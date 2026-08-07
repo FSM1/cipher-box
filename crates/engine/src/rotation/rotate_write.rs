@@ -50,7 +50,7 @@
 //! [`build_repoint_object`]'s two encode-side invariants are release-active, never
 //! a `debug_assert!` (AGENTS.md rule 8). Entropy enters only through the
 //! [`Entropy`] seam; the impure edges are the injected [`WriteSubtreeResolver`] and
-//! [`WriteWavePublisher`] (`net/rotation.rs` holds the production publisher).
+//! [`WriteWavePublisher`] (`net/rotation.rs` holds both production arms).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -144,9 +144,8 @@ pub struct RepublishedNode {
 
 /// Resolve the write scope's subtree from published records — the read edge, the
 /// analogue of the cascade's `CascadeResealResolver`. Resolve + adoption-gate +
-/// unseal live behind this trait; the real network/gate wiring is not landed and
-/// tests fake it. A resolve either yields the node or a fail-closed
-/// [`ResolveFailure`].
+/// unseal live behind this trait (`net/rotation.rs::WriteWaveNet`). A resolve
+/// either yields the node or a fail-closed [`ResolveFailure`].
 pub trait WriteSubtreeResolver {
     /// Resolve `node_id`'s current write-plane node (its name + children), or a
     /// fail-closed [`ResolveFailure`] if its record cannot be authoritatively
