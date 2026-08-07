@@ -1,8 +1,9 @@
 # The web e2e smoke slice (blueprint/testing.md). The suite runs against the
-# production static build, so this workflow carries the wasm toolchain
-# `ci.yml`'s `Web Bundle` job carries — the web bundle compiles crates/wasm.
-# It builds that bundle twice: once as it ships, once with `VITE_E2E_HOOK` for
-# the introspection seam. The suite asserts the shipping one carries no hook.
+# production static build, so it needs the engine WASM: a caller passes
+# `wasm-artifact` to hand over the module its run already built, and only a
+# standalone dispatch falls back to building one here. It builds the bundle
+# twice: once as it ships, once with `VITE_E2E_HOOK` for the introspection
+# seam. The suite asserts the shipping one carries no hook.
 name: Web E2E Tests
 
 on:
@@ -13,6 +14,14 @@ on:
         description: 'Git ref to checkout (tag, branch, or SHA)'
         required: false
         type: string
+      wasm-artifact:
+        description: >-
+          Name of a run artifact holding a prebuilt engine WASM module. Set it
+          and the suite tests exactly those bytes; leave it empty and this job
+          builds the module itself, which is what a standalone dispatch needs.
+        required: false
+        default: ''
+        type: string
 
 permissions: {}
 
@@ -20,8 +29,8 @@ jobs:
   web-e2e:
     name: Web E2E Smoke
     runs-on: ubuntu-latest
-    # The suite itself runs in seconds; the budget is the cold-cache wasm build
-    # and the wasm-bindgen-cli install ahead of it.
+    # The suite itself runs in seconds; the budget covers a standalone
+    # dispatch, where a cold-cache wasm build runs ahead of it.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -68,24 +77,26 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      # Only the browser target's build tree, matching `Web Bundle`: the native
-      # subtrees the cargo jobs cache are dead weight for a wasm-only build.
+      # `target/release` is the host tree — under `--target wasm32-…` cargo puts
+      # proc macros and build scripts there, so omitting it recompiles them.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.wasm-artifact == ''
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
+            target/release
             target/wasm32-unknown-unknown
           key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}
-          # `Web Bundle` caches the same paths off the same lockfile, so fall
-          # back to its entry rather than paying a cold wasm build twice.
+          # `Web Engine WASM` caches the same paths off the same lockfile, so
+          # fall back to its entry rather than paying a cold wasm build twice.
           restore-keys: |
             web-e2e-cargo-
-            web-bundle-cargo-
+            wasm-engine-cargo-
 
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - uses: ./.github/actions/wasm-bindgen-cli
+        if: inputs.wasm-artifact == ''
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
@@ -94,32 +105,10 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
-      # wasm-bindgen-cli generates the engine glue and must match the locked
-      # wasm-bindgen version exactly (a schema mismatch fails the run).
-      - name: Install wasm-bindgen-cli (matching Cargo.lock)
-        run: |
-          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "wasm-bindgen ${WB_VERSION}"
-          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
-            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-          else
-            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
-          fi
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The promoted mock-ipns-routing tool is the hermetic /routing/v1 record
-      # store (blueprint/testing.md). It is not a pnpm workspace member, so it
-      # installs and builds with its own npm.
-      - name: Start the mock /routing/v1 record store
-        run: |
-          cd tools/mock-ipns-routing
-          npm ci
-          npm run build
-          node dist/index.js > /tmp/mock-ipns-routing.log 2>&1 &
-          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:3001/health \
-            || { echo '--- mock-ipns-routing log ---'; cat /tmp/mock-ipns-routing.log; exit 1; }
+      - uses: ./.github/actions/mock-ipns-routing
 
       - name: Apply migrations to a fresh database
         run: pnpm --filter @cipherbox/api migration:run
@@ -131,9 +120,16 @@ jobs:
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
             || { echo '--- API log ---'; cat /tmp/api.log; exit 1; }
 
-      # The engine WASM is built once and consumed by both bundles; only the
-      # hook flag differs between them.
+      # One engine module feeds both bundles below; only the hook flag differs
+      # between them.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.wasm-artifact != ''
+        with:
+          name: ${{ inputs.wasm-artifact }}
+          path: apps/web/src/wasm
+
       - name: Build the engine WASM
+        if: inputs.wasm-artifact == ''
         run: pnpm --filter @cipherbox/web run build:wasm
 
       - name: Build the shipping bundle

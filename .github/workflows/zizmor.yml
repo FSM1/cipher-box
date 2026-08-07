@@ -35,5 +35,7 @@ jobs:
       # (known-vulnerable-actions) depend on the GitHub advisories API and a
       # 503 there aborts the whole gate with "no audit was performed".
       # Dependabot covers action-version advisories separately.
+      # `.github/actions/` is in scope too: a composite action's `uses:` refs
+      # are as much of a supply-chain surface as a workflow's.
       - name: Run zizmor
-        run: zizmor --no-online-audits .github/workflows/
+        run: zizmor --no-online-audits .github/workflows/ .github/actions/

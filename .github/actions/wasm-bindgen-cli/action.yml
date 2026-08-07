@@ -1,0 +1,33 @@
+name: Install wasm-bindgen-cli
+description: Add the wasm rustup targets and install wasm-bindgen-cli at the version Cargo.lock pins.
+
+inputs:
+  targets:
+    description: Space-separated rustup targets to add.
+    required: false
+    default: wasm32-unknown-unknown
+
+runs:
+  using: composite
+  steps:
+    - name: Add wasm targets
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+      # Word splitting is the point: `targets` carries a space-separated list.
+      run: rustup target add ${TARGETS}
+
+    # The CLI and the locked wasm-bindgen crate share a glue schema, so a
+    # version skew fails the run; derive the version from Cargo.lock. The
+    # binary is cached in ~/.cargo/bin, where a bare `cargo install` errors
+    # "already exists": skip on a match, --force to overwrite a stale one.
+    - name: Install wasm-bindgen-cli matching Cargo.lock
+      shell: bash
+      run: |
+        WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        echo "wasm-bindgen ${WB_VERSION}"
+        if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
+          echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
+        else
+          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+        fi

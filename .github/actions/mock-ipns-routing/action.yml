@@ -1,0 +1,18 @@
+name: Start the mock /routing/v1 record store
+description: Build and boot the hermetic mock-ipns-routing store, then wait for it to answer on :3001.
+
+runs:
+  using: composite
+  steps:
+    # The promoted mock-ipns-routing tool is the hermetic /routing/v1 record
+    # store (blueprint/testing.md). It is not a pnpm workspace member, so it
+    # installs and builds with its own npm.
+    - name: Start the mock /routing/v1 record store
+      shell: bash
+      run: |
+        cd tools/mock-ipns-routing
+        npm ci
+        npm run build
+        node dist/index.js > /tmp/mock-ipns-routing.log 2>&1 &
+        curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:3001/health \
+          || { echo '--- mock-ipns-routing log ---'; cat /tmp/mock-ipns-routing.log; exit 1; }
