@@ -81,15 +81,25 @@ export class EngineHost implements EngineHostLike {
     );
   }
 
-  async start(secret: ArrayBuffer): Promise<void> {
-    // The engine copies the secret into its `Zeroizing` store; scrub the
-    // worker's transferred copy immediately after so no plaintext lingers.
-    const view = new Uint8Array(secret);
+  /**
+   * Runs `use` over `buffer`, scrubbing it once the call settles — including
+   * when it rejects. Buffers reaching the host arrive by transfer, making the
+   * worker their terminal owner, and the engine below copies what it keeps.
+   */
+  private async scrubbing(
+    buffer: ArrayBuffer,
+    use: (view: Uint8Array) => Promise<unknown>
+  ): Promise<void> {
+    const view = new Uint8Array(buffer);
     try {
-      await this.handle.start(view);
+      await use(view);
     } finally {
       view.fill(0);
     }
+  }
+
+  start(secret: ArrayBuffer): Promise<void> {
+    return this.scrubbing(secret, (view) => this.handle.start(view));
   }
 
   async command(command: CommandDescriptor): Promise<void> {
@@ -113,16 +123,8 @@ export class EngineHost implements EngineHostLike {
     );
   }
 
-  async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    // The chunk arrives by transfer, so the worker is its terminal owner: the
-    // handle copies it into WASM memory synchronously, and the JS-side
-    // plaintext is scrubbed rather than left for the collector.
-    const view = new Uint8Array(chunk);
-    try {
-      await this.handle.pushChunk(handle, view);
-    } finally {
-      view.fill(0);
-    }
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.scrubbing(chunk, (view) => this.handle.pushChunk(handle, view));
   }
 
   commitWrite(handle: WriteHandle): Promise<bigint> {
