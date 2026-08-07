@@ -2999,6 +2999,17 @@ impl<T: SeamTypes> Engine<T> {
         .map_err(open_engine_error)
     }
 
+    /// The `contentCid` of the version a live stream pinned: the identity of
+    /// the plaintext every window off it serves. `None` for a handle the
+    /// engine does not hold.
+    pub fn stream_version_cid(&self, handle: StreamHandle) -> Option<Vec<u8>> {
+        self.streams
+            .borrow()
+            .open
+            .get(&handle)
+            .map(|stream| stream.version.content_cid.clone())
+    }
+
     /// Release a read stream. Idempotent — an unknown handle is already gone.
     pub fn close_stream(&self, handle: StreamHandle) {
         self.streams.borrow_mut().open.remove(&handle);
