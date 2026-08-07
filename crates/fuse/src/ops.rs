@@ -537,6 +537,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             pending.dirty = false;
         }
         let ino = self.inodes.ino_for(open.node);
+        // Nothing re-binds this inode, so the pages this commit replaced would
+        // stay live. Data before attributes: a kernel that learns the new size
+        // first serves those pages as the new version.
+        self.adapter.invalidate(Invalidation::Data { ino });
         self.adapter.invalidate(Invalidation::Attributes { ino });
         Ok(())
     }
@@ -641,9 +645,11 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// The read stream pinning `handle`'s content version, opened on first use:
-    /// a handle on a file whose bytes are never read, and one whose writes
-    /// replace every block, pays neither the resolve nor a slot against the
-    /// engine's stream ceiling.
+    /// a handle on a file whose bytes are never read pays neither the resolve
+    /// nor a slot against the engine's stream ceiling. A writer earns that only
+    /// over an already-projected size whose blocks its writes replace whole — an
+    /// unprojected size resolves regardless, because only the resolve yields the
+    /// base length.
     async fn stream_for(&mut self, handle: HandleId) -> Result<StreamHandle, VfsError> {
         let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
         if let Some(stream) = open.stream {

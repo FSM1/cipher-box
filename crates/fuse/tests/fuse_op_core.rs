@@ -915,8 +915,9 @@ fn the_bytes_a_handle_wrote_read_back_through_it() {
 }
 
 #[test]
-fn a_write_into_the_spill_never_parks() {
-    // The never-block law: landing bytes locally waits on nothing at all.
+fn a_write_into_a_created_handles_spill_never_parks() {
+    // The never-block law over a handle `create` already sized: `begin_pending`
+    // has nothing left to resolve, so the bytes land locally.
     let (mut core, _adapter) = mount();
     let handle = writing_handle(&mut core);
     let Poll::Ready(outcome) = poll_once(core.write(handle, 0, b"bytes")) else {
@@ -1838,6 +1839,68 @@ mod published {
         assert!(
             mount.adapter.drain().is_empty(),
             "a bind on the version already served repaints nothing"
+        );
+    }
+
+    #[test]
+    fn a_commit_repaints_the_pages_of_the_version_it_replaced() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let ino = mount.ino;
+        // A second handle has already served this version's bytes, so the kernel
+        // holds pages the commit is about to invalidate. Nothing re-binds it.
+        let reader = opened(&mut mount);
+        block_on(mount.core.read(reader, 0, 8)).expect("the reader serves the published version");
+
+        let writer = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.write(writer, 3, b"EDIT")).expect("the write lands");
+        mount.adapter.drain();
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        let pushed = mount.adapter.drain();
+        let data = pushed
+            .iter()
+            .position(|seen| seen == &Invalidation::Data { ino });
+        let attrs = pushed
+            .iter()
+            .position(|seen| seen == &Invalidation::Attributes { ino });
+        assert!(
+            data.is_some(),
+            "a commit must drop the pages of the version it replaced, got {pushed:?}"
+        );
+        assert!(
+            data < attrs,
+            "the new size must not reach the kernel while it still holds the old pages: {pushed:?}"
+        );
+    }
+
+    #[test]
+    fn a_write_on_a_reopened_handle_never_parks_once_the_size_is_projected() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let ino = mount.ino;
+        assert!(
+            block_on(mount.core.getattr(ino))
+                .expect("the published file renders")
+                .size
+                .is_some(),
+            "the projected size is what leaves the write nothing to resolve"
+        );
+        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+
+        let whole_block = vec![0xab; chunk() as usize];
+        let Poll::Ready(outcome) = poll_once(mount.core.write(handle, 0, &whole_block)) else {
+            panic!("a write on a reopened handle parked instead of landing in the spill");
+        };
+        assert_eq!(outcome.expect("the write lands"), whole_block.len() as u32);
+        assert!(
+            mount
+                .core
+                .handle(handle)
+                .expect("the handle is open")
+                .stream
+                .is_none(),
+            "a write that replaces whole blocks must not have resolved the content"
         );
     }
 }

@@ -249,6 +249,9 @@ fn open_private(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Off unix the file inherits the parent's ACL. Confidentiality rests on the
+/// seal, not the mode: every block is ciphertext under a per-handle key that
+/// only ever exists in memory.
 #[cfg(not(unix))]
 fn open_private(path: &Path) -> io::Result<File> {
     OpenOptions::new()
@@ -264,6 +267,8 @@ fn restrict_dir(dir: &Path) -> io::Result<()> {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
+/// Off unix the directory keeps the permissions it was created with; it holds
+/// nothing but sealed blocks, for the reason given on `open_private`.
 #[cfg(not(unix))]
 fn restrict_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
