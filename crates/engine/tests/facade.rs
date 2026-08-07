@@ -1,12 +1,16 @@
 //! Facade skeleton surface: lifecycle law, typed unimplemented commands,
 //! and event-stream plumbing over a fully faked seam set.
 
+use cipherbox_core::kdf;
+use cipherbox_core::suite::contact::ContactCode;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    ApiBaseUrl, Command, ContentProfile, Engine, EngineError, EventStream, GatewayConfig,
-    LoginSecret, NodeId, Permission, StoragePolicy, SyncTimingProfile,
+    ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
+    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, Permission, StoragePolicy,
+    SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -32,12 +36,6 @@ fn unimplemented_commands() -> Vec<(Command, &'static str)> {
     let node = NodeId([1; 16]);
     vec![
         (Command::ManualRefresh, "manualRefresh"),
-        (
-            Command::ImportContact {
-                contact_code: b"contact-bundle".to_vec(),
-            },
-            "importContact",
-        ),
         (
             Command::Grant {
                 node,
@@ -168,6 +166,113 @@ fn unimplemented_commands_return_their_typed_error() {
     }
 }
 
+/// A contact code the peer signed itself: the bundle a real import receives
+/// out of band.
+fn contact_code(scalar: [u8; 32]) -> Vec<u8> {
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    ContactCode::create(&identity, kdf::enc_subkey(&scalar).public()).encode()
+}
+
+#[test]
+fn importing_a_contact_returns_the_bound_public_keys() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let scalar = [3u8; 32];
+
+    let outcome = block_on(engine.command(Command::ImportContact {
+        contact_code: contact_code(scalar),
+    }));
+
+    let CommandOutcome::ContactImported(contact) = outcome.expect("the code imports") else {
+        panic!("importing a contact answers with the contact");
+    };
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    assert_eq!(contact.identity_pk(), identity.verifying_key());
+    assert_eq!(contact.enc_subkey(), kdf::enc_subkey(&scalar).public());
+}
+
+/// The binding signature is the only thing tying the encryption subkey to the
+/// identity key, so a code that fails it is refused outright — never a
+/// degraded import that hands back an unbound subkey (#34 D6).
+#[test]
+fn a_contact_code_that_fails_its_binding_is_refused() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let mut code = contact_code([3u8; 32]);
+    let honest = kdf::enc_subkey(&[3u8; 32]).public().to_bytes();
+    let forged = kdf::enc_subkey(&[4u8; 32]).public().to_bytes();
+    let at = code
+        .windows(honest.len())
+        .position(|window| window == honest)
+        .expect("the encoded code carries the subkey it bound");
+    code[at..at + forged.len()].copy_from_slice(&forged);
+
+    assert_eq!(
+        block_on(engine.command(Command::ImportContact { contact_code: code })),
+        Err(EngineError::TrustViolation {
+            message: "contact code rejected: subkey-binding-invalid".to_owned(),
+        }),
+    );
+}
+
+/// A bundle that does not decode is refused too, but as bad input — a host
+/// told a garbled scan came from a forger would accuse the wrong party.
+#[test]
+fn a_malformed_contact_code_is_refused_without_a_trust_verdict() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    let result = block_on(engine.command(Command::ImportContact {
+        contact_code: b"not a contact bundle".to_vec(),
+    }));
+
+    assert!(
+        matches!(result, Err(EngineError::MalformedInput { .. })),
+        "an undecodable bundle is refused, never imported: {result:?}"
+    );
+}
+
+/// The bundle is three fixed-width keys, and the bytes are an unbounded host
+/// paste: an over-cap payload never reaches the decoder.
+#[test]
+fn an_oversized_contact_code_is_refused_before_it_is_decoded() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::ImportContact {
+            contact_code: vec![0x80; MAX_CONTACT_CODE_BYTES + 1],
+        })),
+        Err(EngineError::MalformedInput {
+            check: "contact-code-too-large",
+        }),
+    );
+}
+
+/// The lifecycle check outranks the trust decision: a valid code still yields
+/// no contact before `start`.
+#[test]
+fn a_contact_import_before_start_never_verifies() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+
+    assert_eq!(
+        block_on(engine.command(Command::ImportContact {
+            contact_code: contact_code([3u8; 32]),
+        })),
+        Err(EngineError::NotStarted),
+    );
+}
+
 /// Focus is recorded whatever the window resolves to: a node absent from
 /// gate-passing state has nothing to descend into, which is not an error.
 #[test]
@@ -181,11 +286,11 @@ fn set_focus_records_a_window_with_nothing_to_resolve() {
         block_on(engine.command(Command::SetFocus {
             node: Some(NodeId([1; 16]))
         })),
-        Ok(None)
+        Ok(CommandOutcome::Done)
     );
     assert_eq!(
         block_on(engine.command(Command::SetFocus { node: None })),
-        Ok(None)
+        Ok(CommandOutcome::Done)
     );
 }
 

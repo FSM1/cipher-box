@@ -48,10 +48,10 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, ApiClient, BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason,
-    DefaultsReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
-    RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, ContentProfile, DeadLetter,
+    DeadLetterReason, DefaultsReason, Engine, EngineError, Event, EventStream, GatewayConfig,
+    LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement,
+    PlacementRefusal, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -730,7 +730,8 @@ fn a_folder_create_publishes_and_resolves_back() {
         name: "photos".into(),
         kind: NodeKind::Folder,
     }))
-    .expect("a metadata create stages");
+    .expect("a metadata create stages")
+    .op_id();
     assert!(
         op_id.is_some(),
         "a staged op is addressable by its queue id"
@@ -2410,7 +2411,8 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
         name: "photos".into(),
         kind: NodeKind::Folder,
     }))
-    .unwrap();
+    .unwrap()
+    .op_id();
     assert_eq!(op_id, Some(OpId(1)), "the create reclaims the covered id");
 
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -2785,7 +2787,8 @@ fn a_rename_of_a_still_queued_create_publishes_child_before_parent() {
         name: "photos".into(),
         kind: NodeKind::Folder,
     }))
-    .unwrap();
+    .unwrap()
+    .op_id();
     assert!(op.is_some());
     let node = child_id(&engine, ROOT, "photos");
     // Renamed while the create is still queued: both drain in one pass.
@@ -3304,6 +3307,7 @@ fn relink_whose_source_remove_is_refused(
         new_parent: photos,
     }))
     .unwrap()
+    .op_id()
     .expect("a relink journals an op")
 }
 
@@ -4768,6 +4772,7 @@ fn a_delete_whose_self_adopt_failed_still_marks_the_op_published() {
 
     let op_id = block_on(engine.command(Command::Delete { node: doomed }))
         .unwrap()
+        .op_id()
         .expect("the delete queues");
     assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
     assert_restart_drops_without_republishing(&world, &blocks, &alice);
@@ -4791,6 +4796,7 @@ fn a_rename_whose_self_adopt_failed_still_marks_the_op_published() {
         new_name: "after".into(),
     }))
     .unwrap()
+    .op_id()
     .expect("the rename queues");
     assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
     assert_restart_drops_without_republishing(&world, &blocks, &alice);
@@ -4817,6 +4823,7 @@ fn a_cross_folder_moves_source_remove_is_the_record_that_marks() {
         replacing: None,
     }))
     .unwrap()
+    .op_id()
     .expect("the move queues");
     assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
     assert_eq!(
@@ -4852,6 +4859,7 @@ fn a_cross_folder_moves_dest_add_never_marks_on_its_own() {
         replacing: None,
     }))
     .unwrap()
+    .op_id()
     .expect("the move queues");
     tick(&world, &engine, &mut tasks);
 
@@ -4904,6 +4912,7 @@ fn a_retried_cross_folder_move_marks_when_its_source_remove_lands() {
         replacing: None,
     }))
     .unwrap()
+    .op_id()
     .expect("the move queues");
     tick(&world, &engine, &mut tasks);
     assert_eq!(
@@ -4990,6 +4999,7 @@ fn another_identitys_drained_mark_never_discards_this_ones_queued_op() {
         kind: NodeKind::Folder,
     }))
     .unwrap()
+    .op_id()
     .expect("the create queues");
 
     let stranger = kdf::enc_subkey(&[9u8; 32]);
@@ -5033,7 +5043,7 @@ fn another_identitys_published_mark_never_retires_this_ones_queued_op() {
 
     assert_eq!(
         block_on(engine.command(Command::CancelUpload { op_id })),
-        Ok(None),
+        Ok(CommandOutcome::Done),
         "the stranger's mark says nothing about this identity's op"
     );
 
@@ -5083,6 +5093,7 @@ fn a_cancel_of_a_metadata_op_is_refused() {
         kind: NodeKind::Folder,
     }))
     .unwrap()
+    .op_id()
     .expect("the create queues");
 
     assert_eq!(
@@ -5670,6 +5681,7 @@ fn create(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
         kind: NodeKind::Folder,
     }))
     .expect("a metadata create stages")
+    .op_id()
     .expect("a create queues an op")
 }
 

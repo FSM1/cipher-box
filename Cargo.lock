@@ -708,6 +708,7 @@ name = "cipherbox-wasm"
 version = "0.0.0"
 dependencies = [
  "async-lock",
+ "cipherbox-core",
  "cipherbox-engine",
  "console_error_panic_hook",
  "getrandom 0.3.4",

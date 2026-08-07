@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ReadBody, Version, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -39,6 +40,7 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
+use crate::grants::{Contact, import_contact};
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -550,6 +552,48 @@ impl fmt::Debug for Command {
     }
 }
 
+/// What a command hands back to its caller.
+///
+/// `Debug` is hand-written like [`Command`]'s: a peer's identity key is a
+/// stable cross-service identifier for a third party, and a derived `{:?}`
+/// would put it in host logs.
+#[derive(Clone, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// The command completed and queued nothing; any further effect arrives on
+    /// the event stream.
+    Done,
+    /// An intent op reached the durable queue under this id — the same id a
+    /// later [`Event::OpProgress`] or [`Event::DeadLetter`] carries, so a host
+    /// can correlate them back to the call that made it.
+    Queued {
+        /// The durable queue id.
+        op_id: OpId,
+    },
+    /// [`Command::ImportContact`] verified a contact code. Holding the
+    /// [`Contact`] is itself the proof its binding signature verified.
+    ContactImported(Contact),
+}
+
+impl fmt::Debug for CommandOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandOutcome::Done => f.write_str("CommandOutcome(done)"),
+            CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
+            CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
+        }
+    }
+}
+
+impl CommandOutcome {
+    /// The staged op's durable queue id, for a command that queued one.
+    pub fn op_id(&self) -> Option<OpId> {
+        match self {
+            CommandOutcome::Queued { op_id } => Some(*op_id),
+            _ => None,
+        }
+    }
+}
+
 /// Events the engine emits on the one-way stream out
 /// (blueprint/engine.md "Facade"). Payloads are scaffold-minimal and harden
 /// with the pipeline slices; the variant set is the contract.
@@ -679,6 +723,14 @@ pub enum EngineError {
     TrustViolation {
         /// The verdict classification; never carries key material.
         message: String,
+    },
+    /// Host-supplied bytes this build could not decode — a truncated paste, a
+    /// mis-scanned code, an over-cap payload. A refusal of the input, never a
+    /// trust verdict about the peer who authored it: collapsing the two would
+    /// tell a host a garbled scan came from a forger.
+    MalformedInput {
+        /// The check that fired; never key material and never input bytes.
+        check: &'static str,
     },
     /// The content's DAG root declared a format version this build cannot
     /// read; see [`DagError::UnsupportedFormat`](crate::DagError).
@@ -854,6 +906,7 @@ impl fmt::Display for EngineError {
                 write!(f, "content unavailable: {message}")
             }
             EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
+            EngineError::MalformedInput { check } => write!(f, "malformed input: {check}"),
             EngineError::UnsupportedContentFormat { version } => write!(
                 f,
                 "content format version {version} is not supported by this client"
@@ -1401,6 +1454,15 @@ impl Drop for StreamSlot {
 /// root manifest carrying a CID per MiB of file, which an unbounded table turns
 /// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
 pub const MAX_OPEN_STREAMS: usize = 256;
+
+/// The largest contact code [`Command::ImportContact`] will decode.
+///
+/// The bundle is three fixed-width keys — a real one is under 200 bytes — and
+/// the bytes arrive as an unbounded host paste or camera scan. Decoding is
+/// linear in length, but a decoded `Value` costs far more than the byte it came
+/// from, so the cap is what stops a paste from exhausting the engine worker
+/// (the resolve path bounds its own reads the same way).
+pub const MAX_CONTACT_CODE_BYTES: usize = 1024;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
 #[derive(Default)]
@@ -2183,14 +2245,11 @@ impl<T: SeamTypes> Engine<T> {
     /// The metadata intent ops (create/delete/rename/relink) stage onto the
     /// durable op queue via [`stage_op`] and emit [`Event::SnapshotUpdated`];
     /// the base sequence each op carries is read from the rendered view (state
-    /// law), so an op rebases against the state the host saw. Content sealing,
-    /// grants, rotation, and auth land with their own slices and stay
+    /// law), so an op rebases against the state the host saw. The grant,
+    /// share, and rotation arms whose slices have not landed stay
     /// [`EngineError::Unimplemented`].
     ///
-    /// Returns the durable queue id of the staged op, so a host can correlate a
-    /// later [`Event::DeadLetter`] or [`Event::OpProgress`] back to the call
-    /// that made it; `None` for a command that queues nothing.
-    pub async fn command(&mut self, command: Command) -> Result<Option<OpId>, EngineError> {
+    pub async fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
@@ -2262,7 +2321,10 @@ impl<T: SeamTypes> Engine<T> {
                 );
                 self.stage_and_notify(&op).await
             }
-            Command::CancelUpload { op_id } => self.cancel_upload(op_id).await.map(|()| None),
+            Command::CancelUpload { op_id } => self
+                .cancel_upload(op_id)
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::SetFocus { node } => {
                 self.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
@@ -2272,14 +2334,31 @@ impl<T: SeamTypes> Engine<T> {
                 if self.refresh_focus_on_access(authored_at).await {
                     let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
-                Ok(None)
+                Ok(CommandOutcome::Done)
+            }
+            Command::ImportContact { contact_code } => {
+                if contact_code.len() > MAX_CONTACT_CODE_BYTES {
+                    return Err(EngineError::MalformedInput {
+                        check: "contact-code-too-large",
+                    });
+                }
+                import_contact(&contact_code)
+                    .map(CommandOutcome::ContactImported)
+                    .map_err(|err| match err {
+                        CodecError::Trust(_) => EngineError::TrustViolation {
+                            message: format!("contact code rejected: {}", err.check()),
+                        },
+                        CodecError::Malformed(_) => {
+                            EngineError::MalformedInput { check: err.check() }
+                        }
+                    })
             }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
                     .await
                     .map_err(EngineError::from_api)?;
-                Ok(None)
+                Ok(CommandOutcome::Done)
             }
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
@@ -3259,7 +3338,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
     /// returning the durable queue id the drain will report the op under.
-    async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
+    async fn stage_and_notify(&mut self, op: &Op) -> Result<CommandOutcome, EngineError> {
         let seal = self.record_seal()?;
         let op_id = stage_op(&self.seams.staging_store, seal, op)
             .await
@@ -3267,7 +3346,7 @@ impl<T: SeamTypes> Engine<T> {
         // Best-effort push-invalidation trigger; a dropped receiver (host torn
         // down) is fine.
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        Ok(Some(op_id))
+        Ok(CommandOutcome::Queued { op_id })
     }
 
     /// Sealing inputs for one durable op record: the session's enc-subkey plus

@@ -36,7 +36,7 @@ use crate::seams_bridge::{
     RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{Command, Event, NodeId, SnapshotView};
+use crate::{Command, CommandOutcome, Event, NodeId, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -216,20 +216,20 @@ impl EngineHandle {
     }
 
     /// Executes one engine command — the single write entry point. Consumes the
-    /// command value. Resolves with the staged op's durable queue id (the same
-    /// `u64` an `opProgress`/`deadLetter` event carries), or `undefined` for a
-    /// command that queues nothing; rejects with the engine error.
+    /// command value. Resolves with the [`CommandOutcome`] the arm produced —
+    /// the staged op's durable queue id, a verified contact — or rejects with
+    /// the engine error.
     pub fn command(&self, command: Command) -> Promise {
         let engine = self.engine.clone();
         let facade_command = command.into_facade();
         future_to_promise(async move {
-            let op_id = engine
+            let outcome = engine
                 .write()
                 .await
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
-            Ok(op_id_value(op_id))
+            Ok(CommandOutcome::from_facade(outcome).into())
         })
     }
 
@@ -453,13 +453,6 @@ impl EngineHandle {
     }
 }
 
-/// A staged op id as the boundary spells it. Op ids run the whole `u64` range,
-/// so they cross as `bigint` — the same marshalling the `opId` getter on
-/// `opProgress`/`deadLetter` uses, or a client could not correlate the two.
-fn op_id_value(op_id: Option<OpId>) -> JsValue {
-    op_id.map_or(JsValue::UNDEFINED, |op| JsValue::from(op.0))
-}
-
 /// Renders an engine error as a rejection value: a `js_sys::Error` whose
 /// message is the diagnostic `Display` string (no key material — redacted by
 /// construction) and whose `code` property is the stable camelCase variant
@@ -474,6 +467,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::NotAFile => "notAFile",
         EngineError::ContentUnavailable { .. } => "contentUnavailable",
         EngineError::TrustViolation { .. } => "trustViolation",
+        EngineError::MalformedInput { .. } => "malformedInput",
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
         EngineError::OverBudget { .. } => "overBudget",
@@ -500,8 +494,33 @@ fn engine_error(error: EngineError) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::kdf;
+    use cipherbox_core::suite::contact::ContactCode;
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_engine::facade::CommandOutcome as Outcome;
+    use cipherbox_engine::import_contact;
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    const CONTACT_SCALAR: [u8; 32] = [3u8; 32];
+
+    fn crossed(outcome: Outcome) -> JsValue {
+        CommandOutcome::from_facade(outcome).into()
+    }
+
+    fn field(outcome: &JsValue, name: &str) -> JsValue {
+        Reflect::get(outcome, &JsValue::from_str(name)).expect("outcome getter is readable")
+    }
+
+    fn bytes(value: JsValue) -> Vec<u8> {
+        value.unchecked_into::<Uint8Array>().to_vec()
+    }
+
+    fn imported_contact() -> Outcome {
+        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
+        let code = ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public());
+        Outcome::ContactImported(import_contact(&code.encode()).expect("the code imports"))
+    }
 
     /// `command()` resolves with the id an `opProgress`/`deadLetter` event
     /// later carries, so both must cross as the same JS type — an f64 `number`
@@ -509,12 +528,17 @@ mod tests {
     /// past 2^53.
     #[wasm_bindgen_test]
     fn a_staged_op_id_crosses_as_a_bigint() {
-        let value = op_id_value(Some(OpId(u64::MAX)));
+        let op_id = field(
+            &crossed(Outcome::Queued {
+                op_id: OpId(u64::MAX),
+            }),
+            "opId",
+        );
 
-        assert_eq!(value.js_typeof(), JsValue::from_str("bigint"));
+        assert_eq!(op_id.js_typeof(), JsValue::from_str("bigint"));
         assert_eq!(
             String::from(
-                value
+                op_id
                     .unchecked_into::<BigInt>()
                     .to_string(10)
                     .expect("bigint renders in base 10")
@@ -523,10 +547,46 @@ mod tests {
         );
     }
 
-    /// A command that queues nothing resolves `undefined`, never `0n`.
+    /// A command that queues nothing carries no op id, never `0n`.
     #[wasm_bindgen_test]
-    fn a_command_that_queues_nothing_crosses_as_undefined() {
-        assert!(op_id_value(None).is_undefined());
+    fn a_command_that_queues_nothing_carries_no_op_id() {
+        assert!(field(&crossed(Outcome::Done), "opId").is_undefined());
+    }
+
+    /// The verified contact's two public keys are the whole point of the
+    /// import, so both must survive the boundary — and no other kind may
+    /// answer for them.
+    #[wasm_bindgen_test]
+    fn an_imported_contact_crosses_with_both_public_keys() {
+        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
+        let imported = crossed(imported_contact());
+
+        assert_eq!(
+            bytes(field(&imported, "identityPublicKey")),
+            identity.verifying_key().to_sec1().to_vec(),
+        );
+        assert_eq!(
+            bytes(field(&imported, "encPublicKey")),
+            kdf::enc_subkey(&CONTACT_SCALAR)
+                .public()
+                .to_bytes()
+                .to_vec(),
+        );
+        assert!(field(&imported, "opId").is_undefined());
+        assert!(field(&crossed(Outcome::Done), "identityPublicKey").is_undefined());
+    }
+
+    /// Hosts switch on `kind`, so each arm's discriminant is a stable string
+    /// literal — the marshalling `Event::kind` already uses.
+    #[wasm_bindgen_test]
+    fn each_outcome_kind_crosses_as_its_stable_name() {
+        for (outcome, name) in [
+            (Outcome::Done, "done"),
+            (Outcome::Queued { op_id: OpId(1) }, "queued"),
+            (imported_contact(), "contactImported"),
+        ] {
+            assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));
+        }
     }
 
     #[wasm_bindgen_test]
