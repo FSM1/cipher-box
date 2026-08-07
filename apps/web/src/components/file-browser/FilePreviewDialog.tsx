@@ -1,6 +1,7 @@
 import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import type { ListingRow } from '../../vault/listing';
 import { Modal } from '../ui/Modal';
+import { MediaPlayer } from './MediaPlayer';
 
 interface FilePreviewDialogProps {
   row: ListingRow;
@@ -44,6 +45,9 @@ function PreviewContent({ preview, name }: { preview: FilePreview; name: string 
         {preview.message}
       </p>
     );
+  }
+  if (preview.status === 'audio' || preview.status === 'video') {
+    return <MediaPlayer url={preview.url} kind={preview.status} name={name} />;
   }
   if (preview.status === 'image') {
     return (
