@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5c472a7518d0",
+  "strategy": "manual-commit",
+  "branch": "rb-1117",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/client/src/sw/install.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5c/472a7518d0/0/metadata.json",
+      "transcript": "/5c/472a7518d0/0/full.jsonl",
+      "compact_transcript": "/5c/472a7518d0/0/transcript.jsonl",
+      "content_hash": "/5c/472a7518d0/0/content_hash.txt",
+      "prompt": "/5c/472a7518d0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 8950,
+    "cache_read_tokens": 3470952,
+    "output_tokens": 3025,
+    "api_call_count": 9
+  }
+}
