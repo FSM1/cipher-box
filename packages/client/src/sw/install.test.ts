@@ -150,6 +150,39 @@ describe('installServiceWorker', () => {
     expect(pipe.portRequests).toBe(1);
   });
 
+  it('holds the fetch that restarted the worker open until the re-broker finishes', async () => {
+    const scope = new FakeScope();
+    const pipe = new FakePipe();
+    let finishRebroker = (): void => {};
+    pipe.requestPorts = () =>
+      new Promise<void>((resolve) => {
+        finishRebroker = resolve;
+      });
+
+    installServiceWorker(scope, { pipe, fetchFn: failingFetch });
+
+    // Script evaluation is not an event, so without this the browser may stop
+    // the worker again before the ask reaches the tabs.
+    const extended: Promise<unknown>[] = [];
+    scope.dispatch('fetch', {
+      request: new Request(`${ORIGIN}/stream/tkt`),
+      respondWith: () => {},
+      waitUntil: (promise) => void extended.push(promise),
+    });
+
+    expect(extended).toHaveLength(1);
+    let settled = false;
+    void Promise.all(extended).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishRebroker();
+    await Promise.all(extended);
+    expect(settled).toBe(true);
+  });
+
   it('answers a stream request from the media pipe, naming the client that asked', async () => {
     const { scope, pipe } = await wire(manifestFetch('["/index.html"]'));
 
