@@ -49,8 +49,8 @@ use crate::net::record_publish::{
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
-    UnixMillis,
+    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SeamResult,
+    SnapshotCache, UnixMillis,
 };
 
 /// The owner's client configuration, sealed into the vault settings record.
@@ -266,19 +266,24 @@ pub enum PlacementRefusal {
 
 /// The byte destinations a settings load authorises.
 ///
-/// The built-in defaults describe a first run and nothing else: every other
-/// degraded reason with no last-known-good copy refuses rather than resolving
-/// to [`PinMode::Hosted`] (blueprint/engine.md "Settings-load policy").
+/// The built-in defaults describe an unproven first run and nothing else: every
+/// other degraded reason with no last-known-good copy refuses rather than
+/// resolving to [`PinMode::Hosted`] (blueprint/engine.md "Settings-load
+/// policy"). The assumed placement is read off [`VaultSettings::default`] so it
+/// cannot drift from the documented default it stands in for.
 ///
-/// Residual, stated there too: `NoRecord` is a verdict about *this device*, so a
-/// record-plane adversary who withholds the record from a device that has never
-/// synced still gets the first-run default.
+/// Residual, stated there too: absence of a settings record is only ever a
+/// verdict about *this device*, so a record-plane adversary who withholds it
+/// from one that holds no [`SettingsTraces`] still reaches the first-run
+/// default. What narrows that window is the trace set, not this decision.
 pub fn decide_placement(load: &SettingsLoad) -> Result<Placement, PlacementRefusal> {
     match load {
         SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => {
             placement_of(settings)
         }
-        SettingsLoad::Defaults(DefaultsReason::NoRecord) => Ok(Placement::Hosted),
+        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun) => {
+            placement_of(&VaultSettings::default())
+        }
         SettingsLoad::Defaults(reason) => Err(PlacementRefusal::SettingsUnavailable(*reason)),
     }
 }
@@ -331,19 +336,23 @@ pub enum SettingsPublishError {
 
 /// Why a load did not use the published record, carried by both degraded
 /// outcomes. Reported rather than collapsed, because the reasons are not
-/// equally benign: `NoRecord` is a first run, while `Suppressed` and
-/// `RolledBack` are what an adversary who controls the record plane produces,
-/// and reverting a member's placement choice to the hosted default is exactly
-/// what they gain by it.
+/// equally benign: `UnprovenFirstRun` is the one that still authorises a write,
+/// while `Suppressed` and `RolledBack` are what an adversary who controls the
+/// record plane produces, and reverting a member's placement choice to the
+/// hosted default is exactly what they gain by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultsReason {
-    /// No endpoint served a record, and this device has no durable floor for
-    /// the name. Floor evidence only: a cached last-known-good block can
-    /// accompany this, since the floor advance is not gated on the cache write.
-    NoRecord,
-    /// No usable record, but the durable sequence floor proves one was adopted
-    /// here before: the record is being withheld or its head block is
-    /// unreachable.
+    /// No endpoint served a record, and this device holds no durable mark of
+    /// one ([`SettingsTraces`]). Named for what it is rather than what it looks
+    /// like: absence here is a statement about *this device*, never a proof
+    /// that the account has never published, so the first run it reports is
+    /// assumed and not established. Floor and mint evidence only — a cached
+    /// last-known-good block can accompany it, since neither raise is gated on
+    /// the cache write.
+    UnprovenFirstRun,
+    /// No usable record, but a durable mark proves this device already adopted
+    /// a settings record, or already tried to publish one: the record is being
+    /// withheld or its head block is unreachable.
     Suppressed,
     /// A record below the durable sequence floor — a replay, not staleness.
     RolledBack {
@@ -418,6 +427,43 @@ fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
     let mut key = prefix.to_vec();
     key.extend_from_slice(name.as_str().as_bytes());
     key
+}
+
+/// Every durable mark a settings record leaves on this device. Read together,
+/// because [`DefaultsReason::UnprovenFirstRun`] is the one degraded outcome that
+/// still authorises a write, and the only thing separating it from
+/// [`DefaultsReason::Suppressed`] is whether *any* of these was ever raised.
+#[derive(Debug, Clone, Copy)]
+struct SettingsTraces {
+    /// The per-name sequence floor: a record was adopted here.
+    sequence: Option<u64>,
+    /// The adopted body revision: a body opened and cleared its bar here.
+    adopted_revision: Option<u64>,
+    /// The mint counter, raised **before** the PUT, so it survives a publish
+    /// that never confirmed — the member expressed a choice this device could
+    /// not authenticate, which is the moment a withheld record is most valuable
+    /// to an adversary.
+    minted_revision: Option<u64>,
+}
+
+impl SettingsTraces {
+    fn any(&self) -> bool {
+        self.sequence
+            .or(self.adopted_revision)
+            .or(self.minted_revision)
+            .is_some()
+    }
+}
+
+/// Read all three marks. A floor the host cannot read is never treated as no
+/// floor: the whole set fails closed together, so a partial read can never
+/// downgrade a suppression into a first run.
+async fn settings_traces<F: FloorStore>(floors: &F, name: &IpnsName) -> SeamResult<SettingsTraces> {
+    Ok(SettingsTraces {
+        sequence: floor::sequence_floor(floors, name.as_str().as_bytes()).await?,
+        adopted_revision: floor::sequence_floor(floors, &revision_adopted_key(name)).await?,
+        minted_revision: floor::sequence_floor(floors, &revision_mint_key(name)).await?,
+    })
 }
 
 /// Mint the next body revision, advancing the durable counter **before** the
@@ -657,15 +703,13 @@ where
     // The settings record belongs to no scope and carries no epoch, so the
     // per-name sequence floor and the adopted body revision are its whole floor
     // law. A floor the host cannot read is never treated as no floor.
-    let Ok(durable) = floor::sequence_floor(floors, key).await else {
+    let Ok(traces) = settings_traces(floors, name).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
     let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
-        // A durable floor is proof this account has published settings, so
-        // finding none now is a suppression rather than a first run.
-        return Err(match durable {
-            Some(_) => DefaultsReason::Suppressed,
-            None => DefaultsReason::NoRecord,
+        return Err(match traces.any() {
+            true => DefaultsReason::Suppressed,
+            false => DefaultsReason::UnprovenFirstRun,
         });
     };
     // The reader of this record is always its signer, so a lapsed EOL is a
@@ -675,7 +719,7 @@ where
         return Err(DefaultsReason::Expired);
     }
     let sequence = verified.sequence;
-    let floor = durable.unwrap_or(0);
+    let floor = traces.sequence.unwrap_or(0);
     if sequence < floor {
         return Err(DefaultsReason::RolledBack { floor, sequence });
     }
@@ -687,10 +731,7 @@ where
     };
     let body = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
     let adopted_key = revision_adopted_key(name);
-    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let adopted = adopted.unwrap_or(0);
+    let adopted = traces.adopted_revision.unwrap_or(0);
     // The revision arbitrates only what the sequence cannot: a fork *at* the
     // sequence this device already adopted. A strictly newer record won its CAS
     // against the network, and holding it to a device-local revision counter
@@ -1142,13 +1183,13 @@ mod tests {
         );
     }
 
-    /// The built-in defaults describe a first run and nothing else: every other
-    /// degraded reason refuses rather than widening an unknown choice onto the
-    /// hosted store.
+    /// The built-in defaults describe an unproven first run and nothing else:
+    /// every other degraded reason refuses rather than widening an unknown
+    /// choice onto the hosted store.
     #[test]
-    fn only_a_first_run_falls_back_to_the_hosted_default() {
+    fn only_an_unproven_first_run_falls_back_to_the_hosted_default() {
         assert_eq!(
-            decide_placement(&SettingsLoad::Defaults(DefaultsReason::NoRecord)).unwrap(),
+            decide_placement(&SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun)).unwrap(),
             Placement::Hosted
         );
         for reason in [

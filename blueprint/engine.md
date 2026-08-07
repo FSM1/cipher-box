@@ -247,17 +247,30 @@ degraded outcome applies a different policy rather than showing stale data.
   can report is the one this device last authenticated, never the built-in
   default. A rollback takes the same path — pinning last-known-good is what
   the gate already owes a rejected record.
-- **No last-known-good copy fails the placement decision closed.** The
-  built-in defaults describe a first run — no record anywhere, no durable
-  floor. Residual: that is a verdict about _this device_, so a record-plane
-  adversary who withholds the record from one that has never synced still
-  reaches the first-run default; closing it needs positive evidence that the
-  account has never published settings, which no device-local seam carries. Under any other reason, with no cached copy to fall back on, a
-  placement decision refuses the hosted upload rather than resolving to
-  `PinMode::Hosted`; the member is told their settings are unavailable. A
-  consumer that branches only on the resolved case, letting the degraded ones
-  fall through to the defaults, reintroduces exactly the widening this policy
-  exists to prevent.
+- **No last-known-good copy fails the placement decision closed.** Under every
+  reason but one, with no cached copy to fall back on, a placement decision
+  refuses the hosted upload rather than resolving to `PinMode::Hosted`; the
+  member is told their settings are unavailable. A consumer that branches only
+  on the resolved case, letting the degraded ones fall through to the defaults,
+  reintroduces exactly the widening this policy exists to prevent.
+- **The one arm that still authorises a write is named for what it assumes.**
+  The built-in defaults stand in for a first run, and the reason that carries
+  them says so: `UnprovenFirstRun`. It is reached only when no endpoint served a
+  record _and_ this device holds no durable mark of one — neither the per-name
+  sequence floor, nor the adopted body revision, nor the mint counter. The three
+  are read together and fail closed together, so a floor store that took one
+  raise and lost another can never downgrade a suppression into a first run.
+  The mint counter is the load-bearing one: it rises _before_ the PUT, so a save
+  that never confirmed still refuses every later widening — the moment a
+  placement change is least confirmed is the moment reverting it is most
+  valuable to an adversary.
+  Residual: absence is still only ever a verdict about _this device_, so a
+  record-plane adversary who withholds the record from one that holds none of
+  the three marks reaches the assumed default. Closing that needs positive
+  account-scoped evidence that settings were never published. The account's
+  advisory BYO flag is the one such signal a fresh device already reads, but it
+  is read after the placement decision is made and is spent reconciling the flag
+  the other way, so wiring it is a change to the pre-flight, not to this policy.
 - **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
   an availability event recovered by revival (above), because a gate-level
   rejection would lock every grantee out of a dormant owner's vault — a read

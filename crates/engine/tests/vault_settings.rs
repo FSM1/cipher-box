@@ -499,8 +499,8 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
 
     assert_eq!(
         load,
-        SettingsLoad::Defaults(DefaultsReason::NoRecord),
-        "no record and no durable floor is a first run, not a suppression",
+        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
+        "no record and no durable mark of one is an assumed first run",
     );
     assert_eq!(
         VaultSettings::default(),
@@ -511,6 +511,69 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
         },
         "the documented defaults: hosted pinning, no member provider, keep all",
     );
+}
+
+/// A publish attempt raises the mint counter before the PUT, so a device whose
+/// save never confirmed still carries a durable mark of the member's choice.
+/// Withholding the record from that device is suppression, not a first run —
+/// otherwise the moment a placement change is least confirmed is the moment it
+/// is cheapest to revert.
+#[test]
+fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &blocks, 4);
+    assert_eq!(
+        block_on(publish_settings(
+            &AcksNothingBack,
+            &api,
+            &device.floor_store,
+            &device.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(6),
+            &OrphanHeads::default(),
+            &SECRET,
+            &external_only(),
+        ))
+        .unwrap_err(),
+        SettingsPublishError::Unconfirmed,
+        "the attempt reaches the network and comes back unconfirmed",
+    );
+
+    // `Defaults` rather than `Stale`: nothing was cached, so the verdict rests
+    // on the mint counter alone.
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::Suppressed),
+        "the mint counter outlives the attempt, so absence is no longer credible",
+    );
+}
+
+/// The adopt-side marks are raised by two separate, non-atomic floor writes. A
+/// store that took one and lost the other must still refuse: any surviving mark
+/// proves this device adopted a record, and a first run has none of them.
+#[test]
+fn any_surviving_adopt_mark_alone_refuses_a_withheld_record() {
+    for key in [b"settings-revision/".as_slice(), b"".as_slice()] {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let mut floor_key = key.to_vec();
+        floor_key.extend_from_slice(settings_name(&SECRET).as_str().as_bytes());
+        block_on(device.floor_store.raise_sequence_floor(&floor_key, 3)).expect("the floor raises");
+
+        assert_eq!(
+            load(&world, &device, &Blocks::default(), &SECRET),
+            SettingsLoad::Defaults(DefaultsReason::Suppressed),
+            "{key:?} alone is proof this device adopted settings before",
+        );
+    }
 }
 
 /// A transport whose GET never settles — the shape of an unresolvable name.
@@ -908,7 +971,7 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
                 &SyncTimingProfile::CI,
                 &SECRET,
             )),
-            SettingsLoad::Defaults(DefaultsReason::NoRecord),
+            SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
             "a cached copy is re-opened on every read, never trusted for being cached",
         );
     }
@@ -1042,7 +1105,7 @@ fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings(
             &SyncTimingProfile::CI,
             &OTHER_SECRET,
         )),
-        SettingsLoad::Defaults(DefaultsReason::NoRecord),
+        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
         "another account's copy is both keyed and sealed out of reach",
     );
 }

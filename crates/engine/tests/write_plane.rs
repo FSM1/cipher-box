@@ -6831,3 +6831,68 @@ fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
         "the version this device wrote is the head"
     );
 }
+
+/// The member picks "never put my bytes in CipherBox's store" and the save does
+/// not land. The revision mint counter rose before the PUT, so the next cold
+/// start on this device refuses the write rather than reading the missing
+/// record as a first run — the moment a placement change is least confirmed is
+/// the moment reverting it is most valuable to a record-plane adversary.
+#[test]
+fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+
+    // No HTTP is scripted, so the head-block upload fails and nothing is ever
+    // published at the settings name.
+    let api = ApiClient::new(
+        alice.http.clone(),
+        alice.credential_store.clone(),
+        String::new(),
+    );
+    block_on(publish_settings(
+        &alice.record_store,
+        &api,
+        &alice.floor_store,
+        &alice.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &OrphanHeads::default(),
+        &SECRET,
+        &VaultSettings {
+            pin_mode: PinMode::External,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+        },
+    ))
+    .expect_err("the save does not reach the network");
+    // The refused save tried to upload its own head block; only what the write
+    // adds on top of that is this test's subject.
+    let before = uploaded_cids(&alice).len();
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let refused = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        200,
+    ))
+    .expect_err("no placement could be authenticated");
+    assert!(
+        matches!(
+            refused,
+            EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+            }
+        ),
+        "an attempted save is a durable mark of a choice: {refused:?}"
+    );
+    assert_eq!(
+        uploaded_cids(&alice).len(),
+        before,
+        "and no content byte went to the hosted store"
+    );
+}
