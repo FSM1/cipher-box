@@ -70,8 +70,7 @@ jobs:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
       # apps/web compiles crates/wasm into the engine artifact it bundles.
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - uses: ./.github/actions/wasm-bindgen-cli
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
@@ -79,14 +78,6 @@ jobs:
         with:
           node-version-file: 'package.json'
           cache: 'pnpm'
-
-      # wasm-bindgen-cli generates the engine glue and must match the locked
-      # wasm-bindgen version exactly (a schema mismatch fails the run).
-      - name: Install wasm-bindgen-cli (matching Cargo.lock)
-        run: |
-          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "wasm-bindgen ${WB_VERSION}"
-          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

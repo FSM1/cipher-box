@@ -43,6 +43,7 @@ jobs:
               - 'package.json'
               - 'tsconfig*.json'
               - '.github/workflows/ci.yml'
+              - '.github/actions/**'
             rust:
               - 'crates/**'
               - 'Cargo.toml'
@@ -50,6 +51,7 @@ jobs:
               - 'rust-toolchain.toml'
               - '.cargo/config.toml'
               - '.github/workflows/ci.yml'
+              - '.github/actions/**'
             web:
               - 'apps/web/**'
               - 'packages/client/**'
@@ -63,6 +65,7 @@ jobs:
               - 'package.json'
               - 'tsconfig*.json'
               - '.github/workflows/ci.yml'
+              - '.github/actions/**'
             # What the smoke slice depends on *beyond* `web` — it drives the
             # browser against a live API and the hermetic record store. Its job
             # runs on `web || e2e`, so widening `web` widens the gate too.
@@ -181,42 +184,82 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # apps/web is built by `Web Bundle`, which carries the Rust toolchain its
-      # WASM artifact needs. `!cipher-box` drops the root project, whose own
-      # `build` script would recurse back into every package.
+      # apps/web is built by `Web Bundle`, which has the engine WASM its bundle
+      # embeds. `!cipher-box` drops the root project, whose own `build` script
+      # would recurse back into every package.
       - name: Build packages
         run: pnpm --filter '!@cipherbox/web' --filter '!cipher-box' run build
 
-  # apps/web's production WASM artifact and the bundle that fingerprints it
-  # (blueprint/web-client.md "WASM packaging"). Split out of `Build` so a change
-  # that touches neither the web app nor the crates pays no Rust toolchain.
-  web-bundle:
-    name: Web Bundle
+  # The engine's browser artifact (blueprint/web-client.md "WASM packaging"),
+  # built once per run. Every job that ships or exercises the browser engine
+  # consumes this artifact, so a run's bundle and its e2e slice are the same
+  # bytes by construction rather than by coincidence.
+  wasm-engine:
+    name: Web Engine WASM
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.changes.outputs.web == 'true'
+      (needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Only the browser target's build tree: the native `target/` subtrees the
-      # cargo jobs cache are dead weight here, and a fourth full copy would push
-      # the repo's other cargo caches out under LRU.
+      # `target/release` is the host tree: under `--target wasm32-…` cargo puts
+      # proc macros and build scripts there, so omitting it recompiles them on
+      # every run. The native `target/<triple>` subtrees the cargo jobs cache
+      # stay out — dead weight here, and a fourth full copy would push the
+      # repo's other cargo caches out under LRU.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
+            target/release
             target/wasm32-unknown-unknown
-          key: web-bundle-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: web-bundle-cargo-
+          key: wasm-engine-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: wasm-engine-cargo-
 
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - uses: ./.github/actions/wasm-bindgen-cli
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      # No `pnpm install`: the script this runs shells out to cargo and
+      # wasm-bindgen and pulls in no npm dependency.
+      - name: Build the engine WASM
+        run: pnpm --filter @cipherbox/web run build:wasm
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-engine-wasm
+          path: apps/web/src/wasm
+          if-no-files-found: error
+          retention-days: 1
+
+  # The bundle that fingerprints the engine artifact. It consumes the module
+  # `wasm-engine` produced, so it carries no Rust toolchain at all.
+  #
+  # Gated on `lint` rather than the usual `!failure()`: branch protection
+  # requires this context by name, and a skipped required context counts as a
+  # pass. So a failed `wasm-engine` must leave this job running and failing at
+  # the download, not skipped and green.
+  web-bundle:
+    name: Web Bundle
+    needs: [changes, lint, wasm-engine]
+    if: |
+      !cancelled() && needs.lint.result == 'success' &&
+      needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
@@ -225,23 +268,16 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
-      # wasm-bindgen-cli generates the engine glue and must match the locked
-      # wasm-bindgen version exactly (a schema mismatch fails the run).
-      - name: Install wasm-bindgen-cli (matching Cargo.lock)
-        run: |
-          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "wasm-bindgen ${WB_VERSION}"
-          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
-            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-          else
-            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
-          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-engine-wasm
+          path: apps/web/src/wasm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build the web bundle
-        run: pnpm --filter @cipherbox/web run build
+        run: pnpm --filter @cipherbox/web run build:bundle
 
       - name: Bundle carries the fingerprinted engine artifact
         run: ls apps/web/dist/assets/cipherbox_wasm-*.js apps/web/dist/assets/cipherbox_wasm_bg-*.wasm
@@ -540,30 +576,16 @@ jobs:
           key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: core-kats-cargo-
 
-      - name: Add wasm targets
-        run: rustup target add wasm32-wasip1 wasm32-unknown-unknown
+      # wasm-bindgen-test-runner drives the wasm32-unknown-unknown legs in Node.
+      - uses: ./.github/actions/wasm-bindgen-cli
+        with:
+          targets: wasm32-wasip1 wasm32-unknown-unknown
 
       - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: 'package.json'
-
-      # wasm-bindgen-test-runner drives the wasm32-unknown-unknown tests in
-      # Node and must match the locked wasm-bindgen version exactly (a schema
-      # mismatch fails the run); derive the version from Cargo.lock. The binary
-      # is cached in ~/.cargo/bin: skip the install when the cached binary
-      # already matches (a bare `cargo install` errors "already exists" on a
-      # cache hit), otherwise install with --force to overwrite a stale one.
-      - name: Install wasm-bindgen-cli (matching Cargo.lock)
-        run: |
-          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "wasm-bindgen ${WB_VERSION}"
-          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
-            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-          else
-            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
-          fi
 
       - name: KAT vectors fresh (committed generator is the only writer)
         run: |
@@ -644,8 +666,8 @@ jobs:
           key: client-browser-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: client-browser-cargo-
 
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      # wasm-bindgen-cli drives the conformance module build.
+      - uses: ./.github/actions/wasm-bindgen-cli
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
@@ -653,18 +675,6 @@ jobs:
         with:
           node-version-file: 'package.json'
           cache: 'pnpm'
-
-      # wasm-bindgen-cli drives the conformance module build and must match the
-      # locked wasm-bindgen version exactly (a schema mismatch fails the run).
-      - name: Install wasm-bindgen-cli (matching Cargo.lock)
-        run: |
-          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "wasm-bindgen ${WB_VERSION}"
-          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
-            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-          else
-            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
-          fi
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -828,17 +838,7 @@ jobs:
           cargo fmt -p cipherbox-contract --check
           cargo clippy -p cipherbox-contract --all-targets -- -D warnings
 
-      # The promoted mock-ipns-routing tool is the hermetic /routing/v1 record
-      # store (blueprint/testing.md). It is not a pnpm workspace member, so it
-      # installs and builds with its own npm.
-      - name: Start the mock /routing/v1 record store
-        run: |
-          cd tools/mock-ipns-routing
-          npm ci
-          npm run build
-          node dist/index.js > /tmp/mock-ipns-routing.log 2>&1 &
-          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:3001/health \
-            || { echo '--- mock-ipns-routing log ---'; cat /tmp/mock-ipns-routing.log; exit 1; }
+      - uses: ./.github/actions/mock-ipns-routing
 
       - name: Apply migrations to a fresh database
         run: pnpm --filter @cipherbox/api migration:run
@@ -880,15 +880,19 @@ jobs:
             exit 1
           fi
 
+  # Same fail-closed gating as web-bundle: a failed `wasm-engine` must surface
+  # as a failed suite, not a skipped one.
   web-e2e:
     name: Web E2E Smoke
-    needs: [changes, lint]
+    needs: [changes, lint, wasm-engine]
     if: |
-      !failure() && !cancelled() &&
+      !cancelled() && needs.lint.result == 'success' &&
       (needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true')
     permissions:
       contents: read
     uses: ./.github/workflows/web-e2e.yml
+    with:
+      wasm-artifact: web-engine-wasm
 
   # Single always-reporting gate for the smoke slice, mirroring
   # contract-suite-result: branch protection requires this stable context, so a
