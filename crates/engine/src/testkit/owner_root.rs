@@ -213,9 +213,13 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
                 Permission::Write => Some(OWNER_ROOT_WRITE_SCOPE_SEED),
                 Permission::Read => None,
             };
+            // The index widens into the tail, so a large grant set neither
+            // overflows the base byte nor repeats a scalar.
+            let mut ephemeral = [EPH_GRANT_BASE; 32];
+            ephemeral[24..].copy_from_slice(&(i as u64).to_be_bytes());
             let sealed = seal_grant_blob(
                 &recipient,
-                &[EPH_GRANT_BASE + i as u8; 32],
+                &ephemeral,
                 &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_GRANT_BLOB),
                 &GrantBlobPayload::new(
                     OWNER_ROOT_SCOPE_SEED,
