@@ -247,17 +247,29 @@ degraded outcome applies a different policy rather than showing stale data.
   can report is the one this device last authenticated, never the built-in
   default. A rollback takes the same path — pinning last-known-good is what
   the gate already owes a rejected record.
-- **No last-known-good copy fails the placement decision closed.** The
-  built-in defaults describe a first run — no record anywhere, no durable
-  floor. Residual: that is a verdict about _this device_, so a record-plane
-  adversary who withholds the record from one that has never synced still
-  reaches the first-run default; closing it needs positive evidence that the
-  account has never published settings, which no device-local seam carries. Under any other reason, with no cached copy to fall back on, a
-  placement decision refuses the hosted upload rather than resolving to
-  `PinMode::Hosted`; the member is told their settings are unavailable. A
-  consumer that branches only on the resolved case, letting the degraded ones
-  fall through to the defaults, reintroduces exactly the widening this policy
-  exists to prevent.
+- **No last-known-good copy fails the placement decision closed.** Under every
+  reason but one, with no cached copy to fall back on, a placement decision
+  refuses the hosted upload rather than resolving to `PinMode::Hosted`; the
+  member is told their settings are unavailable. A consumer that branches only
+  on the resolved case, letting the degraded ones fall through to the defaults,
+  reintroduces exactly the widening this policy exists to prevent.
+- **The one arm that still authorises a write is named for what it assumes.**
+  The built-in defaults stand in for a first run, and the reason carrying them
+  says so: `UnprovenFirstRun`. It is reached only when no endpoint served a
+  record _and_ this device holds none of the three durable marks a settings
+  record leaves: the per-name sequence floor, the adopted body revision, and the
+  publish mint counter. An unreadable mark is never read as an absent one. Two
+  of the three are what the sequence floor alone misses. The mint counter is
+  raised before the PUT, so it outlives any save that got as far as minting a
+  revision — a member who expressed a placement choice this device could not
+  authenticate is never talked back onto the default, which is precisely when
+  that reversal is cheapest. The adopted revision is raised by a store write
+  separate from the sequence floor's and not atomic with it, so it outlives a
+  lost one. Absence is a verdict about _this device_ only, so an assumed
+  placement must never latch account-scoped state, and the account's advisory
+  BYO flag may only ever be read in the restricting direction — `advisory` set
+  means never assume the default. The inverse would be a server-controlled
+  widening on an untrusted signal.
 - **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
   an availability event recovered by revival (above), because a gate-level
   rejection would lock every grantee out of a dormant owner's vault — a read

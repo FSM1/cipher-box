@@ -35,7 +35,9 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
-use cipherbox_engine::settings::{Destinations, VaultSettings, publish_settings, settings_name};
+use cipherbox_engine::settings::{
+    Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
+};
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
@@ -6829,5 +6831,74 @@ fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
         block_on(engine_b.read_content(node)).expect("the head reads"),
         bobs,
         "the version this device wrote is the head"
+    );
+}
+
+/// The member picks "never put my bytes in CipherBox's store" and the save does
+/// not land. The next cold start refuses the write rather than reading the
+/// missing record as a first run.
+#[test]
+fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+
+    // No HTTP is scripted, so the head-block upload fails and nothing is ever
+    // published at the settings name.
+    let api = ApiClient::new(
+        alice.http.clone(),
+        alice.credential_store.clone(),
+        String::new(),
+    );
+    let refused_save = block_on(publish_settings(
+        &alice.record_store,
+        &api,
+        &alice.floor_store,
+        &alice.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &OrphanHeads::default(),
+        &SECRET,
+        &VaultSettings {
+            pin_mode: PinMode::External,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+        },
+    ))
+    .expect_err("the save does not reach the network");
+    // Scoped to a publish failure: an earlier refusal would leave the mint
+    // counter raised without ever attempting the head block this test counts.
+    assert!(
+        matches!(refused_save, SettingsPublishError::Publish(_)),
+        "the head-block publish must be what failed, got {refused_save:?}"
+    );
+    // The refused save tried to upload its own head block; what the write adds
+    // on top of that is the byte-destination property under test.
+    let before = uploaded_cids(&alice).len();
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let refused = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        200,
+    ))
+    .expect_err("no placement could be authenticated");
+    assert!(
+        matches!(
+            refused,
+            EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+            }
+        ),
+        "an attempted save is a durable mark of a choice: {refused:?}"
+    );
+    assert_eq!(
+        uploaded_cids(&alice).len(),
+        before,
+        "and no content byte went to the hosted store"
     );
 }

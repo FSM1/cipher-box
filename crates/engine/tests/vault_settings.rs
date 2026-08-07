@@ -181,6 +181,37 @@ fn publish(
     .expect("the settings record publishes");
 }
 
+/// Publish `settings` from `device` over a transport that acks nothing back:
+/// the attempt reaches the network, uploads its head block, and comes home
+/// unconfirmed.
+fn publish_unconfirmed(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    settings: &VaultSettings,
+    entropy_seed: u64,
+) -> SettingsPublishError {
+    serve_http(device, blocks, 4);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    block_on(publish_settings(
+        &AcksNothingBack,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(entropy_seed),
+        &OrphanHeads::default(),
+        &SECRET,
+        settings,
+    ))
+    .expect_err("a transport that acks nothing back never confirms")
+}
+
 /// Put `body` on the block plane and publish a record anchoring it at the
 /// account's settings name and `sequence`, bypassing the publish path. The
 /// ephemeral varies with the sequence: two bodies sealed under one key must
@@ -391,27 +422,9 @@ impl RecordTransport for AcksNothingBack {
 fn an_unconfirmed_publish_is_reported_and_never_advances_the_floor() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
-    let api = ApiClient::new(
-        device.http.clone(),
-        device.credential_store.clone(),
-        "http://api.test",
-    );
-    serve_http(&device, &Blocks::default(), 4);
+    let outcome = publish_unconfirmed(&world, &device, &Blocks::default(), &configured(), 3);
 
-    let outcome = block_on(publish_settings(
-        &AcksNothingBack,
-        &api,
-        &device.floor_store,
-        &device.snapshot_cache,
-        &world.scheduler,
-        &SyncTimingProfile::CI,
-        &mut SeededEntropy::new(3),
-        &OrphanHeads::default(),
-        &SECRET,
-        &configured(),
-    ));
-
-    assert_eq!(outcome.unwrap_err(), SettingsPublishError::Unconfirmed);
+    assert_eq!(outcome, SettingsPublishError::Unconfirmed);
     assert_eq!(
         block_on(
             device
@@ -499,8 +512,8 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
 
     assert_eq!(
         load,
-        SettingsLoad::Defaults(DefaultsReason::NoRecord),
-        "no record and no durable floor is a first run, not a suppression",
+        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
+        "no record and no durable mark of one is an assumed first run",
     );
     assert_eq!(
         VaultSettings::default(),
@@ -510,6 +523,46 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
             retention: RetentionPolicy::KeepAll,
         },
         "the documented defaults: hosted pinning, no member provider, keep all",
+    );
+}
+
+/// The mint counter is the only mark a save that never confirmed leaves, and it
+/// is enough: withholding the record from that device is suppression, not a
+/// first run.
+#[test]
+fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    assert_eq!(
+        publish_unconfirmed(&world, &device, &blocks, &external_only(), 6),
+        SettingsPublishError::Unconfirmed,
+    );
+    assert_eq!(
+        block_on(
+            device
+                .floor_store
+                .sequence_floor(settings_name(&SECRET).as_str().as_bytes())
+        )
+        .expect("read"),
+        None,
+        "the adopt-side marks stayed where they were",
+    );
+
+    // `Defaults` rather than `Stale`: nothing was cached, so the verdict rests
+    // on the mint counter alone.
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::Suppressed),
+        "the mint counter outlives the attempt, so absence is no longer credible",
+    );
+
+    // The refusal is a state the member can leave: saving again, successfully,
+    // puts the record where every later load can authenticate it.
+    publish(&world, &device, &blocks, &SECRET, &external_only());
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(external_only()),
     );
 }
 
@@ -908,7 +961,7 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
                 &SyncTimingProfile::CI,
                 &SECRET,
             )),
-            SettingsLoad::Defaults(DefaultsReason::NoRecord),
+            SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
             "a cached copy is re-opened on every read, never trusted for being cached",
         );
     }
@@ -1042,7 +1095,7 @@ fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings(
             &SyncTimingProfile::CI,
             &OTHER_SECRET,
         )),
-        SettingsLoad::Defaults(DefaultsReason::NoRecord),
+        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
         "another account's copy is both keyed and sealed out of reach",
     );
 }
