@@ -12,6 +12,7 @@ use cipherbox_core::content::{decode_content_cid_str, encode_content_cid_str, ve
 use cipherbox_core::error::CodecError;
 
 use super::budget::sealed_total_bytes;
+use super::chunk::SEALED_LEAF_OVERHEAD;
 use super::dag::{DagError, decode_root};
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
 use super::profile::ContentProfile;
@@ -156,6 +157,19 @@ pub enum ExpandError {
     TrustViolation(CodecError),
     /// The block addresses correctly but is not a readable root manifest.
     Root(DagError),
+    /// The manifest is not a version this engine framed: its chunk size is not
+    /// this build's, or it accounts for a different pinned total than the plan
+    /// quoted. Either way its link list is not the one the retire may name.
+    ForeignManifest,
+}
+
+/// One doomed version's whole retire set and what retiring it frees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expansion {
+    /// Every leaf in file order, then the root **last**.
+    pub targets: Vec<String>,
+    /// The pinned bytes the manifest accounts for.
+    pub pinned_bytes: u64,
 }
 
 impl From<DagError> for ExpandError {
@@ -175,10 +189,19 @@ impl From<DagError> for ExpandError {
 /// The root block is the only record of its own leaf list, so it retires last: a
 /// drain that dies mid-expansion can re-expand from a root that is still pinned,
 /// where a root-first order would leave its leaves unnameable and charged.
+///
+/// The manifest is held to `profile`'s framing and to `pinned_bytes`, the total
+/// the plan quoted. Anyone holding a scope's write seed can author a version
+/// record, so without both bounds a hand-framed root — correctly addressed, and
+/// internally consistent under a `chunkSize` of its own choosing — could name up
+/// to [`MAX_RESOLVED_RECORD_BYTES`]-worth of CIDs the owner's own token would
+/// then delete.
 pub fn expand_retire_targets(
     content_cid: &str,
     root_block: &[u8],
-) -> Result<Vec<String>, ExpandError> {
+    profile: &ContentProfile,
+    pinned_bytes: u64,
+) -> Result<Expansion, ExpandError> {
     if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(DagError::RootTooLarge {
             size: root_block.len(),
@@ -194,6 +217,14 @@ pub fn expand_retire_targets(
     verify_cid(&expected, root_block).map_err(ExpandError::TrustViolation)?;
     let manifest = decode_root(root_block)?;
 
+    let accounted = manifest
+        .size
+        .saturating_add((manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD))
+        .saturating_add(root_block.len() as u64);
+    if manifest.chunk_size != profile.chunk_size() as u64 || accounted != pinned_bytes {
+        return Err(ExpandError::ForeignManifest);
+    }
+
     let mut targets = Vec::with_capacity(manifest.leaf_cids.len() + 1);
     targets.extend(
         manifest
@@ -202,12 +233,14 @@ pub fn expand_retire_targets(
             .map(|cid| encode_content_cid_str(cid)),
     );
     targets.push(content_cid.to_owned());
-    Ok(targets)
+    Ok(Expansion {
+        targets,
+        pinned_bytes: accounted,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::chunk::SEALED_LEAF_OVERHEAD;
     use super::*;
     use crate::content::dag::{DAG_ROOT_CODEC, assemble};
     use crate::net::REGISTRY_BATCH_MAX;
@@ -350,10 +383,23 @@ mod tests {
             .chain([doomed.content_cid.clone()])
             .collect();
         assert_eq!(
-            expand_retire_targets(&doomed.content_cid, &root_block).expect("expands"),
-            expected,
+            expand(&doomed, &root_block).expect("expands"),
+            Expansion {
+                targets: expected,
+                pinned_bytes: doomed.pinned_bytes,
+            },
             "every leaf in file order, then the expansion key last"
         );
+    }
+
+    /// The expansion under the framing the fixture used.
+    fn expand(doomed: &ContentVersion, root_block: &[u8]) -> Result<Expansion, ExpandError> {
+        expand_retire_targets(
+            &doomed.content_cid,
+            root_block,
+            &ContentProfile::CI,
+            doomed.pinned_bytes,
+        )
     }
 
     /// At the frozen 1 MiB framing a 1 GiB version expands past the registry's
@@ -377,7 +423,14 @@ mod tests {
         )
         .expect("under the ceiling");
 
-        let targets = expand_retire_targets(&doomed.content_cid, &dag.root_block).expect("expands");
+        let targets = expand_retire_targets(
+            &doomed.content_cid,
+            &dag.root_block,
+            &profile,
+            doomed.pinned_bytes,
+        )
+        .expect("expands")
+        .targets;
         assert_eq!(targets.len(), leaves + 1);
         assert!(
             targets.len() > REGISTRY_BATCH_MAX,
@@ -391,26 +444,53 @@ mod tests {
     }
 
     /// The plan quotes a pinned total predicted from the framing profile; the
-    /// manifest accounts for one measured off the block. The two derivations are
-    /// independent, so a prune only reports the bytes it frees while they agree
-    /// — pinned here rather than cross-checked at drain time, where a
-    /// disagreement would stall a never-discard ledger forever.
+    /// manifest accounts for one measured off the block. A prune may only free
+    /// the bytes it reported, so the expansion refuses unless the two agree.
     #[test]
-    fn the_predicted_pinned_total_matches_what_the_manifest_accounts_for() {
+    fn a_manifest_that_cannot_account_for_the_quoted_total_is_refused() {
         for size in [0usize, 1, 15, 16, 17, 40, 100] {
             let (doomed, root_block, _) = doomed_version(&vec![3u8; size]);
-            let manifest = decode_root(&root_block).expect("a root manifest");
-            let accounted = manifest
-                .size
-                .saturating_add(
-                    (manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD),
-                )
-                .saturating_add(root_block.len() as u64);
             assert_eq!(
-                accounted, doomed.pinned_bytes,
+                expand(&doomed, &root_block).expect("expands").pinned_bytes,
+                doomed.pinned_bytes,
                 "size {size}: the two derivations must agree"
             );
+
+            let overstated = ContentVersion {
+                pinned_bytes: doomed.pinned_bytes + 1,
+                ..doomed.clone()
+            };
+            assert_eq!(
+                expand(&overstated, &root_block),
+                Err(ExpandError::ForeignManifest),
+                "size {size}: bytes the manifest cannot account for are never retired"
+            );
         }
+    }
+
+    /// The link count is only pinned to `size` *through* `chunkSize`, which the
+    /// manifest carries. A root framed at a chunk size this build never writes
+    /// can therefore name a leaf list of its own choosing, so it is refused
+    /// before its links are read.
+    #[test]
+    fn a_manifest_framed_at_a_foreign_chunk_size_is_refused() {
+        let leaves = 64usize;
+        let leaf_cids: Vec<Vec<u8>> = (0..leaves)
+            .map(|i| compute_cid(CONTENT_CID_CODEC, &(i as u64).to_be_bytes()))
+            .collect();
+        let foreign = ContentProfile::new(1).expect("nonzero");
+        let dag = assemble(&leaf_cids, leaves as u64, &foreign).expect("assembles");
+        let doomed = ContentVersion {
+            content_cid: encode_content_cid_str(&dag.content_cid),
+            pinned_bytes: leaves as u64
+                + leaves as u64 * SEALED_LEAF_OVERHEAD
+                + dag.root_block.len() as u64,
+        };
+        assert_eq!(
+            expand(&doomed, &dag.root_block),
+            Err(ExpandError::ForeignManifest),
+            "a leaf list this build's framing cannot produce is never retired"
+        );
     }
 
     /// The root block is the expansion key, so a substituted one would retire
@@ -421,7 +501,7 @@ mod tests {
         let (other, ..) = doomed_version(&[2u8; 40]);
         assert_ne!(doomed.content_cid, other.content_cid);
         assert!(matches!(
-            expand_retire_targets(&other.content_cid, &root_block),
+            expand(&other, &root_block),
             Err(ExpandError::TrustViolation(_))
         ));
     }
@@ -430,9 +510,13 @@ mod tests {
     /// refused rather than verified against a root-plane block.
     #[test]
     fn a_root_cid_off_the_dag_cbor_plane_is_refused() {
-        let (_, root_block, leaf_cids) = doomed_version(&[5u8; 40]);
+        let (doomed, root_block, leaf_cids) = doomed_version(&[5u8; 40]);
+        let off_plane = ContentVersion {
+            content_cid: leaf_cids[0].clone(),
+            ..doomed
+        };
         assert_eq!(
-            expand_retire_targets(&leaf_cids[0], &root_block),
+            expand(&off_plane, &root_block),
             Err(ExpandError::MalformedRootCid)
         );
     }
@@ -441,10 +525,7 @@ mod tests {
     fn an_oversized_block_is_refused_before_it_is_decoded() {
         let (doomed, ..) = doomed_version(&[6u8; 40]);
         assert!(matches!(
-            expand_retire_targets(
-                &doomed.content_cid,
-                &vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]
-            ),
+            expand(&doomed, &vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]),
             Err(ExpandError::Root(DagError::RootTooLarge { .. }))
         ));
     }
@@ -454,9 +535,12 @@ mod tests {
     #[test]
     fn a_correctly_addressed_non_manifest_block_is_refused() {
         let junk = b"not a root manifest";
-        let addressed = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, junk));
+        let addressed = ContentVersion {
+            content_cid: encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, junk)),
+            pinned_bytes: 0,
+        };
         assert!(matches!(
-            expand_retire_targets(&addressed, junk),
+            expand(&addressed, junk),
             Err(ExpandError::Root(_))
         ));
     }

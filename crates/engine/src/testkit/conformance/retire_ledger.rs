@@ -3,7 +3,15 @@
 
 use std::collections::BTreeMap;
 
+use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+
+use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{OwedRetire, RetireLedger};
+
+/// A distinct doomed-version root address, spelled as the ledger stores them.
+fn root(seed: u8) -> String {
+    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &[seed]))
+}
 
 fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
     OwedRetire {
@@ -44,35 +52,36 @@ where
     // concatenation without the tag's own length would leak between them.
     let alice_prefix = b"alice".as_slice();
 
+    let (a, b) = (root(1), root(2));
+
     assert!(
         held(&ledger, alice).await.is_empty(),
         "a fresh backing owes nothing"
     );
 
     ledger
-        .owe(alice, &[owed("root-a", 100), owed("root-b", 250)])
+        .owe(alice, &[owed(&a, 100), owed(&b, 250)])
         .await
         .unwrap();
     assert_eq!(
         held(&ledger, alice).await,
-        BTreeMap::from([("root-a".into(), 100), ("root-b".into(), 250)])
+        BTreeMap::from([(a.clone(), 100), (b.clone(), 250)])
     );
 
     // Keyed by target: a replayed prune must not add a second entry or move the
     // figure the vault reports as pending.
     ledger
-        .owe(alice, &[owed("root-a", 999), owed("root-a", 7)])
+        .owe(alice, &[owed(&a, 999), owed(&a, 7)])
         .await
         .unwrap();
     assert_eq!(
         held(&ledger, alice).await,
-        BTreeMap::from([("root-a".into(), 100), ("root-b".into(), 250)]),
+        BTreeMap::from([(a.clone(), 100), (b.clone(), 250)]),
         "re-oweing a held target must keep its stored figure"
     );
 
-    // Owner-scoped: one account's owed CIDs retried under another's token
-    // delete no rows and answer the registry's done-signal, so the two sets
-    // must never see each other.
+    // Owner-scoped: the registry's done-signal cannot tell one account's paid
+    // debt from another's unpaid one, so the two sets must never see each other.
     assert!(
         held(&ledger, bob).await.is_empty(),
         "entries must not be visible under another owner tag"
@@ -81,18 +90,15 @@ where
         held(&ledger, alice_prefix).await.is_empty(),
         "a tag that prefixes another must not see its entries"
     );
-    ledger.owe(bob, &[owed("root-a", 3)]).await.unwrap();
+    ledger.owe(bob, &[owed(&a, 3)]).await.unwrap();
     assert_eq!(
-        held(&ledger, alice).await[&"root-a".to_owned()],
+        held(&ledger, alice).await[&a],
         100,
         "the same target under two owners is two independent debts"
     );
 
     // Settle clears exactly what it names, under exactly the owner it names.
-    ledger
-        .settle(bob, &["root-a".into(), "never-owed".into()])
-        .await
-        .unwrap();
+    ledger.settle(bob, &[a.clone(), root(9)]).await.unwrap();
     assert!(
         held(&ledger, bob).await.is_empty(),
         "settle must clear the named target, and an unheld one must succeed"
@@ -103,10 +109,10 @@ where
         "settling under one owner must not clear another's"
     );
 
-    ledger.settle(alice, &["root-a".into()]).await.unwrap();
+    ledger.settle(alice, &[a.clone()]).await.unwrap();
     assert_eq!(
         held(&ledger, alice).await,
-        BTreeMap::from([("root-b".into(), 250)]),
+        BTreeMap::from([(b.clone(), 250)]),
         "settle must leave every target it did not name"
     );
 
@@ -115,7 +121,7 @@ where
     let reopened = open().await;
     assert_eq!(
         held(&reopened, alice).await,
-        BTreeMap::from([("root-b".into(), 250)]),
+        BTreeMap::from([(b.clone(), 250)]),
         "owed entries must survive reopen"
     );
     assert!(
@@ -125,10 +131,10 @@ where
 
     // A re-owed target that was settled is a fresh debt, not a resurrection of
     // the old figure.
-    reopened.owe(alice, &[owed("root-a", 42)]).await.unwrap();
+    reopened.owe(alice, &[owed(&a, 42)]).await.unwrap();
     assert_eq!(
         held(&reopened, alice).await,
-        BTreeMap::from([("root-a".into(), 42), ("root-b".into(), 250)])
+        BTreeMap::from([(a, 42), (b, 250)])
     );
 
     // An empty batch is a no-op on both sides.

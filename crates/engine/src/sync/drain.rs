@@ -25,7 +25,7 @@ use core::cell::{Cell, RefCell};
 use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::content::{encode_content_cid_str, verify_cid};
+use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid, verify_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -566,17 +566,21 @@ where
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
         self.orphan_heads.retire_pending(self.api).await;
-        // Outside the queue loop, so the FIFO head never waits on cleanup.
-        self.pending_reclaim.set(
-            drain_owed_retires(
-                &StagingRetireLedger::new(self.staging),
-                &owner_tag(scope.enc_secret),
-                self.api,
-                self.gateway,
-                self.http,
-            )
-            .await,
-        );
+        // Outside the queue loop, so the FIFO head never waits on cleanup. A
+        // ledger the store would not read leaves the last figure standing: "no
+        // debt" is a claim this pass cannot make.
+        if let Some(owed) = drain_owed_retires(
+            &StagingRetireLedger::new(self.staging),
+            &owner_tag(scope.enc_secret),
+            self.api,
+            self.gateway,
+            self.http,
+            self.content_profile,
+        )
+        .await
+        {
+            self.pending_reclaim.set(owed);
+        }
         report
     }
 
@@ -1665,7 +1669,8 @@ where
         else {
             return Err(Halt::Unclassified);
         };
-        let plan = plan_prune(&self.pinned_history(&versions)?, keep_latest);
+        let history = self.pinned_history(&versions)?;
+        let plan = plan_prune(&history, keep_latest);
         if plan.retire_targets.is_empty() {
             return Ok(());
         }
@@ -1673,10 +1678,26 @@ where
         let (head_size, head_cid) = (head.size, head.content_cid.clone());
         // The plan named a suffix of the history, so the survivors are its
         // prefix — one count, never a second clamp that could disagree.
-        versions.truncate(versions.len() - plan.retire_targets.len());
-        let content_cids = versions
+        let survivors = &history[..history.len() - plan.retire_targets.len()];
+        // A version list is authored by anyone holding the scope's write seed,
+        // and nothing on the wire forbids one `contentCid` appearing twice in
+        // it. Retiring a CID a surviving version still names would unpin the
+        // live file, so a repeated history is refused rather than pruned.
+        let kept: BTreeSet<&str> = survivors
             .iter()
-            .map(|version| encode_content_cid_str(&version.content_cid))
+            .map(|version| version.content_cid.as_str())
+            .collect();
+        if plan
+            .retire_targets
+            .iter()
+            .any(|doomed| kept.contains(doomed.content_cid.as_str()))
+        {
+            return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
+        }
+        versions.truncate(survivors.len());
+        let content_cids = survivors
+            .iter()
+            .map(|version| version.content_cid.clone())
             .collect();
         let version_count = versions.len() as u64;
         // A prune removes history; it does not modify the file, so the record's
@@ -1719,14 +1740,12 @@ where
         versions
             .iter()
             .map(|version| {
-                ContentVersion::from_plaintext_size(
-                    encode_content_cid_str(&version.content_cid),
-                    version.size,
-                    self.content_profile,
-                )
-                // A framed size with no readable root is a version this engine
-                // could not have published, and no retry reframes it.
-                .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
+                let content_cid =
+                    encode_content_cid_str(checked_content_cid(&version.content_cid)?);
+                ContentVersion::from_plaintext_size(content_cid, version.size, self.content_profile)
+                    // A framed size with no readable root is a version this
+                    // engine could not have published, and no retry reframes it.
+                    .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
             })
             .collect()
     }
@@ -2813,6 +2832,17 @@ fn provider_failure(error: &ProviderError) -> &'static str {
             "the block's address is not one any provider can be told to store"
         }
     }
+}
+
+/// A `contentCid` a resolved record carried, held to the frozen framing.
+///
+/// Core decodes the field as opaque bytes, so nothing upstream has rejected a
+/// malformed one — and [`encode_content_cid_str`]'s own guard is a release-active
+/// panic, which on the wasm leg takes the worker down.
+fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
+    is_wellformed_content_cid(cid)
+        .then_some(cid)
+        .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
 }
 
 /// One version as the registry names it: the root first, then every leaf in

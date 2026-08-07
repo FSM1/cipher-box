@@ -35,8 +35,8 @@ pub use read::{
     leaf_range_for_byte_range, read_block,
 };
 pub use retention::{
-    ContentVersion, ExpandError, PrunePlan, QuotaExceeded, RetentionPolicy, expand_retire_targets,
-    plan_prune, pre_flight_quota_check,
+    ContentVersion, ExpandError, Expansion, PrunePlan, QuotaExceeded, RetentionPolicy,
+    expand_retire_targets, plan_prune, pre_flight_quota_check,
 };
 pub use write::{ContentWriter, FinishedContent};
 

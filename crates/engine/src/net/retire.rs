@@ -11,11 +11,13 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::content::decode_content_cid_str;
+use cipherbox_core::content::{
+    decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
+};
 
 use super::REGISTRY_BATCH_MAX;
 use crate::api::{ApiClient, ApiError};
-use crate::content::{ContentPlane, Gateway, expand_retire_targets, read_block};
+use crate::content::{ContentPlane, ContentProfile, Gateway, expand_retire_targets, read_block};
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
@@ -121,8 +123,12 @@ where
 /// [`orphan_staging_keys`] treats the whole prefix as referenced, every owner's
 /// entries included.
 ///
+/// Kept short because an entry's key is the longest the staging space holds and
+/// the desktop store spells one as a hex filename — twice its byte length,
+/// inside Windows' whole-path budget.
+///
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
-pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cipherbox/retire-ledger/";
+pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 
 /// The owed bytes as one ledger entry stores them.
 const OWED_BYTES_LEN: usize = 8;
@@ -151,9 +157,13 @@ impl<'a, St: StagingStore> StagingRetireLedger<'a, St> {
         Ok(key)
     }
 
+    /// One entry's key. The target rides as its **binary** CID, a third shorter
+    /// than the multibase spelling and the form the suffix decodes back from.
     fn key(owner_tag: &[u8], target: &str) -> SeamResult<Vec<u8>> {
+        let cid = decode_content_cid_str(target)
+            .map_err(|_| SeamError::new("retire-ledger target is not a content CID"))?;
         let mut key = Self::scope(owner_tag)?;
-        key.extend_from_slice(target.as_bytes());
+        key.extend_from_slice(&cid);
         Ok(key)
     }
 }
@@ -162,9 +172,10 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()> {
         for entry in entries {
             let key = Self::key(owner_tag, &entry.target)?;
-            // Held targets keep their stored figure: a replayed prune must not
-            // double what the vault reports as pending.
-            if self.0.staged_bytes(&key).await?.is_none() {
+            // A readable entry keeps its stored figure, so a replayed prune
+            // cannot double what the vault reports as pending; an unreadable one
+            // is repaired rather than left to sit undrainable forever.
+            if owed_bytes(self.0.staged_bytes(&key).await?).is_none() {
                 self.0
                     .put_staged_bytes(&key, &entry.owed_bytes.to_be_bytes())
                     .await?;
@@ -177,26 +188,23 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
         let scope = Self::scope(owner_tag)?;
         let mut entries = Vec::new();
         for key in self.0.staged_keys().await? {
-            let Some(target) = key.strip_prefix(&scope[..]) else {
+            let Some(cid) = key
+                .strip_prefix(&scope[..])
+                .filter(|cid| is_wellformed_content_cid(cid))
+            else {
                 continue;
             };
-            // Bytes this build cannot read stay journaled: the entry is the only
-            // record that the retirement is owed, so it is never discarded on
-            // unreadable bookkeeping.
-            let (Ok(target), Some(owed)) = (
-                core::str::from_utf8(target),
-                self.0.staged_bytes(&key).await?,
-            ) else {
-                continue;
-            };
-            let Ok(owed_bytes) = <[u8; OWED_BYTES_LEN]>::try_from(&owed[..]) else {
+            let Some(owed_bytes) = owed_bytes(self.0.staged_bytes(&key).await?) else {
                 continue;
             };
             entries.push(OwedRetire {
-                target: target.to_owned(),
-                owed_bytes: u64::from_be_bytes(owed_bytes),
+                target: encode_content_cid_str(cid),
+                owed_bytes,
             });
         }
+        // Store enumeration order is host-dependent, and a pass can stop early;
+        // sorted, it at least stops at the same place on every host.
+        entries.sort_by(|a, b| a.target.cmp(&b.target));
         Ok(entries)
     }
 
@@ -210,8 +218,17 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     }
 }
 
+/// One entry's stored figure, or `None` for bytes this build did not write.
+fn owed_bytes(stored: Option<Vec<u8>>) -> Option<u64> {
+    let stored = stored?;
+    <[u8; OWED_BYTES_LEN]>::try_from(&stored[..])
+        .ok()
+        .map(u64::from_be_bytes)
+}
+
 /// Work the ledger once and report the pinned bytes still owed afterwards — the
-/// vault's pending-reclaim figure.
+/// vault's pending-reclaim figure. `None` when the ledger could not be read, so
+/// a store hiccup reports nothing rather than reporting no debt.
 ///
 /// Each entry is expanded from its own root block, fetched keyless (plaintext
 /// det-CBOR), and retired in [`expand_retire_targets`] order.
@@ -229,27 +246,25 @@ pub async fn drain_owed_retires<L, H, C>(
     api: &ApiClient<H, C>,
     gateway: &Gateway,
     http: &H,
-) -> u64
+    profile: &ContentProfile,
+) -> Option<u64>
 where
     L: RetireLedger,
     H: Http,
     C: CredentialStore,
 {
-    let Ok(owed) = ledger.owed(owner_tag).await else {
-        return 0;
-    };
-    let mut settled = Vec::new();
+    let owed = ledger.owed(owner_tag).await.ok()?;
     let mut still_owed = 0u64;
     let mut registry_up = true;
     for entry in owed {
         let outcome = if registry_up {
-            retire_owed(&entry, api, gateway, http).await
+            retire_owed(&entry, ledger, owner_tag, api, gateway, http, profile).await
         } else {
             RetireOutcome::RegistryDown
         };
         match outcome {
-            RetireOutcome::Retired => settled.push(entry.target),
-            RetireOutcome::Unexpandable => {
+            RetireOutcome::Retired => {}
+            RetireOutcome::Deferred => {
                 still_owed = still_owed.saturating_add(entry.owed_bytes);
             }
             RetireOutcome::RegistryDown => {
@@ -258,54 +273,74 @@ where
             }
         }
     }
-    if !settled.is_empty() {
-        // A settle the store refused leaves the entries owed, and the next pass
-        // replays their retire to a `retired: 0` — idempotent, never a
-        // double-free.
-        let _ = ledger.settle(owner_tag, &settled).await;
-    }
-    still_owed
+    Some(still_owed)
 }
 
 /// How one owed entry's pass ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RetireOutcome {
-    /// The registry answered, so the entry clears.
+    /// The entry is settled and owes nothing further.
     Retired,
-    /// This entry alone could not be expanded: a malformed target, or a root no
-    /// source served.
-    Unexpandable,
+    /// Nothing this entry can do this pass — a root no source served, a manifest
+    /// that is not this version's, or a store that would not take the settle. It
+    /// stays owed and the pass moves on.
+    Deferred,
     /// The registry refused or could not be reached — not this entry's fault,
     /// and not the next one's either.
     RegistryDown,
 }
 
 /// Retire one owed version's whole block set.
-async fn retire_owed<H, C>(
+///
+/// The entry settles **between** the leaf batches and the root's own final
+/// batch. The root is the expansion key, so an entry still owed once its root is
+/// gone could never be re-expanded and would owe forever; settling first trades
+/// that for a bounded leak — one root block, on the narrow window where the
+/// final batch never lands.
+async fn retire_owed<L, H, C>(
     entry: &OwedRetire,
+    ledger: &L,
+    owner_tag: &[u8],
     api: &ApiClient<H, C>,
     gateway: &Gateway,
     http: &H,
+    profile: &ContentProfile,
 ) -> RetireOutcome
 where
+    L: RetireLedger,
     H: Http,
     C: CredentialStore,
 {
     let Ok(expected) = decode_content_cid_str(&entry.target) else {
-        return RetireOutcome::Unexpandable;
+        return RetireOutcome::Deferred;
     };
     let Ok(root_block) =
         read_block(gateway, http, &entry.target, &expected, ContentPlane::Root).await
     else {
-        return RetireOutcome::Unexpandable;
+        return RetireOutcome::Deferred;
     };
-    let Ok(targets) = expand_retire_targets(&entry.target, &root_block) else {
-        return RetireOutcome::Unexpandable;
+    let Ok(expansion) =
+        expand_retire_targets(&entry.target, &root_block, profile, entry.owed_bytes)
+    else {
+        return RetireOutcome::Deferred;
     };
-    match retire(api, &targets).await {
-        Ok(()) => RetireOutcome::Retired,
-        Err(_) => RetireOutcome::RegistryDown,
+    let Some((root, leaves)) = expansion.targets.split_last() else {
+        return RetireOutcome::Deferred;
+    };
+    if retire(api, leaves).await.is_err() {
+        return RetireOutcome::RegistryDown;
     }
+    if ledger
+        .settle(owner_tag, core::slice::from_ref(&entry.target))
+        .await
+        .is_err()
+    {
+        return RetireOutcome::Deferred;
+    }
+    // Past the settle the debt is discharged, so a refused root batch is a leaked
+    // pin row rather than a reason to re-own it.
+    let _ = retire(api, core::slice::from_ref(root)).await;
+    RetireOutcome::Retired
 }
 
 /// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
@@ -446,18 +481,23 @@ mod tests {
         http
     }
 
-    /// Every target the pass handed the registry, batch order preserved.
-    fn retired_targets(http: &ScriptedHttp) -> Vec<String> {
+    /// The retire calls the pass made, one entry per batch, in order.
+    fn retire_batches(http: &ScriptedHttp) -> Vec<Vec<String>> {
         http.requests()
             .iter()
             .filter(|request| request.url.ends_with("/registry/retire"))
-            .flat_map(|request| {
+            .map(|request| {
                 serde_json::from_slice::<Vec<String>>(
                     request.body.as_deref().expect("a retire call has a body"),
                 )
                 .expect("a retire body is a JSON array")
             })
             .collect()
+    }
+
+    /// Every target the pass handed the registry, batch order preserved.
+    fn retired_targets(http: &ScriptedHttp) -> Vec<String> {
+        retire_batches(http).into_iter().flatten().collect()
     }
 
     fn drain(
@@ -471,7 +511,15 @@ mod tests {
             InMemoryCredentialStore::default(),
             "http://api.test",
         );
-        let remaining = block_on(drain_owed_retires(&ledger, owner, &api, &gateway(), http));
+        let remaining = block_on(drain_owed_retires(
+            &ledger,
+            owner,
+            &api,
+            &gateway(),
+            http,
+            &ContentProfile::CI,
+        ))
+        .expect("the ledger reads");
         (remaining, block_on(ledger.owed(owner)).expect("owed"))
     }
 
@@ -495,15 +543,53 @@ mod tests {
         let (remaining, owed) = drain(&store, OWNER, &http);
 
         assert_eq!(
-            retired_targets(&http),
-            leaf_cids
-                .into_iter()
-                .chain([entry.target.clone()])
-                .collect::<Vec<_>>(),
-            "the expansion key retires after everything it names"
+            retire_batches(&http),
+            vec![leaf_cids, vec![entry.target.clone()]],
+            "every leaf goes first; the expansion key rides its own final batch"
         );
         assert!(owed.is_empty(), "the registry's answer settles the entry");
         assert_eq!(remaining, 0, "nothing is still owed");
+    }
+
+    /// The root is the expansion key, so an entry still owed once its root is
+    /// gone could never be re-expanded. The settle therefore lands *before* the
+    /// root batch: a refused root leaks one pin row, where the other order owes
+    /// forever.
+    #[test]
+    fn the_entry_settles_before_its_root_goes_so_a_refused_root_cannot_strand_it() {
+        let (entry, root_block, leaf_cids) = owed_version(&[8u8; 40]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        // The leaf batch is answered; the root's own batch is not.
+        let http = ScriptedHttp::default();
+        let leaves = leaf_cids.clone();
+        let cid = entry.target.clone();
+        for _ in 0..32 {
+            let (cid, leaves, root_block) = (cid.clone(), leaves.clone(), root_block.clone());
+            http.enqueue_derived(move |request| {
+                if request.url.ends_with("/registry/retire") {
+                    let sent: Vec<String> =
+                        serde_json::from_slice(request.body.as_deref().unwrap_or_default())
+                            .unwrap_or_default();
+                    return Ok(retire_answer((sent == leaves).then_some(1)));
+                }
+                if requested_cid(&request.url) == cid {
+                    return Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: root_block,
+                    });
+                }
+                Err(SeamError::new("no such block"))
+            });
+        }
+        let (remaining, owed) = drain(&store, OWNER, &http);
+        assert!(
+            owed.is_empty(),
+            "the debt is discharged once the leaves are gone"
+        );
+        assert_eq!(remaining, 0);
     }
 
     /// The done-signal is the registry's own answer, and a zero count is its
