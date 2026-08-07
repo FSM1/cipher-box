@@ -26,6 +26,7 @@ export interface EngineHostLike {
   command(command: CommandDescriptor): Promise<void>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
+  /** Takes ownership of `chunk`: the host scrubs the plaintext once it lands. */
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
@@ -113,9 +114,15 @@ export class EngineHost implements EngineHostLike {
   }
 
   async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    // The handle copies into WASM memory synchronously; a view over the
-    // transferred buffer is safe here.
-    await this.handle.pushChunk(handle, new Uint8Array(chunk));
+    // The chunk arrives by transfer, so the worker is its terminal owner: the
+    // handle copies it into WASM memory synchronously, and the JS-side
+    // plaintext is scrubbed rather than left for the collector.
+    const view = new Uint8Array(chunk);
+    try {
+      await this.handle.pushChunk(handle, view);
+    } finally {
+      view.fill(0);
+    }
   }
 
   commitWrite(handle: WriteHandle): Promise<bigint> {
