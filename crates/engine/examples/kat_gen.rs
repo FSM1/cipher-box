@@ -1,6 +1,6 @@
-//! The committed KAT generator for the engine's content-DAG fixtures
-//! (blueprint/core.md "KAT regime": vectors regenerate only through committed
-//! generators, never hand-edits). Sibling to core's generator; see
+//! The committed KAT generator for the engine's content-DAG and adoption-gate
+//! fixtures (blueprint/core.md "KAT regime": vectors regenerate only through
+//! committed generators, never hand-edits). Sibling to core's generator; see
 //! `crates/engine/tests/kat_content.rs` for why the engine needs its own.
 //!
 //! Run from any cwd:
@@ -21,15 +21,28 @@ use std::path::Path;
 
 use cipherbox_core::codec::{Map, Value, encode};
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, verify_cid};
+use cipherbox_core::error::TrustViolation;
+use cipherbox_core::kdf;
+use cipherbox_core::seal::{
+    GrantSection, GrantSetEntry, Permission, PreservedFields, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedGrantBlob,
+    StructureSigInput, encode_envelope, encode_grant_section, set_grant_section, sign_grant_set,
+    sign_structure,
+};
 use cipherbox_core::suite::aead::KEY_LEN;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_engine::content::{
     ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, assemble,
     decode_root, frame_and_seal,
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
+use cipherbox_engine::gate::authenticate_section_structures;
+use cipherbox_engine::testkit::{OWNER_ROOT_EPOCH, OwnerRootSpec, owner_root_fixture};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 engine content-dag";
+const GATE_PROFILE: &str = "cipherbox/v2 engine adoption-gate";
 
 /// A pinned entropy stream: KAT vectors must be byte-reproducible, so the
 /// generator injects a fixed nonce sequence instead of sampling one.
@@ -95,6 +108,22 @@ struct DagCapacityRejectVector {
     class: String,
 }
 
+/// A scope-root head block the gate's stage 3 must accept or refuse, with the
+/// owner identity that anchors stage 2. The block carries its grant section
+/// under `grantSection`, exactly as it arrives off the record plane.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SectionSignerVector {
+    name: String,
+    head_block: String,
+    owner_identity_pk: String,
+    /// Absent on an accept vector.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileCount {
@@ -128,6 +157,15 @@ struct Manifest {
     manifest_version: u64,
     profile: String,
     content: ContentSection,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GateManifest {
+    manifest_version: u64,
+    profile: String,
+    section_signer_accept: FileCount,
+    section_signer_reject: RejectSection,
 }
 
 fn main() {
@@ -169,7 +207,10 @@ fn main() {
             dag_root_reject: RejectSection {
                 file: "vectors/content/dag_root_reject.json".to_string(),
                 count: root_reject.len(),
-                checks: checks_in_surface_order(root_reject.iter().map(|v| v.check.as_str())),
+                checks: checks_in_surface_order(
+                    DagError::CHECKS,
+                    root_reject.iter().map(|v| v.check.as_str()),
+                ),
             },
             dag_capacity_accept: FileCount {
                 file: "vectors/content/dag_capacity_accept.json".to_string(),
@@ -178,16 +219,52 @@ fn main() {
             dag_capacity_reject: RejectSection {
                 file: "vectors/content/dag_capacity_reject.json".to_string(),
                 count: 1,
-                checks: checks_in_surface_order([capacity_reject.check.as_str()]),
+                checks: checks_in_surface_order(DagError::CHECKS, [capacity_reject.check.as_str()]),
             },
         },
     };
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
+    let gate_dir = kat_dir.join("gate");
+    let gate_vectors = gate_dir.join("vectors");
+    fs::create_dir_all(&gate_vectors)
+        .unwrap_or_else(|e| panic!("create {}: {e}", gate_vectors.display()));
+    let (signer_accept, signer_reject) = build_section_signer_vectors();
+    write_pretty(
+        &gate_vectors.join("section_signer_accept.json"),
+        &signer_accept,
+    );
+    write_pretty(
+        &gate_vectors.join("section_signer_reject.json"),
+        &signer_reject,
+    );
+    write_pretty(
+        &gate_dir.join("manifest.json"),
+        &GateManifest {
+            manifest_version: 1,
+            profile: GATE_PROFILE.to_string(),
+            section_signer_accept: FileCount {
+                file: "vectors/section_signer_accept.json".to_string(),
+                count: signer_accept.len(),
+            },
+            section_signer_reject: RejectSection {
+                file: "vectors/section_signer_reject.json".to_string(),
+                count: signer_reject.len(),
+                checks: checks_in_surface_order(
+                    TrustViolation::CHECKS,
+                    signer_reject.iter().map(|v| v.check.as_deref().unwrap()),
+                ),
+            },
+        },
+    );
+
     println!(
-        "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json",
+        "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \
+         gate: {} accept, {} reject + gate/manifest.json",
         root_accept.len(),
-        root_reject.len()
+        root_reject.len(),
+        signer_accept.len(),
+        signer_reject.len()
     );
 }
 
@@ -197,21 +274,170 @@ fn write_pretty<T: Serialize>(path: &Path, value: &T) {
     fs::write(path, text).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }
 
-/// The distinct checks in declaration order, asserting each comes from
-/// [`DagError::CHECKS`] (a reject vector can never name an off-surface check).
-fn checks_in_surface_order<'a>(present: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+/// The distinct checks in `surface` declaration order, asserting every one is on
+/// that surface — a reject vector can never name an off-surface check.
+fn checks_in_surface_order<'a>(
+    surface: &[&str],
+    present: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
     let present: BTreeSet<&str> = present.into_iter().collect();
-    let checks: Vec<String> = DagError::CHECKS
+    let checks: Vec<String> = surface
         .iter()
         .filter(|c| present.contains(*c))
         .map(|c| (*c).to_string())
         .collect();
-    assert_eq!(
-        checks.len(),
-        present.len(),
-        "every reject-vector check must come from the DAG error surface"
-    );
+    assert_eq!(checks.len(), present.len(), "off-surface reject check");
     checks
+}
+
+/// The gate KAT's own key axis. Nonces and HPKE ephemerals are fixed inside the
+/// fixture, so a spec that shares `root_id`/`owner_enc` with another shares a
+/// (key, nonce) pair (`testkit/owner_root.rs`) — and this set freezes its
+/// ciphertexts in a committed artifact.
+const GATE_KAT_SCOPE: [u8; 16] = [0x2a; 16];
+const GATE_KAT_ROOT: [u8; 16] = [0x1b; 16];
+const GATE_KAT_OWNER_ENC_SEED: [u8; 32] = [0x3c; 32];
+/// The committed write-grantee's blinded tag and pseudonym seed.
+const GATE_KAT_GRANTEE_TAG: [u8; 32] = [0x66; 32];
+const GATE_KAT_GRANTEE_PSEUDONYM_SEED: [u8; 32] = [0x55; 32];
+
+/// Stage 3's **one section, one signer** rule frozen over whole scope-root head
+/// blocks (blueprint/engine.md "Adoption gate and floors").
+///
+/// Every vector shares one commitment naming two write-capable pseudonyms: the
+/// accept family shows the pin bounds how many signers a section has, not which
+/// pseudonym may sign, and every reject's structure signatures are each valid
+/// under a committed pseudonym, so only the pin refuses them.
+fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSignerVector>) {
+    let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
+    let owner_enc = kdf::enc_subkey(&GATE_KAT_OWNER_ENC_SEED).public();
+    let fixture = owner_root_fixture(OwnerRootSpec {
+        owner_identity: &owner_identity,
+        owner_enc: &owner_enc,
+        scope_id: GATE_KAT_SCOPE,
+        root_id: GATE_KAT_ROOT,
+        children: Vec::new(),
+        child_scope_index: Vec::new(),
+        parent_node_seed: None,
+        owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+    });
+    let owner_identity_pk = hex::encode(owner_identity.verifying_key().to_sec1());
+    let grantee = Ed25519Signer::from_seed(GATE_KAT_GRANTEE_PSEUDONYM_SEED);
+    let by_grantee = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
+        let input = StructureSigInput::over_ciphertext(
+            GATE_KAT_SCOPE,
+            OWNER_ROOT_EPOCH,
+            tag,
+            recipient,
+            ct,
+        );
+        sign_structure(&grantee, &input).to_bytes()
+    };
+
+    // One commitment for every vector, naming the owner's pseudonym and a write
+    // grantee's, so `committed_write_pseudonyms` is never a one-element set a
+    // pin could satisfy vacuously.
+    let committed = {
+        let mut section = fixture.grant_section.clone();
+        section.commitment.entries.push(GrantSetEntry::new(
+            GATE_KAT_GRANTEE_TAG,
+            Permission::Write,
+            grantee.verifying_key().to_bytes(),
+        ));
+        section.commitment_sig = sign_grant_set(&owner_identity, &section.commitment)
+            .expect("commitment signs")
+            .to_compact();
+        section
+    };
+    let head_block = |section: &GrantSection| {
+        let mut envelope = fixture.envelope.clone();
+        set_grant_section(
+            &mut envelope,
+            encode_grant_section(section).expect("section encodes"),
+        );
+        encode_envelope(&envelope).expect("envelope encodes")
+    };
+
+    // Accept: the whole section under the grantee's pseudonym — a committed
+    // signer that is neither the owner's nor first in the trial order.
+    let mut grantee_signed = committed.clone();
+    grantee_signed.owner_blob.signature = by_grantee(
+        STRUCT_TAG_OWNER_BLOB,
+        None,
+        &grantee_signed.owner_blob.ciphertext,
+    );
+    {
+        let blob = grantee_signed
+            .owner_write_blob
+            .as_mut()
+            .expect("the spec authors one");
+        blob.signature = by_grantee(STRUCT_TAG_OWNER_WRITE_BLOB, None, &blob.ciphertext);
+    }
+    grantee_signed.write_body.signature = by_grantee(
+        STRUCT_TAG_WRITE_BODY,
+        None,
+        &grantee_signed.write_body.sealed,
+    );
+
+    // Reject: the owner's section with the write-body re-signed by the grantee —
+    // the shape that used to force the full trial-verify product.
+    let mut two_signers = committed.clone();
+    two_signers.write_body.signature =
+        by_grantee(STRUCT_TAG_WRITE_BODY, None, &two_signers.write_body.sealed);
+
+    // Reject: a structure splice. The grant blob is verbatim another committed
+    // writer's work at this scope and epoch, so its signature recomputes
+    // identically here — the integrity hole the pin closes, and the only vector
+    // exercising the `recipientTag` arm of the signed input.
+    let mut spliced = committed.clone();
+    let ciphertext = b"a grant blob lifted from another committed writer".to_vec();
+    spliced.grant_blobs.push(SignedGrantBlob {
+        tag: GATE_KAT_GRANTEE_TAG,
+        enc: [0x7d; 32],
+        signature: by_grantee(
+            STRUCT_TAG_GRANT_BLOB,
+            Some(GATE_KAT_GRANTEE_TAG),
+            &ciphertext,
+        ),
+        ciphertext,
+        unknown: PreservedFields::new(),
+    });
+
+    let vector = |name: &str, section: &GrantSection, verdict: Option<(String, String)>| {
+        let (check, class) = verdict.unzip();
+        SectionSignerVector {
+            name: name.to_string(),
+            head_block: hex::encode(head_block(section)),
+            owner_identity_pk: owner_identity_pk.clone(),
+            check,
+            class,
+        }
+    };
+    let accept_out = [
+        ("single-signer-owner-pseudonym", committed),
+        ("single-signer-committed-grantee", grantee_signed),
+    ]
+    .iter()
+    .map(|(name, section)| {
+        authenticate_section_structures(section, &fixture.envelope)
+            .unwrap_or_else(|e| panic!("{name}: a single-signer section must authenticate: {e}"));
+        vector(name, section, None)
+    })
+    .collect();
+
+    let reject_out = [
+        ("two-committed-signers", two_signers),
+        ("spliced-structure-from-another-committed-signer", spliced),
+    ]
+    .iter()
+    .map(|(name, section)| {
+        let error = authenticate_section_structures(section, &fixture.envelope)
+            .expect_err("a section with two committed signers must fail closed");
+        let verdict = (error.check().to_string(), error.class().to_string());
+        vector(name, section, Some(verdict))
+    })
+    .collect();
+    (accept_out, reject_out)
 }
 
 /// Deterministic plaintext of `len` bytes.

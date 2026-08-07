@@ -264,11 +264,12 @@ pub struct GrantSection {
     pub unknown: PreservedFields,
 }
 
-/// The frozen bound on a section's history links. The gate verifies one
-/// signature per structure per committed pseudonym, so an unbounded collection
-/// lets one record dictate another reader's CPU budget. Producers prune to a far
-/// smaller retained window (`rotation/reseal.rs`), leaving this a
-/// malformed-input guard an honest rotator never approaches.
+/// The frozen bound on a section's history links: the gate's stage-3 work is
+/// `pseudonyms + structures` (blueprint/engine.md "One section, one signer"), so
+/// an unbounded collection on either side lets one record dictate another
+/// reader's CPU budget. Producers prune to a far smaller retained window
+/// (`rotation/reseal.rs`), leaving this a malformed-input guard an honest
+/// rotator never approaches.
 pub const MAX_HISTORY_LINKS: usize = 256;
 
 /// The frozen bound on a section's grant blobs — one per committed grantee.
