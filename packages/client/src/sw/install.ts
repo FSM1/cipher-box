@@ -27,6 +27,8 @@ export interface FetchEventLike {
   /** The window client that issued the request; empty when the browser knows none. */
   readonly clientId?: string;
   respondWith(response: Response | Promise<Response>): void;
+  /** Optional so a caller's fake event need not supply one. */
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 /** The client that sent a message; its `id` is the one `FetchEventLike.clientId` carries. */
