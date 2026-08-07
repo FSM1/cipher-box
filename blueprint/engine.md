@@ -265,19 +265,11 @@ degraded outcome applies a different policy rather than showing stale data.
   authenticate is never talked back onto the default, which is precisely when
   that reversal is cheapest. The adopted revision is raised by a store write
   separate from the sequence floor's and not atomic with it, so it outlives a
-  lost one. Residual: absence remains a verdict about _this device_, and every
-  fresh install on an account that already published settings holds no mark
-  until its first successful resolve, so an adversary who withholds the record
-  from one reaches the assumed default. Closing that needs positive
-  account-scoped evidence that settings were never published, and the only such
-  signal in reach is the account's advisory BYO flag — which the placement
-  decision does not see, and which this very arm _clears_: an assumed placement
-  reaches the hosted quota pre-flight, whose reconcile then PATCHes the account
-  to `byo=false`. So the flag is not a standing witness today, and when it is
-  wired it may only ever be read in the restricting direction — `advisory` set
+  lost one. Absence is a verdict about _this device_ only, so an assumed
+  placement must never latch account-scoped state, and the account's advisory
+  BYO flag may only ever be read in the restricting direction — `advisory` set
   means never assume the default. The inverse would be a server-controlled
-  widening on an untrusted signal, and an assumed placement must not latch
-  account-scoped state in the first place.
+  widening on an untrusted signal.
 - **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
   an availability event recovered by revival (above), because a gate-level
   rejection would lock every grantee out of a dormant owner's vault — a read
