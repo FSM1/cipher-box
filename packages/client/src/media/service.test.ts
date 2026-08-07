@@ -187,6 +187,22 @@ describe('MediaService', () => {
     expect(service.revokeStreamUrl(`${ORIGIN}${url}`)).toBe(false);
   });
 
+  it('has nothing to wait for on a url naming no live ticket', async () => {
+    const { container, worker, service } = setup();
+    container.controller = worker;
+    await service.start();
+    const url = service.createStreamUrl({
+      node: new Uint8Array([9]),
+      size: 8,
+      mimeType: 'audio/o',
+    });
+    service.revokeStreamUrl(url);
+
+    // A deadline long enough that only an immediate resolve can finish the test.
+    await service.whenStreamIdle(url, 60_000);
+    await service.whenStreamIdle('https://elsewhere.example/stream/x', 60_000);
+  });
+
   it('re-brokers a fresh channel and closes the old one when the worker asks for a port', async () => {
     const { container, worker, service, channels } = setup();
     container.controller = worker;

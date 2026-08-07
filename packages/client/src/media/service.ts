@@ -91,6 +91,18 @@ export class MediaService {
     return this.registry.register(source);
   }
 
+  /**
+   * Resolves once nothing is reading `url` — its transfer ended, or `stallMs`
+   * passed with no window delivered. A holder that revokes on this drops a
+   * ticket as soon as its bytes stop rather than holding plaintext addressable
+   * for the life of the tab.
+   */
+  whenStreamIdle(url: string, stallMs: number): Promise<void> {
+    const ticket = ticketFromUrl(url, this.origin);
+    if (ticket === null || this.registry.lookup(ticket) === undefined) return Promise.resolve();
+    return this.broker.whenIdle(ticket, stallMs);
+  }
+
   /** False when the URL named no live ticket of this tab's. */
   revokeStreamUrl(url: string): boolean {
     const ticket = ticketFromUrl(url, this.origin);

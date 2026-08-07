@@ -560,3 +560,82 @@ describe('MediaBroker', () => {
     next.port2.close();
   });
 });
+
+describe('MediaBroker.whenIdle', () => {
+  /** Records the settlement without awaiting it, so pending can be asserted. */
+  function watch(promise: Promise<void>): () => boolean {
+    let done = false;
+    void promise.then(() => {
+      done = true;
+    });
+    return () => done;
+  }
+
+  it('stays pending while a body is still reading the ticket', async () => {
+    const h = harness(20, { lingerMs: 50 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'chunk');
+
+    expect(idle()).toBe(false);
+  });
+
+  it('resolves once the last body ends, without waiting out the pin linger', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'chunk');
+    expect(idle()).toBe(false);
+
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await waitFor(idle, 'the ticket to go idle');
+  });
+
+  it('gives up on a ticket no body ever claims', async () => {
+    const h = harness(20);
+    await h.broker.whenIdle(h.ticket, 1);
+  });
+
+  it('re-arms the deadline for as long as windows keep arriving', async () => {
+    const h = harness(20, { lingerMs: 50 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 40));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    // Four windows spaced past a deadline that never re-armed would expire.
+    for (let pull = 0; pull < 4; pull += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      h.send({ type: 'cb:media:pull', requestId: 1 });
+      await waitFor(() => h.received.length === pull + 2, `chunk ${pull}`);
+      expect(idle()).toBe(false);
+    }
+  });
+
+  it('settles a waiter when the ticket is revoked out from under the read', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    h.broker.revoke(h.ticket);
+
+    await waitFor(idle, 'the revoked ticket to settle');
+  });
+
+  it('settles every waiter when the broker loses its port', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    h.broker.close();
+
+    await waitFor(idle, 'the closed broker to settle its waiters');
+  });
+});

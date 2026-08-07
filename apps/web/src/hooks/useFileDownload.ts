@@ -19,9 +19,21 @@ const OPAQUE = 'application/octet-stream';
  */
 const REVOKE_AFTER_MS = 1_000;
 
+/**
+ * How long a ticket may go without delivering a window before its transfer
+ * counts as over. A stalled read fails at the pipe's own pull deadline well
+ * before this, so it only ever catches a save the browser never began.
+ */
+const STREAM_STALL_MS = 45_000;
+
 export interface FileDownload {
   error: string | null;
-  /** @param size the engine's byte count; `null` forces the buffered read. */
+  /**
+   * Resolves when the file's bytes have stopped moving, so a caller saving a
+   * selection can serialize on it.
+   *
+   * @param size the engine's byte count; `null` forces the buffered read.
+   */
   save(node: Uint8Array, name: string, size: bigint | null): Promise<void>;
   /** Drops a failure the user has moved on from. */
   clearError(): void;
@@ -31,14 +43,15 @@ export function useFileDownload(): FileDownload {
   const client = useEngine();
   const media = useMediaService();
   const [error, setError] = useState<string | null>(null);
-  const tickets = useRef<string[]>([]);
+  const tickets = useRef(new Set<string>());
 
-  // A streamed save reads for as long as the transfer lasts, so its ticket
-  // cannot be dropped on a timer the way a fully materialized blob URL can.
+  // Only a save still transferring at unmount reaches here; every other ticket
+  // is dropped by the save that minted it.
   useEffect(() => {
     const held = tickets.current;
     return () => {
-      for (const url of held.splice(0)) media?.revokeStreamUrl(url);
+      for (const url of [...held]) media?.revokeStreamUrl(url);
+      held.clear();
     };
   }, [media]);
 
@@ -52,8 +65,16 @@ export function useFileDownload(): FileDownload {
 
       const ticket = streamTicket(media, node, size, OPAQUE);
       if (ticket !== null) {
-        tickets.current.push(ticket);
+        tickets.current.add(ticket);
         saveToDisk(ticket, name);
+        // Resolving only when the bytes stop is what bounds the live set: a
+        // caller looping over a selection holds one ticket, not one per file.
+        try {
+          await media?.whenStreamIdle(ticket, STREAM_STALL_MS);
+        } finally {
+          tickets.current.delete(ticket);
+          media?.revokeStreamUrl(ticket);
+        }
         return;
       }
 

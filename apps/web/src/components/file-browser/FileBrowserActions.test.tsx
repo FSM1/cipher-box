@@ -756,6 +756,7 @@ describe('the vault browser read path over the streaming pipe', () => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
+        whenStreamIdle: () => Promise.resolve(),
         revokeStreamUrl: (url: string) => {
           revoked.push(url);
           return true;
