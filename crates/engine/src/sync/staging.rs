@@ -537,9 +537,12 @@ mod tests {
     /// Collecting the drain's completion mark would let a restored queue replay
     /// ops that already published, so it is never orphan residue.
     ///
-    /// The op-id marks are per-identity, so this holds for a mark **this**
+    /// The same holds for a retire-ledger entry, whose collection would drop a
+    /// pending reclaim debt and leak the pinned bytes it names.
+    ///
+    /// Both prefixes are per-identity, so this holds for an entry **this**
     /// session cannot read too: its owner is the identity that still needs it,
-    /// and collecting it would discard their completion record.
+    /// and collecting it would discard their record.
     #[test]
     fn the_drains_own_bookkeeping_is_never_classed_an_orphan() {
         let store = InMemoryStagingStore::default();
@@ -549,7 +552,11 @@ mod tests {
                 key.extend_from_slice(&[7u8; 32]);
                 key
             };
-            for prefix in [DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX] {
+            for prefix in [
+                DRAINED_OP_MARK_PREFIX,
+                PUBLISHED_OP_MARK_PREFIX,
+                RETIRE_LEDGER_PREFIX,
+            ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
                     .await
@@ -564,7 +571,7 @@ mod tests {
             assert_eq!(
                 orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
-                "only the residue is collected, never anyone's mark"
+                "only the residue is collected, never anyone's bookkeeping"
             );
         });
     }

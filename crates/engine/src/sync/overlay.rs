@@ -287,6 +287,41 @@ mod tests {
     }
 
     #[test]
+    fn overlay_prune_caps_a_projected_content_version() {
+        let mut base = base();
+        let mut meta = NodeMeta::new(id(1), "f.txt", NodeKind::File);
+        meta.content_version = Some(5);
+        base.upsert_node(meta);
+        base.link(id(0), id(1), 1);
+        let keep = core::num::NonZeroU64::new(2).expect("nonzero");
+        let view = apply_overlay(&base, &[Op::prune(id(1), keep, 1, AT)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            Some(2),
+            "the shortened history is rendered"
+        );
+        assert_eq!(
+            base.node(id(1)).unwrap().content_version,
+            Some(5),
+            "base untouched"
+        );
+    }
+
+    #[test]
+    fn overlay_prune_leaves_an_unprojected_count_unknown() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        let keep = core::num::NonZeroU64::new(2).expect("nonzero");
+        let view = apply_overlay(&base, &[Op::prune(id(1), keep, 1, AT)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            None,
+            "capping an unknown count still says nothing about it"
+        );
+    }
+
+    #[test]
     fn overlay_renders_the_one_version_a_content_bearing_create_authors() {
         let base = base();
         let with_content = Op::create(

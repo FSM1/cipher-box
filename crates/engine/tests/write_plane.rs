@@ -417,12 +417,15 @@ impl Blocks {
                 });
             }
             // The registry answers a retire with what it deleted; the count is
-            // the engine's done-signal, so an empty body is not a valid ack.
-            let retired = request
+            // the engine's done-signal, so a malformed body must fail the test
+            // rather than ack a zero that reads as done.
+            let body = request
                 .body
                 .as_deref()
-                .and_then(|body| serde_json::from_slice::<Vec<String>>(body).ok())
-                .map_or(0, |targets| targets.len());
+                .expect("a retire call carries a body");
+            let retired = serde_json::from_slice::<Vec<String>>(body)
+                .expect("a retire body is a name array")
+                .len();
             return ok(format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes());
         }
         if url.contains("/registry/") {
@@ -7136,4 +7139,61 @@ fn a_prune_that_keeps_the_whole_history_publishes_and_retires_nothing() {
             .is_empty(),
         "a no-op prune is not a failure"
     );
+}
+
+/// Nothing on the wire forbids a version list naming one `contentCid` twice, so
+/// a doomed version can share its bytes with a survivor. Retiring those bytes
+/// would unpin the live file, so the whole prune is refused.
+#[test]
+fn a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies = vec![(0..60u8).collect::<Vec<u8>>()];
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![head.clone(), head],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+    let (sequence, _) = published(&world.record_store, file);
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 1);
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert_eq!(passes, 1, "a repeated history is refused on sight");
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::PayloadRefused]
+    );
+    assert_eq!(
+        published(&world.record_store, file).0,
+        sequence,
+        "the history the refusal read is the history that stands"
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "and no retire names the CID a survivor still holds"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
 }
