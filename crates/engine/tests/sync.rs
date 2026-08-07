@@ -28,7 +28,7 @@ use cipherbox_engine::rotation::{
 };
 use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
-use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::pointer::{open_repoint, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, NewNode, Op, OpResolution, PointerFetch,
     RecordReader, RecordSeal, ScopeCrossing, SessionRole, Snapshot, StagedContent, apply_repairs,
@@ -607,6 +607,48 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
             "the floor seeded from the owner-signed re-point anchor"
         );
     });
+}
+
+/// `floor::cold_seed_checked` picks the vault anchor by an opened re-point's
+/// `scopeId`. That is sound only because the pointer seal derives its AAD from
+/// that same field, so a re-point opens under no other scope id — pinned here
+/// rather than left to the encoder.
+#[test]
+fn a_repoint_opens_only_under_the_scope_id_it_names() {
+    let owner = EcdsaSigner::from_scalar(&[3u8; 32]).unwrap();
+    let read_key = kdf::pointer_read_key(
+        kdf::owner_pointer_seed(LOGIN_SECRET).as_bytes(),
+        &ROOT_SCOPE,
+    );
+    let mut entropy = SeededEntropy::new(1);
+    let block = seal_repoint(
+        SessionRole::Owner,
+        &mut entropy,
+        read_key.as_bytes(),
+        1,
+        &owner,
+        &repoint(5, 3),
+    )
+    .unwrap();
+
+    let opened = open_repoint(
+        read_key.as_bytes(),
+        1,
+        &ROOT_SCOPE,
+        &owner.verifying_key(),
+        &block,
+    )
+    .expect("a re-point opens under the scope id it names");
+    assert_eq!(opened.scope_id, ROOT_SCOPE);
+
+    open_repoint(
+        read_key.as_bytes(),
+        1,
+        &[9u8; 16],
+        &owner.verifying_key(),
+        &block,
+    )
+    .expect_err("the seal AAD binds the re-point to the scope id it names");
 }
 
 // ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 /// staleness (the floor law: revocation boundaries cannot be rolled back).
 ///
 /// Where the read-epoch comparison is sound — and where it must not run — is
-/// [`AnchorRole`]'s contract.
+/// [`cold_seed_checked`]'s contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloorRegression {
     /// The re-point's `minReadEpoch` is strictly below the durable read-epoch
@@ -103,51 +103,6 @@ impl core::fmt::Display for ColdSeedError {
 }
 
 impl std::error::Error for ColdSeedError {}
-
-/// The scope role a cold-seed runs against — the gate on the read-epoch
-/// (revocation) regression check, which is sound **only at the root/vault
-/// anchor**.
-///
-/// At the root scope the read epoch is owner-authored, so
-/// [`advance_on_unseal`] raises the read-epoch floor in lockstep with the owner
-/// clock and a vouched `minReadEpoch` below the durable floor is an unambiguous
-/// owner rollback (correct fail-closed). At a **shared** scope a grantee's
-/// legitimate lazy-rotation unseal-advances that same floor *past* the
-/// owner-authored `minReadEpoch`, so the identical comparison would
-/// false-positive into a self-inflicted fail-closed **DoS** (a bricked boot) —
-/// never a security hole, since no rollback is accepted and the write-epoch
-/// check stays unconditionally sound. `Shared` therefore never runs the
-/// read-epoch check; only `Root` does.
-///
-/// The role is never an argument: [`cold_seed_checked`] derives it from the
-/// scope's authenticated identity, so no caller — and therefore no transport —
-/// can claim `Shared` for the vault anchor to suppress the read-epoch check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnchorRole {
-    /// The vault/root anchor: read-epoch check runs (alongside write-epoch).
-    Root,
-    /// A shared scope: read-epoch check skipped; only write-epoch runs.
-    Shared,
-}
-
-impl AnchorRole {
-    /// Select the role from authenticated scope identity: the session's own
-    /// vault anchor is [`AnchorRole::Root`], every other scope is
-    /// [`AnchorRole::Shared`].
-    ///
-    /// Both operands are trusted. `session_root_scope_id` is session state
-    /// derived from the login secret, and a [`RepointObject`]'s `scope_id` is
-    /// sealed into the pointer payload AAD and covered by the owner signature —
-    /// so an untrusted transport can neither forge a scope id nor transplant a
-    /// shared scope's re-point onto the vault anchor.
-    fn for_scope(session_root_scope_id: &[u8; 16], scope_id: &[u8; 16]) -> Self {
-        if scope_id == session_root_scope_id {
-            AnchorRole::Root
-        } else {
-            AnchorRole::Shared
-        }
-    }
-}
 
 /// Suffix that distinguishes a scope's write-epoch floor key from its
 /// read-epoch floor key inside the [`FloorStore`] epoch namespace. The
@@ -322,17 +277,22 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// the single checked cold-seed seam production uses.
 ///
 /// Reads the durable floors and rejects before any write if the owner-vouched
-/// re-point would move one backward: a re-point whose `writeEpoch` (any role),
-/// or whose `minReadEpoch` (root anchor only, see below), is strictly below the
-/// durable floor is a rolled-back pointer (a replay past a revocation
+/// re-point would move one backward: a re-point whose `writeEpoch` (any scope),
+/// or whose `minReadEpoch` (the vault anchor only, see below), is strictly below
+/// the durable floor is a rolled-back pointer (a replay past a revocation
 /// boundary), a trust violation never mere staleness. Only when nothing
 /// regresses does it advance the floors via the monotonic-max [`cold_seed`].
 ///
-/// The read-epoch check runs under [`AnchorRole::Root`] only; the write-epoch
-/// check is unconditional — see [`AnchorRole`] for why. The role is derived from
-/// the re-point's own scope id against `session_root_scope_id` (the session's
-/// vault anchor, from the derived session identity), never supplied by the
-/// caller.
+/// The read-epoch check runs **only at the vault anchor**, and this function
+/// selects that from the re-point's own scope id against `session_root_scope_id`
+/// — never from a caller, so no wiring can suppress it. At the vault anchor the
+/// read epoch is owner-authored, so a vouched `minReadEpoch` below the durable
+/// floor is an unambiguous owner rollback. At a shared scope a grantee's
+/// legitimate lazy rotation unseal-advances that same floor *past* the
+/// owner-authored `minReadEpoch`, so the identical comparison would
+/// false-positive into a self-inflicted bricked boot. Either way no rollback is
+/// accepted: the write-epoch check stays unconditional and every advance is
+/// monotonic-max.
 ///
 /// Check-then-advance is deliberately not a CAS pair: the engine is the single
 /// writer (blueprint/engine.md "Facade"), and the monotonic-max store backstops
@@ -342,7 +302,7 @@ pub async fn cold_seed_checked<F: FloorStore>(
     repoint: &RepointObject,
     session_root_scope_id: &[u8; 16],
 ) -> Result<(), ColdSeedError> {
-    if AnchorRole::for_scope(session_root_scope_id, &repoint.scope_id) == AnchorRole::Root {
+    if repoint.scope_id == *session_root_scope_id {
         if let Some(floor) = read_epoch_floor(floors, &repoint.scope_id)
             .await
             .map_err(ColdSeedError::Seam)?
@@ -391,8 +351,6 @@ mod tests {
     use crate::testkit::fakes::InMemoryFloorStore;
 
     const SCOPE: [u8; 16] = [7u8; 16];
-    /// A scope id that is not the session's vault anchor — cold-seeding it is a
-    /// shared-scope seed.
     const SHARED_SCOPE: [u8; 16] = [8u8; 16];
     const NAME: &[u8] = b"k51-scope-root-name";
 
@@ -535,18 +493,6 @@ mod tests {
             );
             assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(6));
         });
-    }
-
-    /// The role follows the re-point's own scope id against the session's vault
-    /// anchor, so a shared scope can never be seeded as `Root` nor the vault
-    /// anchor as `Shared`.
-    #[test]
-    fn the_anchor_role_follows_the_scopes_position_not_the_caller() {
-        assert_eq!(AnchorRole::for_scope(&SCOPE, &SCOPE), AnchorRole::Root);
-        assert_eq!(
-            AnchorRole::for_scope(&SCOPE, &SHARED_SCOPE),
-            AnchorRole::Shared
-        );
     }
 
     /// The read-epoch regression check is unrepresentable for a shared scope: a
