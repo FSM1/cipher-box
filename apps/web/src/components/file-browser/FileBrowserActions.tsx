@@ -5,9 +5,10 @@
  */
 
 import { useState } from 'react';
+import { toHex } from '@cipherbox/client';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useFileDownload } from '../../hooks/useFileDownload';
-import { useVaultActions } from '../../hooks/useVaultActions';
+import { useVaultActions, type BatchOutcome } from '../../hooks/useVaultActions';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
 import { useSelection } from '../../vault/selection';
@@ -43,6 +44,7 @@ export function FileBrowserActions({
   onNavigateUp,
 }: FileBrowserActionsProps) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const menu = useContextMenu();
   const actions = useVaultActions();
   const downloads = useFileDownload();
@@ -51,22 +53,46 @@ export function FileBrowserActions({
 
   const close = () => setDialog(null);
   /**
-   * A dispatch the engine accepted closes its dialog and retires the rows it
-   * acted on; a rejected one stays up. The banner reports one failure, so a
-   * dispatch also retires the last read's.
+   * A dispatch the engine accepted closes its dialog; a refused one stays up.
+   * The banner reports one failure, so a dispatch also retires the last read's.
    */
-  const closeOnSuccess = (dispatched: Promise<boolean>, acted: ListingRow[] = []) => {
+  const closeOnSuccess = (dispatched: Promise<boolean>) => {
     downloads.clearError();
     void dispatched.then((accepted) => {
-      if (!accepted) return;
-      close();
-      selection.drop(acted.map((row) => row.key));
+      if (accepted) close();
+    });
+  };
+
+  /**
+   * A batch retires only what the engine took, from both the selection and the
+   * dialog: a retry must not re-dispatch an accepted node, which the engine
+   * would journal a second time and dead-letter.
+   */
+  const closeOnBatch = (dispatched: Promise<BatchOutcome>) => {
+    downloads.clearError();
+    void dispatched.then((outcome) => {
+      const retired = outcome.accepted.map(toHex);
+      selection.drop(retired);
+      if (outcome.ok) {
+        close();
+        return;
+      }
+      setDialog((current) => {
+        if (current?.kind !== 'move' && current?.kind !== 'delete') return current;
+        const gone = new Set(retired);
+        return { ...current, rows: current.rows.filter((row) => !gone.has(row.key)) };
+      });
     });
   };
 
   const downloadSelection = async (): Promise<void> => {
-    for (const row of selection.rows) {
-      if (row.kind === 'file') await downloads.save(row.id, row.name, row.bytes);
+    setDownloading(true);
+    try {
+      for (const row of selection.rows) {
+        if (row.kind === 'file') await downloads.save(row.id, row.name, row.bytes);
+      }
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -113,7 +139,7 @@ export function FileBrowserActions({
       </div>
       <SelectionActionBar
         rows={selection.rows}
-        busy={actions.busy !== null}
+        busy={actions.busy !== null || downloading}
         onClear={selection.clear}
         onDownload={() => void downloadSelection()}
         onMove={() => setDialog({ kind: 'move', rows: selection.rows })}
@@ -183,12 +209,11 @@ export function FileBrowserActions({
           busy={actions.busy === 'relink'}
           error={actions.error}
           onConfirm={(newParent) =>
-            closeOnSuccess(
+            closeOnBatch(
               actions.move(
                 dialog.rows.map((row) => row.id),
                 newParent
-              ),
-              dialog.rows
+              )
             )
           }
         />
@@ -199,9 +224,7 @@ export function FileBrowserActions({
           onClose={close}
           busy={actions.busy === 'delete'}
           error={actions.error}
-          onConfirm={() =>
-            closeOnSuccess(actions.remove(dialog.rows.map((row) => row.id)), dialog.rows)
-          }
+          onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
         />
       )}
       {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}

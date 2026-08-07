@@ -455,6 +455,73 @@ describe('the vault browser selection', () => {
     expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
   });
 
+  it('runs one batch download at a time, however often the button is clicked', async () => {
+    const pending: ((bytes: ArrayBuffer) => void)[] = [];
+    const engine = fakeEngine(() => new Promise<ArrayBuffer>((resolve) => pending.push(resolve)));
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt'), file(PICTURE, 'shot.png')] })
+    );
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // A second loop would hand the user a duplicate of every file, and would
+    // let a move or delete land between two reads of the same batch.
+    const bar = screen.getByTestId('selection-action-bar');
+    for (const action of ['download', 'move', 'delete']) {
+      expect((screen.getByTestId(`selection-${action}`) as HTMLButtonElement).disabled).toBe(true);
+    }
+    fireEvent.click(screen.getByTestId('selection-download'));
+    expect(engine.facade.download.mock.calls).toEqual([[NOTE]]);
+    expect(bar).toBeDefined();
+
+    await act(async () => {
+      pending[0](new ArrayBuffer(0));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => {
+      pending[1](new ArrayBuffer(0));
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect((screen.getByTestId('selection-download') as HTMLButtonElement).disabled).toBe(false)
+    );
+    expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
+  });
+
+  it('retires only the nodes a partly refused batch was accepted for', async () => {
+    const engine = fakeEngine();
+    engine.facade.delete
+      .mockImplementationOnce(() => Promise.resolve())
+      .mockImplementationOnce(() => Promise.reject(new Error('the op queue is full')));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-delete'));
+    fireEvent.click(screen.getByTestId('delete-confirm'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('dialog-error').textContent).toBe('the op queue is full')
+    );
+    // The dialog stays up over what was refused only: retrying it must not
+    // journal a second delete for the node the engine already took.
+    expect(count()).toBe('notes.txt selected');
+    expect(screen.getByTestId('delete-dialog').textContent).toContain('"notes.txt"');
+
+    fireEvent.click(screen.getByTestId('delete-confirm'));
+    await waitFor(() => expect(engine.facade.delete.mock.calls).toEqual([[DOCS], [NOTE], [NOTE]]));
+    await waitFor(() => expect(screen.queryByTestId('delete-dialog')).toBeNull());
+    expect(screen.queryByTestId('selection-action-bar')).toBeNull();
+  });
+
   it('retires only the rows a command acted on, not the whole selection', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);

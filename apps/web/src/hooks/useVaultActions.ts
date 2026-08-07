@@ -13,34 +13,28 @@ import { useEngine } from '../providers/EngineProvider';
 /** Which command is in flight, or `null` when the browser is idle. */
 export type VaultCommand = 'create' | 'rename' | 'relink' | 'delete';
 
+/** Which nodes a batch dispatch was accepted for; the rest were refused. */
+export interface BatchOutcome {
+  /** `true` when the engine accepted every node. */
+  ok: boolean;
+  /** The nodes the engine accepted, in listing order. */
+  accepted: readonly Uint8Array[];
+}
+
 export interface VaultActions {
   busy: VaultCommand | null;
   /** The last dispatch's failure, cleared by the next dispatch. */
   error: string | null;
-  /** Every action resolves `true` once the engine accepted every command. */
+  /** A single-node action resolves `true` once the engine accepted it. */
   createFolder(parent: Uint8Array, name: string): Promise<boolean>;
   rename(node: Uint8Array, newName: string): Promise<boolean>;
   /** One `facade.relink` per node — a batch is not a command of its own. */
-  move(nodes: readonly Uint8Array[], newParent: Uint8Array): Promise<boolean>;
+  move(nodes: readonly Uint8Array[], newParent: Uint8Array): Promise<BatchOutcome>;
   /** One `facade.delete` per node. */
-  remove(nodes: readonly Uint8Array[]): Promise<boolean>;
+  remove(nodes: readonly Uint8Array[]): Promise<BatchOutcome>;
 }
 
-/**
- * Dispatches one command per node in listing order. Every node is attempted
- * even after one is refused — the nodes are independent, and the snapshot is
- * what reports which of them the engine took.
- */
-async function perNode(
-  nodes: readonly Uint8Array[],
-  dispatch: (node: Uint8Array) => Promise<void>
-): Promise<void> {
-  const refusals: unknown[] = [];
-  for (const node of nodes) {
-    await dispatch(node).catch((failure: unknown) => refusals.push(failure));
-  }
-  if (refusals.length > 0) throw refusals[0];
-}
+const NOT_READY = 'the engine is not ready yet';
 
 export function useVaultActions(): VaultActions {
   const client = useEngine();
@@ -67,12 +61,46 @@ export function useVaultActions(): VaultActions {
   const dispatchOrFail = useCallback(
     (command: VaultCommand, dispatch: (facade: EngineFacade) => Promise<void>) => {
       if (client === null) {
-        setError('the engine is not ready yet');
+        setError(NOT_READY);
         return Promise.resolve(false);
       }
       return run(command, () => dispatch(client.facade));
     },
     [client, run]
+  );
+
+  /**
+   * Dispatches one command per node in listing order, attempting every node
+   * even after one is refused — the nodes are independent. The outcome names
+   * the accepted ones so the caller can retire exactly those.
+   */
+  const runBatch = useCallback(
+    async (
+      command: VaultCommand,
+      nodes: readonly Uint8Array[],
+      dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<void>
+    ): Promise<BatchOutcome> => {
+      if (client === null) {
+        setError(NOT_READY);
+        return { ok: false, accepted: [] };
+      }
+      setBusy(command);
+      setError(null);
+      const accepted: Uint8Array[] = [];
+      const refusals: unknown[] = [];
+      for (const node of nodes) {
+        try {
+          await dispatch(client.facade, node);
+          accepted.push(node);
+        } catch (failure: unknown) {
+          refusals.push(failure);
+        }
+      }
+      setBusy(null);
+      if (refusals.length > 0) setError(errorMessage(refusals[0]));
+      return { ok: refusals.length === 0, accepted };
+    },
+    [client]
   );
 
   return {
@@ -88,15 +116,12 @@ export function useVaultActions(): VaultActions {
     ),
     move: useCallback(
       (nodes, newParent) =>
-        dispatchOrFail('relink', (facade) =>
-          perNode(nodes, (node) => facade.relink(node, newParent))
-        ),
-      [dispatchOrFail]
+        runBatch('relink', nodes, (facade, node) => facade.relink(node, newParent)),
+      [runBatch]
     ),
     remove: useCallback(
-      (nodes) =>
-        dispatchOrFail('delete', (facade) => perNode(nodes, (node) => facade.delete(node))),
-      [dispatchOrFail]
+      (nodes) => runBatch('delete', nodes, (facade, node) => facade.delete(node)),
+      [runBatch]
     ),
   };
 }
