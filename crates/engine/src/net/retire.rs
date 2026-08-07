@@ -449,7 +449,7 @@ mod tests {
             let root_block = root_block.clone();
             http.enqueue_derived(move |request| {
                 if request.url.ends_with("/registry/retire") {
-                    let retired = retire_ok.then_some(1).unwrap_or_default();
+                    let retired = u64::from(retire_ok);
                     return Ok(HttpResponse {
                         status: if retire_ok { 200 } else { 503 },
                         headers: Vec::new(),

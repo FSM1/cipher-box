@@ -460,6 +460,54 @@ async fn batch_register_and_retire_are_idempotent() {
         .expect("replayed retire is a no-op");
 }
 
+/// The retire ledger's done-signal is the registry's own count, so the client
+/// has to read it back. A replay reports `retired: 0` — positive evidence the
+/// rows are gone, which is what makes a lost response harmless — and another
+/// account's targets report the same, which is why the ledger is owner-scoped.
+#[tokio::test]
+async fn a_retire_reports_what_it_deleted_and_a_replay_reports_nothing_left() {
+    let base = require_stack!("a_retire_reports_what_it_deleted_and_a_replay_reports_nothing_left");
+    let client = fresh_account(&base).await;
+    let stranger = fresh_account(&base).await;
+
+    let target = "bafyContractRetireCount".to_owned();
+    client
+        .register(&[NameRegistration {
+            ipns_name: "k51contractRetireCount".into(),
+            head_cid: None,
+            content_cids: vec![target.clone()],
+        }])
+        .await
+        .expect("register");
+
+    let first = client
+        .retire(std::slice::from_ref(&target))
+        .await
+        .expect("first retire");
+    assert_eq!(
+        first.retired, 1,
+        "the registry reports the row it deleted, got {first:?}"
+    );
+
+    let replay = client
+        .retire(std::slice::from_ref(&target))
+        .await
+        .expect("replayed retire");
+    assert_eq!(
+        replay.retired, 0,
+        "a replay finds nothing left, which is the done-signal"
+    );
+
+    let foreign = stranger
+        .retire(std::slice::from_ref(&target))
+        .await
+        .expect("a permissionless retire of a target this account never held");
+    assert_eq!(
+        foreign.retired, 0,
+        "another account's token deletes no rows, so the count alone cannot prove a debt was paid"
+    );
+}
+
 /// Union liveness (blueprint/api.md): inventory rows are per account and the
 /// server authorizes nothing across accounts, so two accounts independently
 /// hold rows for the same shared CID and each retires its own permissionlessly
