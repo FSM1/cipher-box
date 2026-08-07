@@ -34,8 +34,6 @@ export interface VaultActions {
   remove(nodes: readonly Uint8Array[]): Promise<BatchOutcome>;
 }
 
-const NOT_READY = 'the engine is not ready yet';
-
 export function useVaultActions(): VaultActions {
   const client = useEngine();
   const [busy, setBusy] = useState<VaultCommand | null>(null);
@@ -61,7 +59,7 @@ export function useVaultActions(): VaultActions {
   const dispatchOrFail = useCallback(
     (command: VaultCommand, dispatch: (facade: EngineFacade) => Promise<void>) => {
       if (client === null) {
-        setError(NOT_READY);
+        setError('the engine is not ready yet');
         return Promise.resolve(false);
       }
       return run(command, () => dispatch(client.facade));
@@ -80,27 +78,22 @@ export function useVaultActions(): VaultActions {
       nodes: readonly Uint8Array[],
       dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<void>
     ): Promise<BatchOutcome> => {
-      if (client === null) {
-        setError(NOT_READY);
-        return { ok: false, accepted: [] };
-      }
-      setBusy(command);
-      setError(null);
       const accepted: Uint8Array[] = [];
-      const refusals: unknown[] = [];
-      for (const node of nodes) {
-        try {
-          await dispatch(client.facade, node);
-          accepted.push(node);
-        } catch (failure: unknown) {
-          refusals.push(failure);
+      const ok = await dispatchOrFail(command, async (facade) => {
+        const refusals: unknown[] = [];
+        for (const node of nodes) {
+          try {
+            await dispatch(facade, node);
+            accepted.push(node);
+          } catch (failure: unknown) {
+            refusals.push(failure);
+          }
         }
-      }
-      setBusy(null);
-      if (refusals.length > 0) setError(errorMessage(refusals[0]));
-      return { ok: refusals.length === 0, accepted };
+        if (refusals.length > 0) throw refusals[0];
+      });
+      return { ok, accepted };
     },
-    [client]
+    [dispatchOrFail]
   );
 
   return {
