@@ -256,17 +256,28 @@ degraded outcome applies a different policy rather than showing stale data.
 - **The one arm that still authorises a write is named for what it assumes.**
   The built-in defaults stand in for a first run, and the reason carrying them
   says so: `UnprovenFirstRun`. It is reached only when no endpoint served a
-  record _and_ this device holds no durable mark of one — neither the per-name
-  sequence floor nor the publish mint counter, and an unreadable floor is never
-  read as an absent one. The mint counter is what the sequence floor misses: it
-  is raised before the PUT, so a save that reached the network and never
-  confirmed still refuses every later widening — the member expressed a choice
-  this device could not authenticate. Residual: absence remains a
-  verdict about _this device_, so an adversary who withholds the record from one
-  holding no mark at all reaches the assumed default. Closing that needs
-  positive account-scoped evidence that settings were never published, and the
-  only such signal in reach is the account's advisory BYO flag, which the
-  placement decision does not see.
+  record _and_ this device holds none of the three durable marks a settings
+  record leaves: the per-name sequence floor, the adopted body revision, and the
+  publish mint counter. An unreadable mark is never read as an absent one. Two
+  of the three are what the sequence floor alone misses. The mint counter is
+  raised before the PUT, so it outlives any save that got as far as minting a
+  revision — a member who expressed a placement choice this device could not
+  authenticate is never talked back onto the default, which is precisely when
+  that reversal is cheapest. The adopted revision is raised by a store write
+  separate from the sequence floor's and not atomic with it, so it outlives a
+  lost one. Residual: absence remains a verdict about _this device_, and every
+  fresh install on an account that already published settings holds no mark
+  until its first successful resolve, so an adversary who withholds the record
+  from one reaches the assumed default. Closing that needs positive
+  account-scoped evidence that settings were never published, and the only such
+  signal in reach is the account's advisory BYO flag — which the placement
+  decision does not see, and which this very arm _clears_: an assumed placement
+  reaches the hosted quota pre-flight, whose reconcile then PATCHes the account
+  to `byo=false`. So the flag is not a standing witness today, and when it is
+  wired it may only ever be read in the restricting direction — `advisory` set
+  means never assume the default. The inverse would be a server-controlled
+  widening on an untrusted signal, and an assumed placement must not latch
+  account-scoped state in the first place.
 - **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
   an availability event recovered by revival (above), because a gate-level
   rejection would lock every grantee out of a dormant owner's vault — a read

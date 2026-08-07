@@ -334,13 +334,14 @@ pub enum SettingsPublishError {
 /// hosted default is exactly what they gain by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultsReason {
-    /// No endpoint served a record, and this device holds no durable mark of
-    /// one: neither the sequence floor nor the publish mint counter. Named for
-    /// what it is rather than what it looks like — absence is a statement about
-    /// *this device*, never proof that the account has never published, so the
-    /// first run it reports is assumed and not established. Durable-mark
-    /// evidence only: a cached last-known-good block can accompany it, since no
-    /// raise is gated on the cache write.
+    /// No endpoint served a record, and this device holds none of the three
+    /// durable marks one leaves: the sequence floor, the adopted body revision,
+    /// or the publish mint counter. Named for what it is rather than what it
+    /// looks like — absence is a statement about *this device*, never proof
+    /// that the account has never published, so the first run it reports is
+    /// assumed and not established. Durable-mark evidence only: a cached
+    /// last-known-good block can accompany it, since no raise is gated on the
+    /// cache write.
     UnprovenFirstRun,
     /// No usable record, but a durable mark proves this device already adopted
     /// a settings record, or already tried to publish one: the record is being
@@ -662,16 +663,19 @@ where
         return Err(DefaultsReason::FloorUnreadable);
     };
     let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
-        // The mint counter joins the sequence floor only here, because only
-        // here does their absence still authorise a write. [`next_revision`]
-        // raises it before the PUT, so it outlives a save that never confirmed:
-        // an unconfirmed publish is still a durable mark of a member's choice,
-        // and the moment that choice is least confirmed is the moment reverting
-        // it is most valuable.
-        let Ok(minted) = floor::sequence_floor(floors, &revision_mint_key(name)).await else {
+        // The other two marks join the sequence floor only here, because only
+        // here does their absence still authorise a write, and each is raised
+        // where the sequence floor is not. The mint counter is raised ahead of
+        // everything a publish can fail at, so it outlives any save that got as
+        // far as minting a revision. The adopted revision is raised by a
+        // separate, non-atomic store write, so it can outlive a lost one.
+        let (Ok(minted), Ok(adopted)) = (
+            floor::sequence_floor(floors, &revision_mint_key(name)).await,
+            floor::sequence_floor(floors, &revision_adopted_key(name)).await,
+        ) else {
             return Err(DefaultsReason::FloorUnreadable);
         };
-        return Err(match durable.or(minted) {
+        return Err(match durable.or(minted).or(adopted) {
             Some(_) => DefaultsReason::Suppressed,
             None => DefaultsReason::UnprovenFirstRun,
         });
@@ -958,6 +962,7 @@ fn kind_str(kind: ByoKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::GatewayConfig;
     use crate::testkit::{FakeWorld, SeededEntropy, block_on};
 
     fn keep(n: u64) -> RetentionPolicy {
@@ -1212,6 +1217,121 @@ mod tests {
                 decide_placement(&SettingsLoad::Resolved(placed(PinMode::Dual, provider))).is_ok(),
                 "{kind:?} is a fine second leg"
             );
+        }
+    }
+
+    /// The three marks a settings record leaves are raised by separate,
+    /// non-atomic store writes, and the adopt path discards each raise's error.
+    /// So a device can hold any one of them alone, and each alone is proof it
+    /// adopted or attempted a record: a withheld one is suppression, never the
+    /// first run that would widen placement onto the hosted store.
+    ///
+    /// Reached with no record served and no cached copy, so only the marks can
+    /// answer.
+    #[test]
+    fn any_durable_mark_alone_refuses_a_withheld_record() {
+        let world = FakeWorld::new();
+        let secret = [4u8; 32];
+        let name = settings_name(&secret);
+        let gateway = GatewayConfig {
+            accelerator: None,
+            public_fallbacks: Vec::new(),
+        }
+        .into_gateway();
+
+        let marks = [
+            name.as_str().as_bytes().to_vec(),
+            revision_adopted_key(&name),
+            revision_mint_key(&name),
+        ];
+        for mark in &marks {
+            let device = world.device(b"cold");
+            block_on(device.floor_store.raise_sequence_floor(mark, 3)).expect("the mark raises");
+            let load = block_on(load_settings(
+                &device.record_store,
+                &gateway,
+                &device.http,
+                &device.floor_store,
+                &device.snapshot_cache,
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &secret,
+            ));
+            assert_eq!(
+                load,
+                SettingsLoad::Defaults(DefaultsReason::Suppressed),
+                "one mark alone must not read as a first run",
+            );
+            assert_eq!(
+                decide_placement(&load).unwrap_err(),
+                PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+            );
+        }
+
+        // The same device with none of them is the arm that still authorises.
+        let bare = world.device(b"cold");
+        assert_eq!(
+            block_on(load_settings(
+                &bare.record_store,
+                &gateway,
+                &bare.http,
+                &bare.floor_store,
+                &bare.snapshot_cache,
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &secret,
+            )),
+            SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
+        );
+
+        // A mark the host cannot read is never read as an absent one, or the
+        // store that answers "I don't know" would widen placement.
+        let unreadable = world.device(b"cold");
+        assert_eq!(
+            block_on(load_settings(
+                &unreadable.record_store,
+                &gateway,
+                &unreadable.http,
+                &UnreadableBeyondTheName(name),
+                &unreadable.snapshot_cache,
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &secret,
+            )),
+            SettingsLoad::Defaults(DefaultsReason::FloorUnreadable),
+        );
+    }
+
+    /// A floor store that answers for the bare settings name and fails on the
+    /// prefixed marks, so the reads this module added are the ones that fail.
+    struct UnreadableBeyondTheName(IpnsName);
+
+    impl FloorStore for UnreadableBeyondTheName {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+            Err(SeamError::new("unreadable"))
+        }
+
+        async fn raise_epoch_floor(
+            &self,
+            _scope_id: &[u8],
+            _epoch: u64,
+        ) -> crate::seams::SeamResult<u64> {
+            Err(SeamError::new("unreadable"))
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+            match ipns_name == self.0.as_str().as_bytes() {
+                true => Ok(None),
+                false => Err(SeamError::new("unreadable")),
+            }
+        }
+
+        async fn raise_sequence_floor(
+            &self,
+            _ipns_name: &[u8],
+            _sequence: u64,
+        ) -> crate::seams::SeamResult<u64> {
+            Err(SeamError::new("unreadable"))
         }
     }
 

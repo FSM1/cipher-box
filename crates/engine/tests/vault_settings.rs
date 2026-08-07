@@ -556,6 +556,14 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
         SettingsLoad::Defaults(DefaultsReason::Suppressed),
         "the mint counter outlives the attempt, so absence is no longer credible",
     );
+
+    // The refusal is a state the member can leave: saving again, successfully,
+    // puts the record where every later load can authenticate it.
+    publish(&world, &device, &blocks, &SECRET, &external_only());
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(external_only()),
+    );
 }
 
 /// A transport whose GET never settles — the shape of an unresolvable name.

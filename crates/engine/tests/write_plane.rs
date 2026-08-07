@@ -6866,8 +6866,8 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
         },
     ))
     .expect_err("the save does not reach the network");
-    // The refused save tried to upload its own head block; only what the write
-    // adds on top of that is this test's subject.
+    // The refused save tried to upload its own head block; what the write adds
+    // on top of that is the byte-destination property under test.
     let before = uploaded_cids(&alice).len();
 
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
