@@ -264,7 +264,8 @@ impl From<facade::OpPhase> for OpPhase {
 // `bigint`, absent projections as `undefined`.
 // ---------------------------------------------------------------------------
 
-/// What a command handed back across the worker boundary.
+/// The result of one `Engine::command` call. Read `kind`, then the matching
+/// payload getter.
 #[wasm_bindgen]
 pub struct CommandOutcome {
     inner: facade::CommandOutcome,
