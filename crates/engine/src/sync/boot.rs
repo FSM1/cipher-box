@@ -208,10 +208,7 @@ where
 
     // Step 2 — floor cold-seed, fail-closed on regression: a re-point that would
     // move either floor backward is a rolled-back pointer, a trust violation.
-    // The vault pointer is the root/vault anchor, so the read-epoch check is
-    // sound here (`AnchorRole::Root`); a shared-scope cold-seed would pass
-    // `Shared`.
-    floor::cold_seed_checked(floors, &adoption.repoint, floor::AnchorRole::Root)
+    floor::cold_seed_checked(floors, &adoption.repoint, &params.root_scope_id)
         .await
         .map_err(|e| match e {
             ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),
@@ -565,28 +562,41 @@ mod tests {
         });
     }
 
+    /// The floors a first cold start seeds are the ones a rolled-back re-point
+    /// trips on the next boot: the replay is validly owner-signed, so only the
+    /// floor law catches it.
     #[test]
     fn floor_regression_is_fail_closed_and_emits_nothing() {
         block_on(async {
             let pointers = ScriptedPointers::default();
             let root_name = IpnsName::from_public_key(&root_signer().verifying_key());
-            // The re-point vouches a lower minReadEpoch than the durable floor.
-            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 2, 1));
+            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 5, 3));
 
             let floors = InMemoryFloorStore::default();
-            floors.raise_epoch_floor(&ROOT_SCOPE, 5).await.unwrap();
-
-            let (out, events) = run(
+            let transport = transport_with_root_record(&root_name);
+            let (first, _) = run(
                 &pointers,
                 &ScriptedAdopter::adopting(),
                 &floors,
-                &transport_with_root_record(&root_name),
+                &transport,
+                &InMemorySnapshotCache::default(),
+                &pending_create(),
+            )
+            .await;
+            first.expect("the first boot seeds the floors");
+
+            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 2, 3));
+            let (second, events) = run(
+                &pointers,
+                &ScriptedAdopter::adopting(),
+                &floors,
+                &transport,
                 &InMemorySnapshotCache::default(),
                 &pending_create(),
             )
             .await;
             assert_eq!(
-                out,
+                second,
                 Err(ColdStartError::FloorRegression(
                     FloorRegression::ReadEpoch {
                         floor: 5,

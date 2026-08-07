@@ -120,6 +120,27 @@ fn assert_all_endpoints_at(store: &InMemoryRecordStore, name: &IpnsName, sequenc
     }
 }
 
+fn assert_no_endpoint_holds(store: &InMemoryRecordStore, name: &IpnsName) {
+    for endpoint in store.endpoints() {
+        assert!(
+            store.record_at(&endpoint, name.as_str()).is_none(),
+            "endpoint {} holds a record",
+            endpoint.0
+        );
+    }
+}
+
+fn head_value_at(store: &InMemoryRecordStore, name: &IpnsName) -> Vec<u8> {
+    let bytes = store
+        .record_at(&store.endpoints()[0], name.as_str())
+        .expect("endpoint holds a record");
+    IpnsRecord::unmarshal(&bytes)
+        .expect("record parses")
+        .verify(name)
+        .expect("record verifies")
+        .value
+}
+
 // --- the Adopter stub: a scripted gate verdict + the sequences it was fed ----
 
 #[derive(Clone, Copy)]
@@ -996,6 +1017,204 @@ fn revive_fails_closed_when_the_recovery_endpoint_is_unauthorized() {
                 .is_none()
         );
     }
+}
+
+#[test]
+fn revive_prefers_a_fresher_corroborating_record_over_the_recovery_endpoint() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(17);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // A replaying recovery endpoint serves an old but validly signed record,
+    // while an endpoint that still holds the name serves the real head.
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafystale", 3, 0)));
+    device.http.enqueue_response(ok_200()); // register for the re-mint
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyfresh", 9, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 10 });
+    assert_all_endpoints_at(&world.record_store, &name, 10);
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyfresh",
+        "the CID rides out of the same record as the sequence"
+    );
+}
+
+#[test]
+fn revive_takes_the_fan_out_side_of_a_same_sequence_fork() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(23);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // An unconfirmed publish retry forks the name: two validly signed records at
+    // one sequence, pointing at different CIDs. The routing set is canonical, so
+    // it takes the tie — the recovery endpoint does not get to pick a side.
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecoveryside", 5, 0)));
+    device.http.enqueue_response(ok_200()); // register for the re-mint
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyfanoutside", 5, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 6 });
+    assert_all_endpoints_at(&world.record_store, &name, 6);
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyfanoutside",
+        "a corroborated sequence never rides with the recovery endpoint's CID"
+    );
+}
+
+#[test]
+fn revive_keeps_the_recovery_record_when_the_fan_out_is_older() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(19);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 7, 0)));
+    device.http.enqueue_response(ok_200());
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyolder", 2, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 8 });
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyrecovered",
+        "an older fan-out record never displaces the recovery record"
+    );
+}
+
+#[test]
+fn revive_fails_closed_when_the_sequence_floor_cannot_be_read() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(20);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 5, 0)));
+
+    let error = block_on(revive(
+        &device.record_store,
+        &api,
+        &FailingFloorStore,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect_err("the corroboration cannot run without the floor");
+    assert!(matches!(error, ReviveError::FloorRead(_)));
+    assert_no_endpoint_holds(&world.record_store, &name);
+}
+
+#[test]
+fn revive_fails_closed_when_every_source_is_below_the_durable_floor() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(18);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // This device durably adopted sequence 9; the recovery endpoint replays 3.
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), 9),
+    )
+    .unwrap();
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
+
+    let error = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect_err("a source below the durable floor is a replay, not a lapse");
+    assert_eq!(
+        error,
+        ReviveError::StaleSource {
+            floor: 9,
+            sequence: 3
+        }
+    );
+    assert_no_endpoint_holds(&world.record_store, &name);
 }
 
 // ---------------------------------------------------------------------------
