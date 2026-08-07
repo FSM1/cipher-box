@@ -77,9 +77,8 @@ pub struct ScopeRootIdentity<'a> {
     /// at `ipns_name` ([`entry_tag_is_bound`]) before anything is sealed.
     ///
     /// `None` is the write-grantee re-sealer: it holds no owner encryption
-    /// subkey, so it cannot derive a single tag and re-wraps the committed rows
-    /// as they stand. That residual is why a write-grantee can still redirect a
-    /// blob it re-seals, and the owner's own re-seal is what refuses it.
+    /// subkey, so it derives no tag and re-wraps the committed rows as they
+    /// stand — the residual [`ResealError::TagNotBoundToRecipient`] names.
     pub owner_enc_secret: Option<&'a X25519Secret>,
     /// The parent node seed the ascent link derives its keypair from; `None` at
     /// the vault root, which carries no ascent link.
@@ -290,10 +289,8 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 /// Callers MUST still source the set from a gate-passed section.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
-/// ledger, an unusable recipient key, or (where
-/// [`ScopeRootIdentity::owner_enc_secret`] is `Some`) a row filed under a tag its
-/// own recipient key does not derive, so a partial, unopenable or misdirected
-/// section is never produced. Terminal-owner rule: this function owns only the transient
+/// ledger, an unusable recipient key, or a row not bound to its recipient tag,
+/// so a partial, unopenable or misdirected section is never produced. Terminal-owner rule: this function owns only the transient
 /// seal plaintexts (zeroized by the core seal primitives); every borrowed seed
 /// stays the caller's to zero.
 pub fn reseal_scope_root<E: Entropy>(
@@ -328,8 +325,6 @@ pub fn reseal_scope_root<E: Entropy>(
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
-    // Fail-closed BEFORE any seal: an owner-held re-sealer re-derives every tag,
-    // so no row can steer its own blob to a key the tag does not name.
     if let Some(owner_enc_secret) = identity.owner_enc_secret
         && !committed
             .grant_ledger
@@ -588,6 +583,8 @@ mod tests {
 
     const V: u64 = 2;
     const SCOPE: [u8; 16] = [0x5c; 16];
+    /// The name every honestly minted fixture set binds.
+    const MINTED_NAME: &[u8] = b"minted-scope-root-name";
 
     struct Fixture {
         owner_enc: X25519Secret,
@@ -659,11 +656,11 @@ mod tests {
             (commitment, sig, ledger)
         }
 
-        /// The same pair, but with every tag **honestly minted** at `name` from
-        /// the owner–recipient ECDH — what an owner-held re-sealer re-derives.
+        /// The same pair, but with every tag **honestly minted** at
+        /// [`MINTED_NAME`] from the owner–recipient ECDH — what an owner-held
+        /// re-sealer re-derives.
         fn minted(
             &self,
-            name: &[u8],
         ) -> (
             GrantSetCommitment,
             [u8; ECDSA_SIG_LEN],
@@ -676,7 +673,7 @@ mod tests {
                     &identity.verifying_key(),
                     &grantee.public(),
                     &SCOPE,
-                    name,
+                    MINTED_NAME,
                     permission,
                 )
                 .expect("a contributory recipient key")
@@ -686,7 +683,7 @@ mod tests {
                 mint(&self.write_grantee, [0x52; 32], Permission::Write),
             ];
             let commitment = GrantSetCommitment {
-                ipns_name: name.to_vec(),
+                ipns_name: MINTED_NAME.to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
                 unknown: PreservedFields::new(),
@@ -1489,9 +1486,6 @@ mod tests {
         assert_eq!(err.check(), "signer-not-committed");
     }
 
-    /// The name every honestly minted fixture set binds.
-    const MINTED_NAME: &[u8] = b"minted-scope-root-name";
-
     /// The re-seal a holder of the owner encryption subkey runs.
     fn owner_held<'a>(fx: &'a Fixture, owner_pub: &'a X25519Public) -> ScopeRootIdentity<'a> {
         ScopeRootIdentity {
@@ -1504,7 +1498,7 @@ mod tests {
     fn an_owner_held_reseal_wraps_every_honestly_minted_row() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.minted(MINTED_NAME);
+        let (commitment, sig, ledger) = fx.minted();
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
         let cs = committed_set(&commitment, &sig, &ledger);
@@ -1531,7 +1525,7 @@ mod tests {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let attacker = X25519Secret::from_scalar([0x5f; 32]);
-        let (commitment, sig, mut ledger) = fx.minted(MINTED_NAME);
+        let (commitment, sig, mut ledger) = fx.minted();
         ledger[0].recipient_enc_pk = attacker.public().to_bytes();
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
@@ -1557,7 +1551,7 @@ mod tests {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let attacker = X25519Secret::from_scalar([0x5f; 32]);
-        let (commitment, sig, mut ledger) = fx.minted(MINTED_NAME);
+        let (commitment, sig, mut ledger) = fx.minted();
         ledger[0].recipient_enc_pk = attacker.public().to_bytes();
         let victim_tag = ledger[0].tag;
         let seed = [0x01; 32];
