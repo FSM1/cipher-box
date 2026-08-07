@@ -31,8 +31,8 @@ import type {
  * A descriptor crosses a realm boundary as plain data, so its fields arrive
  * untrusted however they are typed here: a version-skewed peer can carry a
  * wrong-typed one, and wasm-bindgen would coerce it — a `12345` newName
- * marshalled as `"12345"` — rather than reject it. Every field the builders
- * read is checked, so the only wrong-typed field is a rejected command.
+ * marshalled as `"12345"` — rather than reject it. Hence the checkers below
+ * take `unknown`, and every field a builder reads passes through one.
  */
 function invalidField(field: string, value: unknown): Error {
   return new Error(`invalid command field ${field}: ${value === null ? 'null' : typeof value}`);
@@ -67,6 +67,15 @@ function permission(wasm: EngineWasm, value: unknown): number {
   if (value === 'read') return wasm.Permission.Read;
   if (value === 'write') return wasm.Permission.Write;
   throw invalidField('permission', value);
+}
+
+/**
+ * Exhaustiveness bound: adding a command kind without a builder fails the
+ * build, and a sender off the union gets a refusal rather than the `undefined`
+ * command the wasm glue merely happens to reject.
+ */
+function unknownCommand(descriptor: never): Error {
+  return new Error(`unknown command kind: ${String((descriptor as CommandDescriptor).kind)}`);
 }
 
 export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
@@ -131,13 +140,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'logout':
       return wasm.Command.logout();
-    default: {
-      // Fail closed: an unmapped kind means a peer built against a different
-      // protocol, not a command to guess at. The `never` binding makes adding
-      // a kind without a builder a compile error.
-      const unmapped: never = descriptor;
-      throw new Error(`unknown command kind: ${String((unmapped as CommandDescriptor).kind)}`);
-    }
+    default:
+      throw unknownCommand(descriptor);
   }
 }
 
