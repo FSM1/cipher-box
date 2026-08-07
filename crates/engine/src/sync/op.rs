@@ -176,6 +176,16 @@ pub enum OpKind {
     UpdateContent {
         /// The new version's staged content.
         content: StagedContent,
+        /// The `contentCid` of the version this edit was formed against — the
+        /// conditional-edit anchor (blueprint/engine.md "Per-op rebase rules").
+        /// A head that is not this one by rebase or publish time is a version
+        /// this edit never saw, and the edit refuses rather than superseding
+        /// it. `None` only for a file with no version yet.
+        ///
+        /// An identity, not a count: a queued predecessor and a concurrent
+        /// writer advance a count identically, and a retention prune moves it
+        /// backwards.
+        base_version_cid: Option<Vec<u8>>,
     },
 }
 
@@ -280,10 +290,11 @@ impl Op {
         }
     }
 
-    /// An `updateContent` op.
+    /// An `updateContent` op anchored on the version it was formed against.
     pub fn update_content(
         target: NodeId,
         content: StagedContent,
+        base_version_cid: Option<Vec<u8>>,
         base_sequence: u64,
         authored_at: UnixMillis,
     ) -> Self {
@@ -291,7 +302,10 @@ impl Op {
             target,
             base_sequence,
             authored_at,
-            kind: OpKind::UpdateContent { content },
+            kind: OpKind::UpdateContent {
+                content,
+                base_version_cid,
+            },
         }
     }
 
@@ -304,7 +318,7 @@ impl Op {
                 },
                 ..
             }
-            | OpKind::UpdateContent { content } => Some(content),
+            | OpKind::UpdateContent { content, .. } => Some(content),
             _ => None,
         }
     }
@@ -433,7 +447,7 @@ mod tests {
                 ScopeCrossing::ExitsGrantedSource,
             ),
             Op::relink(id(8), id(0), id(9), 7, at(1_006), ScopeCrossing::Cross),
-            Op::update_content(id(5), staged(b"stage2", 12), 8, at(1_004)),
+            Op::update_content(id(5), staged(b"stage2", 12), None, 8, at(1_004)),
             Op::move_node(
                 id(6),
                 id(0),
@@ -490,7 +504,7 @@ mod tests {
             Some(&b"k"[..])
         );
         assert_eq!(
-            Op::update_content(id(1), staged(b"k", 1), 1, at(1)).content_root_cid(),
+            Op::update_content(id(1), staged(b"k", 1), None, 1, at(1)).content_root_cid(),
             Some(&b"k"[..])
         );
         assert_eq!(Op::rename(id(1), "b", 1, at(1)).content_root_cid(), None);
@@ -531,7 +545,7 @@ mod tests {
                 ScopeCrossing::Intra,
             )
             .pending_class(),
-            Op::update_content(id(5), staged(b"k", 1), 1, at(1)).pending_class(),
+            Op::update_content(id(5), staged(b"k", 1), None, 1, at(1)).pending_class(),
         ];
         assert_eq!(
             classes,
@@ -553,7 +567,7 @@ mod tests {
     #[test]
     fn a_content_op_stamps_its_authored_time_and_plaintext_size() {
         let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
-        Op::update_content(id(1), staged(b"root", 9), 1, at(5)).stamp_authored(&mut node);
+        Op::update_content(id(1), staged(b"root", 9), None, 1, at(5)).stamp_authored(&mut node);
         assert_eq!(node.mtime, Some(5));
         assert_eq!(node.size, Some(9));
     }

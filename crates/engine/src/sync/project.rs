@@ -81,6 +81,7 @@ pub(crate) fn project_folder(
             meta.size = prior.size;
             meta.mtime = prior.mtime;
             meta.content_version = prior.content_version;
+            meta.head_content_cid = prior.head_content_cid.clone();
             meta.record_sequence = prior.record_sequence;
         }
         changed |= snapshot.node(id) != Some(&meta);
@@ -90,25 +91,32 @@ pub(crate) fn project_folder(
     changed
 }
 
-/// Fold a verified file read-body's plaintext `(size, mtime)` and version count
-/// into the base node. Returns whether any value actually changed, so the caller
-/// repaints only on a real change (a repeat read of the same version is a no-op).
+/// Fold a verified file read-body's plaintext `(size, mtime)`, version count and
+/// head `contentCid` into the base node. Returns whether any value actually
+/// changed, so the caller repaints only on a real change (a repeat read of the
+/// same version is a no-op).
+///
+/// `head_content_cid` is `None` only for a file with no published version.
 pub(crate) fn project_child_version(
     snapshot: &mut Snapshot,
     node: NodeId,
     size: u64,
     mtime: u64,
     version_count: u64,
+    head_content_cid: Option<&[u8]>,
 ) -> bool {
     let Some(meta) = snapshot.node_mut(node) else {
         return false;
     };
+    let head = head_content_cid.map(<[u8]>::to_vec);
     let changed = meta.size != Some(size)
         || meta.mtime != Some(mtime)
-        || meta.content_version != Some(version_count);
+        || meta.content_version != Some(version_count)
+        || meta.head_content_cid != head;
     meta.size = Some(size);
     meta.mtime = Some(mtime);
     meta.content_version = Some(version_count);
+    meta.head_content_cid = head;
     changed
 }
 
@@ -289,17 +297,52 @@ mod tests {
         let adopted = adopted_folder(vec![child(1, "a", CoreNodeKind::File, 1)], 1);
         let mut snap = project_fresh(root, &adopted);
 
-        assert!(project_child_version(&mut snap, node_id(1), 10, 99, 3));
+        assert!(project_child_version(
+            &mut snap,
+            node_id(1),
+            10,
+            99,
+            3,
+            Some(b"cid")
+        ));
         assert_eq!(snap.node(node_id(1)).unwrap().size, Some(10));
         assert_eq!(snap.node(node_id(1)).unwrap().mtime, Some(99));
         assert_eq!(snap.node(node_id(1)).unwrap().content_version, Some(3));
         // The identical fold changes nothing; a differing one does.
-        assert!(!project_child_version(&mut snap, node_id(1), 10, 99, 3));
-        assert!(project_child_version(&mut snap, node_id(1), 11, 99, 3));
+        assert!(!project_child_version(
+            &mut snap,
+            node_id(1),
+            10,
+            99,
+            3,
+            Some(b"cid")
+        ));
+        assert!(project_child_version(
+            &mut snap,
+            node_id(1),
+            11,
+            99,
+            3,
+            Some(b"cid")
+        ));
         // A new version alone is a change.
-        assert!(project_child_version(&mut snap, node_id(1), 11, 99, 4));
+        assert!(project_child_version(
+            &mut snap,
+            node_id(1),
+            11,
+            99,
+            4,
+            Some(b"cid")
+        ));
         // An absent node folds nothing.
-        assert!(!project_child_version(&mut snap, node_id(7), 1, 1, 1));
+        assert!(!project_child_version(
+            &mut snap,
+            node_id(7),
+            1,
+            1,
+            1,
+            Some(b"cid")
+        ));
     }
 
     #[test]
@@ -312,7 +355,8 @@ mod tests {
             node_id(1),
             2_048,
             500,
-            2
+            2,
+            Some(b"cid")
         ));
 
         // The same child renamed, re-linked and re-kinded by the newer body.
@@ -344,7 +388,8 @@ mod tests {
             node_id(1),
             2_048,
             500,
-            2
+            2,
+            Some(b"cid")
         ));
 
         // The child left the root body; it takes its projected values with it.

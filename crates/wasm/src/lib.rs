@@ -191,6 +191,9 @@ pub enum DeadLetterReason {
     AttemptsExhausted,
     /// The op's staged content can never publish, and its blocks were released.
     ContentUnrecoverable,
+    /// Another writer published a version this edit was not formed against; the
+    /// edit's own version stays staged rather than superseding it.
+    BaseSuperseded,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -208,6 +211,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::ContentUnrecoverable => {
                 DeadLetterReason::ContentUnrecoverable
             }
+            facade::DeadLetterReason::BaseSuperseded => DeadLetterReason::BaseSuperseded,
         }
     }
 }

@@ -984,6 +984,10 @@ mod published {
         device: FakeDevice,
         world: FakeWorld,
         ino: u64,
+        node: NodeId,
+        /// The engine's spawned loops, kept so a test can drain a write it
+        /// stages after the mount is up.
+        tasks: Vec<BoxedTask>,
     }
 
     fn mount_published(plaintext: &[u8], budget: CacheBudget) -> Mount {
@@ -1016,17 +1020,37 @@ mod published {
 
         let adapter = RecordingAdapter::push_capable();
         let mut core = OperationCore::new(engine, adapter.clone(), budget);
-        let ino = block_on(core.lookup(ROOT_INO, CLIP))
-            .expect("the published file is rendered")
-            .ino;
+        let published =
+            block_on(core.lookup(ROOT_INO, CLIP)).expect("the published file is rendered");
         adapter.drain();
         Mount {
             core,
             adapter,
             device,
             world,
-            ino,
+            ino: published.ino,
+            node: published.node,
+            tasks,
         }
+    }
+
+    /// Publish a new version of `CLIP` through the engine the mount projects —
+    /// the shell writing while the mount is up.
+    fn publish_version(mount: &mut Mount, plaintext: &[u8]) {
+        let node = mount.node;
+        let cadence = {
+            let engine = mount.core.engine_mut();
+            let handle =
+                block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
+                    .expect("the write opens");
+            for slice in plaintext.chunks(7) {
+                block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
+            }
+            block_on(engine.commit_write(handle)).expect("the write commits");
+            engine.profile().poll_cadence
+        };
+        mount.world.scheduler.advance(cadence);
+        pump(&mut mount.tasks);
     }
 
     fn opened(mount: &mut Mount) -> HandleId {
@@ -1237,27 +1261,61 @@ mod published {
     }
 
     #[test]
-    fn the_first_read_invalidates_the_kernels_data_cache_for_the_inode() {
-        // Opening the stream verifies a head version the kernel's page cache
-        // may predate, so the mount has to say so.
+    fn a_read_off_a_version_the_mount_never_served_repaints_the_kernels_data_cache() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let first = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(first, 0, 8)).expect("the first version reads"),
+            plaintext[..8]
+        );
+        mount.core.release(first).expect("the handle closes");
+        mount.adapter.drain();
+
+        let edited: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0xff).collect();
+        publish_version(&mut mount, &edited);
+        let ino = mount.ino;
+        let projected = block_on(mount.core.getattr(ino)).expect("the edited file is rendered");
+
+        let second = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(second, 0, 8)).expect("the newer version reads"),
+            edited[..8],
+            "the second bind must serve the version it resolved"
+        );
+        // The engine projects the head its own drain published, so the open
+        // moves nothing: what the kernel holds is stale even though the
+        // projection never changed.
+        assert_eq!(
+            block_on(mount.core.getattr(ino)).expect("still rendered"),
+            projected
+        );
+        let pushed = mount.adapter.drain();
+        assert!(
+            pushed.contains(&Invalidation::Data { ino }),
+            "expected a data invalidation for ino {ino}, got {pushed:?}"
+        );
+    }
+
+    #[test]
+    fn reading_the_version_already_served_repaints_nothing() {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle = opened(&mut mount);
         mount.adapter.drain();
 
+        // The kernel holds nothing for an inode this mount minted and has never
+        // served, so the first bind has nothing to drop.
         block_on(mount.core.read(handle, 0, 8)).expect("the first window");
-        let pushed = mount.adapter.drain();
-
-        let ino = mount.ino;
-        assert!(
-            pushed.contains(&Invalidation::Data { ino }),
-            "expected a data invalidation for ino {ino}, got {pushed:?}"
-        );
-
         block_on(mount.core.read(handle, 8, 8)).expect("a later window");
+        assert!(mount.adapter.drain().is_empty());
+
+        // A fresh handle re-resolves the same head: same bytes, no repaint.
+        let reopened = opened(&mut mount);
+        block_on(mount.core.read(reopened, 0, 8)).expect("the reopened window");
         assert!(
             mount.adapter.drain().is_empty(),
-            "a window off an already-pinned stream repaints nothing"
+            "a bind on the version already served repaints nothing"
         );
     }
 }

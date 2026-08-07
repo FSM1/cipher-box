@@ -1334,6 +1334,11 @@ struct LiveWrite {
     /// The size declared at `beginWrite`, which the reservation was sized from
     /// and the commit cross-checks the pushes against.
     declared_size: u64,
+    /// The version this write replaces ([`Engine::write_anchor`]), taken at the
+    /// open rather than the commit: the whole upload sits between the two, and
+    /// an anchor minted after it would call a version that landed mid-upload
+    /// the one the caller wrote against.
+    base_version_cid: Option<Vec<u8>>,
     /// The staging reservation held for this handle's whole life.
     reservation: ReservationId,
     /// The streaming framer, holding the version's content key.
@@ -2352,13 +2357,16 @@ impl<T: SeamTypes> Engine<T> {
         // Checked before anything is spent: a version of a node this device has
         // no file for would journal an `updateContent` the drain can only halt
         // on, after a whole upload's worth of staging, entropy and budget.
-        if let WriteTarget::Version { node } = &target {
-            match self.render().await?.node(*node).map(|meta| meta.kind) {
-                Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
-                Some(_) => {}
-                None => return Err(EngineError::UnknownNode),
+        let base_version_cid = match &target {
+            WriteTarget::NewFile { .. } => None,
+            WriteTarget::Version { node } => {
+                match self.render().await?.node(*node).map(|meta| meta.kind) {
+                    Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
+                    Some(_) => self.write_anchor(*node).await?,
+                    None => return Err(EngineError::UnknownNode),
+                }
             }
-        }
+        };
         let requested = sealed_total_bytes(size, &self.content_profile).map_err(|error| {
             EngineError::ContentTooLarge {
                 check: error.check(),
@@ -2404,6 +2412,7 @@ impl<T: SeamTypes> Engine<T> {
                 node,
                 target,
                 declared_size: size,
+                base_version_cid,
                 reservation,
                 writer,
             },
@@ -2594,6 +2603,7 @@ impl<T: SeamTypes> Engine<T> {
             node,
             target,
             declared_size,
+            base_version_cid,
             writer,
             ..
         } = write;
@@ -2659,7 +2669,7 @@ impl<T: SeamTypes> Engine<T> {
             }
             WriteTarget::Version { node } => {
                 let base_sequence = self.base_sequence_for(node).await?;
-                Op::update_content(node, content, base_sequence, authored_at)
+                Op::update_content(node, content, base_version_cid, base_sequence, authored_at)
             }
         };
         let seal = self.record_seal()?;
@@ -2989,6 +2999,17 @@ impl<T: SeamTypes> Engine<T> {
         .map_err(open_engine_error)
     }
 
+    /// The `contentCid` of the version a live stream pinned: the identity of
+    /// the plaintext every window off it serves. `None` for a handle the
+    /// engine does not hold.
+    pub fn stream_version_cid(&self, handle: StreamHandle) -> Option<Vec<u8>> {
+        self.streams
+            .borrow()
+            .open
+            .get(&handle)
+            .map(|stream| stream.version.content_cid.clone())
+    }
+
     /// Release a read stream. Idempotent — an unknown handle is already gone.
     pub fn close_stream(&self, handle: StreamHandle) {
         self.streams.borrow_mut().open.remove(&handle);
@@ -3006,15 +3027,28 @@ impl<T: SeamTypes> Engine<T> {
             version.size,
             version.modified_at,
             version_count,
+            Some(&version.content_cid),
         ) {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         }
     }
 
+    /// [`Self::resolve_head`] for a read, which needs bytes: a file with no
+    /// published version is unavailable rather than empty.
+    async fn head_version(&self, node: NodeId) -> Result<(Version, u64), EngineError> {
+        match self.resolve_head(node).await? {
+            (Some(version), count) => Ok((version, count)),
+            (None, _) => Err(EngineError::ContentUnavailable {
+                message: "file has no published content version".to_owned(),
+            }),
+        }
+    }
+
     /// Resolve one file node's head content version: base-snapshot lookup →
     /// gated child resolve → head of the sealed body's version list. Returns
-    /// the version and the body's version count.
-    async fn head_version(&self, node: NodeId) -> Result<(Version, u64), EngineError> {
+    /// the head version (`None` for a file that has published none) and the
+    /// body's version count.
+    async fn resolve_head(&self, node: NodeId) -> Result<(Option<Version>, u64), EngineError> {
         // The base snapshot alone answers the lookup (kind and ipnsName never
         // come from the overlay) — no full render for a single node. The borrow
         // never spans an await.
@@ -3093,13 +3127,7 @@ impl<T: SeamTypes> Engine<T> {
         // Newest-first; head is current (crates/core/src/seal/body.rs). Clone the
         // head rather than moving it out: `into_iter().next()` bitwise-moves slot
         // 0, so its content key would reach the allocator unzeroized.
-        let version_count = versions.len() as u64;
-        let Some(version) = versions.first().cloned() else {
-            return Err(EngineError::ContentUnavailable {
-                message: "file has no published content version".to_owned(),
-            });
-        };
-        Ok((version, version_count))
+        Ok((versions.first().cloned(), versions.len() as u64))
     }
 
     /// Best-effort [`Event::OpProgress`] emission for a full content read (a
@@ -3166,6 +3194,46 @@ impl<T: SeamTypes> Engine<T> {
             .parent_of(node)
             .unwrap_or(self.snapshot.borrow().root);
         (from_parent, rendered.record_sequence(node).unwrap_or(1))
+    }
+
+    /// The version a new write of `node` follows — the conditional-edit anchor
+    /// ([`OpKind::UpdateContent`](crate::sync::op::OpKind::UpdateContent)): the
+    /// last queued op that authors one, else the published head.
+    ///
+    /// A head this device has never projected is resolved here, before anything
+    /// is spent, rather than left unanchored — an unanchored write is one the
+    /// drain can only refuse, after a whole upload. Fails closed: a head that
+    /// will not resolve is a write that cannot prove what it replaces.
+    async fn write_anchor(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+        let queued = self.pending_ops().await?;
+        let authored = queued.iter().rev().find_map(|op| {
+            (op.target == node)
+                .then(|| op.staged_content())
+                .flatten()
+                .map(|content| content.root_cid.clone())
+        });
+        if authored.is_some() {
+            return Ok(authored);
+        }
+        let projected = {
+            let base = self.snapshot.borrow();
+            base.node(node)
+                .map(|meta| (meta.content_version, meta.head_content_cid.clone()))
+        };
+        match projected {
+            // Absent from gate-passing state: a pending create, whose versions
+            // are exactly what its own queue authors.
+            None => Ok(None),
+            Some((Some(_), head)) => Ok(head),
+            Some((None, _)) => match self.resolve_head(node).await? {
+                (Some(version), count) => {
+                    let cid = version.content_cid.clone();
+                    self.project_head(node, &version, count);
+                    Ok(Some(cid))
+                }
+                (None, _) => Ok(None),
+            },
+        }
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in

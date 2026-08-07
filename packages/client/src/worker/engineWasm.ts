@@ -169,5 +169,6 @@ export interface EngineWasm {
     readonly PayloadRefused: number;
     readonly AttemptsExhausted: number;
     readonly ContentUnrecoverable: number;
+    readonly BaseSuperseded: number;
   };
 }

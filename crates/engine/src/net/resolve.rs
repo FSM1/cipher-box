@@ -1141,6 +1141,7 @@ mod tests {
                 4_096,
                 1_700,
                 2,
+                Some(b"head-cid"),
             ));
 
             assert!(

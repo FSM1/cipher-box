@@ -8,7 +8,7 @@
 //! machinery, no freshness policy — those decisions all happened below the
 //! facade.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{
@@ -60,6 +60,11 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     inodes: InodeTable,
     handles: HandleTable,
     cache: ChunkCache,
+    /// Per node, the `contentCid` of the newest version this mount has bound a
+    /// read stream to. The kernel's page cache for that node's inode can only
+    /// hold bytes this mount served, so a bind at a different version is
+    /// exactly the condition under which those pages went stale.
+    streamed: HashMap<NodeId, Vec<u8>>,
 }
 
 impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
@@ -72,6 +77,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             inodes: InodeTable::new(),
             handles: HandleTable::new(),
             cache: ChunkCache::new(cache),
+            streamed: HashMap::new(),
         }
     }
 
@@ -79,6 +85,16 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// was mounted with.
     pub fn cached_plaintext_bytes(&self) -> usize {
         self.cache.retained_bytes()
+    }
+
+    /// The engine this mount projects. A session runs exactly one brain, so a
+    /// caller that also writes content drives it through here rather than
+    /// standing up a second engine over the same account.
+    ///
+    /// `#[doc(hidden)]`: a cross-crate test surface until a host adapter needs it.
+    #[doc(hidden)]
+    pub fn engine_mut(&mut self) -> &mut Engine<T> {
+        &mut self.engine
     }
 
     /// The kernel cache lifetimes this mount's adapter earned.
@@ -289,6 +305,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             self.release_stream(open);
         }
         self.cache.clear();
+        self.streamed.clear();
     }
 
     /// The read stream pinning `handle`'s content version, opened on first use:
@@ -302,17 +319,24 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if !matches!(open.access, Access::Read | Access::ReadWrite) {
             return Err(VfsError::BadHandle);
         }
-        let before = self.projected_content(open.node).await?;
         let stream = self.engine.open_content_stream(open.node).await?;
         if !self.handles.attach_stream(handle, stream) {
             self.engine.close_stream(stream);
             return Err(VfsError::BadHandle);
         }
-        // Opening the stream verified a head version the kernel's page cache
-        // for this inode may predate.
-        if self.projected_content(open.node).await? != before {
-            let ino = self.inodes.ino_for(open.node);
-            self.adapter.invalidate(Invalidation::Data { ino });
+        // The kernel's pages for this inode came from the version this mount
+        // last bound; binding a different one is what makes them stale. A first
+        // bind repaints nothing — the kernel holds no bytes the mount never
+        // served.
+        if let Some(pinned) = self.engine.stream_version_cid(stream) {
+            let superseded = self
+                .streamed
+                .insert(open.node, pinned.clone())
+                .is_some_and(|last| last != pinned);
+            if superseded {
+                let ino = self.inodes.ino_for(open.node);
+                self.adapter.invalidate(Invalidation::Data { ino });
+            }
         }
         Ok(stream)
     }
@@ -322,16 +346,6 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             self.engine.close_stream(stream);
             self.cache.forget_stream(stream);
         }
-    }
-
-    /// What the projection currently believes a node's content is.
-    async fn projected_content(
-        &mut self,
-        node: NodeId,
-    ) -> Result<(Option<u64>, Option<u64>), VfsError> {
-        let view = self.render().await?;
-        let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
-        Ok((meta.size, meta.mtime))
     }
 
     /// Filesystem counters. The longest admissible name is
