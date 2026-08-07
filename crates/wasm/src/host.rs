@@ -493,9 +493,15 @@ fn engine_error(error: EngineError) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_engine::facade::{CommandOutcome as Outcome, ImportedContact};
+    use cipherbox_core::kdf;
+    use cipherbox_core::suite::contact::ContactCode;
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_engine::facade::CommandOutcome as Outcome;
+    use cipherbox_engine::import_contact;
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    const CONTACT_SCALAR: [u8; 32] = [3u8; 32];
 
     fn crossed(outcome: Outcome) -> JsValue {
         CommandOutcome::from_facade(outcome).into()
@@ -503,6 +509,16 @@ mod tests {
 
     fn field(outcome: &JsValue, name: &str) -> JsValue {
         Reflect::get(outcome, &JsValue::from_str(name)).expect("outcome getter is readable")
+    }
+
+    fn bytes(value: JsValue) -> Vec<u8> {
+        value.unchecked_into::<Uint8Array>().to_vec()
+    }
+
+    fn imported_contact() -> Outcome {
+        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
+        let code = ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public());
+        Outcome::ContactImported(import_contact(&code.encode()).expect("the code imports"))
     }
 
     /// `command()` resolves with the id an `opProgress`/`deadLetter` event
@@ -541,47 +557,34 @@ mod tests {
     /// answer for them.
     #[wasm_bindgen_test]
     fn an_imported_contact_crosses_with_both_public_keys() {
-        let imported = crossed(Outcome::ContactImported(ImportedContact {
-            identity_public_key: vec![2u8; 33],
-            enc_public_key: vec![7u8; 32],
-        }));
+        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
+        let imported = crossed(imported_contact());
 
         assert_eq!(
-            field(&imported, "identityPublicKey")
-                .unchecked_into::<Uint8Array>()
-                .to_vec(),
-            vec![2u8; 33],
+            bytes(field(&imported, "identityPublicKey")),
+            identity.verifying_key().to_sec1().to_vec(),
         );
         assert_eq!(
-            field(&imported, "encPublicKey")
-                .unchecked_into::<Uint8Array>()
+            bytes(field(&imported, "encPublicKey")),
+            kdf::enc_subkey(&CONTACT_SCALAR)
+                .public()
+                .to_bytes()
                 .to_vec(),
-            vec![7u8; 32],
         );
         assert!(field(&imported, "opId").is_undefined());
         assert!(field(&crossed(Outcome::Done), "identityPublicKey").is_undefined());
     }
 
-    /// Hosts branch on `kind`, so the three arms must be distinguishable
-    /// without inspecting the payload getters.
+    /// Hosts switch on `kind`, so each arm's discriminant is a stable string
+    /// literal — the marshalling `Event::kind` already uses.
     #[wasm_bindgen_test]
-    fn each_outcome_kind_crosses_distinctly() {
-        let kinds = [
-            field(&crossed(Outcome::Done), "kind"),
-            field(&crossed(Outcome::Queued { op_id: OpId(1) }), "kind"),
-            field(
-                &crossed(Outcome::ContactImported(ImportedContact {
-                    identity_public_key: vec![2u8; 33],
-                    enc_public_key: vec![7u8; 32],
-                })),
-                "kind",
-            ),
-        ];
-
-        for (index, kind) in kinds.iter().enumerate() {
-            for other in &kinds[index + 1..] {
-                assert!(*kind != *other, "outcome kinds must not collide");
-            }
+    fn each_outcome_kind_crosses_as_its_stable_name() {
+        for (outcome, name) in [
+            (Outcome::Done, "done"),
+            (Outcome::Queued { op_id: OpId(1) }, "queued"),
+            (imported_contact(), "contactImported"),
+        ] {
+            assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));
         }
     }
 

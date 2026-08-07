@@ -44,6 +44,9 @@ async-lock = "3"
 # engine's `GatewaySource` — the credential never sits in a plain `String`.
 zeroize.workspace = true
 
-# The boundary tests run under wasm-bindgen-test-runner.
+# The boundary tests run under wasm-bindgen-test-runner. Core is a test-only
+# dependency: the contact-code round-trip needs a signed bundle to import, and
+# no engine API mints one. It never enters the cdylib.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+cipherbox-core.workspace = true
 wasm-bindgen-test = "0.3"

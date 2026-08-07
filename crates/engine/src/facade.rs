@@ -39,7 +39,7 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
-use crate::grants::import_contact;
+use crate::grants::{Contact, import_contact};
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -551,25 +551,7 @@ impl fmt::Debug for Command {
     }
 }
 
-/// A contact code the engine verified at import: the two public keys the
-/// bundle's binding signature tied together (`CONTEXT.md` "Contact code").
-///
-/// Both halves are public material — the identity key is what a host names as
-/// `recipient_identity_public_key` on a grant command, and the encryption
-/// subkey is what a grant blob seals to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedContact {
-    /// Compressed SEC1 secp256k1 identity public key (33 bytes).
-    pub identity_public_key: Vec<u8>,
-    /// X25519 encryption subkey (32 bytes).
-    pub enc_public_key: Vec<u8>,
-}
-
 /// What a command hands back to its caller.
-///
-/// An op id alone cannot answer every command: the grant, share, and rotation
-/// arms each produce a value only the caller can act on, so the return type
-/// carries the payload rather than reducing it to `Option<OpId>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandOutcome {
     /// The command completed and queued nothing; any further effect arrives on
@@ -582,8 +564,9 @@ pub enum CommandOutcome {
         /// The durable queue id.
         op_id: OpId,
     },
-    /// [`Command::ImportContact`] verified a contact code.
-    ContactImported(ImportedContact),
+    /// [`Command::ImportContact`] verified a contact code. Holding the
+    /// [`Contact`] is itself the proof its binding signature verified.
+    ContactImported(Contact),
 }
 
 impl CommandOutcome {
@@ -2233,9 +2216,6 @@ impl<T: SeamTypes> Engine<T> {
     /// share, and rotation arms whose slices have not landed stay
     /// [`EngineError::Unimplemented`].
     ///
-    /// The [`CommandOutcome`] carries whatever the arm produced — the staged
-    /// op's durable queue id, a verified contact — so a host never has to
-    /// reconstruct it from the event stream.
     pub async fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
@@ -2323,20 +2303,11 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 Ok(CommandOutcome::Done)
             }
-            Command::ImportContact { contact_code } => {
-                let contact = import_contact(&contact_code).map_err(|err| {
-                    // An unverifiable bundle is a fail-closed rejection, never a
-                    // retryable stall: the binding signature is the only thing
-                    // tying the encryption subkey to the identity key (#34 D6).
-                    EngineError::TrustViolation {
-                        message: format!("contact code rejected: {}", err.check()),
-                    }
-                })?;
-                Ok(CommandOutcome::ContactImported(ImportedContact {
-                    identity_public_key: contact.identity_pk().to_sec1().to_vec(),
-                    enc_public_key: contact.enc_subkey().to_bytes().to_vec(),
-                }))
-            }
+            Command::ImportContact { contact_code } => import_contact(&contact_code)
+                .map(CommandOutcome::ContactImported)
+                .map_err(|err| EngineError::TrustViolation {
+                    message: format!("contact code {}: {}", err.class(), err.check()),
+                }),
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))

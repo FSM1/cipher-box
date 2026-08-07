@@ -9,8 +9,7 @@ use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
-    GatewayConfig, ImportedContact, LoginSecret, NodeId, Permission, StoragePolicy,
-    SyncTimingProfile,
+    GatewayConfig, LoginSecret, NodeId, Permission, StoragePolicy, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -168,15 +167,9 @@ fn unimplemented_commands_return_their_typed_error() {
 
 /// A contact code the peer signed itself: the bundle a real import receives
 /// out of band.
-fn contact_code(scalar: [u8; 32]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+fn contact_code(scalar: [u8; 32]) -> Vec<u8> {
     let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
-    let enc_subkey = kdf::enc_subkey(&scalar).public();
-    let code = ContactCode::create(&identity, enc_subkey);
-    (
-        code.encode(),
-        identity.verifying_key().to_sec1().to_vec(),
-        enc_subkey.to_bytes().to_vec(),
-    )
+    ContactCode::create(&identity, kdf::enc_subkey(&scalar).public()).encode()
 }
 
 #[test]
@@ -185,19 +178,22 @@ fn importing_a_contact_returns_the_bound_public_keys() {
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
-    let (code, identity_public_key, enc_public_key) = contact_code([3u8; 32]);
+    let scalar = [3u8; 32];
 
-    assert_eq!(
-        block_on(engine.command(Command::ImportContact { contact_code: code })),
-        Ok(CommandOutcome::ContactImported(ImportedContact {
-            identity_public_key,
-            enc_public_key,
-        })),
-    );
+    let outcome = block_on(engine.command(Command::ImportContact {
+        contact_code: contact_code(scalar),
+    }));
+
+    let CommandOutcome::ContactImported(contact) = outcome.expect("the code imports") else {
+        panic!("importing a contact answers with the contact");
+    };
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    assert_eq!(contact.identity_pk(), identity.verifying_key());
+    assert_eq!(contact.enc_subkey(), kdf::enc_subkey(&scalar).public());
 }
 
 /// The binding signature is the only thing tying the encryption subkey to the
-/// identity key, so a code that fails it is a trust violation — never a
+/// identity key, so a code that fails it is refused outright — never a
 /// degraded import that hands back an unbound subkey (#34 D6).
 #[test]
 fn a_contact_code_that_fails_its_binding_is_refused() {
@@ -205,22 +201,25 @@ fn a_contact_code_that_fails_its_binding_is_refused() {
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
-    let (mut code, _, honest_enc_public_key) = contact_code([3u8; 32]);
-    let (_, _, other_enc_public_key) = contact_code([4u8; 32]);
+    let mut code = contact_code([3u8; 32]);
+    let honest = kdf::enc_subkey(&[3u8; 32]).public().to_bytes();
+    let forged = kdf::enc_subkey(&[4u8; 32]).public().to_bytes();
     let at = code
-        .windows(honest_enc_public_key.len())
-        .position(|window| window == honest_enc_public_key)
+        .windows(honest.len())
+        .position(|window| window == honest)
         .expect("the encoded code carries the subkey it bound");
-    code[at..at + other_enc_public_key.len()].copy_from_slice(&other_enc_public_key);
+    code[at..at + forged.len()].copy_from_slice(&forged);
 
     assert_eq!(
         block_on(engine.command(Command::ImportContact { contact_code: code })),
         Err(EngineError::TrustViolation {
-            message: "contact code rejected: subkey-binding-invalid".to_owned(),
+            message: "contact code trust: subkey-binding-invalid".to_owned(),
         }),
     );
 }
 
+/// A bundle that does not decode is refused too, and says so: the class tells
+/// a host whether the code is garbled or forged.
 #[test]
 fn a_malformed_contact_code_is_refused() {
     let world = FakeWorld::new();
@@ -232,9 +231,12 @@ fn a_malformed_contact_code_is_refused() {
         contact_code: b"not a contact bundle".to_vec(),
     }));
 
+    let Err(EngineError::TrustViolation { message }) = result else {
+        panic!("an undecodable bundle is refused, never imported: {result:?}");
+    };
     assert!(
-        matches!(result, Err(EngineError::TrustViolation { .. })),
-        "a bundle that does not decode is refused, never imported: {result:?}"
+        message.starts_with("contact code malformed: "),
+        "the refusal names the codec class and check: {message}"
     );
 }
 

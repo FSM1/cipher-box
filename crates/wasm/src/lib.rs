@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use cipherbox_engine::Contact;
 use cipherbox_engine::facade;
 use wasm_bindgen::prelude::*;
 
@@ -263,19 +264,6 @@ impl From<facade::OpPhase> for OpPhase {
 // `bigint`, absent projections as `undefined`.
 // ---------------------------------------------------------------------------
 
-/// Which arm a command took. The payload getters on [`CommandOutcome`] are
-/// `undefined` for every kind that does not carry them.
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandOutcomeKind {
-    /// Completed, nothing to carry back.
-    Done,
-    /// An intent op reached the durable queue.
-    Queued,
-    /// A contact code was verified.
-    ContactImported,
-}
-
 /// What a command handed back across the worker boundary.
 #[wasm_bindgen]
 pub struct CommandOutcome {
@@ -284,37 +272,39 @@ pub struct CommandOutcome {
 
 #[wasm_bindgen]
 impl CommandOutcome {
-    /// Which arm ran, and therefore which payload getters are populated.
+    /// The outcome discriminant, as a stable string literal.
     #[wasm_bindgen(getter)]
-    pub fn kind(&self) -> CommandOutcomeKind {
+    pub fn kind(&self) -> String {
         match self.inner {
-            facade::CommandOutcome::Done => CommandOutcomeKind::Done,
-            facade::CommandOutcome::Queued { .. } => CommandOutcomeKind::Queued,
-            facade::CommandOutcome::ContactImported(_) => CommandOutcomeKind::ContactImported,
+            facade::CommandOutcome::Done => "done",
+            facade::CommandOutcome::Queued { .. } => "queued",
+            facade::CommandOutcome::ContactImported(_) => "contactImported",
         }
+        .to_owned()
     }
 
-    /// The staged op's durable queue id. Crosses as the same `bigint` an
+    /// `queued`: the staged op's durable queue id, as the same `bigint` an
     /// `opProgress`/`deadLetter` event carries, so the two compare equal and
-    /// an id past 2^53 survives.
+    /// an id past 2^53 survives; otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = opId)]
     pub fn op_id(&self) -> Option<u64> {
         self.inner.op_id().map(|op_id| op_id.0)
     }
 
-    /// The imported contact's compressed SEC1 identity public key — what a
-    /// grant command names as its recipient.
+    /// `contactImported`: the compressed SEC1 identity public key a grant
+    /// command names as its recipient; otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = identityPublicKey)]
     pub fn identity_public_key(&self) -> Option<Vec<u8>> {
         self.contact()
-            .map(|contact| contact.identity_public_key.clone())
+            .map(|contact| contact.identity_pk().to_sec1().to_vec())
     }
 
-    /// The imported contact's X25519 encryption subkey, as the verified
-    /// binding signature tied it to the identity key.
+    /// `contactImported`: the X25519 encryption subkey the verified binding
+    /// signature tied to that identity key; otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = encPublicKey)]
     pub fn enc_public_key(&self) -> Option<Vec<u8>> {
-        self.contact().map(|contact| contact.enc_public_key.clone())
+        self.contact()
+            .map(|contact| contact.enc_subkey().to_bytes().to_vec())
     }
 }
 
@@ -324,7 +314,7 @@ impl CommandOutcome {
         Self { inner }
     }
 
-    fn contact(&self) -> Option<&facade::ImportedContact> {
+    fn contact(&self) -> Option<&Contact> {
         match &self.inner {
             facade::CommandOutcome::ContactImported(contact) => Some(contact),
             _ => None,
