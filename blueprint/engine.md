@@ -254,23 +254,19 @@ degraded outcome applies a different policy rather than showing stale data.
   on the resolved case, letting the degraded ones fall through to the defaults,
   reintroduces exactly the widening this policy exists to prevent.
 - **The one arm that still authorises a write is named for what it assumes.**
-  The built-in defaults stand in for a first run, and the reason that carries
-  them says so: `UnprovenFirstRun`. It is reached only when no endpoint served a
+  The built-in defaults stand in for a first run, and the reason carrying them
+  says so: `UnprovenFirstRun`. It is reached only when no endpoint served a
   record _and_ this device holds no durable mark of one — neither the per-name
-  sequence floor, nor the adopted body revision, nor the mint counter. The three
-  are read together and fail closed together, so a floor store that took one
-  raise and lost another can never downgrade a suppression into a first run.
-  The mint counter is the load-bearing one: it rises _before_ the PUT, so a save
-  that never confirmed still refuses every later widening — the moment a
-  placement change is least confirmed is the moment reverting it is most
-  valuable to an adversary.
-  Residual: absence is still only ever a verdict about _this device_, so a
-  record-plane adversary who withholds the record from one that holds none of
-  the three marks reaches the assumed default. Closing that needs positive
-  account-scoped evidence that settings were never published. The account's
-  advisory BYO flag is the one such signal a fresh device already reads, but it
-  is read after the placement decision is made and is spent reconciling the flag
-  the other way, so wiring it is a change to the pre-flight, not to this policy.
+  sequence floor nor the publish mint counter, and an unreadable floor is never
+  read as an absent one. The mint counter is what the sequence floor misses: it
+  is raised before the PUT, so a save that reached the network and never
+  confirmed still refuses every later widening — the member expressed a choice
+  this device could not authenticate. Residual: absence remains a
+  verdict about _this device_, so an adversary who withholds the record from one
+  holding no mark at all reaches the assumed default. Closing that needs
+  positive account-scoped evidence that settings were never published, and the
+  only such signal in reach is the account's advisory BYO flag, which the
+  placement decision does not see.
 - **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
   an availability event recovered by revival (above), because a gate-level
   rejection would lock every grantee out of a dormant owner's vault — a read

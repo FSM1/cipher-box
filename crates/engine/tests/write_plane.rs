@@ -6833,10 +6833,8 @@ fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
 }
 
 /// The member picks "never put my bytes in CipherBox's store" and the save does
-/// not land. The revision mint counter rose before the PUT, so the next cold
-/// start on this device refuses the write rather than reading the missing
-/// record as a first run — the moment a placement change is least confirmed is
-/// the moment reverting it is most valuable to a record-plane adversary.
+/// not land. The next cold start refuses the write rather than reading the
+/// missing record as a first run.
 #[test]
 fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() {
     let world = FakeWorld::new();

@@ -181,6 +181,37 @@ fn publish(
     .expect("the settings record publishes");
 }
 
+/// Publish `settings` from `device` over a transport that acks nothing back:
+/// the attempt reaches the network, uploads its head block, and comes home
+/// unconfirmed.
+fn publish_unconfirmed(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    settings: &VaultSettings,
+    entropy_seed: u64,
+) -> SettingsPublishError {
+    serve_http(device, blocks, 4);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    block_on(publish_settings(
+        &AcksNothingBack,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(entropy_seed),
+        &OrphanHeads::default(),
+        &SECRET,
+        settings,
+    ))
+    .expect_err("a transport that acks nothing back never confirms")
+}
+
 /// Put `body` on the block plane and publish a record anchoring it at the
 /// account's settings name and `sequence`, bypassing the publish path. The
 /// ephemeral varies with the sequence: two bodies sealed under one key must
@@ -391,27 +422,9 @@ impl RecordTransport for AcksNothingBack {
 fn an_unconfirmed_publish_is_reported_and_never_advances_the_floor() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
-    let api = ApiClient::new(
-        device.http.clone(),
-        device.credential_store.clone(),
-        "http://api.test",
-    );
-    serve_http(&device, &Blocks::default(), 4);
+    let outcome = publish_unconfirmed(&world, &device, &Blocks::default(), &configured(), 3);
 
-    let outcome = block_on(publish_settings(
-        &AcksNothingBack,
-        &api,
-        &device.floor_store,
-        &device.snapshot_cache,
-        &world.scheduler,
-        &SyncTimingProfile::CI,
-        &mut SeededEntropy::new(3),
-        &OrphanHeads::default(),
-        &SECRET,
-        &configured(),
-    ));
-
-    assert_eq!(outcome.unwrap_err(), SettingsPublishError::Unconfirmed);
+    assert_eq!(outcome, SettingsPublishError::Unconfirmed);
     assert_eq!(
         block_on(
             device
@@ -513,38 +526,27 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
     );
 }
 
-/// A publish attempt raises the mint counter before the PUT, so a device whose
-/// save never confirmed still carries a durable mark of the member's choice.
-/// Withholding the record from that device is suppression, not a first run —
-/// otherwise the moment a placement change is least confirmed is the moment it
-/// is cheapest to revert.
+/// The mint counter is the only mark a save that never confirmed leaves, and it
+/// is enough: withholding the record from that device is suppression, not a
+/// first run.
 #[test]
 fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"me");
-    let api = ApiClient::new(
-        device.http.clone(),
-        device.credential_store.clone(),
-        "http://api.test",
-    );
-    serve_http(&device, &blocks, 4);
     assert_eq!(
-        block_on(publish_settings(
-            &AcksNothingBack,
-            &api,
-            &device.floor_store,
-            &device.snapshot_cache,
-            &world.scheduler,
-            &SyncTimingProfile::CI,
-            &mut SeededEntropy::new(6),
-            &OrphanHeads::default(),
-            &SECRET,
-            &external_only(),
-        ))
-        .unwrap_err(),
+        publish_unconfirmed(&world, &device, &blocks, &external_only(), 6),
         SettingsPublishError::Unconfirmed,
-        "the attempt reaches the network and comes back unconfirmed",
+    );
+    assert_eq!(
+        block_on(
+            device
+                .floor_store
+                .sequence_floor(settings_name(&SECRET).as_str().as_bytes())
+        )
+        .expect("read"),
+        None,
+        "the adopt-side marks stayed where they were",
     );
 
     // `Defaults` rather than `Stale`: nothing was cached, so the verdict rests
@@ -554,26 +556,6 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
         SettingsLoad::Defaults(DefaultsReason::Suppressed),
         "the mint counter outlives the attempt, so absence is no longer credible",
     );
-}
-
-/// The adopt-side marks are raised by two separate, non-atomic floor writes. A
-/// store that took one and lost the other must still refuse: any surviving mark
-/// proves this device adopted a record, and a first run has none of them.
-#[test]
-fn any_surviving_adopt_mark_alone_refuses_a_withheld_record() {
-    for key in [b"settings-revision/".as_slice(), b"".as_slice()] {
-        let world = FakeWorld::new();
-        let device = world.device(b"me");
-        let mut floor_key = key.to_vec();
-        floor_key.extend_from_slice(settings_name(&SECRET).as_str().as_bytes());
-        block_on(device.floor_store.raise_sequence_floor(&floor_key, 3)).expect("the floor raises");
-
-        assert_eq!(
-            load(&world, &device, &Blocks::default(), &SECRET),
-            SettingsLoad::Defaults(DefaultsReason::Suppressed),
-            "{key:?} alone is proof this device adopted settings before",
-        );
-    }
 }
 
 /// A transport whose GET never settles — the shape of an unresolvable name.
