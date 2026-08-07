@@ -120,7 +120,6 @@ fn assert_all_endpoints_at(store: &InMemoryRecordStore, name: &IpnsName, sequenc
     }
 }
 
-/// Assert no configured endpoint holds any record for `name`.
 fn assert_no_endpoint_holds(store: &InMemoryRecordStore, name: &IpnsName) {
     for endpoint in store.endpoints() {
         assert!(
@@ -131,7 +130,6 @@ fn assert_no_endpoint_holds(store: &InMemoryRecordStore, name: &IpnsName) {
     }
 }
 
-/// The verified `Value` of the record the first endpoint holds for `name`.
 fn head_value_at(store: &InMemoryRecordStore, name: &IpnsName) -> Vec<u8> {
     let bytes = store
         .record_at(&store.endpoints()[0], name.as_str())
@@ -1061,6 +1059,50 @@ fn revive_prefers_a_fresher_corroborating_record_over_the_recovery_endpoint() {
         head_value_at(&world.record_store, &name),
         b"/ipfs/bafyfresh",
         "the CID rides out of the same record as the sequence"
+    );
+}
+
+#[test]
+fn revive_takes_the_fan_out_side_of_a_same_sequence_fork() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(23);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // An unconfirmed publish retry forks the name: two validly signed records at
+    // one sequence, pointing at different CIDs. The routing set is canonical, so
+    // it takes the tie — the recovery endpoint does not get to pick a side.
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecoveryside", 5, 0)));
+    device.http.enqueue_response(ok_200()); // register for the re-mint
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyfanoutside", 5, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 6 });
+    assert_all_endpoints_at(&world.record_store, &name, 6);
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyfanoutside",
+        "a corroborated sequence never rides with the recovery endpoint's CID"
     );
 }
 
