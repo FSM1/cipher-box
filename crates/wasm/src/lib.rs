@@ -263,6 +263,75 @@ impl From<facade::OpPhase> for OpPhase {
 // `bigint`, absent projections as `undefined`.
 // ---------------------------------------------------------------------------
 
+/// Which arm a command took. The payload getters on [`CommandOutcome`] are
+/// `undefined` for every kind that does not carry them.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOutcomeKind {
+    /// Completed, nothing to carry back.
+    Done,
+    /// An intent op reached the durable queue.
+    Queued,
+    /// A contact code was verified.
+    ContactImported,
+}
+
+/// What a command handed back across the worker boundary.
+#[wasm_bindgen]
+pub struct CommandOutcome {
+    inner: facade::CommandOutcome,
+}
+
+#[wasm_bindgen]
+impl CommandOutcome {
+    /// Which arm ran, and therefore which payload getters are populated.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> CommandOutcomeKind {
+        match self.inner {
+            facade::CommandOutcome::Done => CommandOutcomeKind::Done,
+            facade::CommandOutcome::Queued { .. } => CommandOutcomeKind::Queued,
+            facade::CommandOutcome::ContactImported(_) => CommandOutcomeKind::ContactImported,
+        }
+    }
+
+    /// The staged op's durable queue id. Crosses as the same `bigint` an
+    /// `opProgress`/`deadLetter` event carries, so the two compare equal and
+    /// an id past 2^53 survives.
+    #[wasm_bindgen(getter, js_name = opId)]
+    pub fn op_id(&self) -> Option<u64> {
+        self.inner.op_id().map(|op_id| op_id.0)
+    }
+
+    /// The imported contact's compressed SEC1 identity public key — what a
+    /// grant command names as its recipient.
+    #[wasm_bindgen(getter, js_name = identityPublicKey)]
+    pub fn identity_public_key(&self) -> Option<Vec<u8>> {
+        self.contact()
+            .map(|contact| contact.identity_public_key.clone())
+    }
+
+    /// The imported contact's X25519 encryption subkey, as the verified
+    /// binding signature tied it to the identity key.
+    #[wasm_bindgen(getter, js_name = encPublicKey)]
+    pub fn enc_public_key(&self) -> Option<Vec<u8>> {
+        self.contact().map(|contact| contact.enc_public_key.clone())
+    }
+}
+
+impl CommandOutcome {
+    /// Wraps an engine command outcome. Never exported to JS.
+    pub fn from_facade(inner: facade::CommandOutcome) -> Self {
+        Self { inner }
+    }
+
+    fn contact(&self) -> Option<&facade::ImportedContact> {
+        match &self.inner {
+            facade::CommandOutcome::ContactImported(contact) => Some(contact),
+            _ => None,
+        }
+    }
+}
+
 /// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
 #[wasm_bindgen]
 pub struct Breadcrumb {

@@ -39,6 +39,7 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
+use crate::grants::import_contact;
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -547,6 +548,51 @@ impl Command {
 impl fmt::Debug for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Command({})", self.name())
+    }
+}
+
+/// A contact code the engine verified at import: the two public keys the
+/// bundle's binding signature tied together (`CONTEXT.md` "Contact code").
+///
+/// Both halves are public material — the identity key is what a host names as
+/// `recipient_identity_public_key` on a grant command, and the encryption
+/// subkey is what a grant blob seals to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedContact {
+    /// Compressed SEC1 secp256k1 identity public key (33 bytes).
+    pub identity_public_key: Vec<u8>,
+    /// X25519 encryption subkey (32 bytes).
+    pub enc_public_key: Vec<u8>,
+}
+
+/// What a command hands back to its caller.
+///
+/// An op id alone cannot answer every command: the grant, share, and rotation
+/// arms each produce a value only the caller can act on, so the return type
+/// carries the payload rather than reducing it to `Option<OpId>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// The command completed and queued nothing; any further effect arrives on
+    /// the event stream.
+    Done,
+    /// An intent op reached the durable queue under this id — the same id a
+    /// later [`Event::OpProgress`] or [`Event::DeadLetter`] carries, so a host
+    /// can correlate them back to the call that made it.
+    Queued {
+        /// The durable queue id.
+        op_id: OpId,
+    },
+    /// [`Command::ImportContact`] verified a contact code.
+    ContactImported(ImportedContact),
+}
+
+impl CommandOutcome {
+    /// The staged op's durable queue id, for a command that queued one.
+    pub fn op_id(&self) -> Option<OpId> {
+        match self {
+            CommandOutcome::Queued { op_id } => Some(*op_id),
+            _ => None,
+        }
     }
 }
 
@@ -2183,14 +2229,14 @@ impl<T: SeamTypes> Engine<T> {
     /// The metadata intent ops (create/delete/rename/relink) stage onto the
     /// durable op queue via [`stage_op`] and emit [`Event::SnapshotUpdated`];
     /// the base sequence each op carries is read from the rendered view (state
-    /// law), so an op rebases against the state the host saw. Content sealing,
-    /// grants, rotation, and auth land with their own slices and stay
+    /// law), so an op rebases against the state the host saw. The grant,
+    /// share, and rotation arms whose slices have not landed stay
     /// [`EngineError::Unimplemented`].
     ///
-    /// Returns the durable queue id of the staged op, so a host can correlate a
-    /// later [`Event::DeadLetter`] or [`Event::OpProgress`] back to the call
-    /// that made it; `None` for a command that queues nothing.
-    pub async fn command(&mut self, command: Command) -> Result<Option<OpId>, EngineError> {
+    /// The [`CommandOutcome`] carries whatever the arm produced — the staged
+    /// op's durable queue id, a verified contact — so a host never has to
+    /// reconstruct it from the event stream.
+    pub async fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
@@ -2262,7 +2308,10 @@ impl<T: SeamTypes> Engine<T> {
                 );
                 self.stage_and_notify(&op).await
             }
-            Command::CancelUpload { op_id } => self.cancel_upload(op_id).await.map(|()| None),
+            Command::CancelUpload { op_id } => self
+                .cancel_upload(op_id)
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::SetFocus { node } => {
                 self.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
@@ -2272,14 +2321,28 @@ impl<T: SeamTypes> Engine<T> {
                 if self.refresh_focus_on_access(authored_at).await {
                     let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
-                Ok(None)
+                Ok(CommandOutcome::Done)
+            }
+            Command::ImportContact { contact_code } => {
+                let contact = import_contact(&contact_code).map_err(|err| {
+                    // An unverifiable bundle is a fail-closed rejection, never a
+                    // retryable stall: the binding signature is the only thing
+                    // tying the encryption subkey to the identity key (#34 D6).
+                    EngineError::TrustViolation {
+                        message: format!("contact code rejected: {}", err.check()),
+                    }
+                })?;
+                Ok(CommandOutcome::ContactImported(ImportedContact {
+                    identity_public_key: contact.identity_pk().to_sec1().to_vec(),
+                    enc_public_key: contact.enc_subkey().to_bytes().to_vec(),
+                }))
             }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
                     .await
                     .map_err(EngineError::from_api)?;
-                Ok(None)
+                Ok(CommandOutcome::Done)
             }
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
@@ -3259,7 +3322,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
     /// returning the durable queue id the drain will report the op under.
-    async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
+    async fn stage_and_notify(&mut self, op: &Op) -> Result<CommandOutcome, EngineError> {
         let seal = self.record_seal()?;
         let op_id = stage_op(&self.seams.staging_store, seal, op)
             .await
@@ -3267,7 +3330,7 @@ impl<T: SeamTypes> Engine<T> {
         // Best-effort push-invalidation trigger; a dropped receiver (host torn
         // down) is fine.
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        Ok(Some(op_id))
+        Ok(CommandOutcome::Queued { op_id })
     }
 
     /// Sealing inputs for one durable op record: the session's enc-subkey plus

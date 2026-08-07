@@ -36,7 +36,7 @@ use crate::seams_bridge::{
     RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{Command, Event, NodeId, SnapshotView};
+use crate::{Command, CommandOutcome, Event, NodeId, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -216,20 +216,20 @@ impl EngineHandle {
     }
 
     /// Executes one engine command — the single write entry point. Consumes the
-    /// command value. Resolves with the staged op's durable queue id (the same
-    /// `u64` an `opProgress`/`deadLetter` event carries), or `undefined` for a
-    /// command that queues nothing; rejects with the engine error.
+    /// command value. Resolves with the [`CommandOutcome`] the arm produced —
+    /// the staged op's durable queue id, a verified contact — or rejects with
+    /// the engine error.
     pub fn command(&self, command: Command) -> Promise {
         let engine = self.engine.clone();
         let facade_command = command.into_facade();
         future_to_promise(async move {
-            let op_id = engine
+            let outcome = engine
                 .write()
                 .await
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
-            Ok(op_id_value(op_id))
+            Ok(CommandOutcome::from_facade(outcome).into())
         })
     }
 
@@ -453,13 +453,6 @@ impl EngineHandle {
     }
 }
 
-/// A staged op id as the boundary spells it. Op ids run the whole `u64` range,
-/// so they cross as `bigint` — the same marshalling the `opId` getter on
-/// `opProgress`/`deadLetter` uses, or a client could not correlate the two.
-fn op_id_value(op_id: Option<OpId>) -> JsValue {
-    op_id.map_or(JsValue::UNDEFINED, |op| JsValue::from(op.0))
-}
-
 /// Renders an engine error as a rejection value: a `js_sys::Error` whose
 /// message is the diagnostic `Display` string (no key material — redacted by
 /// construction) and whose `code` property is the stable camelCase variant
@@ -500,8 +493,17 @@ fn engine_error(error: EngineError) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_engine::facade::{CommandOutcome as Outcome, ImportedContact};
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    fn crossed(outcome: Outcome) -> JsValue {
+        CommandOutcome::from_facade(outcome).into()
+    }
+
+    fn field(outcome: &JsValue, name: &str) -> JsValue {
+        Reflect::get(outcome, &JsValue::from_str(name)).expect("outcome getter is readable")
+    }
 
     /// `command()` resolves with the id an `opProgress`/`deadLetter` event
     /// later carries, so both must cross as the same JS type — an f64 `number`
@@ -509,12 +511,17 @@ mod tests {
     /// past 2^53.
     #[wasm_bindgen_test]
     fn a_staged_op_id_crosses_as_a_bigint() {
-        let value = op_id_value(Some(OpId(u64::MAX)));
+        let op_id = field(
+            &crossed(Outcome::Queued {
+                op_id: OpId(u64::MAX),
+            }),
+            "opId",
+        );
 
-        assert_eq!(value.js_typeof(), JsValue::from_str("bigint"));
+        assert_eq!(op_id.js_typeof(), JsValue::from_str("bigint"));
         assert_eq!(
             String::from(
-                value
+                op_id
                     .unchecked_into::<BigInt>()
                     .to_string(10)
                     .expect("bigint renders in base 10")
@@ -523,10 +530,59 @@ mod tests {
         );
     }
 
-    /// A command that queues nothing resolves `undefined`, never `0n`.
+    /// A command that queues nothing carries no op id, never `0n`.
     #[wasm_bindgen_test]
-    fn a_command_that_queues_nothing_crosses_as_undefined() {
-        assert!(op_id_value(None).is_undefined());
+    fn a_command_that_queues_nothing_carries_no_op_id() {
+        assert!(field(&crossed(Outcome::Done), "opId").is_undefined());
+    }
+
+    /// The verified contact's two public keys are the whole point of the
+    /// import, so both must survive the boundary — and no other kind may
+    /// answer for them.
+    #[wasm_bindgen_test]
+    fn an_imported_contact_crosses_with_both_public_keys() {
+        let imported = crossed(Outcome::ContactImported(ImportedContact {
+            identity_public_key: vec![2u8; 33],
+            enc_public_key: vec![7u8; 32],
+        }));
+
+        assert_eq!(
+            field(&imported, "identityPublicKey")
+                .unchecked_into::<Uint8Array>()
+                .to_vec(),
+            vec![2u8; 33],
+        );
+        assert_eq!(
+            field(&imported, "encPublicKey")
+                .unchecked_into::<Uint8Array>()
+                .to_vec(),
+            vec![7u8; 32],
+        );
+        assert!(field(&imported, "opId").is_undefined());
+        assert!(field(&crossed(Outcome::Done), "identityPublicKey").is_undefined());
+    }
+
+    /// Hosts branch on `kind`, so the three arms must be distinguishable
+    /// without inspecting the payload getters.
+    #[wasm_bindgen_test]
+    fn each_outcome_kind_crosses_distinctly() {
+        let kinds = [
+            field(&crossed(Outcome::Done), "kind"),
+            field(&crossed(Outcome::Queued { op_id: OpId(1) }), "kind"),
+            field(
+                &crossed(Outcome::ContactImported(ImportedContact {
+                    identity_public_key: vec![2u8; 33],
+                    enc_public_key: vec![7u8; 32],
+                })),
+                "kind",
+            ),
+        ];
+
+        for (index, kind) in kinds.iter().enumerate() {
+            for other in &kinds[index + 1..] {
+                assert!(*kind != *other, "outcome kinds must not collide");
+            }
+        }
     }
 
     #[wasm_bindgen_test]
