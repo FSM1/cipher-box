@@ -120,6 +120,29 @@ fn assert_all_endpoints_at(store: &InMemoryRecordStore, name: &IpnsName, sequenc
     }
 }
 
+/// Assert no configured endpoint holds any record for `name`.
+fn assert_no_endpoint_holds(store: &InMemoryRecordStore, name: &IpnsName) {
+    for endpoint in store.endpoints() {
+        assert!(
+            store.record_at(&endpoint, name.as_str()).is_none(),
+            "endpoint {} holds a record",
+            endpoint.0
+        );
+    }
+}
+
+/// The verified `Value` of the record the first endpoint holds for `name`.
+fn head_value_at(store: &InMemoryRecordStore, name: &IpnsName) -> Vec<u8> {
+    let bytes = store
+        .record_at(&store.endpoints()[0], name.as_str())
+        .expect("endpoint holds a record");
+    IpnsRecord::unmarshal(&bytes)
+        .expect("record parses")
+        .verify(name)
+        .expect("record verifies")
+        .value
+}
+
 // --- the Adopter stub: a scripted gate verdict + the sequences it was fed ----
 
 #[derive(Clone, Copy)]
@@ -1033,21 +1056,81 @@ fn revive_prefers_a_fresher_corroborating_record_over_the_recovery_endpoint() {
     .expect("revive");
 
     assert_eq!(outcome, PublishOutcome::Published { sequence: 10 });
-    for endpoint in world.record_store.endpoints() {
-        let bytes = world
-            .record_store
-            .record_at(&endpoint, name.as_str())
-            .unwrap();
-        let verified = IpnsRecord::unmarshal(&bytes)
-            .unwrap()
-            .verify(&name)
-            .unwrap();
-        assert_eq!(verified.sequence, 10);
-        assert_eq!(
-            verified.value, b"/ipfs/bafyfresh",
-            "the CID rides out of the same record as the sequence"
-        );
-    }
+    assert_all_endpoints_at(&world.record_store, &name, 10);
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyfresh",
+        "the CID rides out of the same record as the sequence"
+    );
+}
+
+#[test]
+fn revive_keeps_the_recovery_record_when_the_fan_out_is_older() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(19);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 7, 0)));
+    device.http.enqueue_response(ok_200());
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyolder", 2, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 8 });
+    assert_eq!(
+        head_value_at(&world.record_store, &name),
+        b"/ipfs/bafyrecovered",
+        "an older fan-out record never displaces the recovery record"
+    );
+}
+
+#[test]
+fn revive_fails_closed_when_the_sequence_floor_cannot_be_read() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(20);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyrecovered", 5, 0)));
+
+    let error = block_on(revive(
+        &device.record_store,
+        &api,
+        &FailingFloorStore,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect_err("the corroboration cannot run without the floor");
+    assert!(matches!(error, ReviveError::FloorRead(_)));
+    assert_no_endpoint_holds(&world.record_store, &name);
 }
 
 #[test]
@@ -1086,18 +1169,10 @@ fn revive_fails_closed_when_every_source_is_below_the_durable_floor() {
         error,
         ReviveError::StaleSource {
             floor: 9,
-            recovered: 3
+            sequence: 3
         }
     );
-    for endpoint in world.record_store.endpoints() {
-        assert!(
-            world
-                .record_store
-                .record_at(&endpoint, name.as_str())
-                .is_none(),
-            "nothing is re-minted from a replayed source"
-        );
-    }
+    assert_no_endpoint_holds(&world.record_store, &name);
 }
 
 // ---------------------------------------------------------------------------

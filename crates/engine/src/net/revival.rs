@@ -1,18 +1,18 @@
 //! Revival after a >EOL lapse (blueprint/engine.md "Resolve/publish pipeline:
 //! Revival", #24 lapse semantics).
 //!
-//! A lapse is an availability event, never loss. A key-holding session fetches
-//! the cached (possibly expired) record bytes from the authenticated recovery
-//! endpoint, extracts the last-known CID, and mints a fresh record with a fresh
-//! signature at a strictly-newer sequence through the normal publish path — the
-//! recovered sequence raises the CAS floor so the re-mint supersedes whatever
-//! lapsed. (The pin set's name→CID mapping is the designed-for alternate source
-//! behind the same recovery endpoint.)
+//! A lapse is an availability event, never loss. A key-holding session takes the
+//! freshest record the authenticated recovery endpoint and the routing fan-out
+//! between them can produce, and mints its CID afresh at a strictly-newer
+//! sequence through the normal publish path — that record's sequence raises the
+//! CAS floor so the re-mint supersedes whatever lapsed. (The pin set's name→CID
+//! mapping is the designed-for alternate source behind the same recovery
+//! endpoint.)
 //!
-//! A signature attests authorship, never freshness, so one endpoint's word is
-//! never the basis on its own: the re-mint is built from the freshest record the
-//! recovery endpoint and the routing fan-out can jointly produce, and refuses a
-//! basis below the sequence this device durably adopted (the floor law).
+//! A signature attests authorship, never freshness, so the recovery endpoint's
+//! record is corroborated rather than believed: the fan-out outranks it whenever
+//! it can, and a basis below the sequence this device durably adopted is refused
+//! outright (the floor law).
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -26,7 +26,7 @@ use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler
 
 /// What to revive: the lapsed name, its node signing key, and the session's
 /// known content CIDs to re-register for pinning (empty is valid — a name-only
-/// re-mint). The CID to re-point at is recovered from the endpoint, not carried
+/// re-mint). The CID to re-point at is recovered from the network, not carried
 /// here.
 pub struct ReviveRequest<'a> {
     /// The lapsed IPNS name.
@@ -53,10 +53,10 @@ pub enum ReviveError {
         /// The device's durable sequence floor for the name.
         floor: u64,
         /// The freshest sequence any source could produce.
-        recovered: u64,
+        sequence: u64,
     },
-    /// The durable sequence floor could not be read — host I/O, never a trust
-    /// verdict, but the corroboration cannot run without it.
+    /// The durable sequence floor could not be read — as fail-closed as
+    /// [`PublishError::FloorRead`], and for the same reason.
     FloorRead(SeamError),
     /// The re-mint publish failed.
     Publish(PublishError),
@@ -90,18 +90,15 @@ where
         .and_then(|record| record.verify(request.name))
         .map_err(|_| ReviveError::Unrecoverable)?;
 
-    // Corroborate: any endpoint still serving the name outranks the recovery
-    // endpoint when it is fresher, and the CID rides out of the same record as
-    // the sequence so a corroborated sequence can never re-mint superseded
-    // content.
+    // The routing set is the canonical plane, so it takes the tie: a same-sequence
+    // fork is a designed-for state after an unconfirmed publish retry, and the
+    // recovery endpoint must not get to pick which side of one is re-minted.
     let basis = match fanout_get_verify(transport, request.name).await {
-        Some((observed, _)) if observed.sequence > recovered.sequence => observed,
+        Some((observed, _)) if observed.sequence >= recovered.sequence => observed,
         _ => recovered,
     };
 
-    // The durable sequence floor is what this device last adopted for the name,
-    // so a basis below it is a demonstrably rolled-back source — fail-closed,
-    // never revived from (the floor law).
+    // A basis below the durable floor is a rolled-back source (the floor law).
     let floor = floor::sequence_floor(floors, request.name.as_str().as_bytes())
         .await
         .map_err(ReviveError::FloorRead)?
@@ -109,10 +106,12 @@ where
     if basis.sequence < floor {
         return Err(ReviveError::StaleSource {
             floor,
-            recovered: basis.sequence,
+            sequence: basis.sequence,
         });
     }
 
+    // The CID rides out of the same record as the sequence, so a corroborated
+    // sequence can never re-mint superseded content.
     let head_cid = head_cid_from_value(&basis.value).ok_or(ReviveError::Unrecoverable)?;
     let publish_request = PublishRequest {
         name: request.name,
