@@ -66,8 +66,9 @@ headless e2e seam.
 - **`crates/fuse`** — the FS core and its host adapters: the inode/handle
   model, the vfs-operation surface, read/write paths over the facade, and one
   adapter per mount technology (FUSE-T SMB, Linux FUSE, WinFsp; FSKit
-  successor). Depends on the engine facade only — no direct core, transport,
-  or API access.
+  successor). Depends on the engine facade only — no transport or API access,
+  and the one direct use of `crates/core` is the AEAD the spill file seals
+  under, since the FS core never implements crypto of its own.
 
 ## Engine wiring
 

@@ -29,9 +29,8 @@ pub fn account_data_dir(data_local_dir: &Path, account_id: &str) -> SeamResult<P
 /// handle's sealed spill file lives (blueprint/desktop.md "Reads, writes, and
 /// the never-block law").
 ///
-/// Ciphertext under a key that never leaves memory, so nothing here survives a
-/// crash as anything readable — but it is still engine-private state, not a
-/// temp dir the rest of the machine writes to.
+/// Engine-private state under the account root, not a shared temp dir — the
+/// mount owns everything in it and sweeps the whole directory on open.
 pub fn spill_dir(account_data_dir: &Path) -> PathBuf {
     account_data_dir.join("spill")
 }

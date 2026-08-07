@@ -54,17 +54,6 @@ pub struct DirEntry {
     pub kind: NodeKind,
 }
 
-/// What the base version still contributes to the file a handle's writes are
-/// building.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Base {
-    /// The file starts empty for this handle — created by this mount, or
-    /// truncated to nothing — so no byte of it is ever fetched.
-    Empty,
-    /// Bytes the spill does not hold come from the node's head version.
-    Version,
-}
-
 /// One writable handle's uncommitted content: the sealed spill its writes
 /// landed in, and the file they leave behind.
 struct Pending {
@@ -73,17 +62,23 @@ struct Pending {
     spill: Option<SpillFile>,
     /// Plaintext length of the version release will journal.
     len: u64,
-    base: Base,
+    /// How far into the file the base version may still contribute bytes.
+    /// Clamped by every truncate: bytes a shrink removed must read as the zeros
+    /// of a hole if the file grows again, never as the version's own plaintext.
+    base_len: u64,
     /// Whether an `updateContent` op is still owed for what the spill holds.
     dirty: bool,
 }
 
 impl Pending {
-    /// The block the spill holds at `index`, if any.
-    fn block(&mut self, index: u64) -> Result<Option<Zeroizing<Vec<u8>>>, VfsError> {
-        match &mut self.spill {
-            Some(spill) => spill.block(index),
-            None => Ok(None),
+    /// A handle's write state over a file of `len` bytes, all of which the base
+    /// version still holds.
+    fn over(len: u64) -> Self {
+        Self {
+            spill: None,
+            len,
+            base_len: len,
+            dirty: false,
         }
     }
 }
@@ -98,8 +93,6 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     cache: ChunkCache,
     spill: SpillArea,
     /// Per writable handle, the writes it has taken but not yet journaled.
-    /// Kept beside the handle table rather than in it so an open handle stays
-    /// the copyable identity record it is.
     pending: HashMap<HandleId, Pending>,
     /// Per node, the `contentCid` of the newest version this mount has bound a
     /// read stream to. The kernel's page cache for that node's inode can only
@@ -196,18 +189,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ) -> Result<(Attributes, HandleId), VfsError> {
         let attrs = self.make(parent, name, NodeKind::File).await?;
         let handle = self.handles.open(attrs.node, access);
-        // The node was empty a moment ago and nothing else can have published
-        // content for it, so this handle's writes never fetch a base version.
         if access.writable() {
-            self.pending.insert(
-                handle,
-                Pending {
-                    spill: None,
-                    len: 0,
-                    base: Base::Empty,
-                    dirty: false,
-                },
-            );
+            self.pending.insert(handle, Pending::over(0));
         }
         Ok((attrs, handle))
     }
@@ -374,6 +357,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             return Err(VfsError::BadHandle);
         }
         let took = u32::try_from(data.len()).map_err(|_| VfsError::Invalid)?;
+        // POSIX: a zero-length write changes nothing, not even the length.
+        if data.is_empty() {
+            return Ok(0);
+        }
         let end = offset
             .checked_add(data.len() as u64)
             .ok_or(VfsError::Invalid)?;
@@ -386,15 +373,14 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             let index = cursor / block_bytes;
             let within = (cursor - index * block_bytes) as usize;
             let take = (block_bytes as usize - within).min(rest.len());
-            // A block the write replaces whole owes the base version nothing,
-            // so a full overwrite never fetches the file it is replacing.
-            let mut block = if within == 0 && take as u64 == block_bytes {
-                Zeroizing::new(vec![0u8; block_bytes as usize])
+            // A block the write replaces whole owes the base version nothing.
+            if within == 0 && take as u64 == block_bytes {
+                self.spill_mut(handle)?.put(index, &rest[..take])?;
             } else {
-                self.version_block(handle, index).await?
-            };
-            block[within..within + take].copy_from_slice(&rest[..take]);
-            self.spill_mut(handle)?.put(index, &block)?;
+                let mut block = self.version_block(handle, index).await?;
+                block[within..within + take].copy_from_slice(&rest[..take]);
+                self.spill_mut(handle)?.put(index, &block)?;
+            }
             cursor += take as u64;
             rest = &rest[take..];
         }
@@ -409,9 +395,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ///
     /// On an open writable handle this is a spill-file operation: the new
     /// length rides into the one `updateContent` op that handle's release
-    /// journals. With no handle it becomes its own op, so a bare `truncate(2)`
-    /// is never silently lost. An `O_TRUNC` open is the first form — the
-    /// adapter opens the handle, then truncates it to zero.
+    /// journals, which is also how an adapter carries `O_TRUNC`. With no handle
+    /// it becomes its own op, so a bare `truncate(2)` is never silently lost.
     pub async fn truncate(
         &mut self,
         ino: u64,
@@ -457,8 +442,6 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     pub async fn release(&mut self, handle: HandleId) -> Result<(), VfsError> {
         let committed = self.commit(handle).await;
         let open = self.handles.close(handle).ok_or(VfsError::BadHandle)?;
-        // Dropping the spill removes its file, and the key that could open it
-        // zeroizes with the handle.
         self.pending.remove(&handle);
         self.release_stream(open);
         committed
@@ -483,15 +466,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             return Ok(());
         }
         let len = self.base_len(handle, node).await?;
-        self.pending.insert(
-            handle,
-            Pending {
-                spill: None,
-                len,
-                base: Base::Version,
-                dirty: false,
-            },
-        );
+        self.pending.insert(handle, Pending::over(len));
         Ok(())
     }
 
@@ -519,34 +494,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if !open.access.writable() {
             return Err(VfsError::BadHandle);
         }
-        if !self.pending.contains_key(&handle) {
+        if size == 0 {
             // Truncating everything away resolves nothing: no byte of the
             // version being replaced can survive it.
-            let pending = if size == 0 {
-                Pending {
-                    spill: None,
-                    len: 0,
-                    base: Base::Empty,
-                    dirty: false,
-                }
-            } else {
-                Pending {
-                    spill: None,
-                    len: self.base_len(handle, open.node).await?,
-                    base: Base::Version,
-                    dirty: false,
-                }
-            };
-            self.pending.insert(handle, pending);
+            self.pending
+                .entry(handle)
+                .or_insert_with(|| Pending::over(0));
+        } else {
+            self.begin_pending(handle, open.node).await?;
         }
         let pending = self.pending.get_mut(&handle).ok_or(VfsError::BadHandle)?;
         if let Some(spill) = pending.spill.as_mut() {
             spill.truncate(size)?;
         }
         pending.len = size;
-        if size == 0 {
-            pending.base = Base::Empty;
-        }
+        pending.base_len = pending.base_len.min(size);
         pending.dirty = true;
         Ok(())
     }
@@ -614,11 +576,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         while cursor < end {
             let index = cursor / block_bytes;
             let within = (cursor - index * block_bytes) as usize;
-            let take = (block_bytes - within as u64).min(end - cursor) as usize;
+            let want = (end - cursor) as usize;
             let block = self.version_block(handle, index).await?;
-            grow_wiping(&mut out, take);
-            out.extend_from_slice(&block[within..within + take]);
-            cursor += take as u64;
+            cursor += take_from(&mut out, &block, within, want) as u64;
         }
         Ok(core::mem::take(&mut *out))
     }
@@ -631,22 +591,24 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         handle: HandleId,
         index: u64,
     ) -> Result<Zeroizing<Vec<u8>>, VfsError> {
-        let held = self
-            .pending
-            .get_mut(&handle)
-            .ok_or(VfsError::BadHandle)?
-            .block(index)?;
-        if let Some(block) = held {
+        let block_bytes = self.cache.block_bytes();
+        let pending = self.pending.get_mut(&handle).ok_or(VfsError::BadHandle)?;
+        let base_len = pending.base_len;
+        if let Some(spill) = pending.spill.as_mut()
+            && let Some(block) = spill.block(index)?
+        {
             return Ok(block);
         }
-        let block_bytes = self.cache.block_bytes();
         let mut out = Zeroizing::new(vec![0u8; block_bytes as usize]);
-        if self.pending.get(&handle).ok_or(VfsError::BadHandle)?.base == Base::Empty {
+        let at = index.checked_mul(block_bytes).ok_or(VfsError::Invalid)?;
+        if at >= base_len {
             return Ok(out);
         }
-        let at = index.checked_mul(block_bytes).ok_or(VfsError::Invalid)?;
+        // Clamped to the floor a truncate left: past it the version's own bytes
+        // are gone, and the file reads as the hole they left.
+        let want = block_bytes.min(base_len - at);
         let stream = self.stream_for(handle).await?;
-        let base = Zeroizing::new(self.engine.read_stream(stream, at, block_bytes).await?);
+        let base = Zeroizing::new(self.engine.read_stream(stream, at, want).await?);
         let take = base.len().min(out.len());
         out[..take].copy_from_slice(&base[..take]);
         Ok(out)
@@ -655,21 +617,11 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// The handle's spill file, minted on first use.
     fn spill_mut(&mut self, handle: HandleId) -> Result<&mut SpillFile, VfsError> {
         let block_bytes = self.cache.block_bytes();
-        let empty = match self.pending.get(&handle) {
-            Some(pending) => pending.spill.is_none(),
-            None => return Err(VfsError::BadHandle),
-        };
-        if empty {
-            let spill = self.spill.create(block_bytes)?;
-            self.pending
-                .get_mut(&handle)
-                .ok_or(VfsError::BadHandle)?
-                .spill = Some(spill);
+        let pending = self.pending.get_mut(&handle).ok_or(VfsError::BadHandle)?;
+        if pending.spill.is_none() {
+            pending.spill = Some(self.spill.create(block_bytes)?);
         }
-        self.pending
-            .get_mut(&handle)
-            .and_then(|pending| pending.spill.as_mut())
-            .ok_or(VfsError::BadHandle)
+        pending.spill.as_mut().ok_or(VfsError::BadHandle)
     }
 
     /// The length a handle with unjournaled writes will publish for `node` —
