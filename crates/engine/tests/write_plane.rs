@@ -35,7 +35,9 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
-use cipherbox_engine::settings::{Destinations, VaultSettings, publish_settings, settings_name};
+use cipherbox_engine::settings::{
+    Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
+};
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
@@ -6849,7 +6851,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
         alice.credential_store.clone(),
         String::new(),
     );
-    block_on(publish_settings(
+    let refused_save = block_on(publish_settings(
         &alice.record_store,
         &api,
         &alice.floor_store,
@@ -6866,6 +6868,12 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
         },
     ))
     .expect_err("the save does not reach the network");
+    // Scoped to a publish failure: an earlier refusal would leave the mint
+    // counter raised without ever attempting the head block this test counts.
+    assert!(
+        matches!(refused_save, SettingsPublishError::Publish(_)),
+        "the head-block publish must be what failed, got {refused_save:?}"
+    );
     // The refused save tried to upload its own head block; what the write adds
     // on top of that is the byte-destination property under test.
     let before = uploaded_cids(&alice).len();
