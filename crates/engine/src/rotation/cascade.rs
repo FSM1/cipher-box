@@ -446,6 +446,9 @@ where
     Mk: FnOnce() -> BoxedTask,
 {
     let root_scope_id = root_plan.identity.scope_id;
+    // A cascade is owner-driven, so whatever the root plan holds re-checks every
+    // descendant's grant rows too (`ScopeRootIdentity::owner_enc_secret`).
+    let owner_enc_secret = root_plan.identity.owner_enc_secret;
 
     // 1) Re-key the root — the thread head. Its fresh seed derives its children's
     //    new parent node seeds.
@@ -526,6 +529,7 @@ where
                     scope_id: child.scope_id,
                     ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
+                    owner_enc_secret,
                     parent_node_seed: Some(&child_parent_node_seed),
                     pseudonym_signer: &target.pseudonym_signer,
                 },
@@ -912,6 +916,7 @@ mod tests {
                     scope_id: sid(0x00),
                     ipns_name: b"ipns-00",
                     owner_enc_pub: &self.owner_pub,
+                    owner_enc_secret: None,
                     parent_node_seed: None,
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },

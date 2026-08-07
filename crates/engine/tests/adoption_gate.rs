@@ -1592,6 +1592,7 @@ impl ResealedFixture {
             scope_id,
             ipns_name: name.as_str().as_bytes(),
             owner_enc_pub: &owner_enc_pub,
+            owner_enc_secret: None,
             parent_node_seed: None,
             pseudonym_signer: &owner_pseudonym,
         };

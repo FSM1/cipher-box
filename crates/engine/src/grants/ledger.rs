@@ -56,6 +56,24 @@ pub fn recipient_blinded_tag(
     Some(kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name))
 }
 
+/// Whether `entry` is filed under the tag its own `recipientEncPk` derives at
+/// `scope_root_ipns_name` — the check only a holder of the owner encryption
+/// subkey can run, since the tag is the owner–recipient pairwise ECDH.
+///
+/// `false` on a malformed or low-order recipient key: a tag it can never derive
+/// is a tag it is not bound to. Every input is public and the verdict is a
+/// public tag comparison, so no constant-time guarantee is needed.
+pub fn entry_tag_is_bound(
+    owner_enc_secret: &X25519Secret,
+    entry: &GrantLedgerEntry,
+    scope_root_ipns_name: &[u8],
+) -> bool {
+    let Some(recipient) = X25519Public::from_bytes(entry.recipient_enc_pk) else {
+        return false;
+    };
+    recipient_blinded_tag(owner_enc_secret, &recipient, scope_root_ipns_name) == Some(entry.tag)
+}
+
 /// Locate the grant blob filed under `tag` in a scope root's published grant
 /// section. `None` at a fresh owner-signed record is the definitive
 /// revocation signal (classified by [`super::revocation`]); the tag is public,
@@ -171,8 +189,10 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// a committed entry share — the owner also signs each entry's `pseudonymPk`, but
 /// no ledger row carries one. So a row's `recipientIdentityPk`, `recipientEncPk`,
 /// and `expiresAt` go unchecked here and a write-grantee may alter them
-/// undetectably. The tag↔enc_pk binding is a resolve-time check; the
-/// deadline is not a capability boundary ([`GrantLedgerEntry::expires_at`]).
+/// undetectably. The tag↔enc_pk binding is [`entry_tag_is_bound`], which a
+/// re-seal runs over every row whenever the re-sealer holds the owner encryption
+/// subkey; the deadline is not a capability boundary
+/// ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],

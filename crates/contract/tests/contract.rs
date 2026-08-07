@@ -1228,6 +1228,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
                 scope_id: [0x0e; 16],
                 ipns_name: b"contract-parent-scope-root",
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
                 parent_node_seed: None,
                 pseudonym_signer: &owner_pseudonym,
             },

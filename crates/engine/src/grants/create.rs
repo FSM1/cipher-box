@@ -339,6 +339,7 @@ where
             scope_id: grantee.scope_id,
             ipns_name: name_bytes,
             owner_enc_pub: grantee.owner_enc_pub,
+            owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(grantee.parent_node_seed),
             pseudonym_signer: owner.pseudonym_signer,
         };
@@ -401,6 +402,7 @@ where
             scope_id: descendant.scope_id,
             ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
+            owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(&parent_node_seed),
             pseudonym_signer: &target.pseudonym_signer,
         };
@@ -778,6 +780,7 @@ mod tests {
                 scope_id: PARENT_SCOPE,
                 ipns_name: PARENT_NAME,
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
                 parent_node_seed: None,
                 pseudonym_signer: &owner_pseudonym,
             },
@@ -887,6 +890,7 @@ mod tests {
                     scope_id: PARENT_SCOPE,
                     ipns_name: PARENT_NAME,
                     owner_enc_pub: &owner_enc_pub,
+                    owner_enc_secret: None,
                     parent_node_seed: None,
                     pseudonym_signer: &owner_pseudonym,
                 },
