@@ -43,8 +43,8 @@ pub mod testkit;
 
 pub use api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
-    NameRegistration, QUOTA_EXCEEDED, Quota, SiweNonce, TestLoginOutcome, UPLOAD_TOO_LARGE,
-    UploadResult,
+    NameRegistration, QUOTA_EXCEEDED, Quota, RetireResult, SiweNonce, TestLoginOutcome,
+    UPLOAD_TOO_LARGE, UploadResult,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
@@ -74,8 +74,9 @@ pub use grants::{
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
     AdoptOutcome, Adopter, HeldRecord, HeldRecords, OrphanHeads, PreflightError, PublishError,
-    PublishOutcome, PublishRequest, RePutResult, RecordPointerFetch, RecordPublishError,
-    ResolveOutcome, Resolved, ReviveError, ReviveRequest, RootAdopter, publish, resolve, revive,
+    PublishOutcome, PublishRequest, RETIRE_LEDGER_PREFIX, RePutResult, RecordPointerFetch,
+    RecordPublishError, ResolveOutcome, Resolved, ReviveError, ReviveRequest, RootAdopter,
+    StagingRetireLedger, drain_owed_retires, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{
@@ -85,7 +86,7 @@ pub use rotation::{
     ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, consume_scope_exit_triggers,
     enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
 };
-pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
+pub use seams::{OwedRetire, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
     DefaultsReason, Placement, PlacementDecision, PlacementRefusal, SettingsLoad,
     SettingsPublishError, VaultSettings, decide_placement, load_settings, placement_of,

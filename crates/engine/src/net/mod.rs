@@ -58,6 +58,9 @@ pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resol
 pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,
 };
-pub use retire::{OrphanHeads, orphaned_head, retire, root_retire_ready};
+pub use retire::{
+    OrphanHeads, RETIRE_LEDGER_PREFIX, StagingRetireLedger, drain_owed_retires,
+    is_retire_ledger_key, orphaned_head, retire, root_retire_ready,
+};
 pub use revival::{ReviveError, ReviveRequest, revive};
 pub use rotation::{OwnerRotationKeys, OwnerRotationNet, WriteWaveNet};

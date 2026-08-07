@@ -26,8 +26,8 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 
 /// Apply one op to the working view optimistically (intent, not rebase).
 ///
-/// Every op but a delete authors its target's next record, so each stamps
-/// [`Op::stamp_authored`].
+/// An op that authors a *change* to its target stamps [`Op::stamp_authored`];
+/// the ops that only remove state — a delete, a prune — have nothing to stamp.
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create { parent, name, node } => {
@@ -66,6 +66,16 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
                 op.stamp_authored(node);
+            }
+        }
+        // A prune leaves the head version exactly where it was, so it stamps
+        // nothing: the file's size and mtime are the head's, and only the count
+        // behind it shortens.
+        OpKind::Prune { keep_latest } => {
+            if let Some(node) = view.node_mut(op.target) {
+                node.content_version = node
+                    .content_version
+                    .map(|count| count.min(keep_latest.get()));
             }
         }
     }

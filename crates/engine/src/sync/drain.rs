@@ -21,7 +21,8 @@
 //! [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport) all the
 //! same, off the same [`replay`] this pass runs.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
+use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::content::{encode_content_cid_str, verify_cid};
@@ -36,7 +37,10 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
-use crate::content::{Gateway, ProviderError, SealedContent, place_block, pre_flight_quota_check};
+use crate::content::{
+    ContentProfile, ContentVersion, Gateway, ProviderError, SealedContent, place_block, plan_prune,
+    pre_flight_quota_check,
+};
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
@@ -49,7 +53,9 @@ use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
-use crate::net::retire::{OrphanHeads, orphaned_head, retire};
+use crate::net::retire::{
+    OrphanHeads, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+};
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
     assemble_head_envelope, fanout_get_verify, resolve,
@@ -57,8 +63,8 @@ use crate::net::{
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SeamResult, SnapshotCache,
-    StagingStore,
+    CredentialStore, FloorStore, Http, OpId, OwedRetire, RecordTransport, RetireLedger, Scheduler,
+    SeamResult, SnapshotCache, StagingStore,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision};
@@ -357,6 +363,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
+    /// The framing profile a version's pinned size is derived under — the same
+    /// one the upload framed it at.
+    pub(crate) content_profile: &'a ContentProfile,
     /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     /// The gate-passing base snapshot, repainted in place on each publish.
@@ -366,6 +375,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// Pinned bytes the retire ledger still owes, shared with the facade's read
+    /// surface. Rewritten at the end of every pass from the ledger itself.
+    pub(crate) pending_reclaim: &'a Cell<u64>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The upload-cancel interlock, shared with the facade's cancel command.
@@ -545,7 +557,28 @@ where
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
         self.orphan_heads.retire_pending(self.api).await;
+        // Last, and never inside the queue loop: reclaiming a pruned version's
+        // bytes is garbage collection, and holding the FIFO head behind it would
+        // make the next rename wait on cleanup.
+        self.pending_reclaim.set(
+            drain_owed_retires(
+                &StagingRetireLedger::new(self.staging),
+                &self.owner_tag(scope),
+                self.api,
+                self.gateway,
+                self.http,
+            )
+            .await,
+        );
         report
+    }
+
+    /// This identity's ledger scope — the same owner tag the op-queue marks and
+    /// [`RecordReader`] classify against. Another account's owed CIDs retried
+    /// under this session's token would delete no rows, answer the done-signal,
+    /// and clear a debt nothing paid.
+    fn owner_tag(&self, scope: &DrainScope<'_>) -> [u8; 32] {
+        RecordReader::new(scope.enc_secret).owner_tag()
     }
 
     async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
@@ -1087,6 +1120,9 @@ where
                 )
                 .await
             }
+            OpKind::Prune { keep_latest } => {
+                self.publish_prune(scope, pass, applied, *keep_latest).await
+            }
             // A cross-scope relocation re-seals the moved subtree at the
             // destination epoch — a plan this driver does not author. Publishing
             // it as a plain ref move would carry the subtree into the
@@ -1577,6 +1613,140 @@ where
         }
         self.hold(target.0, published.held);
         Ok(())
+    }
+
+    /// `prune`: republish the file's record with its history shortened to the
+    /// newest `keep_latest` versions, then journal what that dropped to the
+    /// retire ledger.
+    ///
+    /// The op ends at the publish. Its bytes come back on the ledger's own pass
+    /// ([`Self::run`]), because a garbage collection on this queue's critical
+    /// path would hold the FIFO head — the next rename would wait on cleanup.
+    ///
+    /// The journal happens **after** the publish: until the shortened history is
+    /// live, a resolvable record still names the dropped roots, and retiring
+    /// them would unpin content a reader can reach.
+    async fn publish_prune(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        keep_latest: NonZeroU64,
+    ) -> Result<(), Halt> {
+        let target = applied.op.target;
+        // This plan authors the target's own record and nothing else, so a
+        // resolution that also needs a parent-side write has no plan here.
+        if applied.effective_name.is_some() {
+            return Err(Halt::Unclassified);
+        }
+        self.ensure_folder(scope, pass, self.published_parent(target)?)
+            .await?;
+        let loaded = self.load_child_node(scope, pass.epoch, target).await?;
+        let ReadBody::File {
+            created_at,
+            modified_at,
+            mut versions,
+            unknown,
+        } = loaded.body
+        else {
+            return Err(Halt::Unclassified);
+        };
+        let plan = plan_prune(&self.pinned_history(&versions)?, keep_latest);
+        if plan.retire_targets.is_empty() {
+            return Ok(());
+        }
+        let head = versions.first().ok_or(Halt::Unclassified)?;
+        let (head_size, head_cid) = (head.size, head.content_cid.clone());
+        // The plan named a suffix of the history, so the survivors are its
+        // prefix — one count, never a second clamp that could disagree.
+        versions.truncate(versions.len() - plan.retire_targets.len());
+        let content_cids = versions
+            .iter()
+            .map(|version| encode_content_cid_str(&version.content_cid))
+            .collect();
+        let version_count = versions.len() as u64;
+        // A prune removes history; it does not modify the file, so the record's
+        // `modified_at` stays the head version's.
+        let body = ReadBody::File {
+            created_at,
+            modified_at,
+            versions,
+            unknown,
+        };
+        let published = self
+            .publish_node(
+                scope,
+                pass.epoch,
+                target,
+                &loaded.name,
+                false,
+                &body,
+                content_cids,
+                loaded.envelope_unknown,
+                loaded.epoch_tag_unknown,
+                Some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        self.owe_retires(scope, &plan.retire_targets).await?;
+        project_child_version(
+            &mut self.base.borrow_mut(),
+            target,
+            head_size,
+            modified_at,
+            version_count,
+            Some(&head_cid),
+        );
+        if let Some(node) = self.base.borrow_mut().node_mut(target) {
+            node.record_sequence = published.sequence;
+        }
+        self.hold(target.0, published.held);
+        Ok(())
+    }
+
+    /// A published history in the **pinned** unit a retire frees, newest first.
+    ///
+    /// A version record carries its plaintext `size`; sealing adds a nonce and a
+    /// tag to every leaf and stages a root block besides. Quoting the plaintext
+    /// number would report bytes no retire returns.
+    fn pinned_history(&self, versions: &[Version]) -> Result<Vec<ContentVersion>, Halt> {
+        versions
+            .iter()
+            .map(|version| {
+                ContentVersion::from_plaintext_size(
+                    encode_content_cid_str(&version.content_cid),
+                    version.size,
+                    self.content_profile,
+                )
+                // A framed size with no readable root is a version this engine
+                // could not have published, and no retry reframes it.
+                .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
+            })
+            .collect()
+    }
+
+    /// Journal the dropped roots as owed, under this identity's ledger scope.
+    ///
+    /// Owed bytes are the hosted figure: an external-only vault registers its
+    /// content rows at size zero, so the registry retire this ledger drives
+    /// frees nothing there and a non-zero figure would never fall.
+    async fn owe_retires(
+        &self,
+        scope: &DrainScope<'_>,
+        doomed: &[ContentVersion],
+    ) -> Result<(), Halt> {
+        let hosted = matches!(self.placement, Ok(placement) if placement.has_hosted_leg());
+        let entries: Vec<OwedRetire> = doomed
+            .iter()
+            .map(|version| OwedRetire {
+                target: version.content_cid.clone(),
+                owed_bytes: if hosted { version.pinned_bytes } else { 0 },
+            })
+            .collect();
+        StagingRetireLedger::new(self.staging)
+            .owe(&self.owner_tag(scope), &entries)
+            .await
+            .map_err(seam)
     }
 
     // -----------------------------------------------------------------------

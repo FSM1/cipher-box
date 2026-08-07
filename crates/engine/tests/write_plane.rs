@@ -397,6 +397,16 @@ impl Blocks {
             }
             return register_reply(request.body.as_deref());
         }
+        if url.ends_with("/registry/retire") {
+            // The registry answers a retire with what it deleted; the count is
+            // the engine's done-signal, so an empty body is not a valid ack.
+            let retired = request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_slice::<Vec<String>>(body).ok())
+                .map_or(0, |targets| targets.len());
+            return ok(format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes());
+        }
         if url.contains("/registry/") {
             return ok(Vec::new());
         }

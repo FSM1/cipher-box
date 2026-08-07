@@ -1563,6 +1563,10 @@ pub struct Engine<T: SeamTypes> {
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
     blocked: Rc<RefCell<Option<BlockedOp>>>,
+    /// Pinned bytes a published prune still owes the registry, written by the
+    /// drain tick and read by [`snapshot`](Self::snapshot). In-memory: the
+    /// durable record is the retire ledger itself, which the next drain re-reads.
+    pending_reclaim: Rc<Cell<u64>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass.
@@ -1639,6 +1643,7 @@ impl<T: SeamTypes> Engine<T> {
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
+                pending_reclaim: Rc::new(Cell::new(0)),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -2021,6 +2026,8 @@ impl<T: SeamTypes> Engine<T> {
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
         let blocked = self.blocked.clone();
+        let pending_reclaim = self.pending_reclaim.clone();
+        let content_profile = self.content_profile;
         let orphan_heads = self.orphan_heads.clone();
         let cancels = self.cancels.clone();
         let live_blocks = self.live_blocks.clone();
@@ -2184,10 +2191,12 @@ impl<T: SeamTypes> Engine<T> {
                         gateway: &gateway,
                         placement: &decision,
                         profile: &profile,
+                        content_profile: &content_profile,
                         entropy: &entropy,
                         base: &base,
                         held: &held,
                         blocked: &blocked,
+                        pending_reclaim: &pending_reclaim,
                         orphan_heads: &orphan_heads,
                         cancels: &cancels,
                         events: &events,
@@ -2888,6 +2897,17 @@ impl<T: SeamTypes> Engine<T> {
         Ok(EngineView {
             rendered: self.render().await?,
         })
+    }
+
+    /// Vault-level pinned bytes a published prune still owes the registry — the
+    /// figure a host shows beside the quota, because the quota does not fall by
+    /// them until the retire ledger drains. Zero once it has.
+    ///
+    /// A vault-wide state that *clears*, so it is read rather than evented: a
+    /// lost "reclaimed" would strand a host on a debt that is already paid.
+    #[must_use]
+    pub fn pending_reclaim_bytes(&self) -> u64 {
+        self.pending_reclaim.get()
     }
 
     /// A key-free [`SnapshotView`] of `folder` — its children (with pending/

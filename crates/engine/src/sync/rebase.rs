@@ -23,6 +23,7 @@
 //! Terminally unrebasable ops (access revoked while offline) **dead-letter**
 //! with their staged bytes preserved — nothing is silently dropped (#33 D6).
 
+use core::num::NonZeroU64;
 use std::collections::HashSet;
 
 use crate::seams::OpId;
@@ -338,7 +339,22 @@ pub fn rebase_one(
         OpKind::UpdateContent {
             base_version_cid, ..
         } => rebase_update_content(working, local, op, base_version_cid.as_deref()),
+        OpKind::Prune { keep_latest } => rebase_prune(working, op, *keep_latest),
     }
+}
+
+/// A prune anchors on no version: it keeps the newest `keep_latest` whatever
+/// concurrent writers added, so a history that advanced under it still rebases.
+/// A target gate-passing state no longer holds has nothing to shorten — its
+/// versions retire with the node.
+fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpResolution {
+    let Some(node) = working.node_mut(op.target) else {
+        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+    };
+    node.content_version = node
+        .content_version
+        .map(|count| count.min(keep_latest.get()));
+    OpResolution::applied(None)
 }
 
 /// The granted scope root a move exited, walking `from_parent` and then its

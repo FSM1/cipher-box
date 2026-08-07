@@ -96,7 +96,7 @@ impl Blocks {
                 String::from_utf8(request.body.clone().unwrap_or_default())
                     .unwrap_or_else(|_| String::new()),
             );
-            return ok(Vec::new());
+            return ok(br#"{"retired":1,"unpinned":0}"#.to_vec());
         }
         if url.ends_with("/registry/register") && *self.refuse_register.lock().expect("lock") {
             return Ok(HttpResponse {

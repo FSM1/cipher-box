@@ -108,15 +108,22 @@ impl ContentVersion {
     }
 }
 
-/// The result of the explicit prune op: the versions to retire and the bytes
-/// reclaiming them frees.
+/// The result of the explicit prune op: the versions to retire, oldest first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrunePlan {
-    /// The doomed versions' **root** content CIDs, oldest first. Each is an
-    /// [`expand_retire_targets`] input, not a retire target on its own.
-    pub retire_targets: Vec<String>,
-    /// Pinned bytes freed by retiring the expansion of [`Self::retire_targets`].
-    pub reclaimed_bytes: u64,
+    /// The doomed versions, oldest first. Each is an [`expand_retire_targets`]
+    /// input, not a retire target on its own.
+    pub retire_targets: Vec<ContentVersion>,
+}
+
+impl PrunePlan {
+    /// Pinned bytes retiring the expansion of every target frees.
+    #[must_use]
+    pub fn reclaimed_bytes(&self) -> u64 {
+        self.retire_targets.iter().fold(0u64, |total, version| {
+            total.saturating_add(version.pinned_bytes)
+        })
+    }
 }
 
 /// Plan the explicit user-initiated prune: keep the newest `keep_latest`
@@ -127,17 +134,16 @@ pub struct PrunePlan {
 pub fn plan_prune(versions_newest_first: &[ContentVersion], keep_latest: NonZeroU64) -> PrunePlan {
     // Clamped: a keep-count past `usize` on a 32-bit target keeps everything.
     let keep = usize::try_from(keep_latest.get()).unwrap_or(usize::MAX);
-    let doomed = versions_newest_first.iter().skip(keep);
-    let mut plan = PrunePlan {
-        retire_targets: Vec::with_capacity(doomed.len()),
-        ..PrunePlan::default()
-    };
-    // Emit oldest-first so retirement proceeds from the tail of history.
-    for version in doomed.rev() {
-        plan.retire_targets.push(version.content_cid.clone());
-        plan.reclaimed_bytes = plan.reclaimed_bytes.saturating_add(version.pinned_bytes);
+    PrunePlan {
+        // Oldest first, so retirement proceeds from the tail of history and any
+        // prefix of it leaves a valid suffix.
+        retire_targets: versions_newest_first
+            .iter()
+            .skip(keep)
+            .rev()
+            .cloned()
+            .collect(),
     }
-    plan
 }
 
 /// Why a doomed root could not be expanded into its retire targets.
@@ -302,10 +308,22 @@ mod tests {
         let plan = plan_prune(&history, keep(1));
         assert_eq!(
             plan.retire_targets,
-            vec!["v1", "v2"],
+            vec![version("v1", 10), version("v2", 20)],
             "oldest first, newest kept"
         );
-        assert_eq!(plan.reclaimed_bytes, 30);
+        assert_eq!(plan.reclaimed_bytes(), 30);
+    }
+
+    /// The figure a prune quotes is the sum of what its own targets account for,
+    /// so it cannot drift from the bytes the retire frees.
+    #[test]
+    fn the_quoted_reclaim_saturates_rather_than_wrapping_to_a_small_figure() {
+        let history = vec![
+            version("v3", 1),
+            version("v2", u64::MAX),
+            version("v1", u64::MAX),
+        ];
+        assert_eq!(plan_prune(&history, keep(1)).reclaimed_bytes(), u64::MAX);
     }
 
     #[test]

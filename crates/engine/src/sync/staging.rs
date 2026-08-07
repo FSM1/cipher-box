@@ -22,6 +22,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
+use crate::net::is_retire_ledger_key;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
@@ -29,10 +30,15 @@ use crate::sync::drain::{
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
-/// Whether `key` is one of the per-identity op-id high-water marks
-/// ([`op_mark_key`](crate::sync::drain::op_mark_key)).
-fn is_op_mark(key: &[u8]) -> bool {
-    key.starts_with(DRAINED_OP_MARK_PREFIX) || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+/// Whether `key` is engine bookkeeping rather than upload residue: a
+/// per-identity op-id high-water mark
+/// ([`op_mark_key`](crate::sync::drain::op_mark_key)) or a retire-ledger entry.
+/// Both are per-owner, so their whole prefixes are referenced — an entry this
+/// session cannot read belongs to the identity that still needs it.
+fn is_bookkeeping(key: &[u8]) -> bool {
+    key.starts_with(DRAINED_OP_MARK_PREFIX)
+        || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+        || is_retire_ledger_key(key)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -310,14 +316,12 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     referenced.extend(live.iter().cloned());
     // Enumerated first, so an idle store answers without reading the queue at
     // all, and a version journaled mid-pass is decided by a queue read that
-    // already covers it. The op-id marks are per-identity, so their whole
-    // prefixes are referenced — a mark this session cannot read belongs to the
-    // identity that still needs it.
+    // already covers it.
     let candidates: Vec<Vec<u8>> = store
         .staged_keys()
         .await?
         .into_iter()
-        .filter(|key| !referenced.contains(key) && !is_op_mark(key))
+        .filter(|key| !referenced.contains(key) && !is_bookkeeping(key))
         .collect();
     if candidates.is_empty() {
         return Ok(candidates);
