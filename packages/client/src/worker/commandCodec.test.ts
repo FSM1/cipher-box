@@ -56,6 +56,34 @@ describe('buildCommand', () => {
     expect(calls).toEqual([[2n ** 60n]]);
   });
 
+  it('maps the second literal of each mirror enum, not just the first', () => {
+    const calls: unknown[][] = [];
+    const record = (...args: unknown[]): object => {
+      calls.push(args);
+      return {};
+    };
+    const wasm = {
+      ...fakeWasmEnums,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+      Command: { create: record, createInviteLink: record },
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, {
+      kind: 'create',
+      parent: new Uint8Array(16),
+      name: 'docs',
+      nodeKind: 'folder',
+    });
+    buildCommand(wasm, {
+      kind: 'createInviteLink',
+      node: new Uint8Array(16),
+      permission: 'write',
+    });
+
+    expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.Folder);
+    expect(calls[1][1]).toBe(fakeWasmEnums.Permission.Write);
+  });
+
   /** Every builder succeeds, so only the codec's own checks can reject. */
   const permissiveWasm = {
     ...fakeWasmEnums,
