@@ -467,6 +467,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::NotAFile => "notAFile",
         EngineError::ContentUnavailable { .. } => "contentUnavailable",
         EngineError::TrustViolation { .. } => "trustViolation",
+        EngineError::MalformedInput { .. } => "malformedInput",
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
         EngineError::OverBudget { .. } => "overBudget",

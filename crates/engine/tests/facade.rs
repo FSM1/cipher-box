@@ -9,7 +9,8 @@ use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
-    GatewayConfig, LoginSecret, NodeId, Permission, StoragePolicy, SyncTimingProfile,
+    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, Permission, StoragePolicy,
+    SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -213,15 +214,15 @@ fn a_contact_code_that_fails_its_binding_is_refused() {
     assert_eq!(
         block_on(engine.command(Command::ImportContact { contact_code: code })),
         Err(EngineError::TrustViolation {
-            message: "contact code trust: subkey-binding-invalid".to_owned(),
+            message: "contact code rejected: subkey-binding-invalid".to_owned(),
         }),
     );
 }
 
-/// A bundle that does not decode is refused too, and says so: the class tells
-/// a host whether the code is garbled or forged.
+/// A bundle that does not decode is refused too, but as bad input — a host
+/// told a garbled scan came from a forger would accuse the wrong party.
 #[test]
-fn a_malformed_contact_code_is_refused() {
+fn a_malformed_contact_code_is_refused_without_a_trust_verdict() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
@@ -231,12 +232,44 @@ fn a_malformed_contact_code_is_refused() {
         contact_code: b"not a contact bundle".to_vec(),
     }));
 
-    let Err(EngineError::TrustViolation { message }) = result else {
-        panic!("an undecodable bundle is refused, never imported: {result:?}");
-    };
     assert!(
-        message.starts_with("contact code malformed: "),
-        "the refusal names the codec class and check: {message}"
+        matches!(result, Err(EngineError::MalformedInput { .. })),
+        "an undecodable bundle is refused, never imported: {result:?}"
+    );
+}
+
+/// The bundle is three fixed-width keys, and the bytes are an unbounded host
+/// paste: an over-cap payload never reaches the decoder.
+#[test]
+fn an_oversized_contact_code_is_refused_before_it_is_decoded() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::ImportContact {
+            contact_code: vec![0x80; MAX_CONTACT_CODE_BYTES + 1],
+        })),
+        Err(EngineError::MalformedInput {
+            check: "contact-code-too-large",
+        }),
+    );
+}
+
+/// The lifecycle check outranks the trust decision: a valid code still yields
+/// no contact before `start`.
+#[test]
+fn a_contact_import_before_start_never_verifies() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+
+    assert_eq!(
+        block_on(engine.command(Command::ImportContact {
+            contact_code: contact_code([3u8; 32]),
+        })),
+        Err(EngineError::NotStarted),
     );
 }
 

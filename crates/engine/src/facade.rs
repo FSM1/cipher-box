@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ReadBody, Version, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -552,7 +553,11 @@ impl fmt::Debug for Command {
 }
 
 /// What a command hands back to its caller.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written like [`Command`]'s: a peer's identity key is a
+/// stable cross-service identifier for a third party, and a derived `{:?}`
+/// would put it in host logs.
+#[derive(Clone, PartialEq, Eq)]
 pub enum CommandOutcome {
     /// The command completed and queued nothing; any further effect arrives on
     /// the event stream.
@@ -567,6 +572,16 @@ pub enum CommandOutcome {
     /// [`Command::ImportContact`] verified a contact code. Holding the
     /// [`Contact`] is itself the proof its binding signature verified.
     ContactImported(Contact),
+}
+
+impl fmt::Debug for CommandOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandOutcome::Done => f.write_str("CommandOutcome(done)"),
+            CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
+            CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
+        }
+    }
 }
 
 impl CommandOutcome {
@@ -708,6 +723,14 @@ pub enum EngineError {
     TrustViolation {
         /// The verdict classification; never carries key material.
         message: String,
+    },
+    /// Host-supplied bytes this build could not decode — a truncated paste, a
+    /// mis-scanned code, an over-cap payload. A refusal of the input, never a
+    /// trust verdict about the peer who authored it: collapsing the two would
+    /// tell a host a garbled scan came from a forger.
+    MalformedInput {
+        /// The check that fired; never key material and never input bytes.
+        check: &'static str,
     },
     /// The content's DAG root declared a format version this build cannot
     /// read; see [`DagError::UnsupportedFormat`](crate::DagError).
@@ -883,6 +906,7 @@ impl fmt::Display for EngineError {
                 write!(f, "content unavailable: {message}")
             }
             EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
+            EngineError::MalformedInput { check } => write!(f, "malformed input: {check}"),
             EngineError::UnsupportedContentFormat { version } => write!(
                 f,
                 "content format version {version} is not supported by this client"
@@ -1430,6 +1454,15 @@ impl Drop for StreamSlot {
 /// root manifest carrying a CID per MiB of file, which an unbounded table turns
 /// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
 pub const MAX_OPEN_STREAMS: usize = 256;
+
+/// The largest contact code [`Command::ImportContact`] will decode.
+///
+/// The bundle is three fixed-width keys — a real one is under 200 bytes — and
+/// the bytes arrive as an unbounded host paste or camera scan. Decoding is
+/// linear in length, but a decoded `Value` costs far more than the byte it came
+/// from, so the cap is what stops a paste from exhausting the engine worker
+/// (the resolve path bounds its own reads the same way).
+pub const MAX_CONTACT_CODE_BYTES: usize = 1024;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
 #[derive(Default)]
@@ -2303,11 +2336,23 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 Ok(CommandOutcome::Done)
             }
-            Command::ImportContact { contact_code } => import_contact(&contact_code)
-                .map(CommandOutcome::ContactImported)
-                .map_err(|err| EngineError::TrustViolation {
-                    message: format!("contact code {}: {}", err.class(), err.check()),
-                }),
+            Command::ImportContact { contact_code } => {
+                if contact_code.len() > MAX_CONTACT_CODE_BYTES {
+                    return Err(EngineError::MalformedInput {
+                        check: "contact-code-too-large",
+                    });
+                }
+                import_contact(&contact_code)
+                    .map(CommandOutcome::ContactImported)
+                    .map_err(|err| match err {
+                        CodecError::Trust(_) => EngineError::TrustViolation {
+                            message: format!("contact code rejected: {}", err.check()),
+                        },
+                        CodecError::Malformed(_) => {
+                            EngineError::MalformedInput { check: err.check() }
+                        }
+                    })
+            }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))

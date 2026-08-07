@@ -83,6 +83,7 @@ impl From<EngineError> for VfsError {
             // Past the flat-DAG ceiling: no amount of free space stores a file
             // this large as one version, so it is not a budget verdict.
             EngineError::ContentTooLarge { .. } => VfsError::Invalid,
+            EngineError::MalformedInput { .. } => VfsError::Invalid,
             EngineError::Seam { message }
             | EngineError::Entropy { message }
             | EngineError::Auth { message } => VfsError::Internal { message },
