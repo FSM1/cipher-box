@@ -1,0 +1,72 @@
+<task-notification>
+<task-id>a2f94cc6fa3ada13e</task-id>
+<tool-use-id>toolu_01MastWhxPgsMHJRXsFiqYRv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a2f94cc6fa3ada13e.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold review findings into PR 1141" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six review items are folded into PR #1141 as one commit, `8decee9d5`, pushed to `fix/rotation-grant-tag-remint`. The PR remains a draft.
+
+## Per item
+
+**Item 1 — owner-held parent leg passed `None`. Fixed.**
+`crates/engine/src/grants/create.rs:472-479`. Step 6 now builds the parent identity with `owner_enc_secret: Some(owner.enc_secret)` through a struct update over `parent.identity`, so `ParentScopePlan` can no longer disable the binding check. I chose the local struct update over deleting the field from the plan: removing it means either a second near-duplicate identity type or flattening six fields into the plan, both of which duplicate `ScopeRootIdentity` for no gain. `ScopeRootIdentity` gained `#[derive(Clone, Copy)]` (`crates/engine/src/rotation/reseal.rs:65`) so the update reads off a shared borrow; every field is already a reference or a plain array. The field doc on `ParentScopePlan::identity` states that the value is overridden (`create.rs:124-127`).
+
+**Item 2 — the re-mint's free veto. Fixed.**
+`mint_grant_row` now takes `recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN]` (`crates/engine/src/grants/ledger.rs:129-141`). I checked all six call sites first: every one already holds a parsed verifier and now passes `.to_sec1()`, so no caller needs the parse. The re-mint at `crates/engine/src/net/rotation.rs:1235-1239` carries `entry.recipient_identity_pk` verbatim and the `EcdsaVerifier::from_sec1` call is gone.
+
+**Item 3 — pseudonym pin negative test. Added.**
+`the_wave_refuses_a_committed_pseudonym_key_the_mint_does_not_reproduce_release_active`, `crates/engine/src/net/rotation.rs:3704`. I left the sorting assertion in `the_re_mint_reproduces_the_committed_pseudonym_key` untouched.
+
+**Item 4 — `None` residual doc. Rewritten.**
+`crates/engine/src/rotation/reseal.rs:75-85`. It now says `None` derives no tag and names the legs: a write-grantee re-sealer can pass nothing else, while the sweep and a root plan built outside the module leave the residual open on themselves. The one-line sweep rationale is restored at `crates/engine/src/rotation/sweep.rs:354-356`.
+
+**Item 5 — overreaching doc claim. Narrowed.**
+`crates/engine/src/net/rotation.rs:1203-1208`. The "owner already signed it" claim is now scoped to the commitment entries, and the ledger's three author-controlled fields are named.
+
+**Item 6 — fixture doc. Made consistent.**
+`crates/engine/src/testkit/owner_root.rs:49-55` states the fixed-`(key, nonce)` property the specs actually have instead of prescribing a rule they break. I did not touch the underlying reuse.
+
+## Where the code disagreed with the brief
+
+- The brief said the parent leg is reachable through `ParentScopePlan` constructions at `create.rs:783`, `create.rs:893` and `contract.rs:1231`. After I parameterized the test harness the two `create.rs` sites collapsed into one (`run` now takes `parent_grants`), which is how the new test builds its poisoned ledger without duplicating ~90 lines of harness.
+- The non-constant-time compare at `grants/ledger.rs:74` is left alone. `ct_eq` there would contradict the function's own doc, which states the inputs and the verdict are public. It does not cost nothing, so it does not meet the brief's own bar.
+
+## Gates, all unpiped with output redirected
+
+| Command | Exit |
+| --- | --- |
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | 0 |
+
+Totals: **1573 passed, 0 failed** — the 1570 baseline plus the three new tests.
+
+## New tests, each verified red without its guard
+
+| Test | Guard removed | Result |
+| --- | --- | --- |
+| `a_swapped_recipient_key_in_the_parent_ledger_fails_closed_release_active` | parent identity override in `create.rs` | FAILED |
+| `the_wave_refuses_a_committed_pseudonym_key_the_mint_does_not_reproduce_release_active` | pseudonym compare in `remint_grants` | FAILED |
+| `a_ledger_row_whose_identity_key_is_not_a_curve_point_does_not_stop_the_wave` | `from_sec1` parse restored | FAILED |
+
+The PR body records the fold-in under an "Independent review" section, and three stale claims in the older body text (the unparseable-identity-key refusal, the write-grantee-only reading of `None`, and the fixture "known and accepted" note) are corrected to match the code.</result>
+<usage><subagent_tokens>192277</subagent_tokens><tool_uses>88</tool_uses><duration_ms>1053719</duration_ms></usage>
+</task-notification>
+
+---
+
+already marked as ready - coderabbit is reviewing
+
+---
+
+ok please /resolve-pr-reviews #1141
+
+---
+
+ok, does landing #1141 change the wave 7 plan?
+
+---
+
+Make sure that the mint_grants_row check against #775 is included in the wave 7 B4 plan, so it is not lost.
