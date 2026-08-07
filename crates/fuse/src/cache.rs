@@ -22,9 +22,11 @@ type BlockKey = (StreamHandle, u64);
 /// How much plaintext one mount may hold, and at what granularity.
 ///
 /// `block_bytes` is chosen to match the content plane's chunk framing so a
-/// cache block maps onto one sealed chunk. Only performance rests on it: a
-/// smaller block would make every miss fetch a whole leaf and keep a fraction
-/// of it, but the engine clamps every window to the pinned version either way.
+/// cache block maps onto one sealed chunk. It is the mount's one framing width:
+/// a spill file's slot stride is the same number, so a written block and a read
+/// block are the same unit. Only performance rests on the choice — a smaller
+/// block would make every miss fetch a whole leaf and keep a fraction of it,
+/// but the engine clamps every window to the pinned version either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheBudget {
     max_bytes: usize,

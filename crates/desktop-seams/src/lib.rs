@@ -46,7 +46,7 @@ mod staging_store;
 pub use credential_store::KeyringCredentialStore;
 pub use floor_store::FileFloorStore;
 pub use http::ReqwestHttp;
-pub use paths::account_data_dir;
+pub use paths::{account_data_dir, spill_dir};
 pub use record_transport::ReqwestRecordTransport;
 pub use scheduler::TokioScheduler;
 pub use snapshot_cache::FileSnapshotCache;

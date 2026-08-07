@@ -25,6 +25,16 @@ pub fn account_data_dir(data_local_dir: &Path, account_id: &str) -> SeamResult<P
     Ok(data_local_dir.join("cipherbox").join(account_id))
 }
 
+/// The mount's spill area inside an account's data dir: where a writable file
+/// handle's sealed spill file lives (blueprint/desktop.md "Reads, writes, and
+/// the never-block law").
+///
+/// Engine-private state under the account root, not a shared temp dir — the
+/// mount owns everything in it and sweeps the whole directory on open.
+pub fn spill_dir(account_data_dir: &Path) -> PathBuf {
+    account_data_dir.join("spill")
+}
+
 /// True only when `account_id` is exactly one `Normal` path component with no
 /// embedded separator on any platform — so `..`, `.`, `/tmp`, `a/b`, `C:\tmp`,
 /// and the empty string are all rejected.
@@ -47,6 +57,15 @@ mod tests {
     fn composes_the_cipherbox_account_root() {
         let dir = account_data_dir(Path::new("/var/lib"), "acct-42").unwrap();
         assert_eq!(dir, PathBuf::from("/var/lib/cipherbox/acct-42"));
+    }
+
+    #[test]
+    fn the_spill_area_sits_inside_the_account_root() {
+        let dir = account_data_dir(Path::new("/var/lib"), "acct-42").unwrap();
+        assert_eq!(
+            spill_dir(&dir),
+            PathBuf::from("/var/lib/cipherbox/acct-42/spill")
+        );
     }
 
     #[test]
