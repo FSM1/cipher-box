@@ -1,0 +1,702 @@
+ok with wave 6 finally merged, can we go through the usual cycle of issue hygiene (parents, dependecy edges) followed by planning wave 7?
+
+---
+
+<task-notification>
+<task-id>a900e1fb9f3729244</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a900e1fb9f3729244.output</output-file>
+<status>completed</status>
+<summary>Agent "Parent the 12 orphan issues" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 12 parents applied and verified via `parent_issue_url`. No failures.
+
+## Parents
+
+| Issue | Parent | Why |
+|---|---|---|
+| 1121 test: promote published-account fixture into engine testkit | #991 | Work lands in `crates/engine/src/testkit/` — the seams/fakes/conformance-kit scaffolding #623 built under the engine foundation track. Not #648: the FUSE suite is only a call site being deleted. |
+| 1124 prune must subtract retained versions | #872 | Directly the prune op's plan/reclaim accounting. |
+| 1125 register and retire CID-set derivations unlinked | #872 | Unification is explicitly gated on the prune drain landing. |
+| 1126 bound live stream-ticket set | #642 | `apps/web/src/hooks/useFileDownload.ts`; triggered by batch download #1091, already a child of #642. |
+| 1127 bind re-sealed grant blob to derived tag | #635 | `crates/engine/src/rotation/reseal.rs` + `grants/invite.rs` — the rotation/grant cluster. |
+| 1128 single-use invite claim | #635 | `crates/engine/src/grants/invite.rs`, follows #1015 grant invites. |
+| 1129 bind write wave re-seal to owner-verified commitment | #635 | `net/rotation.rs` `WriteWaveNet`, the name-wave cluster (#1026). |
+| 1130 re-read write-epoch floor at root republish | #635 | Same file and same wave. |
+| 1131 move stage-3 section auth into crates/core | #989 | Moves the predicate, `verify_grant_set`'s signature, and vectors into `crates/core` + the core KAT manifest. |
+| 1132 fold engine gate KAT family into one manifest | #991 | The gate vectors are the adoption gate's (#1102, #991 track); the fix is engine-side test layout, not a CI workflow change. |
+| 1133 preserved dead letters unbounded | #992 | `sync/staging.rs` + drain dead-letter policy (#867), surfaced by #1106. |
+| 1134 carry expected version through beginWrite | #992 | `Engine::begin_write` write plane; follows the #1106 clobber rule, client/web are the trailing edge. |
+
+## Dependency edges added
+
+- **#1129 blocked_by #1026** (open) — body states the code is PR #1101's, and #1101 is "Part of #1026"; matches the sibling convention of an originating-issue edge.
+- **#1130 blocked_by #1026** (open) — same origin, same file (`publish_moved`).
+- **#1132 blocked_by #1131** (open) — the body says the fold "becomes moot if the stage-3 predicate moves into `crates/core`", so #1131 must be decided first.
+
+Existing edges on #1124 and #1125 already point at the open prune umbrella #872, so nothing was missing there.
+
+## Looked wrong, deliberately unchanged
+
+- `gh issue view` is broken repo-wide (Projects-classic GraphQL deprecation error). Read everything via REST instead. Not mine to fix.
+- #1026 is still open although its PR #1101 merged — it was "Part of", not "Closes", so the remainder is presumably real. I did not close it.
+- #1124/#1125 could take more precise edges to #849/#850/#851 rather than the #872 umbrella, but the umbrella edge already exists and the bodies name the prune op generally, not a specific child. Left as is.
+- #1121's body says the two open FUSE slices (#1110, #1111) will need the promoted fixture. That makes them dependents of #1121, not blockers, so I added no edge (I was only authorized to add `blocked_by` on the 12).
+- #1128 says the owner-local claim store "belongs with whatever slice owns the owner's invite records" — no such open issue exists to point at, so no edge.</result>
+<usage><subagent_tokens>62822</subagent_tokens><tool_uses>16</tool_uses><duration_ms>198780</duration_ms></usage>
+</task-notification>
+
+---
+
+ok regarding #1026 can you go through that issue thoroughly and identify whether there is indeed any work outstanding on that issue and if so, whether that is tracked in any existing issues (dependecies need to be specified) or follow up sub-issues need to be created
+
+---
+
+<task-notification>
+<task-id>ad91e12864406ec32</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/ad91e12864406ec32.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze wave 7 candidates" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Wave 7 proposal
+
+## First: the checkout is stale
+
+The local `main` is 5 commits behind `origin/main`. Commits `d2a75db8f`, `2ec86e565`, `99a88ed1b`, `868f1e656`, `2819cb831` (PRs 1120, 1123, 1122, 1119, 1117) landed after the local HEAD. The dependency data you supplied is fresher than the working tree and remains correct. Fast-forward before launching any worktree agent.
+
+Two consequences that change the plan:
+
+- **#1128 is genuinely actionable.** `InviteClaim`, `convert_invite_claim` and `ClaimOutcome` landed in PR 1119 at 08:42Z today. Against the stale tree they do not exist.
+- **#1132 is genuinely actionable.** `crates/engine/kat/gate/manifest.json` and `crates/engine/tests/kat_gate.rs` landed in PR 1120.
+
+## Actionable set
+
+**63 open, non-umbrella issues have every blocker closed.** One of them, #778, is marked "OPTIONAL / do not build" in its own body, so **62 are buildable**.
+
+### Critical-path unblockers, ranked
+
+| Rank | Issue | Downstream it releases |
+|---|---|---|
+| 1 | **#1110** | 1111 → 1112 → [648] → 649 → 650 → 651 → 652/653/654 → 656. Nine issues, including the staging cutover and release management. The deepest chain on the tracker by a wide margin. |
+| 2 | **#1016** | 785 directly. Indirectly everything: it changes `Engine::command`'s return type, so every issue touching `facade.rs`, `wasm/host.rs` or `fuse/ops.rs` rebases behind it. Its body says land it first in the wave, never last. |
+| 3 | **#1026 + #1129 + #1130** | All three together clear 1019 → 772. None alone does. |
+| 4 | **#1025** | 1017 → 754. Also retires the faked `SweepResolver`. |
+| 5 | **#849 + #850 + #851** | Close umbrella 872 → 1124 and 1125. All three live in one 194-line file. |
+| 6 | **#1107** | 1018. Retires the faked `ScopeExitRotator` (only test-only impls exist today). |
+| 7 | **#914** | 942. |
+| 8 | **#775 + #1060** | Close umbrella 752 → 938. The two are in different batches below; note the pairing. |
+| 9 | **#1073** | 1075. |
+| 10 | **#1094** | 1095. |
+| 11 | **#1088** | No tracker edge, but it restructures the workflow files that #1096 and #658 both edit. |
+
+## Security confirmation on #1127
+
+**Confirmed still live on `origin/main`.** `reseal_scope_root` (`/Users/myankelev/Code/random/cipher-box/crates/engine/src/rotation/reseal.rs`, line 333) reads `entry.recipient_enc_pk` straight from the resolved ledger and seals the override seed to it with no tag re-derivation. `enforce_committed_ledger` (`grants/ledger.rs:176`) compares `(tag, permission)` sets only.
+
+The in-code comment at `reseal.rs:304-307` is worse than absent — it is false:
+
+```
+// Reseal trusts each entry's `recipient_enc_pk` verbatim from the committed
+// ledger; the tag&lt;-&gt;enc_pk binding is enforced at resolve time.
+```
+
+No resolve path enforces that binding. The only tag re-derivation is `recipient_blinded_tag` at `grants/ledger.rs:50`, called from `grants/accept.rs:429` and `grants/invite.rs:413` — both are a party deriving **its own** tag, never a check of another row's `recipient_enc_pk` against the tag it is filed under. `self_locate` is a plain public tag compare. So a write-grantee that swaps a victim's `recipient_enc_pk` under the victim's owner-committed tag makes every subsequent honest re-seal, the owner's included, wrap the scope seed to the attacker's key. Owner authority passes at every step. This is exactly the wave-6 class: a field outside the owner's signature is trusted to identify something.
+
+**#1129 and #1130 are the same class**, on the write plane. **#1128** (invite-claim redelivery resurrects a cut grant) is a fourth instance, newly actionable.
+
+## Hot-file map drift
+
+| Item | Status |
+|---|---|
+| `crates/engine/src/facade.rs` | **Confirmed hottest.** 6200 lines, 19 of the 63 commits since 1 Aug. Twelve-plus actionable issues touch it. |
+| `crates/engine/src/net/rotation.rs` | **New number-one rotation contention point, not in your map.** 3887 lines, 9 commits in 7 days, and 8 of the 14 rotation-cluster issues modify it. It has overtaken every file under `rotation/`. |
+| `crates/engine/tests/write_plane.rs` | Confirmed. 6608 lines, 15 commits. #1121 deletes about 230 lines of its helpers, so it conflicts with all seven other issues that touch it. |
+| `crates/engine/src/sync/drain.rs` | Confirmed. 2980 lines, 12 commits. #1090 and #1085 both add `Halt` variants. |
+| `crates/engine/src/gate/floor.rs` + `seams/floor_store.rs` | **Cooled.** 606 and 107 lines. Only #856, #858 and #775 modify them; #1130 only reads. No longer needs a dedicated ownership zone. |
+| `crates/wasm/src/seams_bridge.rs` | **Wrong file.** The wasm hot spot is `crates/wasm/src/host.rs` (8 commits since 1 Aug against 3). Five issues edit adjacent `EngineHandle` method signatures there. |
+| `apps/web/src/engine/snapshotStore.ts` | **Cooled.** Not in the top 25 web churn list. Only #914 modifies it. |
+| `packages/client/src/leaderRelay.ts` | Confirmed hot. 596 lines, 6 commits. Five issues collide on it. |
+| **New zone, not in your map** | The wasm-to-client RPC boundary: `packages/client/src/worker/protocol.ts`, `worker/commandCodec.ts`, `worker/engineWasm.ts`, `worker/engineHost.ts`, `engineClient.ts`, `index.ts`, `testkit.ts`. Six actionable issues all edit `protocol.ts`. This is now the second-hottest zone after `facade.rs`. |
+| **New, secondary** | `crates/engine/src/sync/rebase.rs`, 1840 lines, 14 commits since 1 July. Touched by #918, #1056, #856. |
+
+## The eight batches
+
+Every Rust batch needs its own worktree **and its own `CARGO_TARGET_DIR`**. Never share a target directory across worktrees.
+
+### B1 — FUSE content write path
+**#1110.** Land the FUSE write path, per-handle sealed spill files, and the release-journal ack.
+Owns: `crates/fuse/**` (about 2000 lines, `ops.rs`, `handle.rs`, `cache.rs`, `error.rs`, a new `spill.rs`, `Cargo.toml`, `tests/fuse_op_core.rs`).
+Size **L**. Worktree **yes**. Security-shaped: ephemeral XChaCha20 key, zeroize, no false ack.
+Highest critical-path value in the wave. Nothing else in the wave touches `crates/fuse`. It widens `OperationCore` and turns `release` into an op-emitting async call, so its `fuse/src/ops.rs` call sites rebase if B2 lands first — accept one rebase.
+
+### B2 — Facade command surface (sequence-first)
+**#1016, #1060.** Wire the seven grant, share and rotation command arms; require an absolute origin in `ApiBaseUrl`.
+Owns: `crates/engine/src/facade.rs` (dispatch region and `ApiBaseUrl::parse`), `crates/wasm/src/host.rs`, `crates/wasm/src/lib.rs`, `packages/client/src/facade.ts`, `engineClient.ts`, `worker/engineHost.ts`, `apps/web/src/engine/config.ts`.
+Size **L**. Worktree **yes**. Breaking public signature. Owner-only authority checks make #1016 security-shaped; #1060 guards the URL that carries the refresh token.
+**Must merge before B3 and before B6's #1094.**
+
+### B3 — Client transport plane
+**#1083, then #914, then #1073** — three PRs, one owner, in that internal order.
+Owns: `packages/client/src/leaderRelay.ts`, `broadcast.ts`, `broadcastTransport.ts`, `correlatedTransport.ts`, `transport.ts`, `worker/protocol.ts`, `worker/serve.ts`, `testkit.ts`, `index.ts`, `apps/web/src/engine/snapshotStore.ts`, `apps/web/src/auth/**`, `apps/web/src/stores/auth.store.ts`, `crates/engine/src/facade.rs` `Event` enum, `crates/wasm/src/lib.rs` `EventDescriptor`.
+Size **L**. Worktree **yes**. #1083 is security-shaped (same-origin rendezvous forgery) and rewrites the rendezvous structurally, so it goes first or the other two rebase into it.
+**Starts after B2 merges.** Unblocks #942 and #1075.
+
+### B4 — Write-plane rotation completion and its trust bindings
+**#1026, #1129, #1130, #1127, #1077.**
+Owns: `crates/engine/src/net/rotation.rs` (exclusive), `crates/engine/src/rotation/rotate_write.rs`, `crates/engine/src/rotation/reseal.rs`, `crates/engine/src/net/retire.rs`, `crates/engine/src/net/author.rs`, `crates/engine/tests/write_plane.rs`.
+Size **L**. Worktree **yes**. Four of the five are security-shaped; #1127, #1129 and #1130 are three instances of one defect class and belong in one review pass.
+#1026's bulk already landed in PR 1101, so its residual is M: the mailbox and tombstone arms of `publish_repoint`, `root_retire_ready`, doc corrections, and the depth-greater-than-one read-only-survivor gate.
+**#1026 + #1129 + #1130 together clear #1019 → #772.**
+
+### B5 — Read-plane rotation: sweep, triggers, ancestor-seed authentication
+**#1025, #757, #1076, #784, #1020.**
+Owns: `crates/engine/src/rotation/sweep.rs`, `rotate.rs`, `cascade.rs`, `trigger.rs`, `mod.rs`, `crates/engine/src/grants/create.rs`, `crates/engine/src/grants/ledger.rs`, plus the new `SweepResolver` impl block in `net/rotation.rs`.
+Size **L**. Worktree **yes**. #1076 is security-shaped (unopenable-record class, encode/decode symmetry rule 8).
+Grouped because #757 and #1076 both rewrite `rekey_one`, and #784 and #1020 both edit the same `RotationTrigger` match arms.
+**Starts after B4 merges** — it needs `net/rotation.rs` and `reseal.rs`. Unblocks #1017 → #754.
+
+### B6 — Version retention and reclaim
+**#849, #850, #851, #1094, #1059.**
+Owns: `crates/engine/src/content/retention.rs`, `content/mod.rs`, `content/write.rs`, `content/dag.rs`, `crates/engine/src/sync/staging.rs`, `sync/model.rs`, `sync/project.rs`, the new `Command` variants in `facade.rs`.
+Size **L**. Worktree **yes**.
+The prune trio is one 194-line file and was filed as siblings. #1059 and #1094 both edit `orphan_staging_keys`, so they belong here too.
+**#1094's `Command` additions must land after B2.** The trio can start immediately. Closes umbrella #872 → unblocks #1124 and #1125; #1094 unblocks #1095.
+
+### B7 — Floor, cold start and revival identity
+**#775, #856, #703.**
+Owns: `crates/engine/src/gate/floor.rs`, `crates/engine/src/seams/floor_store.rs`, `crates/engine/src/sync/boot.rs`, `sync/pointer.rs`, `crates/engine/src/net/revival.rs`, `crates/engine/tests/floor_atomic.rs`, `crates/engine/tests/net.rs`.
+Size **M**. Worktree **yes**. All three security-shaped: #856 is a permanent second-account lockout, #775 must keep `AnchorRole` non-transport-selectable, #703 closes a self-rollback replay.
+Grouped because all three key or re-key the same durable floor namespace. #856 touches `facade.rs:1664` (`root_scope_id`) — a one-line collision with B2, note it.
+**#775 with B2's #1060 closes umbrella #752 → unblocks #938.**
+
+### B8 — CI and workflow restructure
+**#1088, then #1096, then #658** — strict internal order.
+Owns: `.github/workflows/ci.yml`, `web-e2e.yml`, `ci-e2e.yml`, new `.github/actions/**`, `tests/web-e2e/**`, `scripts/baseline-benchmark.sh`, a new `crates/engine/benches/`, `blueprint/testing.md`.
+Size **M-L**. Worktree **yes**. #1088 restructures the two files the other two edit, so it goes first or they are rewritten.
+One cross-batch touch: B2's #1060 changes `VITE_API_URL` in `web-e2e.yml`. Small; coordinate the line.
+
+### Spare capacity, if you have agents left
+**#1037, #1051, #1126, #1064** — isolated web hardening. #1051 owns `worker/commandCodec.ts` alone. #1037 is five lines in an isolated region of `worker/engineHost.ts`. #1126 and #1064 share `media/service.ts`. Total **M**, no collision with B1–B8 except a five-line overlap with B3. Note that #1064 needs a media-player component that does not exist yet in `apps/web`.
+
+## Required sequencing
+
+```
+B2 ──&gt; B3
+B2 ──&gt; B6 (#1094 only; the prune trio is free)
+B4 ──&gt; B5
+B8 internal: 1088 -&gt; 1096 -&gt; 658
+B3 internal: 1083 -&gt; 914 -&gt; 1073
+```
+
+B1, B2, B4, B6 (trio), B7 and B8 all start on day one. B3 and B5 start on a merge.
+
+## Named critical-path work that cannot run this wave
+
+- **#1107** (grantee arm of the rotation net, unblocks #1018) needs `net/rotation.rs`, which B4 then B5 hold for the whole wave. It is the strongest wave-8 head.
+- **#767** (extract inline test modules from six rotation files) is a pure move that loses every conflict against B4 and B5. Schedule it immediately after B5 merges, never alongside.
+- **#1121** (promote the published-account fixture into the testkit) structurally deletes about 230 lines of `write_plane.rs` helpers, which B4 owns. Wave 8.
+- **#1128** (single-use invite claim, revocation resurrection) is a live security hole and newly actionable, but it adds a seam trait that every host implements, colliding with B2's wasm surface. Wave 8, or promote it over a lower-value batch if you rate the security higher than the critical path.
+- **#1131 → #1132** (move stage-3 section authentication into `crates/core`) is security-shaped and large, and updates call sites in `net/author.rs`, `net/rotation.rs`, `rotation/trigger.rs` and `rotation/rotate_write.rs` — all owned by B4 and B5. Wave 8.
+
+## Dependency-edge drift and missing edges
+
+1. **Missing: #1131 → #1132.** #1131 relocates the gate vectors to the **core** KAT manifest. #1132 folds the same family into the **engine** manifest. Landing #1132 first is wasted work.
+2. **Missing: #958 → #959.** `drive`, `gateway_read` and `VirtualClient` in `crates/load` take a concrete `&amp;ReqwestHttp` today. #958 genericizes them over `&lt;H: Http&gt;`; #959 adds a scenario on that surface. Reverse the order and #959 is rewritten.
+3. **Missing: #1088 → #1096 and #1088 → #658.** All three restructure `web-e2e.yml` or `ci.yml`.
+4. **Missing: #1025 → #767.** #1025 near-rewrites `sweep.rs`; #767 moves its test module wholesale.
+5. **Missing: #926 ↔ #858.** Both change the `StagingStore` seam trait, and so every impl (`desktop-seams`, `wasm/seams_bridge.rs`, `packages/client/src/seams/stagingStore.ts`) plus the conformance kit. They cannot land concurrently.
+6. **Missing: #856 → #858.** `FloorStore::clear` is the stated recovery path for the lockout #856 fixes, and both edit `floor.rs` and `floor_store.rs`.
+7. **#1043 has nowhere to land.** `publish_settings` (`crates/engine/src/settings.rs:464`) has no production caller — only `lib.rs` re-exports it and its own test invokes it. #1043 registers the settings name in the held set so its EOL renews; there is no live publish to register. It needs an edge onto whatever slice wires the settings publish plane.
+8. **#849, #850 and #851 are similarly unreachable today.** `plan_prune` is exported from `lib.rs:54` only; the sole `retire()` callers are in `sync/drain.rs`. The fixes are correct, and that is precisely why they are cheap.
+9. **#846 is gated on a desktop engine bootstrap that does not exist.** `apps/desktop/src-tauri/Cargo.toml` states "No engine wiring yet" and `src/main.rs` is 107 lines. #846 cannot close until B1's chain reaches the mount lifecycle at #650. No edge records this.
+10. **#1064 is partly gated on a UI surface that does not exist** — there is no media-player component in `apps/web`.
+11. **#1026's residual scope was never recorded.** Its latest comment (2026-08-04) is a literal scratchpad path, `@/private/tmp/.../1026-comment.md`, instead of the intended text. The body's "Definition of done" checkboxes are the only surviving record. Repost the comment before assigning B4.
+12. **#649 blocks on umbrella #648, and #938 blocks on umbrella #752.** Blocking on an umbrella clears only when every child closes. That is right for #648. It is probably over-tight for #752: #938 needs "a started-engine surface", which #775 alone may satisfy without waiting on #1060.
+13. **#778 sits in the actionable set but its body says "OPTIONAL / speculative — do not build".** It carries no label that distinguishes it, so any automated actionable-set query will keep proposing it. Consider a `wontfix-unless-measured` label or closing it.
+14. **#857 is a timeboxed investigation, not a build slice** — it produces no code. It is safe filler for any agent that finishes early, with zero contention.</result>
+<usage><subagent_tokens>133383</subagent_tokens><tool_uses>49</tool_uses><duration_ms>646306</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a499de477c9b35453</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a499de477c9b35453.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit issue 1026 outstanding work" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Tests pass on `main` (`cargo test -p cipherbox-engine rotation::`, exit 0). Everything below is asserted from the code and the tests, not from grep hits.
+
+# Item-by-item verdict
+
+## Scope items
+
+| Item | Verdict | Evidence | Tracked by |
+|---|---|---|---|
+| 1. Widen `RepublishedNode` with `current_name`; update the call site and the simulation tests | **DONE** | `crates/engine/src/rotation/rotate_write.rs:118` (field), `:609-651` (`republish_node` builds the order), tests `every_order_carries_the_derived_names_of_its_in_scope_children` (`rotate_write.rs:1092`), `happy_path_child_first_root_last_repoint_then_retire` (`:946`) | — |
+| 2a. `register` over `net::register` | **DONE by supersession** | The trait method was deleted. Register-first now lives inside the pipeline at `crates/engine/src/net/publish.rs:272`, so no publisher path can skip it. Tests `publish_registers_first_embeds_sequence_one_and_confirms` and `register_first_fail_closed_puts_no_record` (`crates/engine/tests/net.rs:351`, `:424`) | — |
+| 2b. `retire` over `net::retire` | **DONE** | `crates/engine/src/net/rotation.rs:1472-1486`; test `retire_refuses_a_batch_naming_the_lingering_root` (`net/rotation.rs:3423`) | — |
+| 2c. `is_republished` over the fan-out GET | **DONE** | `net/rotation.rs:1440`; test `is_republished_answers_from_published_state_alone` (`:3495`) | — |
+| 2d. `republish` — gated read at `current_name`, child-name rewrite, `net::author` + `net::record_publish` | **DONE** | `net/rotation.rs:1444-1470` (source select), `:1242-1338` (`publish_moved`), `:886` (`rewrite_child_names`); tests `a_republished_folder_names_its_children_at_their_new_names` (`:3166`), `a_child_name_the_body_does_not_carry_is_refused_fail_closed` (`:3379`) | — |
+| 2e. `publish_repoint` across the three channels | **PARTIAL — 1 of 3** | Only `ScopePointer` publishes (`net/rotation.rs:1487-1503`, `publish_scope_pointer` at `:1349`). `Mailbox` and `Tombstone` return `NotLanded` unconditionally; test `the_accelerator_channels_report_that_they_did_not_land` (`:3478`) pins the shortfall, it does not close it | **untracked** (gap B) |
+| 3. Thread the read key and a nonce from the entropy seam; the read epoch must not move | **DONE** | `net/rotation.rs:1142` (`read_key_for`), `:1266-1271` (nonce from the entropy seam), `:1195-1237` (`reseal_root` reuses `plane.read_scope_seed` and `read_epoch`, `prev: None`); tests `the_read_epoch_floor_never_moves_across_a_republish` (`:3399`) and the `read_only_open` epoch assertion (`:3145`) | — |
+| 4. Root linger: `retire` never includes the old root; `root_retire_ready` stays stubbed `false` | **DONE as scoped** | Orchestrator omits the root at `rotate_write.rs:517-527`; release-active guard at `net/rotation.rs:1475`; `root_retire_ready()` at `crates/engine/src/net/retire.rs:112`. Test `net/rotation.rs:3423` | the stub itself is **untracked** (gap C) |
+
+## Definition of done
+
+| Item | Verdict | Evidence | Tracked by |
+|---|---|---|---|
+| Module header narrowed | **DONE** | `rotate_write.rs:11-16` — "The read plane's **keys** are untouched … Read-body *metadata* is not" | — |
+| `RepublishedNode` doc drops the byte-stable claim | **DONE** | `rotate_write.rs:106-143`; the doc now states the publisher re-resolves and rewrites | — |
+| ADR 0004 `Status:` flipped on cipher-box-next | **NOT DONE** | `FSM1/cipher-box-next/decisions/0004-…md` still reads `- **Status:** Proposed`. ADR 0002 shows the target form: `Accepted — implemented in FSM1/cipher-box#792 (merged)` | **untracked** (gap D) |
+
+## Gate criteria
+
+| Criterion | Verdict | Evidence | Tracked by |
+|---|---|---|---|
+| 1. Resumed waves via the write-plane history link, and crash recovery from published records only | **PARTIAL** | Crash recovery is real and tested: `mid_wave_crash_resumes_from_published_records_only` (`rotate_write.rs:1243`) and `a_resumed_wave_re_resolves_the_subtree_from_published_records_alone` (`net/rotation.rs:3864`). The history-link half is **not landed**: the fresh write scope seed enters as `RotateScopeWritePlan::resume_write_scope_seed` (`rotate_write.rs:246-251`), the module header says the recovery wiring is not landed (`:38-43`), and `reseal_root` carries `write_history_link` verbatim (`net/rotation.rs:1232`). No code anywhere in the repo mints a write history link — every producer passes `&amp;[]` or passes one through | **untracked** (gap E) |
+| 2. Register-first enforced structurally | **DONE, with a nuance** | The trait no longer exposes `register` (`rotate_write.rs:169-188`), so an unregistered publish is unreachable through the seam. Inside the pipeline it is a fail-closed sequenced call, not a type-level token: `publish.rs:272` returns `Err(PublishError::Register)` before any PUT. So it is unrepresentable at the seam, runtime-guarded one layer down | — |
+| 3. Read-only holder resolves every node from the re-pointed root, at depth &gt; 1 | **DONE** | `a_read_only_holder_descends_the_whole_subtree_after_the_wave` (`net/rotation.rs:3205`) walks root → mid → leaf, three levels, with a holder that has the scope read seed and no write seed. `the_production_edges_carry_the_whole_wave_from_enumeration_to_re_point` (`:3787`) repeats it over the real orchestrator, `SCOPE → MID → LEAF` | — |
+| 4. Every republished parent's `ChildRef.ipnsName` set equals the derived new names; no retired name survives | **DONE** | `net/rotation.rs:3166` (equality plus `assert_ne` on the retired name), `:3205`, `:3787` (`assert_ne!(name, staged.mid_name)`, and the descendant scope root keeps its own name at `:3856`). Bidirectional coverage holds by construction: `WaveSubtree::record_children` (`:798`) builds the map from the same gated bodies the rewrite reads, minus proven descendant scope roots — closed by #1108, not by #1101 | — |
+| 5. Read epoch and **every** read-epoch floor unchanged while the write epoch advances | **PARTIAL** | The read epoch on every published record is asserted (`read_only_open`, `:3145`). The floor is asserted for exactly one interior republish (`:3399`). No test holds the read-epoch floor still across a whole wave, across the root re-seal, or for the descendant scope roots the enumeration adopts in `record_scope_boundary` (`:1103`) | **untracked** (gap F) |
+| 6. A resumed wave that skips republished nodes leaves no stale child name | **DONE** | `rotate_write.rs:1243` asserts every order across both runs carried its children's post-wave names; `resume_after_flip_never_retires_a_live_name` (`:1339`) covers the post-flip case | — |
+
+## The migration-window constant
+
+No open issue tracks it. I searched all 102 open issue titles and bodies for "migration window", "migration-window", "root_retire_ready", "root linger", "linger", "tombstone" and "movedTo". The only hits are #1026 itself and #1019 (which merely restates the residual). `root_retire_ready()` therefore returns `false` forever, and the old root name is never reclaimed.
+
+# Untracked gaps, with drafted issues
+
+## Gap B — the two accelerator re-point channels
+
+**Title:** `engine: two of the three re-point channels never publish, so a lagging reader has only the scope pointer`
+**Parent:** #635 · **blocked_by:** none · **blocks:** #1019
+
+`WriteWavePublisher::publish_repoint` returns `WritePublishError::NotLanded` for both `RepointChannel::Mailbox` and `RepointChannel::Tombstone` (`crates/engine/src/net/rotation.rs:1495-1502`). Neither channel has a wire shape: no tombstone record type, author or decoder exists in `crates/engine`, and `mailbox::post_sealed` seals internally, so a pre-sealed re-point block would double-seal into a format nothing opens. The blueprint specifies all three (`blueprint/engine.md` "rotateScopeWrite", #38 D3), and the accelerators are what let a surviving grantee learn of a re-point before its next pointer consult. The wave completes without them, so this is a latency and discovery defect rather than a safety one, but it must be honest before a production caller ships. Land a tombstone record shape and a mailbox re-point payload, or amend the blueprint to two channels.
+
+## Gap A — the scope pointer record lapses at its EOL
+
+**Title:** `engine: the scope pointer record never renews, so the only landed re-point channel lapses at its EOL`
+**Parent:** #635 · **blocked_by:** none · **blocks:** #1019 · **relates to:** #1043 (the same defect for the vault settings record)
+
+`publish_scope_pointer` (`crates/engine/src/net/rotation.rs:1349-1385`) publishes the canonical re-point and never enrols the pointer name in the held set, so `keyless_re_put` and `eol_renew_pass` (`crates/engine/src/net/liveness.rs:109`, `:225`) never see it and the record dies at its 90-day client-signed EOL. The API republisher is keyless and cannot extend a client-signed validity. `HeldRecord.head_cid` is a required `/ipfs/` head (`liveness.rs:63`, skipped when empty at `:245`), while the pointer's `Value` is the sealed block itself, so the fix needs an inline-or-head shape. With both accelerator channels unlanded, this is the only channel a read-only survivor has, and after the window closes a cold-starting survivor cannot find the new root at all.
+
+## Gap C — the migration-window constant
+
+**Title:** `engine: the old root name lingers forever because the migration-window constant does not exist`
+**Parent:** #635 · **blocked_by:** none · **relates to:** #764
+
+`root_retire_ready()` is hard-coded `false` (`crates/engine/src/net/retire.rs:112`) and `WriteWaveNet::retire` refuses any batch naming the current root while it stays false (`crates/engine/src/net/rotation.rs:1475`). Every write rotation therefore leaks one registered root name permanently, against the account's name-registry quota, and each subsequent rotation leaks another. `blueprint/api.md:249` lists the `movedTo` migration-window length and its closure signal as an open edge. Decide the constant and its closure signal, then make `root_retire_ready` a real predicate over the re-point publish time. The current direction is the fail-safe one, so this is quota accretion, not a trust defect.
+
+## Gap E — the write-plane history link
+
+**Title:** `engine: a resumed write rotation cannot recover its write scope seed, because nothing mints the write-plane history link`
+**Parent:** #635 · **blocked_by:** none · **blocks:** #1019 · **relates to:** #764
+
+`RotateScopeWritePlan::resume_write_scope_seed` (`crates/engine/src/rotation/rotate_write.rs:246-251`) makes the resuming caller supply the fresh write scope seed, and the module header states the recovery wiring is not landed (`:38-43`). Nothing in the repo ever mints a `WriteBody.write_history_link`: `reseal_scope_root` copies whatever it is handed (`crates/engine/src/rotation/reseal.rs:467`), and every call site passes `&amp;[]` or passes the old value through, including `WriteWaveNet::reseal_root` (`crates/engine/src/net/rotation.rs:1232`). A real crash therefore has no published source for the seed, and the wave cannot resume — the seed is only reachable from the new root, whose name the seed itself derives. #635's own gate names "resumed name waves via the write-plane history link", so this is an unmet slice gate, not a nicety.
+
+## Gap F — the read-epoch floor test
+
+**Title:** `test: no test holds the read-epoch floors still across a whole write rotation`
+**Parent:** #635 · **blocked_by:** none
+
+`the_read_epoch_floor_never_moves_across_a_republish` (`crates/engine/src/net/rotation.rs:3399`) republishes one interior node and checks one floor. The whole-wave test (`:3787`) reads no floor at all. The root path adopts through `RootAdopter` and the enumeration adopts every proven descendant scope root in `record_scope_boundary` (`:1103`), so three floor-touching paths are unasserted. #1026's gate says "every read-epoch floor is unchanged across the wave while the write epoch advances". Extend the whole-wave test to snapshot the scope's read-epoch floor and each descendant scope's floor before and after, and to assert the write-epoch advance in the same test.
+
+## Gap G — content CIDs (low confidence, worth a decision not necessarily an issue)
+
+`publish_moved` publishes with `content_cids: Vec::new()` (`crates/engine/src/net/rotation.rs:1325`), matching the landed `publish_scope_root`, so after a wave every node's content pins remain accounted to its retired name. #1125 covers the register-vs-retire CID-set derivation but not the name-move case. Decide whether the registry's pin rows survive a name retirement before filing.
+
+# Dependency edges
+
+- **#1019's `blocked_by #1026` is real but about to become misleading.** I confirmed there is no production caller of `rotate_scope_write` anywhere in `crates/` — only tests and doc references. #1019 is the first one. If #1026 closes, that edge is satisfied and #1019 unblocks while gaps A, B and E remain unlanded. Re-point #1019 at the residual issues: add `blocked_by` edges from #1019 to gap A (pointer EOL), gap B (re-point channels) and gap E (history-link resume). #1129 and #1130 already block #1019 correctly.
+- **Gaps A, B, E need bidirectional edges at filing**, each hanging under #635 with `blocks #1019`.
+- **Gap C and gap F need no blocking edge.** Gap C is quota accretion in the fail-safe direction. Gap F is test coverage.
+- **#764 should gain a `blocked_by` edge to gap E.** #764's own ask names the write-plane history link as the mechanism that makes orphaned interior names recoverable, so it cannot be built before the link exists.
+- **Nothing points at the ADR flip (gap D)** because it lands in the other repo. Track it as a checkbox on whichever issue closes #1026, not as a dependency.
+
+# Closure verdict
+
+**#1026 cannot be closed as done today.** Two facts decide it.
+
+1. ADR 0004 still reads `Status: Proposed` on cipher-box-next. That is an explicit, unchecked line in #1026's own Definition of Done, and ADR 0002 already fixes the target wording. It is one commit.
+2. Scope item 2 delivered one of three re-point channels, and Gate 1's write-plane-history-link resume is faked by a plan field rather than landed. Both are stated deliverables of #1026, not discovered defects.
+
+Recommended sequence. Land the ADR 0004 status flip on cipher-box-next. File gaps A, B, C, E and F as siblings under #635 with the edges above. Re-point #1019's `blocked_by` set at gaps A, B and E. Then close #1026, following the precedent already set by carving #1129 and #1130 out of it. Do not close #1026 before the edges move, or #1019 will read as unblocked while the wave still has no durable re-point channel and no resume path.</result>
+<usage><subagent_tokens>133484</subagent_tokens><tool_uses>48</tool_uses><duration_ms>482792</duration_ms></usage>
+</task-notification>
+
+---
+
+please confirm the open security question especially with regard to #1019 and #1101 might have already settled this. file the gaps as described afterwards (and any new gaps possibly identified from the investigation).
+
+---
+
+<task-notification>
+<task-id>a3b589d4ede637958</task-id>
+<tool-use-id>toolu_0196Emc2Rsa9LcRGVFawfahM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a3b589d4ede637958.output</output-file>
+<status>completed</status>
+<summary>Agent "Settle the blinded-tag root-name binding" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Repo is clean; nothing was written outside the scratchpad.
+
+---
+
+## 1. Verdict
+
+**LIVE DEFECT.** The blinded tag binds the write-plane root `ipnsName`, which `rotate_scope_write` moves by construction. The write wave rewrites the commitment's `ipns_name` to the new name and owner-re-signs it, but carries every tag through unchanged. Proven by execution over production code.
+
+## 2. Evidence chain
+
+**The binding is real, and it is the moving name.**
+
+- `crates/core/src/kdf/mod.rs:285-289` — `blinded_tag(ecdh_shared, scope_root_ipns_name)`.
+- `crates/engine/src/grants/ledger.rs:120` — `mint_grant_row` derives both the commitment entry tag and the ledger row tag from that call.
+- `CONTEXT.md:26` — "A node's Ed25519 IPNS keypair, its `ipnsName`, and its `writeKey` all derive from its write seed." There is **one** name per node, and it is the write-plane name. There is no separate stable read-plane name. The dissolution path in the question is closed.
+- `crates/engine/src/grants/create.rs:302` — the owner mints the grant at `derive_write_name(grantee.write_scope_seed, &amp;grantee.scope_id)`, i.e. the write-plane name, never a stable identifier.
+- Executed: `crates/engine/src/grants/invite.rs:1034` `the_blinded_tag_binds_the_derived_scope_root_name` — same scope id, two different `write_scope_seed` values, `assert_ne!(here.tag, elsewhere.tag)`. **Passes** (`cargo test -p cipherbox-engine --lib grants::`, 77 passed).
+
+**What the wave does to the grant section.**
+
+- `crates/engine/src/rotation/rotate_write.rs:509`, `:529` — every node, root included, republishes at `derive_write_name(&amp;write_scope_seed, node_id)` off a freshly minted random seed (`:486-495`).
+- `crates/engine/src/net/rotation.rs:1202-1206` — `reseal_root` clones the resolved commitment, overwrites **only** `ipns_name` with `node.new_name`, and owner-re-signs. `entries` (and therefore every `tag`) is cloned verbatim.
+- `crates/engine/src/net/rotation.rs:1231` — `grant_ledger: &amp;plane.write_body.grant_ledger`, carried verbatim from the record resolved at the old name.
+- `crates/engine/src/rotation/reseal.rs:356` — the blob loop re-seals fresh HPKE ciphertext but files it under `tag: entry.tag`, taken straight off the carried ledger row. `reseal.rs:353` signs the structure over that same stale tag.
+- `crates/engine/src/rotation/reseal.rs:308` — the only consistency check is `enforce_committed_ledger`, which compares commitment-tags against ledger-tags. Both sides are stale in the same way, so it passes. Nothing anywhere compares a tag against the `ipns_name` it is supposed to bind.
+- No occurrence of `blinded_tag`, `mint_grant_row`, or `recipient_blinded_tag` anywhere in `crates/engine/src/net/rotation.rs` or `crates/engine/src/rotation/`.
+
+**The read side has no way to distinguish this from a revocation.**
+
+- `crates/engine/src/gate/adoption.rs:547` — a record is rejected unless `section.commitment.ipns_name == candidate.name`. So the moved root's own owner-signed commitment asserts the **new** name. That is the only name the record self-describes with.
+- `crates/engine/src/grants/ledger.rs:63-68` — `self_locate` is a plain tag equality scan.
+- `crates/engine/src/grants/ledger.rs:62` and `crates/engine/src/grants/revocation.rs:74-84` — `classify` returns `RevocationSignal` on `owner_signed_record &amp;&amp; !blob_present`, ahead of every epoch check. The wave's record **is** freshly owner-signed, so the misread is exactly the failure the design note predicted.
+- `crates/engine/src/grants/accept.rs:423-435` — the only implemented self-locate caller binds `candidate.name == pointer.scope_root_name` and then derives the tag from that same name. The system's one implemented read-side convention is "derive from the name of the record you are looking at".
+
+**Executed proof over production code** (scratchpad `src/bin/reseal_proof.rs`, running the real `reseal_scope_root` with a one-row read-only ledger and the exact `reseal_root` sequence):
+
+```
+commitment.ipns_name == new root name : true
+published blob tag == tag(OLD name)   : true
+published blob tag == tag(NEW name)   : false
+committed entry tag == tag(NEW name)  : false
+```
+
+The re-seal **succeeds** — it does not fail closed on the mismatch. A companion run through `recipient_blinded_tag` → `self_locate` → `classify` returns `revocation-signal`.
+
+**The blueprint agrees the tags must move.**
+
+- `blueprint/engine.md:558` — "tags are name-bound, so **read** rotation leaves the commitment untouched." The exemption is scoped to read rotation. Write rotation moves the name.
+- `blueprint/engine.md:552` — "re-mint does not exist as a separate step — every rekey re-seals surviving committed grants uniformly in the republish it already does." The re-mint is supposed to ride this exact republish.
+- `blueprint/engine.md:43` — "Grant re-mint as a separate relay step … killed by #25 D1 — grant re-seal rides the republish."
+
+**No test covers it.** Every wave fixture commits an empty grant set (`crates/engine/src/testkit/owner_root.rs:191-195`, `:143`, `:202`; `crates/engine/src/net/rotation.rs:2371`, `:2401`; every `grant_ledger` literal in that test module is `&amp;[]`). `a_moved_root_re_signs_its_commitment_over_the_new_name` (`net/rotation.rs:3258`) asserts the `ipns_name` swap and the signature, and nothing about `entries`, blobs, or tags — it cannot, on an empty set. No test in `crates/engine/tests/write_plane.rs` runs a rotation at all.
+
+## 3. The failure sequence and blast radius
+
+1. Owner shares folder F read-only with Alice. `create_read_grant` (`create.rs:302,307`) files Alice's blob under `T_old = blinded_tag(ECDH(owner,alice), N_old)`.
+2. Owner later downgrades Bob from write to read, or does a manual write-hygiene rotate. Either drives `rotate_scope_write`.
+3. The wave mints a fresh `writeScopeSeed`; the root moves `N_old → N_new` (`rotate_write.rs:529`).
+4. `reseal_root` publishes at `N_new` with `commitment.ipns_name = N_new`, owner-signed, and Alice's blob still filed under `T_old` (`net/rotation.rs:1203`, `reseal.rs:356`).
+5. Alice follows the canonical scope-pointer re-point to `currentRootName = N_new`, resolves, passes the adoption gate, derives `T_new = blinded_tag(ECDH, N_new)`, and finds nothing.
+6. `classify` returns `RevocationSignal` — the *definitive* "you were removed", outranking epoch lag by design (`revocation.rs:78-80`).
+
+**Blast radius: every read-only grantee of the rotated scope, plus every write grantee that self-locates rather than deriving.** A write revoke aimed at one recipient silently reads as a mass read-revoke of the whole grant set. It is not self-healing: the tag is a pure function of the name, so every subsequent poll returns the same verdict.
+
+**Recoverable only by owner action**, and only awkwardly — the owner must re-mint at the current name and republish. There is no client-side recovery, because after a second rotation the mint-time name is unrecoverable (`RepointObject.prev_root` carries exactly one hop, `rotate_write.rs:431`).
+
+**Not yet exploitable in production.** `rotate_scope_write` has no facade or trigger caller (only tests and `net/rotation.rs` compose it), and `grants::revocation::classify` has no production caller at all — its only uses are the public re-export and `crates/engine/tests/grants_mailbox.rs`. This is a landed defect on an unwired path, so the cost of fixing it now is a ~15-line change in `reseal_root`, not a migration.
+
+## 4. Does #1019 cover it?
+
+**No — and worse, #1019 cannot pass its own gate.** Its Gate states: "a downgrade rotates the write plane only; the recipient's read grant is still live and **their blob still present at their tag** afterwards." A downgrade *is* a name wave, so that criterion is unsatisfiable against `main` unless the tags are re-minted. But #1019's "Already landed — do not re-implement" section explicitly fences `rotate_scope_write` and the commitment re-sign out of scope, and its Scope covers only the committed-set *membership* cut (remove/demote the row, re-sign, drive the rotation). An implementer following #1019 literally would change membership, drive the wave, watch the gate fail, and have to reach outside the issue's declared scope to fix it — or, more likely, write the gate assertion against the stale tag and ship a green test over a broken behaviour. #1019 owns the symptom implicitly and the cause not at all.
+
+## 5. Draft issue
+
+**Title:** `engine: the write name wave republishes grant tags bound to the retired root name`
+
+**Parent:** `#635` — engine: implement rotation primitives, sweep, name wave, and grants (the parent #1019 and #1026 both sit under)
+
+**blocked_by:** none — the fix is self-contained in `reseal_root`, which already holds every input it needs.
+
+**blocks:** `#1019` (its downgrade gate is unsatisfiable without this), `#1016` (facade wiring of the rotation and grant command arms), `#1127` (see body — #1127's proposed check fires on every honest row until this lands).
+
+**Body:**
+
+&gt; `kdf::blinded_tag(ecdh_shared, scope_root_ipns_name)` (`crates/core/src/kdf/mod.rs:285`) binds the scope root's `ipnsName`, and `CONTEXT.md` "Write seed" makes that name a pure function of the `writeScopeSeed`. A write rotation mints a fresh `writeScopeSeed` and moves the root name by construction (`crates/engine/src/rotation/rotate_write.rs:486-529`), so every tag minted before the wave is dead after it. `WriteWaveNet::reseal_root` rewrites `commitment.ipns_name` to the new name and owner-re-signs it (`crates/engine/src/net/rotation.rs:1202-1206`), but clones `commitment.entries` and passes the resolved ledger through verbatim (`:1231`); `reseal_scope_root` then files each freshly sealed blob under `entry.tag` off that carried row (`crates/engine/src/rotation/reseal.rs:356`). The published record therefore owner-asserts one name while every tag inside it binds another, and nothing fails closed: `enforce_committed_ledger` (`reseal.rs:308`) compares tags against tags, both equally stale. A surviving read-only grantee follows the re-point to `currentRootName`, passes the adoption gate — which forces `commitment.ipns_name == candidate.name` (`crates/engine/src/gate/adoption.rs:547`) — re-derives its tag from that name, and misses; `classify` reads a fresh owner-signed record with no blob at the tag as the definitive revocation signal, ahead of every epoch check (`crates/engine/src/grants/revocation.rs:74-80`). One write revoke or downgrade therefore reads as a mass read-revoke of the entire grant set, unrecoverable client-side because `RepointObject.prev_root` carries only one hop. `blueprint/engine.md:552` and `:558` already require the opposite — tags are name-bound and "every rekey re-seals surviving committed grants uniformly in the republish it already does" — so the re-mint belongs inside `reseal_root`, which already holds `self.owner_enc_secret` (`net/rotation.rs:1207`), `self.scope_id`, `node.new_name`, and each row's `recipient_enc_pk` and `recipient_identity_pk`; `mint_grant_row(owner_enc_secret, identity, enc_pub, scope_id, new_name, permission)` reproduces both the commitment entry and the ledger row at the new name. Gate: a rotation simulation over a scope root with a non-empty grant set asserts that a read-only grantee re-deriving `recipient_blinded_tag(…, outcome.new_root_name)` locates its blob in the republished section, and that a full write revoke removes only the revokee.
+
+## 6. Adjacent findings you did not ask about
+
+- **#1127 collides head-on with this and is currently unimplementable.** #1127 asks `reseal_scope_root` to refuse a ledger row whose `recipientEncPk` does not re-derive the tag it is filed under. Applied on the write-wave path with the new name, that check fires on **every honest row** and turns this latent defect into a hard `WritePublishError::Rejected` that aborts any wave over a scope with grants. Applied with the old name it passes but leaves the staleness. The two issues must be sequenced: re-mint first, then #1127's check becomes a free tautology at the mint site. Worth an explicit dependency edge.
+
+- **`RepublishedNode` is the wrong shape for owner re-mint material.** `crates/engine/src/rotation/rotate_write.rs:112-143` carries no owner identity, no owner enc secret, and no grant rows — deliberately, so the wave "drags neither O(subtree) bodies nor per-node read keys". The re-mint therefore has to live in `WriteWaveNet` (which does hold the owner material) rather than the pure orchestrator, which means the pure `rotate_scope_write` simulation tests in `rotate_write.rs` can never catch this class. That is a structural test blind spot, not just a missing case.
+
+- **ADR 0004 asked exactly this question one level up and stopped.** It reasons carefully about what a moved name does to `ChildRef.ipnsName` and never asks what it does to anything else keyed by the root name — no occurrence of "tag", "commitment", or "grant section" in the whole document. The ADR's own Gate ("a read-only holder starting from the re-pointed `currentRootName` resolves every node in the subtree") is written one level below where it breaks: such a holder cannot open the root at all.
+
+- **`enforce_committed_ledger`'s doc comment (`ledger.rs:170-175`) already names the general weakness** — "`recipientIdentityPk`, `recipientEncPk`, and `expiresAt` go unchecked here and a write-grantee may alter them undetectably" — and asserts "the tag↔enc_pk binding is a resolve-time check". Grepping the resolve path, I found no such check anywhere. That claim in the comment is currently false, which is the precondition #1127 depends on.</result>
+<usage><subagent_tokens>148186</subagent_tokens><tool_uses>43</tool_uses><duration_ms>442345</duration_ms></usage>
+</task-notification>
+
+---
+
+can we combine #1135 and #1127 in to 1 PR and knock it out first, then plan wave 7?
+
+---
+
+<task-notification>
+<task-id>ae70239a6cf8fcbe8</task-id>
+<tool-use-id>toolu_017fnC9HKnCKfFev1XYkjHuY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/ae70239a6cf8fcbe8.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 1135 and 1127" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All gates pass and the tree is clean. Final summary.
+
+## PR
+
+**#1141 — https://github.com/FSM1/cipher-box/pull/1141 — confirmed `draft: true`**, base `main`, branch `fix/rotation-grant-tag-remint`, 2 commits, 18 files.
+
+## Where the owner secret lives
+
+On `ScopeRootIdentity` as `owner_enc_secret: Option&lt;&amp;'a X25519Secret&gt;`, not on `CommittedSet`:
+
+1. The check's other two inputs — `ipns_name` and the owner half of the pairwise ECDH — already live there, so the predicate reads off one struct.
+2. `ScopeRootIdentity` already carries caller-owned secret material (`parent_node_seed`), so the terminal-owner rule needs no new statement.
+3. The cascade builds each descendant identity off the root plan's identity, so one field lends the key down an owner-driven walk; on `CommittedSet` it would have to be re-supplied per descendant.
+
+Production call sites: wave `reseal_root` → `Some`; `create_read_grant` grantee mint and descendant re-key → `Some`; cascade descendants → inherit from the root plan; sweep → `None` (no owner subkey in a `SweepTarget`).
+
+## Gates, each run unpiped
+
+| Command | Exit |
+|---|---|
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | 0 |
+
+`crates/core` is untouched. `cargo run -p cipherbox-engine --example kat_gen` regenerates byte-identical vectors.
+
+## Tests added, and their red state
+
+Every wave fixture committed an empty grant set, so `OwnerRootSpec` gains `grants` (commitment entries, ledger rows, grant blobs).
+
+Red on the unmodified engine, verified by removing only the matching guard:
+
+- `a_surviving_grantee_self_locates_its_blob_after_the_name_wave`
+- `a_read_and_a_write_grantee_both_survive_a_wave_over_a_deeper_subtree` (depth &gt; 1, read row and write row)
+- `the_re_mint_carries_each_grants_deadline_forward`
+- `the_wave_refuses_a_swapped_recipient_key_release_active`
+- `the_wave_refuses_a_ledger_row_the_commitment_does_not_commit_release_active`
+- `a_new_name_the_fresh_write_scope_seed_does_not_derive_is_refused_release_active`
+- `a_recipient_key_swapped_under_a_committed_tag_fails_closed_release_active`
+
+Positive-path tests, green either way by design: `a_reseal_without_the_owner_key_re_wraps_the_committed_set_as_it_stands` (the honest `None` residual), `an_owner_held_reseal_wraps_every_honestly_minted_row`, and `the_re_mint_reproduces_the_committed_pseudonym_key` (an invariant assertion, not a regression test).
+
+## Where the code disagreed with the brief
+
+1. **Re-minting alone opens a laundering hole the brief does not mention.** `reseal_root` owner-**re-signs** the commitment it builds, so building it from a resolved ledger — authored by any committed write-grantee — puts that writer's content under the owner's signature. Two guards run before any row is minted: the carried ledger must match the carried commitment (else a self-upgrade to `write` lands in a commitment the owner signs, with the write scope seed), and each row must derive its tag at the **old** name (else a swapped `recipientEncPk` is re-minted into a fresh honest-looking tag). Both are proven load-bearing by a test.
+2. **`mint_grant_row` also re-derives `pseudonymPk`**, which the brief does not cover. It binds the scope, not the name, so it must be identical — and it authorizes structure signing, so the re-mint now checks it against the committed key release-active.
+3. **Fail-closed hands a committed write-grantee a veto over its own revocation.** One poisoned row now aborts the write wave and the read cascade — the rotations that cut the attacker. #1127 specifies fail-closed and I implemented it, but the availability side was never weighed. Filed as **#1143** with a dependency edge on #1127.
+4. **The new check pins only the cofactor equivalence class of `recipientEncPk`.** `kdf::blinded_tag` mixes the shared secret, not the key bytes, and X25519 clamping makes `u^(p-2) mod p` yield the same secret; `X25519Public::from_bytes` has no prime-order check. That twin passes the binding but breaks DHKEM's `kem_context`, so a victim stays locked out across the owner's rotation. The fix belongs to `crates/core` validation — filed as **#1142** with a dependency edge.
+5. **`enforce_committed_ledger`'s "resolve-time check" claim is indeed false** — no resolve path performs it. Both that doc and `reseal.rs`'s now name the check that actually runs.
+6. Most `reseal_scope_root` call sites ripgrep finds are test code; the production set is the five above. `sweep_pass` is called by `create_read_grant`, which does hold the owner subkey, so the same descendants are checked on one leg and unchecked on the other — threading it is noted in #1143 rather than widened here.
+7. The brief says a lost `expires_at` "would silently un-expire every grant". It is carried forward and tested, but the field is explicitly not a capability boundary and `entry_is_live` is consulted only on the invite claim path, so the in-code comment states what carrying it actually preserves.
+8. The owner-root fixture seals under a fixed key and nonce by blueprint design, so fixture variants sharing a `root_id` share a `(key, nonce)`. This diff adds write-body variants to a class the read bodies already had. Test-corpus only; noted in the PR body rather than fixed, because a plaintext-derived nonce would churn the committed gate KAT vectors and contradicts `blueprint/core.md`'s "fixed-parameter full-envelope KATs".
+
+`/simplify`, `/security-review` and `/crypto-privacy-review` all ran; accepted findings are in the second commit, and the PR body records what was folded in, what was filed, and what was accepted.</result>
+<usage><subagent_tokens>312157</subagent_tokens><tool_uses>197</tool_uses><duration_ms>3188589</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bug5gp6ze</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bug5gp6ze.output</output-file>
+<status>completed</status>
+<summary>Background command "Independently re-run fmt and workspace tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+#778 clearly defines when it should be handled: `Only if the retry latency during large write-rotation re-point waves becomes a measured problem`. I think that is clear enough to anyone proposing building it now, before any timings for large write rotations are in.
+
+---
+
+<task-notification>
+<task-id>ae96b27913c1bfe2a</task-id>
+<tool-use-id>toolu_01VWy1r5kRHSomkHCVrfJ79i</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/ae96b27913c1bfe2a.output</output-file>
+<status>completed</status>
+<summary>Agent "Independent crypto review of PR 1141" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Findings below.
+
+## CONFIRMED
+
+### [Medium] The owner holds the subkey at `create_read_grant` step 6 and still re-seals the parent unchecked
+
+**Location:** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/create.rs:470-476` (uses `&amp;parent.identity`); plan field at `create.rs:125`; every construction passes `None` — `create.rs:783`, `create.rs:893`, `/Users/myankelev/Code/random/cipher-box/crates/contract/tests/contract.rs:1231`.
+
+The PR added `owner_enc_secret: Some(owner.enc_secret)` at two of the three `reseal_scope_root` sites inside `create_read_grant` (`create.rs:342`, `create.rs:405`). The third, step 6's parent index update, uses `&amp;parent.identity`, a whole `ScopeRootIdentity` handed in by the caller, and every construction in the tree sets `None`. `owner.enc_secret` is in scope at that line.
+
+Attack: a committed write grantee of the **parent** scope re-authors the parent write body and replaces a victim's `recipientEncPk` under the victim's owner-committed tag. Permission and tag still match, so `enforce_committed_ledger` passes. The next `create_read_grant` — an owner action — re-seals the parent and wraps the parent's `override_seed` and `pointer_read_key` to the attacker's key (`rotation/reseal.rs:357-387`). That is #1127 verbatim, on the leg the PR edited and did not close.
+
+Minimal fix: do not let a caller decide this. Drop `owner_enc_secret` from `ParentScopePlan::identity` and have `create_read_grant` build the parent identity with `Some(owner.enc_secret)`, as it already does for the grantee root and each descendant.
+
+### [Medium] The re-mint turns an unauthenticated, unused ledger field into a free veto on the write wave
+
+**Location:** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/net/rotation.rs:1232-1233`
+
+```rust
+let recipient_identity = EcdsaVerifier::from_sec1(&amp;entry.recipient_identity_pk)
+    .ok_or(WritePublishError::Rejected)?;
+```
+
+`recipient_identity_pk` participates in no derivation. `mint_grant_row` only echoes it back (`grants/ledger.rs:146`), the commitment does not cover it (`enforce_committed_ledger` compares `(tag, permission)` only), and no authorization path reads it — the invite claim path matches on the owner-local `RecordedInvite.ephemeral_identity_pk` and the re-derived tag (`grants/invite.rs:517-529`), and `SentIndex` is owner-local (`grants/accept.rs:280-289`).
+
+So a committed write grantee sets a victim's `recipientIdentityPk` to any 33 bytes that are not a curve point. `from_sec1` returns `None`, `remint_grants` returns `Rejected`, and the write wave — the operation that revokes that grantee — fails permanently, with no other symptom and no other check able to observe the field. `main` never parsed the field, so the lever is new in this PR. This is the #1143 mechanism, but with an attacker cost of zero and a fix that is local.
+
+Minimal fix: carry the field verbatim as `expires_at` already is, rather than parsing a value nothing binds — either take the raw SEC1 bytes in `mint_grant_row`, or overwrite `ledger_entry.recipient_identity_pk = entry.recipient_identity_pk` after the mint and stop treating a parse failure as a trust verdict.
+
+### [Low] The pseudonym pin added in commit 2 has no negative test
+
+**Location:** guard at `crates/engine/src/net/rotation.rs:1251-1253`; test at `rotation.rs:3672`
+
+`the_re_mint_reproduces_the_committed_pseudonym_key` runs on honestly minted rows, so the mint reproduces the committed key by construction. Delete the guard and the test still passes. It asserts an invariant, not the refusal.
+
+The same test's second assertion is **not** vacuous: I computed the fixture's two blinded tags at the post-wave name (`read[0]=0xe2`, `write[0]=0x76`), and the ledger order is `[read, write]`, so without the sort `is_sorted_by_key` fails. The codec preserves array order (no sort in `crates/core/src/seal/`), so nothing masks it.
+
+Minimal fix: one fixture with `rows[0].commitment_entry.pseudonym_pk = [0xaa; 32]` (owner still signs the commitment, tag left honest), asserting `Err(Rejected)` and `!published_at`.
+
+### [Low] The `None` residual is not stated honestly, and commit 2 removed the one place it was
+
+**Location:** `crates/engine/src/rotation/reseal.rs:76-80`; `crates/engine/src/rotation/sweep.rs:354`
+
+The field doc says "`None` is the write-grantee re-sealer: it holds no owner encryption subkey." Three owner-held production paths pass `None`: `sweep.rs:354`, `create.rs` step 6 (finding 1), and the externally built root plans consumed at `rotation/rotate.rs:257` and `rotation/cascade.rs:367`. #1143 records the sweep leg only. Commit 2 also deleted the two-line comment at `sweep.rs:354` that explained why the sweep passes `None`, so that leg is now bare.
+
+Minimal fix: restate the field as "`None` = the re-sealer does not apply the binding check", name which callers are which, and restore a one-line rationale at `sweep.rs:354`.
+
+### [Low] The doc claim covers the commitment entries, not the ledger rows the same function returns
+
+**Location:** `crates/engine/src/net/rotation.rs:1203-1205` vs `rotation.rs:1255-1261`
+
+"every field the new entries carry is either derived here or copied from what the owner already signed" holds for `RemintedGrants::entries`. It does not hold for `RemintedGrants::ledger`: `expires_at`, `unknown` and `recipient_identity_pk` all come from the write-grantee-authored body. No escalation — the ledger is owner-authenticated on no path — but a revoked write grantee's planted deadline on a victim's row survives the very wave that cuts it, and feeds the discovered-expiry prune. Narrow the sentence to the commitment entries.
+
+### [Low, informational] Non-constant-time tag compare
+
+**Location:** `crates/engine/src/grants/ledger.rs:74`
+
+One operand is derived from the owner's X25519 secret, so the doc's "every input is public" is loose. The exploit needs an owner-side wave per probe plus microsecond timing, so it is not practical, and the file's existing `self_locate` convention already accepts a plain compare. `ct_eq` is free if you want it closed.
+
+## What checks out
+
+- **`remint_grants` ordering is sufficient, and the `enforce_committed_ledger`-first placement is load-bearing.** Without it, a read grantee that upgrades its own ledger row to `Write` would have the upgrade minted into the commitment entries; `reseal_scope_root`'s own `enforce_committed_ledger` would then compare the *new* commitment against the *new* ledger, find them equal, and the owner would sign the escalation and wrap the fresh write scope seed to it. `the_wave_refuses_a_ledger_row_the_commitment_does_not_commit_release_active` (`rotation.rs:3750`) genuinely guards that ordering, not just the pre-existing check.
+- **Nothing a write grantee chose reaches the owner's fresh signature.** `ipns_name` is derived and cross-checked against the fresh write scope seed (`rotation.rs:1388`); each entry's `tag` is re-derived, `permission` is set-equal to the owner-signed commitment, `pseudonym_pk` is pinned, `unknown` is copied from the owner-signed entry; `owner_pseudonym_pk` and the top-level `unknown` are copied from a commitment that passed `gate/adoption.rs:545-552` (ECDSA verify against the contact-anchored owner identity plus the name binding), including on the at-floor recovery leg, which re-uses only the candidate the gate's stages 1-3 authenticated (`net/adopter.rs:226-237`). `reseal.rs:305-309` then refuses if that carried `owner_pseudonym_pk` is not the owner's own derived pseudonym.
+- **The tag pin and the pseudonym pin are equal in strength.** Both are functions of the same ECDH output, so pinning the tag already pins the pseudonym (and vice versa) up to the cofactor class #1142 records. The pseudonym check is defense in depth and cannot be evaded independently.
+- **Sorting cannot drop or merge a row.** One `Vec::push` per ledger row, no map. Duplicate tags reject fail-closed at both decode and encode in core (`core/src/seal/write_body.rs:236,262`; `section.rs:321,374`). Two rows collide at the new name only if they collide at the old one, since both tags come from the same shared secret.
+- **Rule 8 holds.** Every new refusal is `return Err(...)`. The only `assert!` in the diff is inside `#[test]` bodies; no `debug_assert!` guards a trust check.
+- **Zeroization holds.** `ScopeRootIdentity` gains a borrow, not ownership; neither `reseal_scope_root` nor `remint_grants` zeroes it. `X25519Secret`'s `Debug` is redacted (`core/src/suite/x25519.rs:53-57`), `ScopeRootIdentity` derives no `Debug`, and `TagNotBoundToRecipient`'s text carries no key material.
+- **The new `derive_write_name` guard is real.** Nothing else on that path binds the published seed to the name; its test would pass without the guard only if another check fired, and none does.
+- **No unbounded work.** `enforce_committed_ledger` runs before the ECDH loop and the commitment is capped at `MAX_GRANT_BLOBS = 1024` at decode. Cost note only: the wave now performs three ECDH per row (old-name bind, mint, then `reseal_scope_root`'s new-name re-check of rows it just minted); the third pass is redundant on this leg.
+- All 770 `cipherbox-engine` lib tests pass, including the seven new ones.
+
+## Notes on the already-filed items
+
+- Finding 2 is an amplification of #1143, not a duplicate: the recorded veto needs a swapped `recipientEncPk`, which at least breaks the victim's own blob. A non-point `recipientIdentityPk` costs the attacker nothing, is invisible to every other check, and the parse that creates the lever is new in this PR.
+- On the fixture `(key, nonce)` reuse you excluded: the class is pre-existing on `main`. One new inconsistency only — the PR extends the `OwnerRootSpec` doc (`crates/engine/src/testkit/owner_root.rs:50-55`) to state that specs with differing `grants` need differing `root_id`, and then every new test shares `root_id = SCOPE` with differing `grants` and `children`. The PR's own new sentence is falsified by the PR's own new fixtures.
+
+## SPECULATIVE
+
+- A scope root that already went through a pre-fix write wave now has committed tags bound to a retired name, so `remint_grants` refuses it forever and the owner can never rotate that write plane again. Greenfield plus the staging cutover should make this unreachable, but it is the same fail-closed veto reached from the owner's own prior build rather than from an attacker.
+
+**Verdict:** yes, safe to take out of draft and put in front of CodeRabbit and Greptile — the core re-mint is sound and fail-closed; fold in the two Medium items (the parent-leg `None` and the `recipientIdentityPk` veto) or file them first.</result>
+<usage><subagent_tokens>172695</subagent_tokens><tool_uses>57</tool_uses><duration_ms>758150</duration_ms></usage>
+</task-notification>
+
+---
+
+regarding the 4 issues with no production callers, when do you anticipate these callers to be implemented? is it worthwhile prioritising the production callers of these, so that the slices can be thoroughly tested in production ?
+
+---
+
+<task-notification>
+<task-id>a7844d4abf86bd7d1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a7844d4abf86bd7d1.output</output-file>
+<status>completed</status>
+<summary>Agent "Find the production callers for 4 unreachable slices" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Part 1 — the premise, verified against `origin/main`
+
+| Symbol | Production caller? | Every call site found |
+|---|---|---|
+| `publish_settings` (`crates/engine/src/settings.rs:464`) | **No** | `lib.rs:92` re-export; `settings.rs:1235` inside `#[cfg(test)] mod tests` (module starts `:950`); integration tests `crates/engine/tests/vault_settings.rs:169,307,401,1145,1421,1539,1577,1675,1720` and `crates/engine/tests/write_plane.rs:5886` |
+| `plan_prune` (`crates/engine/src/content/retention.rs:93`) | **No** | `content/mod.rs:38` and `lib.rs:54` re-exports; own `#[cfg(test)]` tests at `retention.rs:175,187,189` |
+| `ContentVersion` (#850's subject) | **No producer at all** | Constructed only in `retention.rs` test helper `:164`. Nothing maps `ReadBody::File { versions }` into it |
+| `plan_prune` zero-keep (#851) | n/a — same as `plan_prune` | — |
+
+Two corrections to the prior analysis:
+
+1. **`load_settings` DOES have a production caller** — `crates/engine/src/facade.rs:1643`, inside `Engine::start`. #1043's body states "`publish_settings` and `load_settings` have no production caller today". That half is stale. The settings plane is read-wired and write-unwired.
+2. **#850's quota claim is stale.** The issue says "The same conflation reaches the quota pre-flight". It does not. `facade.rs:2370` computes `requested = sealed_total_bytes(size, profile)` and passes it to `pre_flight_quota_check` at `facade.rs:2457`. The pre-flight is already sized in sealed bytes. #850's live surface is only `ContentVersion.size_bytes` / `reclaimed_bytes`, which has no producer.
+
+Supporting mechanism facts:
+
+- Sub-EOL renewal runs over `held_records`, typed `HeldRecords = BTreeMap&lt;[u8; 16], HeldRecord&gt;` (`crates/engine/src/net/liveness.rs:91`) — **keyed by node id**. Inserts come only from `net/resolve.rs:367,595` and `sync/drain.rs:2150`. The settings name has no node id and never enters the set.
+- `apps/api/src/registry/services/registry.service.ts` `register` is an additive per-`(account, cid)` upsert, and `retire` deletes exactly the CIDs handed to it. #849's root-only defect is real, and the API half is already pinned by the Contract Suite test `an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_figure` (`crates/contract/tests/contract.rs:790`).
+
+**In-flight work you should know about.** A local unpushed branch `fix/prune-leaf-expansion-and-pinned-units` (4 commits ahead of `origin/main`) already implements all three prune fixes: `plan_prune(..., keep_latest: NonZeroU64)`, `expand_retire_targets`, and an `ExpandError::PinnedBytesMismatch` gate. That is almost certainly the branch the other agent holds. #1124 and #1125 were filed as its deferred residue.
+
+## Part 2 — owning issue for each caller
+
+| Slice | Production caller? | Owning issue for the caller | Blocker state | Hops from actionable |
+|---|---|---|---|---|
+| #1043 settings renewal | No (`publish_settings` dead; `load_settings` live) | **NONE — tracker gap** | #1043 itself: `blocked_by` = 929 (closed). Self-deferred, not blocked | Undefined. Needs a new issue, which is actionable today |
+| #849 leaf expansion | No | **#872** | 871 (closed), 849/850/851 (open, its own folded-in children) | 1 hop |
+| #850 pinned units | No | **#872** | same | 1 hop |
+| #851 zero keep-count | No | **#872** | same | 1 hop |
+
+The `blocked_by` edges on #872 are bookkeeping: #872's own body says it absorbs #849/#850/#851 and closes them as folded-in. Nothing external gates #872. It is startable now.
+
+Adjacent: #1124 and #1125 are also open children of #872 (the brief said three children; there are **five**). Both are `blocked_by: 872 (open)` — 2 hops. #1094 is `blocked_by: 1106 (closed)`, actionable, but it never names `plan_prune` or the retire path; it is a version-history retention issue, not the prune caller. #1095 is `blocked_by: 1094 (open)`. #1016 is `blocked_by: 1135 (open)` and is explicitly scoped to seven rotation and grant command arms only — it owns neither caller. #1084 is unblocked and actionable, but it narrows the settings **read** path only.
+
+### Tracker gap — flag this
+
+**No open issue lands a production caller for `publish_settings`.** The slice that wrote it, #870 `engine: publish and resolve the vault settings record`, is closed. #992's other open children do not cover it. #643 (`web: ship sharing, bin, settings, and invite views over the facade`) promises a `/settings` view "over the facade" while no facade command exists, and it is itself gated by #635 and #642. #1043 names the missing slice in prose and defers to it. The `Command` enum has seventeen variants and none is a settings command. A settings write plane is fully built, KAT-tested, hardened by #904 and #928, and reachable from nothing.
+
+## Part 3 — sequencing
+
+**How far out is each caller.** The prune caller is one hop: #872 is startable today. The settings caller is zero hops from actionable and infinitely far from scheduled — nothing blocks it and nothing owns it.
+
+**Settings cluster — recommended order: caller first, with #1043 folded into it.**
+
+File the missing engine issue (`wire the vault settings write plane into the facade`) and land the held-set insert in the same PR. Three reasons. First, no defect ships today: `publish_settings` has no caller, so no settings record is ever published, so nothing can lapse. #1043 is a latent cliff behind a missing caller, not a live bug. Second, #1043's fix does not compile as written — `HeldRecords` is keyed by a 16-byte node id, and the settings record has no node id, so the caller must decide the key. Third, `load_settings` is already live at cold start and already refuses a lapsed record, so the moment a caller lands, the cliff becomes real. The renewal must land with the publish, not after it. Land #1084 in parallel — it is unblocked and it hardens the read path that is live today.
+
+**Prune cluster — recommended order: fixes first, then #872's caller, then #1124 and #1125.**
+
+This is what is already in motion on `fix/prune-leaf-expansion-and-pinned-units`, and it is correct. The three fixes are pure functions with a closed-form specification and no call sites to churn. The API-side invariant they depend on is already proven by the Contract Suite. Landing #872's drain over a root-only retire would ship an account-wide byte leak that no later fix can reclaim, because once the shortened history publishes, nothing readable names the dropped roots and the leaf list becomes unnameable. Merge the three as #872's first slice, then the op plus `RetireLedger`, then the two caller-shaped residuals.
+
+**Would landing the caller change the fixes?**
+
+| Slice | Verdict | Reason |
+|---|---|---|
+| #849 leaf expansion | **Safe to fix blind** | The root block is plaintext deterministic CBOR, so `decode_root` needs no key and no caller context. Retire is per-CID and set-semantic. The caller-shaped part — subtracting retained versions' leaves — is already correctly carved out as #1124, and #1124 states why it cannot be done in the expansion |
+| #850 pinned units | **Safe to fix blind, with a known rework** | The pinned total is a closed form over leaf count and root length, and `sealed_total_bytes` already exists and is already used in production. But #1124 notes that retained-set subtraction breaks the closed form, so the accounting shape does change when the caller lands. Fix the unit now; expect to re-derive the total in #1124 |
+| #851 zero keep-count | **Safe to fix blind** | `NonZeroU64` on a signature with no call sites. The compiler is the test. Caller-shape-independent by construction |
+| #1043 settings renewal | **Wait for the caller — cannot be fixed blind** | The held map is keyed by node id and the settings record has no node id; the suggested one-liner does not type-check. `publish_settings` does not hold the held set and would need a new parameter the caller shapes. And there is nothing to renew until a caller publishes a record |
+
+## Part 4 — test reachability
+
+| Slice | Tier once its caller lands | Coverage gap that remains |
+|---|---|---|
+| #849 | `Engine Tests` (`cargo test -p cipherbox-engine`) for the expansion; **`Contract Suite`** for the actual reclaim, since only a real registry moves `quota().used_bytes`. #872's gate names both | None once #872 ships. The API half is already covered today |
+| #850 | `Engine Tests` unit for the formula; `Contract Suite` to assert `reclaimed_bytes` equals the quota delta | **Uncovered end-to-end until #872 ships.** A unit test can only assert the number against itself; nothing today can prove it matches bytes actually freed |
+| #851 | `Engine Tests`. Type-level — enforced at compile time | None. No end-to-end tier is meaningful for an unrepresentable state |
+| #1043 | `Engine Tests` via `crates/engine/tests/vault_settings.rs` under the injected virtual clock | **Permanently uncovered end-to-end.** A 90-day EOL lapse cannot be exercised in `Web E2E`, `Desktop E2E`, or `Contract Suite` — none advances wall time. The virtual-clock engine integration test is the ceiling |
+
+No prune or settings surface exists in `packages/client` or `apps/web`, so neither cluster reaches `Web E2E` or `Desktop E2E` at all. A web tier for version history arrives only via #1095, which is blocked by #1094, and via #643, which is blocked by #635 and #642 — and neither is the prune op.</result>
+<usage><subagent_tokens>110373</subagent_tokens><tool_uses>46</tool_uses><duration_ms>358572</duration_ms></usage>
+</task-notification>
