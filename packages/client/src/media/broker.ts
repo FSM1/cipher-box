@@ -40,15 +40,13 @@ interface Pin {
   linger: ReturnType<typeof setTimeout> | null;
 }
 
-/**
- * A holder waiting for a ticket to stop being read. The deadline re-arms on
- * every sign of progress, so it expires only on a ticket no body ever claimed or
- * one whose reader went away without saying so.
- */
+/** A holder waiting for a ticket to stop being read. */
 interface IdleWaiter {
-  readonly resolve: () => void;
-  readonly stallMs: number;
-  timer: ReturnType<typeof setTimeout>;
+  readonly resolve: (read: boolean) => void;
+  readonly startWithinMs: number;
+  /** Set once a body claims the ticket, which is what the deadline waits for. */
+  read: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 /** An open engine stream and the memo it came from, so a failure can drop it. */
@@ -114,41 +112,50 @@ export class MediaBroker {
     this.cursors.clear();
     for (const pin of this.pins.values()) void this.discard(pin);
     this.pins.clear();
-    for (const ticket of [...this.idleWaiters.keys()]) this.settleIdle(ticket);
+    // A replaced port is how a killed worker recovers: its bodies re-open on the
+    // port that replaces this one, so waiters get a fresh deadline, not an end.
+    for (const [ticket, waiters] of this.idleWaiters) {
+      for (const waiter of waiters) this.arm(ticket, waiter);
+    }
   }
 
   /**
-   * Resolves once no response body is reading `ticket`: its last body ended, or
-   * `stallMs` passed with no window delivered. A ticket is a bearer capability
-   * to plaintext, so its holder needs this to know when dropping it can no
-   * longer cut a transfer short.
+   * Resolves once no response body is reading `ticket`, with whether one ever
+   * did. A ticket is a bearer capability to plaintext, so its holder needs this
+   * to know when dropping it can no longer cut a transfer short.
+   *
+   * @param startWithinMs how long to wait for a body to claim the ticket. A
+   * claimed ticket has no deadline — a reader between windows is still reading.
    */
-  whenIdle(ticket: string, stallMs: number): Promise<void> {
+  whenIdle(ticket: string, startWithinMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const waiter: IdleWaiter = {
         resolve,
-        stallMs,
-        timer: setTimeout(() => this.expire(ticket, waiter), stallMs),
+        startWithinMs,
+        read: (this.pins.get(ticket)?.cursors ?? 0) > 0,
+        timer: null,
       };
+      this.arm(ticket, waiter);
       const waiters = this.idleWaiters.get(ticket);
       if (waiters === undefined) this.idleWaiters.set(ticket, new Set([waiter]));
       else waiters.add(waiter);
     });
   }
 
+  private arm(ticket: string, waiter: IdleWaiter): void {
+    if (waiter.timer !== null) clearTimeout(waiter.timer);
+    waiter.timer = setTimeout(() => this.expire(ticket, waiter), waiter.startWithinMs);
+  }
+
   private expire(ticket: string, waiter: IdleWaiter): void {
+    if ((this.pins.get(ticket)?.cursors ?? 0) > 0) {
+      this.arm(ticket, waiter);
+      return;
+    }
     const waiters = this.idleWaiters.get(ticket);
     waiters?.delete(waiter);
     if (waiters?.size === 0) this.idleWaiters.delete(ticket);
-    waiter.resolve();
-  }
-
-  /** Restarts every stall deadline on `ticket`: a reader is demonstrably alive. */
-  private bump(ticket: string): void {
-    for (const waiter of this.idleWaiters.get(ticket) ?? []) {
-      clearTimeout(waiter.timer);
-      waiter.timer = setTimeout(() => this.expire(ticket, waiter), waiter.stallMs);
-    }
+    waiter.resolve(waiter.read);
   }
 
   private settleIdle(ticket: string): void {
@@ -156,8 +163,8 @@ export class MediaBroker {
     if (waiters === undefined) return;
     this.idleWaiters.delete(ticket);
     for (const waiter of waiters) {
-      clearTimeout(waiter.timer);
-      waiter.resolve();
+      if (waiter.timer !== null) clearTimeout(waiter.timer);
+      waiter.resolve(waiter.read);
     }
   }
 
@@ -193,7 +200,7 @@ export class MediaBroker {
   }
 
   private acquire(ticket: string): Pin {
-    this.bump(ticket);
+    for (const waiter of this.idleWaiters.get(ticket) ?? []) waiter.read = true;
     const held = this.pins.get(ticket);
     if (held === undefined) {
       const pin: Pin = { stream: null, cursors: 1, linger: null };
@@ -409,7 +416,6 @@ export class MediaBroker {
       return;
     }
     cursor.offset = offset + delivered;
-    this.bump(cursor.ticket);
     // A short read means the live version is smaller than the head promised;
     // ending here is a clean EOF, where under-delivering content-length is a
     // network error to the media element.

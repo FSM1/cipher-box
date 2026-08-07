@@ -742,11 +742,14 @@ describe('the vault browser read path over the streaming pipe', () => {
   const revoked: string[] = [];
   const clicked: { href: string | null; download: string }[] = [];
   const originalClick = HTMLAnchorElement.prototype.click;
+  /** Whether the browser opens the save the ticket was minted for. */
+  let fetched = true;
 
   beforeEach(() => {
     minted.length = 0;
     revoked.length = 0;
     clicked.length = 0;
+    fetched = true;
     mediaControl.create = () =>
       ({
         streaming: true,
@@ -756,7 +759,7 @@ describe('the vault browser read path over the streaming pipe', () => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
-        whenStreamIdle: () => Promise.resolve(),
+        whenStreamIdle: () => Promise.resolve(fetched),
         revokeStreamUrl: (url: string) => {
           revoked.push(url);
           return true;
@@ -786,6 +789,42 @@ describe('the vault browser read path over the streaming pipe', () => {
     expect(engine.facade.download).not.toHaveBeenCalled();
     expect(minted).toEqual([{ node: NOTE, size: 12, mimeType: 'application/octet-stream' }]);
     expect(clicked).toEqual([{ href: '/stream/ticket-1', download: 'notes.txt' }]);
+    // The ticket serves plaintext to anything same-origin that can name it, so
+    // it dies with the transfer rather than with the view.
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));
+  });
+
+  const twoFiles = () =>
+    folderView({ children: [file(NOTE, 'notes.txt'), file(PICTURE, 'shot.png')] });
+
+  it('saves a selection one ticket at a time', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, twoFiles());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+
+    await waitFor(() => expect(minted).toHaveLength(2));
+    expect(revoked).toEqual(['/stream/ticket-1', '/stream/ticket-2']);
+  });
+
+  it('stops a batch at the first save the browser refuses', async () => {
+    const engine = fakeEngine();
+    fetched = false;
+    renderBrowser(engine);
+    await landSnapshot(engine, twoFiles());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('vault-action-error').textContent).toBe(
+        'the browser did not start the download'
+      )
+    );
+    // Grinding through the rest would burn the start deadline once per file.
+    expect(minted).toHaveLength(1);
   });
 
   it('buffers a save whose size the engine has not projected', async () => {

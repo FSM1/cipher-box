@@ -20,7 +20,7 @@ const NODE = new Uint8Array(16).fill(3);
 function fakePipe() {
   const live = new Set<string>();
   const minted: string[] = [];
-  const waiting = new Map<string, () => void>();
+  const waiting = new Map<string, (read: boolean) => void>();
 
   const service = {
     streaming: true,
@@ -33,7 +33,7 @@ function fakePipe() {
       return url;
     },
     whenStreamIdle: (url: string) =>
-      new Promise<void>((resolve) => {
+      new Promise<boolean>((resolve) => {
         waiting.set(url, resolve);
       }),
     revokeStreamUrl: (url: string) => live.delete(url),
@@ -43,10 +43,10 @@ function fakePipe() {
     service,
     live,
     minted,
-    /** The browser finished — or gave up on — the transfer for this ticket. */
-    finish: async (url: string): Promise<void> => {
+    /** The transfer for this ticket ended, or the browser never began it. */
+    finish: async (url: string, read = true): Promise<void> => {
       await act(async () => {
-        waiting.get(url)?.();
+        waiting.get(url)?.(read);
         await Promise.resolve();
       });
     },
@@ -95,10 +95,10 @@ describe('bounding the tickets a streamed save leaves live', () => {
     mediaControl.create = () => pipe.service;
     const { result } = mount(fakeEngine());
 
-    let saved = false;
+    let saved: boolean | null = null;
     await act(async () => {
-      void result.current.save(NODE, 'notes.txt', 12n).then(() => {
-        saved = true;
+      void result.current.save(NODE, 'notes.txt', 12n).then((ok) => {
+        saved = ok;
       });
       await Promise.resolve();
     });
@@ -106,12 +106,31 @@ describe('bounding the tickets a streamed save leaves live', () => {
     // Revoking before the browser has read the bytes cancels the save.
     expect(clicked).toEqual(['/stream/ticket-1']);
     expect([...pipe.live]).toEqual(['/stream/ticket-1']);
-    expect(saved).toBe(false);
+    expect(saved).toBeNull();
 
     await pipe.finish('/stream/ticket-1');
 
     await waitFor(() => expect(saved).toBe(true));
     expect([...pipe.live]).toEqual([]);
+  });
+
+  it('reports a save the browser never fetched, and says so', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let saved: boolean | null = null;
+    await act(async () => {
+      void result.current.save(NODE, 'notes.txt', 12n).then((ok) => {
+        saved = ok;
+      });
+      await Promise.resolve();
+    });
+    await pipe.finish('/stream/ticket-1', false);
+
+    await waitFor(() => expect(saved).toBe(false));
+    expect(pipe.live.size).toBe(0);
+    expect(result.current.error).toBe('the browser did not start the download');
   });
 
   it('leaves one live ticket however many files a caller saves in a loop', async () => {
