@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fakeWasmEnums } from '../testkit.js';
 import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
+import type { CommandDescriptor } from './protocol.js';
 import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
 
 /**
@@ -53,6 +54,58 @@ describe('buildCommand', () => {
     buildCommand(wasm, { kind: 'cancelUpload', opId: 2n ** 60n });
 
     expect(calls).toEqual([[2n ** 60n]]);
+  });
+
+  /** Every builder succeeds, so only the codec's own checks can reject. */
+  const permissiveWasm = {
+    ...fakeWasmEnums,
+    NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    Command: new Proxy({}, { get: () => () => ({}) }),
+  } as unknown as EngineWasm;
+
+  const refuses =
+    (descriptor: unknown): (() => unknown) =>
+    () =>
+      buildCommand(permissiveWasm, descriptor as CommandDescriptor);
+
+  it('fails closed on an unknown command kind', () => {
+    expect(refuses({ kind: 'telepathy' })).toThrow('unknown command kind: telepathy');
+  });
+
+  it('rejects a wrong-typed string field rather than letting wasm-bindgen coerce it', () => {
+    expect(refuses({ kind: 'rename', node: new Uint8Array(16), newName: 12345 })).toThrow(
+      'invalid command field newName: number'
+    );
+    expect(
+      refuses({ kind: 'create', parent: new Uint8Array(16), name: null, nodeKind: 'file' })
+    ).toThrow('invalid command field name: null');
+  });
+
+  it('rejects a wrong-typed byte-array field', () => {
+    expect(
+      refuses({
+        kind: 'grant',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: 'deadbeef',
+        permission: 'read',
+      })
+    ).toThrow('invalid command field recipientIdentityPublicKey: string');
+    expect(refuses({ kind: 'delete', node: [1, 2, 3] })).toThrow('invalid command field node');
+  });
+
+  it('rejects an unknown node kind or permission rather than defaulting one', () => {
+    expect(
+      refuses({ kind: 'create', parent: new Uint8Array(16), name: 'a', nodeKind: 'symlink' })
+    ).toThrow('invalid command field nodeKind: string');
+    expect(
+      refuses({ kind: 'createInviteLink', node: new Uint8Array(16), permission: 'admin' })
+    ).toThrow('invalid command field permission: string');
+  });
+
+  it('rejects an op id that is not the engine bigint', () => {
+    expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
+      'invalid command field opId: number'
+    );
   });
 });
 

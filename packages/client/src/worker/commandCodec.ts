@@ -15,7 +15,6 @@ import type {
   NodeKind,
   OpProgressPhase,
   PendingClass,
-  Permission,
   SnapshotDescriptor,
   Staleness,
 } from './protocol.js';
@@ -28,71 +27,117 @@ import type {
   WasmSnapshotView,
 } from './engineWasm.js';
 
-function nodeId(wasm: EngineWasm, bytes: Uint8Array): WasmNodeId {
-  return wasm.NodeId.fromBytes(bytes);
+/**
+ * A descriptor crosses a realm boundary as plain data, so its fields arrive
+ * untrusted however they are typed here: a version-skewed peer can carry a
+ * wrong-typed one, and wasm-bindgen would coerce it — a `12345` newName
+ * marshalled as `"12345"` — rather than reject it. Every field the builders
+ * read is checked, so the only wrong-typed field is a rejected command.
+ */
+function invalidField(field: string, value: unknown): Error {
+  return new Error(`invalid command field ${field}: ${value === null ? 'null' : typeof value}`);
 }
 
-function nodeKind(wasm: EngineWasm, kind: NodeKind): number {
-  return kind === 'file' ? wasm.NodeKind.File : wasm.NodeKind.Folder;
+function bytes(value: unknown, field: string): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw invalidField(field, value);
+  return value;
 }
 
-function permission(wasm: EngineWasm, level: Permission): number {
-  return level === 'read' ? wasm.Permission.Read : wasm.Permission.Write;
+function text(value: unknown, field: string): string {
+  if (typeof value !== 'string') throw invalidField(field, value);
+  return value;
+}
+
+function opId(value: unknown, field: string): bigint {
+  if (typeof value !== 'bigint') throw invalidField(field, value);
+  return value;
+}
+
+function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
+  return wasm.NodeId.fromBytes(bytes(value, field));
+}
+
+function nodeKind(wasm: EngineWasm, value: unknown): number {
+  if (value === 'file') return wasm.NodeKind.File;
+  if (value === 'folder') return wasm.NodeKind.Folder;
+  throw invalidField('nodeKind', value);
+}
+
+function permission(wasm: EngineWasm, value: unknown): number {
+  if (value === 'read') return wasm.Permission.Read;
+  if (value === 'write') return wasm.Permission.Write;
+  throw invalidField('permission', value);
 }
 
 export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
   switch (descriptor.kind) {
     case 'create':
       return wasm.Command.create(
-        nodeId(wasm, descriptor.parent),
-        descriptor.name,
+        nodeId(wasm, descriptor.parent, 'parent'),
+        text(descriptor.name, 'name'),
         nodeKind(wasm, descriptor.nodeKind)
       );
     case 'delete':
-      return wasm.Command.delete(nodeId(wasm, descriptor.node));
+      return wasm.Command.delete(nodeId(wasm, descriptor.node, 'node'));
     case 'rename':
-      return wasm.Command.rename(nodeId(wasm, descriptor.node), descriptor.newName);
+      return wasm.Command.rename(
+        nodeId(wasm, descriptor.node, 'node'),
+        text(descriptor.newName, 'newName')
+      );
     case 'relink':
-      return wasm.Command.relink(nodeId(wasm, descriptor.node), nodeId(wasm, descriptor.newParent));
+      return wasm.Command.relink(
+        nodeId(wasm, descriptor.node, 'node'),
+        nodeId(wasm, descriptor.newParent, 'newParent')
+      );
     case 'cancelUpload':
-      return wasm.Command.cancelUpload(descriptor.opId);
+      return wasm.Command.cancelUpload(opId(descriptor.opId, 'opId'));
     case 'setFocus':
       return wasm.Command.setFocus(
-        descriptor.node === null ? undefined : nodeId(wasm, descriptor.node)
+        descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')
       );
     case 'manualRefresh':
       return wasm.Command.manualRefresh();
     case 'importContact':
-      return wasm.Command.importContact(descriptor.contactCode);
+      return wasm.Command.importContact(bytes(descriptor.contactCode, 'contactCode'));
     case 'grant':
       return wasm.Command.grant(
-        nodeId(wasm, descriptor.node),
-        descriptor.recipientIdentityPublicKey,
+        nodeId(wasm, descriptor.node, 'node'),
+        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey'),
         permission(wasm, descriptor.permission)
       );
     case 'revoke':
       return wasm.Command.revoke(
-        nodeId(wasm, descriptor.node),
-        descriptor.recipientIdentityPublicKey
+        nodeId(wasm, descriptor.node, 'node'),
+        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
       );
     case 'downgrade':
       return wasm.Command.downgrade(
-        nodeId(wasm, descriptor.node),
-        descriptor.recipientIdentityPublicKey
+        nodeId(wasm, descriptor.node, 'node'),
+        bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
       );
     case 'createInviteLink':
       return wasm.Command.createInviteLink(
-        nodeId(wasm, descriptor.node),
+        nodeId(wasm, descriptor.node, 'node'),
         permission(wasm, descriptor.permission)
       );
     case 'acceptShare':
-      return wasm.Command.acceptShare(descriptor.sealedSharePointer);
+      return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
-      return wasm.Command.rotateNow(nodeId(wasm, descriptor.node));
+      return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
     case 'siweLogin':
-      return wasm.Command.siweLogin(descriptor.message, descriptor.signature);
+      return wasm.Command.siweLogin(
+        text(descriptor.message, 'message'),
+        bytes(descriptor.signature, 'signature')
+      );
     case 'logout':
       return wasm.Command.logout();
+    default: {
+      // Fail closed: an unmapped kind means a peer built against a different
+      // protocol, not a command to guess at. The `never` binding makes adding
+      // a kind without a builder a compile error.
+      const unmapped: never = descriptor;
+      throw new Error(`unknown command kind: ${String((unmapped as CommandDescriptor).kind)}`);
+    }
   }
 }
 
