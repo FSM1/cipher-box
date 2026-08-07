@@ -30,6 +30,11 @@ export class StreamRegistry {
     // another's head.
     if (this.sources.has(ticket)) throw new Error('a stream ticket must be minted once');
     this.sources.set(ticket, source);
+    return this.urlFor(ticket);
+  }
+
+  /** The URL a media element requests for `ticket`, live or not. */
+  urlFor(ticket: string): string {
     return `${STREAM_PATH_PREFIX}${ticket}`;
   }
 

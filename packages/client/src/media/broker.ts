@@ -21,16 +21,12 @@ export interface MediaReader {
  */
 const DEFAULT_PIN_LINGER_MS = 5000;
 
-/**
- * A read this broker gave up on. The engine's code rides along because a
- * ceiling refusal a later read can clear is not a fault, and a message string
- * is not a classification.
- */
+/** A read this broker gave up on, classified by the engine's code. */
 export interface MediaFailure {
   readonly ticket: string;
-  /** `null` where the failure did not come from the engine. */
-  readonly code: string | null;
   readonly message: string;
+  /** See {@link isRecoverableEngineError}. */
+  readonly recoverable: boolean;
 }
 
 export interface MediaBrokerOptions {
@@ -376,9 +372,11 @@ export class MediaBroker {
     this.drop(requestId);
     const message = errorMessage(error);
     post(port, { type: 'cb:media:error', requestId, message });
-    // The body error the Service Worker raises reaches the media element as a
-    // bare network failure, so the reason has to travel tab-side instead.
-    this.onFailure?.({ ticket: cursor.ticket, code: engineErrorCode(error) ?? null, message });
+    this.onFailure?.({
+      ticket: cursor.ticket,
+      message,
+      recoverable: isRecoverableEngineError(engineErrorCode(error)),
+    });
   }
 }
 

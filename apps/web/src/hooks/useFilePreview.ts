@@ -25,7 +25,6 @@ export type FilePreview =
   | { status: 'image'; url: string }
   | { status: 'pdf'; url: string }
   | { status: 'text'; text: string }
-  /** A ticket URL the player reads range by range; never a buffered blob. */
   | { status: 'audio'; url: string }
   | { status: 'video'; url: string };
 
@@ -57,29 +56,21 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     }
 
     const node = fromHex(key);
-    // Playback is a seek-driven ranged read; buffering the whole file into the
-    // tab is exactly what the pipe exists to avoid, so there is no fallback.
-    if (kind === 'audio' || kind === 'video') {
-      const ticket = streamTicket(media, node, size, previewMime(name));
-      if (ticket === null) {
-        setPreview({ status: 'error', message: NEEDS_PIPE });
-        return;
-      }
-      setPreview({ status: kind, url: ticket });
-      return () => {
-        media?.revokeStreamUrl(ticket);
-      };
-    }
-
-    // The pipe declares media types only, and an image is the one buffered
-    // preview shape that is one (packages/client/src/media/range.ts `safeMimeType`).
-    if (kind === 'image') {
+    // The pipe declares media types only, so these are the shapes it can serve
+    // (packages/client/src/media/range.ts `safeMimeType`).
+    if (kind === 'image' || kind === 'audio' || kind === 'video') {
       const ticket = streamTicket(media, node, size, previewMime(name));
       if (ticket !== null) {
-        setPreview({ status: 'image', url: ticket });
+        setPreview({ status: kind, url: ticket });
         return () => {
           media?.revokeStreamUrl(ticket);
         };
+      }
+      // Playback is a seek-driven ranged read; only an image is small enough to
+      // fall back to a buffered one.
+      if (kind !== 'image') {
+        setPreview({ status: 'error', message: NEEDS_PIPE });
+        return;
       }
     }
 

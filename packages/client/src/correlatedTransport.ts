@@ -76,7 +76,7 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
  * Delivers one event to every listener, isolating a throwing subscriber so it
  * cannot drop the event for the rest.
  */
-export function fanOut(listeners: Iterable<EngineEventListener>, event: EventDescriptor): void {
+export function fanOut<TEvent>(listeners: Iterable<(event: TEvent) => void>, event: TEvent): void {
   for (const listener of listeners) {
     try {
       listener(event);
