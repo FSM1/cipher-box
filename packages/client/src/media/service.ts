@@ -4,14 +4,28 @@
  * ticket URLs the UI hands to a media element.
  */
 
-import { MediaBroker, type MediaReader } from './broker.js';
+import { isRecoverableEngineError } from '../correlatedTransport.js';
+import { MediaBroker, type MediaFailure, type MediaReader } from './broker.js';
 import {
   MEDIA_PORT_OFFER,
   MEDIA_PORT_REQUEST,
+  STREAM_PATH_PREFIX,
   ticketFromUrl,
   type MediaPortOffer,
 } from './protocol.js';
 import { StreamRegistry, type MediaSource } from './registry.js';
+
+/** A stream that stopped, told to whoever holds the URL it stopped on. */
+export interface MediaStreamFailure {
+  /** The URL `createStreamUrl` returned, so a holder can match its own. */
+  readonly url: string;
+  readonly message: string;
+  /**
+   * The engine refused over a ceiling a later read can clear rather than over a
+   * verdict, so the same request is worth making again.
+   */
+  readonly recoverable: boolean;
+}
 
 /** The `ServiceWorker` surface the offer needs. */
 export interface ServiceWorkerLike {
@@ -55,6 +69,7 @@ export class MediaService {
   private readonly broker: MediaBroker;
   private readonly origin: string;
   private readonly createChannel: () => MessageChannel;
+  private readonly failureListeners = new Set<(failure: MediaStreamFailure) => void>();
   private registration: ServiceWorkerRegistrationLike | null = null;
   private channel: MessageChannel | null = null;
   private startup: Promise<void> | null = null;
@@ -63,8 +78,31 @@ export class MediaService {
   constructor(private readonly config: MediaServiceConfig) {
     this.origin = config.origin ?? globalThis.location.origin;
     this.registry = new StreamRegistry(this.origin);
-    this.broker = new MediaBroker(this.registry, config.reader);
+    this.broker = new MediaBroker(this.registry, config.reader, {
+      onFailure: (failure) => this.report(failure),
+    });
     this.createChannel = config.createChannel ?? ((): MessageChannel => new MessageChannel());
+  }
+
+  /**
+   * Subscribes to the streams that stop mid-read. Returns the unsubscribe.
+   *
+   * A response body that errors reaches a media element as an untyped network
+   * failure, so a player that wants to tell a ceiling refusal from a fault has
+   * to hear it here.
+   */
+  onStreamError(listener: (failure: MediaStreamFailure) => void): () => void {
+    this.failureListeners.add(listener);
+    return () => this.failureListeners.delete(listener);
+  }
+
+  private report(failure: MediaFailure): void {
+    const reported: MediaStreamFailure = {
+      url: `${STREAM_PATH_PREFIX}${failure.ticket}`,
+      message: failure.message,
+      recoverable: isRecoverableEngineError(failure.code ?? undefined),
+    };
+    for (const listener of [...this.failureListeners]) listener(reported);
   }
 
   /**
@@ -106,6 +144,7 @@ export class MediaService {
     const container = this.config.container;
     container.removeEventListener('controllerchange', this.onControllerChange);
     container.removeEventListener('message', this.onMessage);
+    this.failureListeners.clear();
     this.registry.clear();
     this.broker.close();
     this.brokerTo(null);

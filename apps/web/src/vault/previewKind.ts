@@ -5,7 +5,7 @@
  * document (a blob URL inherits this origin).
  */
 
-export type PreviewKind = 'image' | 'pdf' | 'text' | 'none';
+export type PreviewKind = 'image' | 'pdf' | 'text' | 'audio' | 'video' | 'none';
 
 /** Blobs the preview builds are typed from here, so nothing else can be. */
 const PREVIEWABLE: Record<string, { kind: PreviewKind; mime: string }> = {
@@ -17,6 +17,15 @@ const PREVIEWABLE: Record<string, { kind: PreviewKind; mime: string }> = {
   bmp: { kind: 'image', mime: 'image/bmp' },
   avif: { kind: 'image', mime: 'image/avif' },
   pdf: { kind: 'pdf', mime: 'application/pdf' },
+  mp4: { kind: 'video', mime: 'video/mp4' },
+  m4v: { kind: 'video', mime: 'video/mp4' },
+  webm: { kind: 'video', mime: 'video/webm' },
+  ogv: { kind: 'video', mime: 'video/ogg' },
+  mp3: { kind: 'audio', mime: 'audio/mpeg' },
+  m4a: { kind: 'audio', mime: 'audio/mp4' },
+  wav: { kind: 'audio', mime: 'audio/wav' },
+  flac: { kind: 'audio', mime: 'audio/flac' },
+  oga: { kind: 'audio', mime: 'audio/ogg' },
   txt: { kind: 'text', mime: 'text/plain' },
   md: { kind: 'text', mime: 'text/plain' },
   json: { kind: 'text', mime: 'text/plain' },

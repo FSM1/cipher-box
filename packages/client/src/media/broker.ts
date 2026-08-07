@@ -21,11 +21,25 @@ export interface MediaReader {
  */
 const DEFAULT_PIN_LINGER_MS = 5000;
 
+/**
+ * A read this broker gave up on. The engine's code rides along because a
+ * ceiling refusal a later read can clear is not a fault, and a message string
+ * is not a classification.
+ */
+export interface MediaFailure {
+  readonly ticket: string;
+  /** `null` where the failure did not come from the engine. */
+  readonly code: string | null;
+  readonly message: string;
+}
+
 export interface MediaBrokerOptions {
   /** The plaintext window read per pull. */
   windowBytes?: number;
   /** How long a ticket's engine stream outlives its last cursor. */
   lingerMs?: number;
+  /** Told about every read this broker ends with an error. */
+  onFailure?: (failure: MediaFailure) => void;
 }
 
 /**
@@ -69,6 +83,7 @@ export class MediaBroker {
   private readonly pins = new Map<string, Pin>();
   private readonly windowBytes: number;
   private readonly lingerMs: number;
+  private readonly onFailure: ((failure: MediaFailure) => void) | null;
   private port: MessagePortLike | null = null;
   private listener: ((event: MessageEvent) => void) | null = null;
 
@@ -79,6 +94,7 @@ export class MediaBroker {
   ) {
     this.windowBytes = options.windowBytes ?? MEDIA_WINDOW_BYTES;
     this.lingerMs = options.lingerMs ?? DEFAULT_PIN_LINGER_MS;
+    this.onFailure = options.onFailure ?? null;
   }
 
   /** The pipe carries one port; a fresh offer supersedes the port it replaces. */
@@ -358,7 +374,11 @@ export class MediaBroker {
   private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {
     if (!this.isCurrent(requestId, cursor)) return;
     this.drop(requestId);
-    post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
+    const message = errorMessage(error);
+    post(port, { type: 'cb:media:error', requestId, message });
+    // The body error the Service Worker raises reaches the media element as a
+    // bare network failure, so the reason has to travel tab-side instead.
+    this.onFailure?.({ ticket: cursor.ticket, code: engineErrorCode(error) ?? null, message });
   }
 }
 
