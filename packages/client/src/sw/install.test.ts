@@ -70,6 +70,11 @@ class FakeScope implements ServiceWorkerScopeLike {
 class FakePipe implements MediaPipeLike {
   readonly adopted: Array<{ port: MessagePortLike; clientId?: string }> = [];
   readonly responded: Array<{ url: string; clientId?: string }> = [];
+  portRequests = 0;
+
+  async requestPorts(): Promise<void> {
+    this.portRequests += 1;
+  }
 
   handles(url: URL): boolean {
     return url.pathname.startsWith('/stream/');
@@ -132,6 +137,50 @@ describe('installServiceWorker', () => {
     expect([...scope.caches.cache(APP_SHELL_CACHE).entries.keys()]).toEqual([
       `${ORIGIN}/index.html`,
     ]);
+  });
+
+  it('asks the tabs to re-broker as soon as the worker starts', async () => {
+    const scope = new FakeScope();
+    const pipe = new FakePipe();
+
+    // No `install` or `activate`: a worker the browser restarted gets neither,
+    // and the cursors its predecessor pinned are waiting on this ask.
+    installServiceWorker(scope, { pipe, fetchFn: failingFetch });
+
+    expect(pipe.portRequests).toBe(1);
+  });
+
+  it('holds the fetch that restarted the worker open until the re-broker finishes', async () => {
+    const scope = new FakeScope();
+    const pipe = new FakePipe();
+    let finishRebroker = (): void => {};
+    pipe.requestPorts = () =>
+      new Promise<void>((resolve) => {
+        finishRebroker = resolve;
+      });
+
+    installServiceWorker(scope, { pipe, fetchFn: failingFetch });
+
+    // Script evaluation is not an event, so without this the browser may stop
+    // the worker again before the ask reaches the tabs.
+    const extended: Promise<unknown>[] = [];
+    scope.dispatch('fetch', {
+      request: new Request(`${ORIGIN}/stream/tkt`),
+      respondWith: () => {},
+      waitUntil: (promise) => void extended.push(promise),
+    });
+
+    expect(extended).toHaveLength(1);
+    let settled = false;
+    void Promise.all(extended).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishRebroker();
+    await Promise.all(extended);
+    expect(settled).toBe(true);
   });
 
   it('answers a stream request from the media pipe, naming the client that asked', async () => {

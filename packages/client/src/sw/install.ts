@@ -27,6 +27,8 @@ export interface FetchEventLike {
   /** The window client that issued the request; empty when the browser knows none. */
   readonly clientId?: string;
   respondWith(response: Response | Promise<Response>): void;
+  /** Optional so a caller's fake event need not supply one. */
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 /** The client that sent a message; its `id` is the one `FetchEventLike.clientId` carries. */
@@ -61,7 +63,7 @@ export interface ServiceWorkerScopeLike extends MediaPipeScopeLike {
 }
 
 /** The pipe surface the fetch and message listeners drive. */
-export type MediaPipeLike = Pick<MediaPipe, 'handles' | 'respond' | 'adoptPort'>;
+export type MediaPipeLike = Pick<MediaPipe, 'handles' | 'respond' | 'adoptPort' | 'requestPorts'>;
 
 export interface ServiceWorkerDeps {
   pipe?: MediaPipeLike;
@@ -85,6 +87,8 @@ export function installServiceWorker(
   };
   // A restarted worker gets no fresh `install`, so it re-learns the shell here.
   let learning = refresh().catch(ignore);
+  // It gets no fresh `activate` either — see `MediaPipe.requestPorts`.
+  const recovering = pipe.requestPorts().catch(ignore);
 
   scope.addEventListener('install', (event) => {
     void scope.skipWaiting();
@@ -103,6 +107,9 @@ export function installServiceWorker(
   });
 
   scope.addEventListener('fetch', (event) => {
+    // Script evaluation is not an event, so a worker the browser restarted to
+    // dispatch this fetch may be stopped again before the re-broker finishes.
+    event.waitUntil?.(recovering);
     const request = event.request;
     if (pipe.handles(new URL(request.url))) {
       event.respondWith(pipe.respond(request, event.clientId));

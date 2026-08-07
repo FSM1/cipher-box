@@ -64,6 +64,19 @@ function stalledPort(): FakePort {
   });
 }
 
+/** Streams one window and then sits between pulls, as a buffered element does. */
+async function idleBody(
+  pipe: MediaPipe,
+  port: FakePort,
+  clientId?: string
+): Promise<{ reader: ReadableStreamDefaultReader<Uint8Array>; requestId: number }> {
+  const response = await pipe.respond(streamRequest(), clientId);
+  const reader = response.body!.getReader();
+  expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+  const open = port.sent.find((message) => message.type === 'cb:media:open')!;
+  return { reader, requestId: open.requestId };
+}
+
 const streamRequest = (ticket = 'tkt', range: string | null = 'bytes=0-4'): Request =>
   new Request(`${ORIGIN}/stream/${ticket}`, {
     headers: range === null ? undefined : { range },
@@ -345,6 +358,102 @@ describe('MediaPipe.respond', () => {
     const response = await pending;
     expect(response.status).toBe(503);
     expect(scope.brokered).toHaveLength(2);
+  });
+});
+
+describe('MediaPipe idle bodies', () => {
+  it('ends an idle body as soon as the tab withdraws the stream', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    pipe.adoptPort(port);
+    const { reader, requestId } = await idleBody(pipe, port);
+
+    // What `MediaBroker.revoke` posts: unsolicited, with no pull in flight.
+    port.deliver({ type: 'cb:media:error', requestId, message: 'the stream was revoked' });
+
+    // No timers advanced: the body must not wait out the pull deadline.
+    await expect(reader.read()).rejects.toThrow('the stream was revoked');
+    expect(port.sent).toContainEqual({ type: 'cb:media:close', requestId });
+  });
+
+  it('ends an idle body as soon as its port is replaced', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    pipe.adoptPort(port, 'tab-a');
+    const { reader } = await idleBody(pipe, port, 'tab-a');
+
+    pipe.adoptPort(new FakePort(), 'tab-a');
+
+    await expect(reader.read()).rejects.toThrow(/media port replaced/);
+  });
+
+  it('ignores an unsolicited error posted on a port that owns no such body', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const own = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    const other = new FakePort();
+    pipe.adoptPort(own, 'tab-a');
+    pipe.adoptPort(other, 'tab-b');
+    const { reader, requestId } = await idleBody(pipe, own, 'tab-a');
+
+    other.deliver({ type: 'cb:media:error', requestId, message: 'not yours to fail' });
+
+    expect((await reader.read()).value).toEqual(new Uint8Array([2]));
+  });
+
+  it('ignores an unsolicited error for a body that already ended', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    pipe.adoptPort(port);
+    const { reader, requestId } = await idleBody(pipe, port);
+    await reader.cancel();
+
+    expect(() =>
+      port.deliver({ type: 'cb:media:error', requestId, message: 'too late' })
+    ).not.toThrow();
+    expect(port.countOf('cb:media:close')).toBe(1);
+  });
+
+  it('retries the open as soon as the port it was sent on is replaced', async () => {
+    vi.useFakeTimers();
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const silent = new FakePort();
+    pipe.adoptPort(silent, 'tab-a');
+
+    const pending = pipe.respond(streamRequest(), 'tab-a');
+    // Flushes the open onto the port without spending any of its deadline.
+    await vi.advanceTimersByTimeAsync(0);
+    const live = streamingPort([new Uint8Array([7])]);
+    pipe.adoptPort(live, 'tab-a');
+
+    const response = await pending;
+    expect(response.status).toBe(206);
+    expect(silent.countOf('cb:media:open')).toBe(1);
+    expect(live.countOf('cb:media:open')).toBe(1);
+  });
+});
+
+describe('MediaPipe.requestPorts', () => {
+  it('asks every window client to re-broker when the worker holds no port', async () => {
+    const scope = new FakeScope();
+    const pipe = new MediaPipe(scope, TIMEOUTS);
+
+    await pipe.requestPorts();
+
+    expect(scope.brokeredTo).toEqual(['tab-a', 'tab-b']);
+  });
+
+  it('asks nobody while it holds a port, leaving a paused body its cursor', async () => {
+    const scope = new FakeScope();
+    const pipe = new MediaPipe(scope, TIMEOUTS);
+    const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    pipe.adoptPort(port, 'tab-a');
+    const { reader } = await idleBody(pipe, port, 'tab-a');
+
+    await pipe.requestPorts();
+
+    expect(scope.brokered).toEqual([]);
+    expect(port.countOf('cb:media:close')).toBe(0);
+    expect((await reader.read()).value).toEqual(new Uint8Array([2]));
   });
 });
 
