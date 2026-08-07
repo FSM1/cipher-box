@@ -17,6 +17,11 @@ export interface Auth {
   isAuthenticated: boolean;
   /** True while the tab is still assembling its engine or Core Kit session. */
   isReady: boolean;
+  /**
+   * True once the tab knows it has no session — the check settled signed out,
+   * or Core Kit could never answer it.
+   */
+  isSignedOut: boolean;
   /** True while a restore, login, or logout is in flight. */
   isBusy: boolean;
   /** The last failure, already stripped of anything secret-shaped. */
@@ -42,13 +47,14 @@ export function useAuth(): Auth {
   const client = useEngine();
   const secrets = useLoginSecretSource();
   const rebuildEngine = useRebuildEngine();
-  const { session, isRestoring, error: coreKitError } = useCoreKit();
+  const { session, status, error: coreKitError } = useCoreKit();
   const { isAuthenticated } = useAuthState();
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isReady = client !== null && session !== null && !isRestoring;
+  const isReady = client !== null && session !== null && status === 'ready';
+  const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
 
   /** Serializes the auth transitions; a collision rejects rather than no-ops. */
   const exclusively = useCallback(async (step: () => Promise<void>): Promise<void> => {
@@ -153,6 +159,7 @@ export function useAuth(): Auth {
   return {
     isAuthenticated,
     isReady,
+    isSignedOut,
     isBusy,
     error: error ?? coreKitError,
     loginWithGoogle,

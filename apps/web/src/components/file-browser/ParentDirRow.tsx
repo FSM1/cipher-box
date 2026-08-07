@@ -18,6 +18,10 @@ export function ParentDirRow({ onActivate }: ParentDirRowProps) {
       data-testid="parent-dir-row"
     >
       <div className="file-list-item-row-top" role="gridcell">
+        {/* `[..]` is not selectable, so it holds the column open instead. A
+            flex item, not padding: it inherits the row's gap rather than
+            restating it. */}
+        <span className="file-list-item-select-gap" aria-hidden="true" />
         <span className="file-list-item-icon" aria-hidden="true">
           [..]
         </span>

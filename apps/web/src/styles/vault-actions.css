@@ -35,6 +35,89 @@
 }
 
 /* ==========================================================================
+   Selection
+   ========================================================================== */
+
+.file-list {
+  --selection-box: 13px;
+}
+
+.file-list-item-select,
+.file-list-select-all,
+.file-list-item-select-gap {
+  flex-shrink: 0;
+  width: var(--selection-box);
+  height: var(--selection-box);
+  margin: 0;
+  accent-color: var(--color-green-primary);
+}
+
+.file-list-item-select,
+.file-list-select-all {
+  cursor: pointer;
+}
+
+/* The header row has no flex gap of its own to inherit. */
+.file-list-select-all {
+  margin-right: var(--spacing-xs);
+}
+
+.file-list-select-all:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.file-list-item--selected {
+  background-color: var(--color-green-darker);
+}
+
+.selection-action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border: var(--border-thickness) solid var(--color-green-primary);
+  background-color: var(--color-green-darker);
+}
+
+.selection-action-bar-count {
+  flex: 1;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.selection-action-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.selection-action-bar-delete:hover:not(:disabled) {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  box-shadow: none;
+}
+
+.selection-action-bar-clear {
+  padding: 0 var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.selection-action-bar-clear:hover:not(:disabled),
+.selection-action-bar-clear:focus-visible {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+}
+
+/* ==========================================================================
    Row Menu Trigger
    ========================================================================== */
 

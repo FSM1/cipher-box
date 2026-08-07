@@ -13,15 +13,25 @@ import { useEngine } from '../providers/EngineProvider';
 /** Which command is in flight, or `null` when the browser is idle. */
 export type VaultCommand = 'create' | 'rename' | 'relink' | 'delete';
 
+/** Which nodes a batch dispatch was accepted for; the rest were refused. */
+export interface BatchOutcome {
+  /** `true` when the engine accepted every node. */
+  ok: boolean;
+  /** The nodes the engine accepted, in listing order. */
+  accepted: readonly Uint8Array[];
+}
+
 export interface VaultActions {
   busy: VaultCommand | null;
   /** The last dispatch's failure, cleared by the next dispatch. */
   error: string | null;
-  /** Every action resolves `true` once the engine accepted the command. */
+  /** A single-node action resolves `true` once the engine accepted it. */
   createFolder(parent: Uint8Array, name: string): Promise<boolean>;
   rename(node: Uint8Array, newName: string): Promise<boolean>;
-  move(node: Uint8Array, newParent: Uint8Array): Promise<boolean>;
-  remove(node: Uint8Array): Promise<boolean>;
+  /** One `facade.relink` per node — a batch is not a command of its own. */
+  move(nodes: readonly Uint8Array[], newParent: Uint8Array): Promise<BatchOutcome>;
+  /** One `facade.delete` per node. */
+  remove(nodes: readonly Uint8Array[]): Promise<BatchOutcome>;
 }
 
 export function useVaultActions(): VaultActions {
@@ -57,6 +67,35 @@ export function useVaultActions(): VaultActions {
     [client, run]
   );
 
+  /**
+   * Dispatches one command per node in listing order, attempting every node
+   * even after one is refused — the nodes are independent. The outcome names
+   * the accepted ones so the caller can retire exactly those.
+   */
+  const runBatch = useCallback(
+    async (
+      command: VaultCommand,
+      nodes: readonly Uint8Array[],
+      dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<void>
+    ): Promise<BatchOutcome> => {
+      const accepted: Uint8Array[] = [];
+      const ok = await dispatchOrFail(command, async (facade) => {
+        const refusals: unknown[] = [];
+        for (const node of nodes) {
+          try {
+            await dispatch(facade, node);
+            accepted.push(node);
+          } catch (failure: unknown) {
+            refusals.push(failure);
+          }
+        }
+        if (refusals.length > 0) throw refusals[0];
+      });
+      return { ok, accepted };
+    },
+    [dispatchOrFail]
+  );
+
   return {
     busy,
     error,
@@ -69,12 +108,13 @@ export function useVaultActions(): VaultActions {
       [dispatchOrFail]
     ),
     move: useCallback(
-      (node, newParent) => dispatchOrFail('relink', (facade) => facade.relink(node, newParent)),
-      [dispatchOrFail]
+      (nodes, newParent) =>
+        runBatch('relink', nodes, (facade, node) => facade.relink(node, newParent)),
+      [runBatch]
     ),
     remove: useCallback(
-      (node) => dispatchOrFail('delete', (facade) => facade.delete(node)),
-      [dispatchOrFail]
+      (nodes) => runBatch('delete', nodes, (facade, node) => facade.delete(node)),
+      [runBatch]
     ),
   };
 }

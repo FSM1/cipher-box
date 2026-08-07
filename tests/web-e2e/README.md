@@ -10,7 +10,8 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 ## What it covers
 
 - the front door renders every built login method
-- a tab with no session lists no vault contents
+- an unauthenticated deep link is returned to the front door and lists no vault
+  contents
 - a cold start reaches a settled, empty vault at its root; the chrome renders
   it, and the event taps saw the snapshot that produced it
 - signing out returns the tab to the front door

@@ -12,11 +12,12 @@ test('the front door offers every built login method', async ({ page }) => {
   await expect(login.walletButton).toBeVisible();
 });
 
-test('a tab with no session lists nothing', async ({ page }) => {
+test('an unauthenticated deep link lands on the front door', async ({ page }) => {
   const files = new FilesPage(page);
   await files.goto();
 
-  await expect(files.checkingSession).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(new LoginPage(page).googleButton).toBeVisible();
   await expect(files.browser).toHaveCount(0);
 });
 

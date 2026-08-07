@@ -2,12 +2,19 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { errorMessage } from '../lib/errorMessage';
 import type { CoreKitSession } from './coreKit';
 
+/** Whether this tab knows if it has a session. */
+export type CoreKitStatus = 'checking' | 'ready' | 'unavailable';
+
+/** Generous, so a slow-but-working restore still lands `ready`. */
+const RESTORE_DEADLINE_MS = 10_000;
+
+const UNREACHABLE = 'the login provider is not responding — check your connection and reload';
+
 export interface CoreKitContextValue {
   /** `null` until the session is built and its restore attempt has settled. */
   session: CoreKitSession | null;
-  /** True while the mount-time session restore is still in flight. */
-  isRestoring: boolean;
-  /** Why Core Kit is unusable at all — a missing or rejected build config. */
+  status: CoreKitStatus;
+  /** Why Core Kit is unusable at all — a bad build config, or silence. */
   error: string | null;
 }
 
@@ -28,7 +35,7 @@ export interface CoreKitProviderProps {
 export function CoreKitProvider({ createSession, children }: CoreKitProviderProps) {
   const [value, setValue] = useState<CoreKitContextValue>({
     session: null,
-    isRestoring: true,
+    status: 'checking',
     error: null,
   });
   const factory = useRef(createSession);
@@ -41,20 +48,32 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
       session.current ??= factory.current();
       restore.current ??= session.current.restore();
     } catch (error) {
-      setValue({ session: null, isRestoring: false, error: errorMessage(error) });
+      setValue({ session: null, status: 'unavailable', error: errorMessage(error) });
       return;
     }
 
-    const settled = { session: session.current, isRestoring: false, error: null };
+    // A restore that never settles would hold every route gating on this at
+    // `checking` forever, so silence past the deadline is a verdict.
+    const deadline = setTimeout(() => {
+      if (live) setValue({ session: null, status: 'unavailable', error: UNREACHABLE });
+    }, RESTORE_DEADLINE_MS);
+
+    const settled: CoreKitContextValue = {
+      session: session.current,
+      status: 'ready',
+      error: null,
+    };
     // A failed restore just means there is no session to resume; the methods
     // below still work, and a real breakage surfaces when one is used.
-    restore.current.then(
-      () => live && setValue(settled),
-      () => live && setValue(settled)
-    );
+    const settle = () => {
+      clearTimeout(deadline);
+      if (live) setValue(settled);
+    };
+    restore.current.then(settle, settle);
 
     return () => {
       live = false;
+      clearTimeout(deadline);
     };
   }, []);
 

@@ -9,12 +9,12 @@ import { AppShell } from '../components/layout/AppShell';
  * on facade auth state (blueprint/web-client.md "Composition").
  */
 export function FilesPage() {
-  const { isAuthenticated, isReady } = useAuth();
+  const { isAuthenticated, isSignedOut } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (isReady && !isAuthenticated) navigate('/');
-  }, [isAuthenticated, isReady, navigate]);
+    if (isSignedOut) navigate('/');
+  }, [isSignedOut, navigate]);
 
   return (
     <AppShell>
