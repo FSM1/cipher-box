@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { EngineRequestError } from '../correlatedTransport.js';
 import { FakePort } from '../sw/testDoubles.js';
 import type { MediaReader } from './broker.js';
-import { MEDIA_PORT_OFFER, MEDIA_PORT_REQUEST, type MediaResponse } from './protocol.js';
+import {
+  MEDIA_PORT_OFFER,
+  MEDIA_PORT_REQUEST,
+  STREAM_PATH_PREFIX,
+  type MediaResponse,
+} from './protocol.js';
 import {
   MediaService,
   type MediaStreamFailure,
@@ -267,9 +272,8 @@ describe('MediaService', () => {
       new EngineRequestError('the adoption gate refused the record', 'trustViolation'),
     ];
     const { container, worker, service, channels } = setup({
+      ...reader,
       openContentStream: () => Promise.reject(refusals.shift() ?? new Error('spent')),
-      readStream: (_handle, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
-      closeStream: () => Promise.resolve(),
     });
     container.controller = worker;
     await service.start();
@@ -286,7 +290,7 @@ describe('MediaService', () => {
       port.postMessage({
         type: 'cb:media:open',
         requestId,
-        ticket: url.slice('/stream/'.length),
+        ticket: url.slice(STREAM_PATH_PREFIX.length),
         range: null,
       });
       port.postMessage({ type: 'cb:media:pull', requestId });
@@ -299,8 +303,6 @@ describe('MediaService', () => {
     stop();
     await read(3);
 
-    // A ceiling is not a verdict: only one of these is worth trying again, and
-    // the difference is the engine's code, not the wording.
     expect(seen).toEqual([
       { url: ceiling, message: 'too many read streams are already open', recoverable: true },
       { url: verdict, message: 'the adoption gate refused the record', recoverable: false },

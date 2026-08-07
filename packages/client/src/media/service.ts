@@ -4,27 +4,22 @@
  * ticket URLs the UI hands to a media element.
  */
 
-import { isRecoverableEngineError } from '../correlatedTransport.js';
+import { fanOut } from '../correlatedTransport.js';
 import { MediaBroker, type MediaFailure, type MediaReader } from './broker.js';
 import {
   MEDIA_PORT_OFFER,
   MEDIA_PORT_REQUEST,
-  STREAM_PATH_PREFIX,
   ticketFromUrl,
   type MediaPortOffer,
 } from './protocol.js';
 import { StreamRegistry, type MediaSource } from './registry.js';
 
+const noop = (): void => undefined;
+
 /** A stream that stopped, told to whoever holds the URL it stopped on. */
-export interface MediaStreamFailure {
+export interface MediaStreamFailure extends Omit<MediaFailure, 'ticket'> {
   /** The URL `createStreamUrl` returned, so a holder can match its own. */
   readonly url: string;
-  readonly message: string;
-  /**
-   * The engine refused over a ceiling a later read can clear rather than over a
-   * verdict, so the same request is worth making again.
-   */
-  readonly recoverable: boolean;
 }
 
 /** The `ServiceWorker` surface the offer needs. */
@@ -92,17 +87,13 @@ export class MediaService {
    * to hear it here.
    */
   onStreamError(listener: (failure: MediaStreamFailure) => void): () => void {
+    if (this.disposed) return noop;
     this.failureListeners.add(listener);
     return () => this.failureListeners.delete(listener);
   }
 
-  private report(failure: MediaFailure): void {
-    const reported: MediaStreamFailure = {
-      url: `${STREAM_PATH_PREFIX}${failure.ticket}`,
-      message: failure.message,
-      recoverable: isRecoverableEngineError(failure.code ?? undefined),
-    };
-    for (const listener of [...this.failureListeners]) listener(reported);
+  private report({ ticket, ...failure }: MediaFailure): void {
+    fanOut(this.failureListeners, { ...failure, url: this.registry.urlFor(ticket) });
   }
 
   /**
