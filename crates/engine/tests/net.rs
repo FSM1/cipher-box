@@ -998,6 +998,108 @@ fn revive_fails_closed_when_the_recovery_endpoint_is_unauthorized() {
     }
 }
 
+#[test]
+fn revive_prefers_a_fresher_corroborating_record_over_the_recovery_endpoint() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(17);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // A replaying recovery endpoint serves an old but validly signed record,
+    // while an endpoint that still holds the name serves the real head.
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafystale", 3, 0)));
+    device.http.enqueue_response(ok_200()); // register for the re-mint
+    world.record_store.seed_record(
+        &world.record_store.endpoints()[0],
+        name.as_str(),
+        record(&s, b"/ipfs/bafyfresh", 9, 0),
+    );
+
+    let outcome = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect("revive");
+
+    assert_eq!(outcome, PublishOutcome::Published { sequence: 10 });
+    for endpoint in world.record_store.endpoints() {
+        let bytes = world
+            .record_store
+            .record_at(&endpoint, name.as_str())
+            .unwrap();
+        let verified = IpnsRecord::unmarshal(&bytes)
+            .unwrap()
+            .verify(&name)
+            .unwrap();
+        assert_eq!(verified.sequence, 10);
+        assert_eq!(
+            verified.value, b"/ipfs/bafyfresh",
+            "the CID rides out of the same record as the sequence"
+        );
+    }
+}
+
+#[test]
+fn revive_fails_closed_when_every_source_is_below_the_durable_floor() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(18);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    // This device durably adopted sequence 9; the recovery endpoint replays 3.
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), 9),
+    )
+    .unwrap();
+    device
+        .http
+        .enqueue_response(ok_200_body(record(&s, b"/ipfs/bafyreplayed", 3, 0)));
+
+    let error = block_on(revive(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        ReviveRequest {
+            name: &name,
+            signer: &s,
+            content_cids: Vec::new(),
+        },
+    ))
+    .expect_err("a source below the durable floor is a replay, not a lapse");
+    assert_eq!(
+        error,
+        ReviveError::StaleSource {
+            floor: 9,
+            recovered: 3
+        }
+    );
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "nothing is re-minted from a replayed source"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // An end-to-end multi-day EOL timeline on virtual time: publish → live →
 // renewal → lapse → revival, one narrative over ~250 virtual days.
