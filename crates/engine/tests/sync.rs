@@ -595,7 +595,7 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
         assert_eq!(adopted.index, 0);
         // The vault pointer is the root anchor: cold-seed through the same
         // checked, fail-closed seam production's `cold_start` uses.
-        floor::cold_seed_checked(&floors, &adopted.repoint, floor::AnchorRole::Root)
+        floor::cold_seed_checked(&floors, &adopted.repoint, &ROOT_SCOPE)
             .await
             .unwrap();
 
