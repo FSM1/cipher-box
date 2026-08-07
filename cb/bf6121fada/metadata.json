@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cbbf6121fada",
+  "strategy": "manual-commit",
+  "branch": "rb-1122",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "apps/web/src/components/file-browser/FileBrowserActions.test.tsx",
+    "apps/web/src/components/file-browser/FileBrowserActions.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/bf6121fada/0/metadata.json",
+      "transcript": "/cb/bf6121fada/0/full.jsonl",
+      "compact_transcript": "/cb/bf6121fada/0/transcript.jsonl",
+      "content_hash": "/cb/bf6121fada/0/content_hash.txt",
+      "prompt": "/cb/bf6121fada/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 25131,
+    "cache_read_tokens": 9110833,
+    "output_tokens": 17740,
+    "api_call_count": 28
+  }
+}
