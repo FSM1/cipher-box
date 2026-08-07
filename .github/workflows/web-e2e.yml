@@ -1,9 +1,9 @@
 # The web e2e smoke slice (blueprint/testing.md). The suite runs against the
 # production static build, so it needs the engine WASM: a caller passes
-# `wasm-artifact` to hand over the module its run already built, and only a
-# standalone dispatch falls back to building one here. It builds the bundle
-# twice: once as it ships, once with `VITE_E2E_HOOK` for the introspection
-# seam. The suite asserts the shipping one carries no hook.
+# `wasm-artifact` to hand over the module its run already built, and a caller
+# that does not gets the module built here. It builds the bundle twice: once as
+# it ships, once with `VITE_E2E_HOOK` for the introspection seam. The suite
+# asserts the shipping one carries no hook.
 name: Web E2E Tests
 
 on:
@@ -77,8 +77,14 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      # `target/release` is the host tree — under `--target wasm32-…` cargo puts
-      # proc macros and build scripts there, so omitting it recompiles them.
+      # Fail fast on a missing or malformed handover, before the stack boots.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.wasm-artifact != ''
+        with:
+          name: ${{ inputs.wasm-artifact }}
+          path: apps/web/src/wasm
+
+      # Same path set as `ci.yml`'s `Web Engine WASM` cache, for the same reason.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.wasm-artifact == ''
         with:
@@ -89,11 +95,7 @@ jobs:
             target/release
             target/wasm32-unknown-unknown
           key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}
-          # `Web Engine WASM` caches the same paths off the same lockfile, so
-          # fall back to its entry rather than paying a cold wasm build twice.
-          restore-keys: |
-            web-e2e-cargo-
-            wasm-engine-cargo-
+          restore-keys: web-e2e-cargo-
 
       - uses: ./.github/actions/wasm-bindgen-cli
         if: inputs.wasm-artifact == ''
@@ -122,12 +124,6 @@ jobs:
 
       # One engine module feeds both bundles below; only the hook flag differs
       # between them.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: inputs.wasm-artifact != ''
-        with:
-          name: ${{ inputs.wasm-artifact }}
-          path: apps/web/src/wasm
-
       - name: Build the engine WASM
         if: inputs.wasm-artifact == ''
         run: pnpm --filter @cipherbox/web run build:wasm

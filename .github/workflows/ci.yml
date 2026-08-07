@@ -224,14 +224,16 @@ jobs:
 
       - uses: ./.github/actions/wasm-bindgen-cli
 
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: 'package.json'
 
-      # The script behind `@cipherbox/web run build:wasm`, which has no npm
-      # dependencies — so this job needs no pnpm install.
+      # No `pnpm install`: the script this runs shells out to cargo and
+      # wasm-bindgen and pulls in no npm dependency.
       - name: Build the engine WASM
-        run: node apps/web/scripts/build-wasm.mjs
+        run: pnpm --filter @cipherbox/web run build:wasm
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -242,11 +244,16 @@ jobs:
 
   # The bundle that fingerprints the engine artifact. It consumes the module
   # `wasm-engine` produced, so it carries no Rust toolchain at all.
+  #
+  # Gated on `lint` rather than the usual `!failure()`: branch protection
+  # requires this context by name, and a skipped required context counts as a
+  # pass. So a failed `wasm-engine` must leave this job running and failing at
+  # the download, not skipped and green.
   web-bundle:
     name: Web Bundle
     needs: [changes, lint, wasm-engine]
     if: |
-      !failure() && !cancelled() &&
+      !cancelled() && needs.lint.result == 'success' &&
       needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -873,11 +880,13 @@ jobs:
             exit 1
           fi
 
+  # Same fail-closed gating as web-bundle: a failed `wasm-engine` must surface
+  # as a failed suite, not a skipped one.
   web-e2e:
     name: Web E2E Smoke
     needs: [changes, lint, wasm-engine]
     if: |
-      !failure() && !cancelled() &&
+      !cancelled() && needs.lint.result == 'success' &&
       (needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true')
     permissions:
       contents: read
@@ -888,33 +897,24 @@ jobs:
   # Single always-reporting gate for the smoke slice, mirroring
   # contract-suite-result: branch protection requires this stable context, so a
   # PR that touches nothing the suite covers is not blocked forever while a real
-  # smoke failure still fails this gate. It covers the engine build too, because
-  # a `wasm-engine` failure only *skips* the suite, which would otherwise read
-  # as a pass.
+  # smoke failure still fails this gate.
   web-e2e-result:
     name: Web E2E Smoke Result
-    needs: [wasm-engine, web-e2e]
+    needs: web-e2e
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Require the engine build and smoke slice to pass or be skipped
+      - name: Require the smoke slice to pass or be skipped
         env:
-          WASM_ENGINE_RESULT: ${{ needs.wasm-engine.result }}
           WEB_E2E_RESULT: ${{ needs.web-e2e.result }}
         run: |
-          status=0
-          for entry in "wasm-engine=${WASM_ENGINE_RESULT}" "web-e2e=${WEB_E2E_RESULT}"; do
-            job="${entry%%=*}"
-            result="${entry#*=}"
-            echo "${job} result: ${result}"
-            if [ "${result}" = 'failure' ] || [ "${result}" = 'cancelled' ]; then
-              echo "::error::${job} ${result}"
-              status=1
-            fi
-          done
-          exit "${status}"
+          echo "web-e2e result: ${WEB_E2E_RESULT}"
+          if [ "${WEB_E2E_RESULT}" = 'failure' ] || [ "${WEB_E2E_RESULT}" = 'cancelled' ]; then
+            echo "::error::web-e2e ${WEB_E2E_RESULT}"
+            exit 1
+          fi
 
   desktop-build:
     name: Desktop Build
