@@ -1201,8 +1201,11 @@ where
     /// that filed them in the first place.
     ///
     /// This owner-re-signs the set it builds, so both carried halves are proven
-    /// before a single row is re-minted, and every field the new entries carry is
-    /// either derived here or copied from what the owner already signed.
+    /// before a single row is re-minted, and every field a re-minted commitment
+    /// entry carries is either derived here or copied from what the owner already
+    /// signed. A ledger row additionally carries forward the fields no owner
+    /// signature covers — `expiresAt`, `recipientIdentityPk`, and the preserved
+    /// unknowns.
     fn remint_grants(
         &self,
         node: &RepublishedNode,
@@ -1229,13 +1232,11 @@ where
             if !entry_tag_is_bound(self.owner_enc_secret, entry, old_name) {
                 return Err(WritePublishError::Rejected);
             }
-            let recipient_identity = EcdsaVerifier::from_sec1(&entry.recipient_identity_pk)
-                .ok_or(WritePublishError::Rejected)?;
             let recipient_enc = X25519Public::from_bytes(entry.recipient_enc_pk)
                 .ok_or(WritePublishError::Rejected)?;
             let row = mint_grant_row(
                 self.owner_enc_secret,
-                &recipient_identity,
+                entry.recipient_identity_pk,
                 &recipient_enc,
                 &self.scope_id,
                 new_name,
@@ -1623,7 +1624,7 @@ mod tests {
         grant_section_bytes, open_ascent_link, open_grant_blob, open_owner_write_blob,
         open_read_body, seal_read_body, set_grant_section, sign_grant_set, verify_grant_set,
     };
-    use cipherbox_core::suite::ecdsa::EcdsaSignature;
+    use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
@@ -3467,7 +3468,7 @@ mod tests {
             let identity = EcdsaSigner::from_scalar(&identity_scalar).expect("valid scalar");
             mint_grant_row(
                 &owner_enc(),
-                &identity.verifying_key(),
+                identity.verifying_key().to_sec1(),
                 &enc.public(),
                 &SCOPE,
                 name.as_str().as_bytes(),
@@ -3697,6 +3698,72 @@ mod tests {
         assert!(
             published.commitment.entries.is_sorted_by_key(|e| e.tag),
             "the owner signs a tag order, never the one a write-grantee authored"
+        );
+    }
+
+    #[test]
+    fn the_wave_refuses_a_committed_pseudonym_key_the_mint_does_not_reproduce_release_active() {
+        // The owner re-signs the entries the re-mint builds, so a committed
+        // pseudonym key the pairwise mint does not reproduce would be re-signed
+        // into structure-signing authority the owner never derived. The refusal is
+        // a runtime `Err`, never a debug_assert. Active in release.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].commitment_entry.pseudonym_pk = [0xaa; 32];
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn a_ledger_row_whose_identity_key_is_not_a_curve_point_does_not_stop_the_wave() {
+        // `recipientIdentityPk` feeds no derivation and no owner signature covers
+        // it, so a committed write-grantee can set a victim's to any 33 bytes.
+        // Parsing it at the re-mint would hand that grantee a free veto over the
+        // very wave that revokes them; the row carries the bytes forward instead.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].ledger_entry.recipient_identity_pk = [0xff; IDENTITY_PUBLIC_LEN];
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+        let tag = recipient_blinded_tag(
+            &read_grantee(),
+            &owner_enc().public(),
+            moved.new_name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        assert_eq!(
+            body.grant_ledger
+                .iter()
+                .find(|e| e.tag == tag)
+                .expect("the grantee's re-minted ledger row")
+                .recipient_identity_pk,
+            [0xff; IDENTITY_PUBLIC_LEN],
+            "carried verbatim, like every other field no owner signature covers"
         );
     }
 

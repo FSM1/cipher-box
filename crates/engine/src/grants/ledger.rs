@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission};
-use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::UnixMillis;
@@ -126,9 +126,14 @@ pub struct GrantRow {
 /// A read entry's pseudonym never authorizes a structure but is derived honestly
 /// so a later write upgrade stays consistent. `None` on a non-contributory ECDH —
 /// a degenerate recipient key the caller refuses fail-closed.
+///
+/// `recipient_identity_pk` is carried into the row uninterpreted: nothing here
+/// derives from it, and it is the one input a re-mint copies from a ledger row a
+/// write-grantee authored, so rejecting bytes that are not a curve point would
+/// hand that author a veto over the owner's own re-mint.
 pub fn mint_grant_row(
     owner_enc_secret: &X25519Secret,
-    recipient_identity_pk: &EcdsaVerifier,
+    recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     recipient_enc_pub: &X25519Public,
     scope_id: &[u8; 16],
     scope_root_ipns_name: &[u8],
@@ -143,7 +148,7 @@ pub fn mint_grant_row(
         tag,
         commitment_entry: GrantSetEntry::new(tag, permission, pseudonym_pk),
         ledger_entry: GrantLedgerEntry::new(
-            recipient_identity_pk.to_sec1(),
+            recipient_identity_pk,
             recipient_enc_pub.to_bytes(),
             permission,
             tag,
@@ -221,7 +226,6 @@ pub fn enforce_committed_ledger(
 mod tests {
     use super::*;
     use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
-    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
     use core::num::NonZeroU64;
 
     fn commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {

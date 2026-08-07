@@ -48,12 +48,11 @@ const EPH_GRANT_BASE: u8 = 0x60;
 
 /// The inputs that diverge between owner-root fixtures.
 ///
-/// Nonces and HPKE ephemerals are fixed, so every varying plaintext must sit on
-/// its own key axis: the read body's key and the write body's key both come
-/// from `root_id` alone, so specs with differing `children`, `child_scope_index`
-/// or `grants` need differing `root_id`; the owner-write-blob's HPKE key
-/// comes from `owner_enc` alone, so specs with differing `owner_write_blob_epoch`
-/// need differing `owner_enc`.
+/// Nonces and HPKE ephemerals are fixed constants, and the body keys derive from
+/// `root_id` alone (the owner-write blob's HPKE key from `owner_enc` alone), so
+/// two specs sharing those seal differing plaintexts under one `(key, nonce)`
+/// pair. Nothing in this corpus is secret, so that costs the fixtures nothing —
+/// but it is why they are a gate/resolve harness and never a KAT source.
 pub struct OwnerRootSpec<'a> {
     /// Signs the grant-set commitment; its verifying key is the owner identity
     /// the adoption gate checks against.

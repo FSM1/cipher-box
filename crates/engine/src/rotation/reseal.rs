@@ -62,6 +62,7 @@ const _: () = assert!(MAX_RETAINED_HISTORY_LINKS <= MAX_HISTORY_LINKS);
 
 /// The identity, recipients, and signing capability of one scope root — the
 /// context-that-does-not-change-across-epochs half of a re-seal.
+#[derive(Clone, Copy)]
 pub struct ScopeRootIdentity<'a> {
     /// The envelope format+suite version.
     pub v: u64,
@@ -76,9 +77,11 @@ pub struct ScopeRootIdentity<'a> {
     /// `Some` binds every ledger row to the tag its own `recipientEncPk` derives
     /// at `ipns_name` ([`entry_tag_is_bound`]) before anything is sealed.
     ///
-    /// `None` is the write-grantee re-sealer: it holds no owner encryption
-    /// subkey, so it derives no tag and re-wraps the committed rows as they
-    /// stand — the residual [`ResealError::TagNotBoundToRecipient`] names.
+    /// `None` derives no tag and re-wraps the committed rows as they stand — the
+    /// residual [`ResealError::TagNotBoundToRecipient`] names. A write-grantee
+    /// re-sealer can pass nothing else; an owner-held leg that passes `None`
+    /// anyway (the sweep, and a root plan built outside this module) leaves that
+    /// residual open on itself.
     pub owner_enc_secret: Option<&'a X25519Secret>,
     /// The parent node seed the ascent link derives its keypair from; `None` at
     /// the vault root, which carries no ascent link.
@@ -670,7 +673,7 @@ mod tests {
                 let identity = EcdsaSigner::from_scalar(&identity_scalar).unwrap();
                 mint_grant_row(
                     &self.owner_enc,
-                    &identity.verifying_key(),
+                    identity.verifying_key().to_sec1(),
                     &grantee.public(),
                     &SCOPE,
                     MINTED_NAME,

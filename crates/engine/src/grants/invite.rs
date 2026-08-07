@@ -298,7 +298,7 @@ pub fn mint_invite_grant(
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
     let mut row = mint_grant_row(
         owner_enc_secret,
-        &invitee.identity_pk(),
+        invitee.identity_pk().to_sec1(),
         &invitee.enc_public(),
         scope_id,
         ipns_name.as_str().as_bytes(),
@@ -562,7 +562,7 @@ pub fn convert_invite_claim(
     }
     let mut row = mint_grant_row(
         owner.enc_secret,
-        &contact.identity_pk(),
+        contact.identity_pk().to_sec1(),
         &contact.enc_subkey(),
         scope.scope_id,
         name,
@@ -889,7 +889,7 @@ mod tests {
         let contact_identity = EcdsaSigner::from_scalar(&[0x78; 32]).expect("valid scalar");
         let personal = mint_grant_row(
             &owner_enc(),
-            &contact_identity.verifying_key(),
+            contact_identity.verifying_key().to_sec1(),
             &contact.public(),
             &SCOPE,
             &scope_name(),
@@ -1402,7 +1402,7 @@ mod tests {
         let grantee_enc = X25519Secret::from_scalar([0x7b; 32]);
         let grantee = mint_grant_row(
             &owner_enc(),
-            &grantee_identity.verifying_key(),
+            grantee_identity.verifying_key().to_sec1(),
             &grantee_enc.public(),
             &SCOPE,
             &scope_name(),
