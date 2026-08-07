@@ -320,6 +320,7 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSigne
         child_scope_index: Vec::new(),
         parent_node_seed: None,
         owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+        grants: Vec::new(),
     });
     let owner_identity_pk = hex::encode(owner_identity.verifying_key().to_sec1());
     let grantee = Ed25519Signer::from_seed(GATE_KAT_GRANTEE_PSEUDONYM_SEED);

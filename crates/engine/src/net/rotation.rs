@@ -19,14 +19,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, Envelope, GrantSection, PreservedFields, ReadBody,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, WriteBody, decode_write_body, open_owner_blob,
-    sign_grant_set, unseal,
+    AadContext, ChildScopeRef, Envelope, GrantLedgerEntry, GrantSection, GrantSetEntry,
+    PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, WriteBody,
+    decode_write_body, open_owner_blob, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::adopter::RootAdopter;
@@ -44,6 +44,7 @@ use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::Entropy;
 use crate::gate::{GateError, RejectionReason, floor};
+use crate::grants::{enforce_committed_ledger, entry_tag_is_bound, mint_grant_row};
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
@@ -51,7 +52,7 @@ use crate::rotation::{
     CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, RepointChannel,
     RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
     ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WritePublishError,
-    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, reseal_scope_root,
+    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name, reseal_scope_root,
 };
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
@@ -954,6 +955,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
+        | ResealError::TagNotBoundToRecipient
         | ResealError::AscentLinkMismatch
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
@@ -1174,6 +1176,14 @@ fn open_write_body(
     decode_write_body(&plaintext).map_err(|_| ResolveFailure::Rejected)
 }
 
+/// A moved root's grant set, re-minted at its new name: the entries the owner
+/// re-signs and the ledger rows the write body carries, built together so the
+/// two cannot drift apart.
+struct RemintedGrants {
+    entries: Vec<GrantSetEntry>,
+    ledger: Vec<GrantLedgerEntry>,
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWaveNet<'_, T, H, C, F, Sch, E>
 where
     T: RecordTransport + Clone + 'static,
@@ -1181,6 +1191,87 @@ where
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
+    /// Re-mint every committed grant at the moved root's new name.
+    ///
+    /// A blinded tag binds the scope root's `ipnsName` (`kdf::blinded_tag`) and a
+    /// write rotation moves that name, so a grant set carried through as it
+    /// stands republishes tags no grantee can re-derive — which
+    /// [`classify`](crate::grants::classify) reads as the definitive revocation
+    /// of the entire set. The rows are re-minted from the owner–recipient ECDH
+    /// that filed them in the first place.
+    ///
+    /// This owner-re-signs the set it builds, so both carried halves are proven
+    /// before a single row is re-minted, and every field a re-minted commitment
+    /// entry carries is either derived here or copied from what the owner already
+    /// signed. A ledger row additionally carries forward the fields no owner
+    /// signature covers — `expiresAt`, `recipientIdentityPk`, and the preserved
+    /// unknowns.
+    fn remint_grants(
+        &self,
+        node: &RepublishedNode,
+        plane: &RootPlane,
+    ) -> Result<RemintedGrants, WritePublishError> {
+        let ledger = &plane.write_body.grant_ledger;
+        enforce_committed_ledger(&plane.section.commitment, ledger)
+            .map_err(|_| WritePublishError::Rejected)?;
+        let old_name = plane.section.commitment.ipns_name.as_slice();
+        let new_name = node.new_name.as_str().as_bytes();
+        let carried: BTreeMap<[u8; 32], &GrantSetEntry> = plane
+            .section
+            .commitment
+            .entries
+            .iter()
+            .map(|e| (e.tag, e))
+            .collect();
+
+        let mut reminted = RemintedGrants {
+            entries: Vec::with_capacity(ledger.len()),
+            ledger: Vec::with_capacity(ledger.len()),
+        };
+        for entry in ledger {
+            if !entry_tag_is_bound(self.owner_enc_secret, entry, old_name) {
+                return Err(WritePublishError::Rejected);
+            }
+            let recipient_enc = X25519Public::from_bytes(entry.recipient_enc_pk)
+                .ok_or(WritePublishError::Rejected)?;
+            let row = mint_grant_row(
+                self.owner_enc_secret,
+                entry.recipient_identity_pk,
+                &recipient_enc,
+                &self.scope_id,
+                new_name,
+                entry.permission,
+            )
+            .ok_or(WritePublishError::Rejected)?;
+
+            let committed = carried.get(&entry.tag).ok_or(WritePublishError::Rejected)?;
+            // The pseudonym binds the scope, not the name, so the mint must
+            // reproduce the committed key: it authorizes structure signing, and
+            // re-signing a different one would hand that authority elsewhere.
+            let mut commitment_entry = row.commitment_entry;
+            if commitment_entry.pseudonym_pk != committed.pseudonym_pk {
+                return Err(WritePublishError::Rejected);
+            }
+            commitment_entry.unknown = committed.unknown.clone();
+            let mut ledger_entry = row.ledger_entry;
+            // The deadline is the discovered-expiry trigger's input and the
+            // invite claim path's restriction; dropping it at a re-mint erases
+            // both, and dropping the unknown fields discards what another version
+            // wrote.
+            ledger_entry.expires_at = entry.expires_at;
+            ledger_entry.unknown = entry.unknown.clone();
+
+            reminted.entries.push(commitment_entry);
+            reminted.ledger.push(ledger_entry);
+        }
+        // Tag order, never the ledger order a write-grantee authored: the owner
+        // signs these entries (`reseal_scope_root` sorts its blobs on the same
+        // rule).
+        reminted.entries.sort_by(|a, b| a.tag.cmp(&b.tag));
+        reminted.ledger.sort_by(|a, b| a.tag.cmp(&b.tag));
+        Ok(reminted)
+    }
+
     /// The moved root's grant section, re-minted for the wave.
     ///
     /// The root's section is the only channel that carries `writeScopeSeed` to
@@ -1199,8 +1290,10 @@ where
         fresh_write_scope_seed: &[u8; SECRET_LEN],
         read_epoch: u64,
     ) -> Result<GrantSection, WritePublishError> {
+        let remint = self.remint_grants(node, plane)?;
         let mut commitment = plane.section.commitment.clone();
         commitment.ipns_name = node.new_name.as_str().as_bytes().to_vec();
+        commitment.entries = remint.entries;
         let commitment_sig = sign_grant_set(self.owner, &commitment)
             .map_err(|_| WritePublishError::Rejected)?
             .to_compact();
@@ -1214,6 +1307,7 @@ where
                 scope_id: self.scope_id,
                 ipns_name: node.new_name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: Some(self.owner_enc_secret),
                 parent_node_seed: self.parent_node_seed,
                 pseudonym_signer: &pseudonym_signer,
             },
@@ -1228,7 +1322,7 @@ where
             &CommittedSet {
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
-                grant_ledger: &plane.write_body.grant_ledger,
+                grant_ledger: &remint.ledger,
                 write_history_link: &plane.write_body.write_history_link,
                 direct_child_scope_index: &plane.write_body.direct_child_scope_index,
             },
@@ -1286,6 +1380,13 @@ where
                 // `node.write_epoch`; sealing the section at or below the floor
                 // publishes a root whose write plane can never be reopened.
                 if node.write_epoch <= plane.write_epoch || node.node_id != self.scope_id {
+                    return Err(WritePublishError::Rejected);
+                }
+                // Every re-minted tag binds `new_name`, and a write grantee
+                // derives that name from the seed this section hands it — so a
+                // name the published seed does not derive mints a set no grantee
+                // can ever self-locate.
+                if node.new_name != derive_write_name(fresh.as_bytes(), &node.node_id) {
                     return Err(WritePublishError::Rejected);
                 }
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
@@ -1507,17 +1608,24 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
+    use core::num::NonZeroU64;
+
     use crate::content::dag::root_block_cid;
     use crate::entropy::EntropyError;
+    use crate::grants::{
+        GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag, self_locate,
+    };
+    use cipherbox_core::codec::Value;
     use cipherbox_core::error::{CodecError, Malformed};
     use cipherbox_core::ipns::{IpnsRecord, VerifiedRecord};
     use cipherbox_core::seal::{
-        AscentLink, ChildRef, GrantSetCommitment, NodeKind, STRUCT_TAG_ASCENT_LINK,
-        STRUCT_TAG_OWNER_WRITE_BLOB, decode_envelope, decode_grant_section, encode_envelope,
-        encode_grant_section, grant_section_bytes, open_ascent_link, open_owner_write_blob,
+        AscentLink, ChildRef, GrantBlobPayload, GrantSetCommitment, NodeKind, Permission,
+        STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+        decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
+        grant_section_bytes, open_ascent_link, open_grant_blob, open_owner_write_blob,
         open_read_body, seal_read_body, set_grant_section, sign_grant_set, verify_grant_set,
     };
-    use cipherbox_core::suite::ecdsa::EcdsaSignature;
+    use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
@@ -1606,6 +1714,7 @@ mod tests {
             child_scope_index,
             parent_node_seed,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
         })
     }
 
@@ -1997,6 +2106,7 @@ mod tests {
                 scope_id,
                 ipns_name: fixture.name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
                 parent_node_seed: None,
                 pseudonym_signer: &pseudonym,
             },
@@ -2292,6 +2402,7 @@ mod tests {
                     scope_id: SCOPE,
                     ipns_name: root.name.as_str().as_bytes(),
                     owner_enc_pub: &owner_enc_pub,
+                    owner_enc_secret: None,
                     parent_node_seed: None,
                     pseudonym_signer: &pseudonym,
                 },
@@ -2384,6 +2495,7 @@ mod tests {
                 scope_id,
                 ipns_name: name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
                 parent_node_seed,
                 pseudonym_signer: &pseudonym,
             },
@@ -2732,6 +2844,7 @@ mod tests {
                     scope_id: SCOPE,
                     ipns_name: root.name.as_str().as_bytes(),
                     owner_enc_pub: &owner_enc_pub,
+                    owner_enc_secret: None,
                     parent_node_seed: None,
                     pseudonym_signer: &pseudonym,
                 },
@@ -3220,6 +3333,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
@@ -3270,6 +3384,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
@@ -3332,6 +3447,457 @@ mod tests {
         );
     }
 
+    // --- The wave's grant re-mint ---
+
+    /// The deadline the write grant carries, so a re-mint that drops it is
+    /// visible.
+    const GRANT_DEADLINE: u64 = 1_800_000_000_000;
+
+    fn read_grantee() -> X25519Secret {
+        X25519Secret::from_scalar([0x91; 32])
+    }
+
+    fn write_grantee() -> X25519Secret {
+        X25519Secret::from_scalar([0x92; 32])
+    }
+
+    /// The committed grant set the wave fixtures publish: a read grantee and a
+    /// deadlined write grantee, minted at the **pre-wave** root name.
+    fn granted_rows() -> Vec<GrantRow> {
+        let name = old_root_name();
+        let mint = |identity_scalar: [u8; 32], enc: &X25519Secret, permission| {
+            let identity = EcdsaSigner::from_scalar(&identity_scalar).expect("valid scalar");
+            mint_grant_row(
+                &owner_enc(),
+                identity.verifying_key().to_sec1(),
+                &enc.public(),
+                &SCOPE,
+                name.as_str().as_bytes(),
+                permission,
+            )
+            .expect("a contributory recipient key")
+        };
+        let read = mint([0x93; 32], &read_grantee(), Permission::Read);
+        let mut write = mint([0x94; 32], &write_grantee(), Permission::Write);
+        write.ledger_entry.expires_at = NonZeroU64::new(GRANT_DEADLINE);
+        vec![read, write]
+    }
+
+    /// A vault root committing [`granted_rows`], with `children` in its folder.
+    fn granted_root(children: Vec<ChildRef>) -> OwnerRootFixture {
+        granted_root_with(granted_rows(), children)
+    }
+
+    fn granted_root_with(grants: Vec<GrantRow>, children: Vec<ChildRef>) -> OwnerRootFixture {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children,
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants,
+        })
+    }
+
+    /// The blob a grantee finds in `section` by re-deriving its own tag from the
+    /// name the record asserts — the whole read-side self-location path.
+    fn self_located(
+        section: &GrantSection,
+        grantee: &X25519Secret,
+        name: &IpnsName,
+    ) -> Option<PublishedGrantBlob> {
+        let blobs: Vec<PublishedGrantBlob> = section
+            .grant_blobs
+            .iter()
+            .map(|b| PublishedGrantBlob {
+                tag: b.tag,
+                enc: b.enc,
+                ciphertext: b.ciphertext.clone(),
+            })
+            .collect();
+        let tag = recipient_blinded_tag(grantee, &owner_enc().public(), name.as_str().as_bytes())
+            .expect("a contributory sharer key");
+        self_locate(&blobs, &tag).cloned()
+    }
+
+    fn open_blob(blob: &PublishedGrantBlob, grantee: &X25519Secret) -> GrantBlobPayload {
+        let ctx = AadContext {
+            v: ENVELOPE_V,
+            id: SCOPE,
+            scope: SCOPE,
+            epoch: OWNER_ROOT_EPOCH,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        open_grant_blob(grantee, &blob.enc, &ctx, &blob.ciphertext)
+            .expect("the grantee opens its own blob")
+    }
+
+    #[test]
+    fn a_surviving_grantee_self_locates_its_blob_after_the_name_wave() {
+        // The blinded tag binds the scope root's `ipnsName` and the wave moves
+        // that name, so a section republished under the retired tags reads to
+        // every grantee as a definitive revocation (`grants/revocation.rs`).
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        assert!(
+            self_located(&root.grant_section, &read_grantee(), &root.name).is_some(),
+            "the grantee locates its blob before the wave"
+        );
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let section = published_section(&harness, &moved.new_name);
+        let blob = self_located(&section, &read_grantee(), &moved.new_name)
+            .expect("the grantee locates its blob at the name the record asserts");
+        let payload = open_blob(&blob, &read_grantee());
+        assert_eq!(payload.read_scope_seed(), &OWNER_ROOT_SCOPE_SEED);
+        assert!(
+            payload.write_scope_seed().is_none(),
+            "a read grant carries no write seed"
+        );
+        assert!(
+            section.commitment.entries.iter().any(|e| e.tag == blob.tag),
+            "the owner-signed commitment commits the re-minted tag"
+        );
+        assert!(
+            self_located(&section, &read_grantee(), &root.name).is_none(),
+            "no tag bound to the retired name survives the wave"
+        );
+    }
+
+    #[test]
+    fn a_read_and_a_write_grantee_both_survive_a_wave_over_a_deeper_subtree() {
+        // Depth greater than one, and both permissions in the ledger: the write
+        // grantee must come out of the wave holding the seed that derives the
+        // post-wave names, the read grantee holding none.
+        let harness = Harness::plain();
+        let leaf_id = [0x1c; 16];
+        let leaf_old = stage_node(&harness, leaf_id, &folder(Vec::new()));
+        let mid_id = [0x1d; 16];
+        let mid_old = stage_node(&harness, mid_id, &folder(vec![ref_to(leaf_id, &leaf_old)]));
+        let root = granted_root(vec![ref_to(mid_id, &mid_old)]);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
+        block_on(net.republish(&leaf)).expect("leaf");
+        let mid = order(mid_id, &mid_old, one_child(leaf_id, &leaf.new_name), false);
+        block_on(net.republish(&mid)).expect("mid");
+        let moved = order(SCOPE, &root.name, one_child(mid_id, &mid.new_name), true);
+        block_on(net.republish(&moved)).expect("root");
+
+        let section = published_section(&harness, &moved.new_name);
+        let read_blob = self_located(&section, &read_grantee(), &moved.new_name)
+            .expect("the read grantee self-locates at the new name");
+        assert!(
+            open_blob(&read_blob, &read_grantee())
+                .write_scope_seed()
+                .is_none()
+        );
+        let write_blob = self_located(&section, &write_grantee(), &moved.new_name)
+            .expect("the write grantee self-locates at the new name");
+        assert_eq!(
+            open_blob(&write_blob, &write_grantee()).write_scope_seed(),
+            Some(&FRESH_WRITE_SCOPE_SEED),
+            "the write grantee is handed the seed the wave derived every new name from"
+        );
+        assert_ne!(read_blob.tag, write_blob.tag);
+        assert_eq!(
+            section.commitment.entries.len(),
+            2,
+            "the re-minted commitment commits the whole set, no more and no less"
+        );
+    }
+
+    #[test]
+    fn the_re_mint_carries_each_grants_deadline_forward() {
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+
+        let row = |grantee: &X25519Secret| {
+            let tag = recipient_blinded_tag(
+                grantee,
+                &owner_enc().public(),
+                moved.new_name.as_str().as_bytes(),
+            )
+            .expect("a contributory sharer key");
+            body.grant_ledger
+                .iter()
+                .find(|e| e.tag == tag)
+                .expect("the grantee's re-minted ledger row")
+                .clone()
+        };
+        let write_row = row(&write_grantee());
+        assert_eq!(
+            write_row.expires_at,
+            NonZeroU64::new(GRANT_DEADLINE),
+            "a deadline dropped by the re-mint silently un-expires the grant"
+        );
+        assert_eq!(write_row.permission, Permission::Write);
+        assert_eq!(
+            write_row.recipient_enc_pk,
+            write_grantee().public().to_bytes()
+        );
+        assert_eq!(
+            row(&read_grantee()).expires_at,
+            None,
+            "and a row that never expired stays that way"
+        );
+    }
+
+    #[test]
+    fn the_re_mint_carries_each_grants_preserved_unknown_fields_forward() {
+        // The two halves come from different signed structures — the commitment
+        // entry from the owner-signed set, the ledger row from the write body —
+        // so each is asserted under its own key.
+        let field = |key: &str, v: u64| -> PreservedFields {
+            [(key.to_string(), Value::Unsigned(v))]
+                .into_iter()
+                .collect()
+        };
+        let mut rows = granted_rows();
+        rows[0].commitment_entry.unknown = field("zc", 7);
+        rows[0].ledger_entry.unknown = field("zl", 9);
+        let root = granted_root_with(rows, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+
+        let tag = recipient_blinded_tag(
+            &read_grantee(),
+            &owner_enc().public(),
+            moved.new_name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let entry = section
+            .commitment
+            .entries
+            .iter()
+            .find(|e| e.tag == tag)
+            .expect("the grantee's re-minted commitment entry");
+        assert_eq!(
+            entry.unknown.get("zc"),
+            Some(&Value::Unsigned(7)),
+            "a dropped unknown discards what another version committed"
+        );
+        let row = body
+            .grant_ledger
+            .iter()
+            .find(|e| e.tag == tag)
+            .expect("the grantee's re-minted ledger row");
+        assert_eq!(
+            row.unknown.get("zl"),
+            Some(&Value::Unsigned(9)),
+            "and the ledger half is carried under no owner signature at all"
+        );
+    }
+
+    #[test]
+    fn the_re_mint_reproduces_the_committed_pseudonym_key() {
+        // The pseudonym binds the scope and not the name, so the wave must
+        // republish the key the owner already committed: it is what authorizes
+        // structure signing.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let published = published_section(&harness, &moved.new_name);
+        let keys = |section: &GrantSection| -> BTreeSet<[u8; 32]> {
+            section
+                .commitment
+                .entries
+                .iter()
+                .map(|e| e.pseudonym_pk)
+                .collect()
+        };
+        let before = keys(&root.grant_section);
+        assert_eq!(before.len(), 2);
+        assert_eq!(keys(&published), before);
+        assert!(
+            published.commitment.entries.is_sorted_by_key(|e| e.tag),
+            "the owner signs a tag order, never the one a write-grantee authored"
+        );
+    }
+
+    #[test]
+    fn the_wave_refuses_a_committed_pseudonym_key_the_mint_does_not_reproduce_release_active() {
+        // The owner re-signs the entries the re-mint builds, so a committed
+        // pseudonym key the pairwise mint does not reproduce would be re-signed
+        // into structure-signing authority the owner never derived. The refusal is
+        // a runtime `Err`, never a debug_assert. Active in release.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].commitment_entry.pseudonym_pk = [0xaa; 32];
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn a_ledger_row_whose_identity_key_is_not_a_curve_point_does_not_stop_the_wave() {
+        // `recipientIdentityPk` feeds no derivation and no owner signature covers
+        // it, so a committed write-grantee can set a victim's to any 33 bytes.
+        // Parsing it at the re-mint would hand that grantee a free veto over the
+        // very wave that revokes them; the row carries the bytes forward instead.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].ledger_entry.recipient_identity_pk = [0xff; IDENTITY_PUBLIC_LEN];
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+        let tag = recipient_blinded_tag(
+            &read_grantee(),
+            &owner_enc().public(),
+            moved.new_name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        assert_eq!(
+            body.grant_ledger
+                .iter()
+                .find(|e| e.tag == tag)
+                .expect("the grantee's re-minted ledger row")
+                .recipient_identity_pk,
+            [0xff; IDENTITY_PUBLIC_LEN],
+            "carried verbatim, like every other field no owner signature covers"
+        );
+    }
+
+    #[test]
+    fn a_new_name_the_fresh_write_scope_seed_does_not_derive_is_refused_release_active() {
+        // Every re-minted tag binds the new name, and a write grantee derives
+        // that name from the published seed — so the two diverging mints a set
+        // no grantee can self-locate. The refusal is a runtime `Err`, never a
+        // debug_assert. Active in release.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let mut moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        // The name and its record signer still agree; only the seed the section
+        // hands out no longer derives them.
+        moved.write_scope_seed = Some(SecretBytes::new([0xb7; 32]));
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn the_wave_refuses_a_swapped_recipient_key_release_active() {
+        // The re-mint owner-re-signs the set it builds, so a `recipientEncPk` a
+        // committed write-grantee swapped under an owner-committed tag would be
+        // laundered into owner authority. The refusal is a runtime `Err`, never
+        // a debug_assert. Active in release.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].ledger_entry.recipient_enc_pk =
+            X25519Secret::from_scalar([0x9f; 32]).public().to_bytes();
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn the_wave_refuses_a_ledger_row_the_commitment_does_not_commit_release_active() {
+        // A committed read-grantee re-authoring the write body upgrades its own
+        // row to write. Re-minting off that ledger would put the upgrade in the
+        // commitment the owner then signs, and hand it the write scope seed. The
+        // refusal is a runtime `Err`, never a debug_assert. Active in release.
+        let harness = Harness::plain();
+        let mut rows = granted_rows();
+        rows[0].ledger_entry.permission = Permission::Write;
+        let root = granted_root_with(rows, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
     #[test]
     fn a_failed_root_publish_leaves_the_root_republishable() {
         // A pass that gated the root and then failed to publish retries off the
@@ -3348,6 +3914,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
@@ -3595,6 +4162,7 @@ mod tests {
             child_scope_index,
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         root

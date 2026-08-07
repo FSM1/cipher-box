@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission};
-use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::UnixMillis;
@@ -54,6 +54,24 @@ pub fn recipient_blinded_tag(
 ) -> Option<[u8; 32]> {
     let shared = my_enc_secret.diffie_hellman(sharer_enc_pub)?;
     Some(kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name))
+}
+
+/// Whether `entry` is filed under the tag its own `recipientEncPk` derives at
+/// `scope_root_ipns_name` — the check only a holder of the owner encryption
+/// subkey can run, since the tag is the owner–recipient pairwise ECDH.
+///
+/// `false` on a malformed or low-order recipient key: a tag it can never derive
+/// is a tag it is not bound to. Every input is public and the verdict is a
+/// public tag comparison, so no constant-time guarantee is needed.
+pub fn entry_tag_is_bound(
+    owner_enc_secret: &X25519Secret,
+    entry: &GrantLedgerEntry,
+    scope_root_ipns_name: &[u8],
+) -> bool {
+    let Some(recipient) = X25519Public::from_bytes(entry.recipient_enc_pk) else {
+        return false;
+    };
+    recipient_blinded_tag(owner_enc_secret, &recipient, scope_root_ipns_name) == Some(entry.tag)
 }
 
 /// Locate the grant blob filed under `tag` in a scope root's published grant
@@ -108,9 +126,14 @@ pub struct GrantRow {
 /// A read entry's pseudonym never authorizes a structure but is derived honestly
 /// so a later write upgrade stays consistent. `None` on a non-contributory ECDH —
 /// a degenerate recipient key the caller refuses fail-closed.
+///
+/// `recipient_identity_pk` is carried into the row uninterpreted: nothing here
+/// derives from it, and it is the one input a re-mint copies from a ledger row a
+/// write-grantee authored, so rejecting bytes that are not a curve point would
+/// hand that author a veto over the owner's own re-mint.
 pub fn mint_grant_row(
     owner_enc_secret: &X25519Secret,
-    recipient_identity_pk: &EcdsaVerifier,
+    recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     recipient_enc_pub: &X25519Public,
     scope_id: &[u8; 16],
     scope_root_ipns_name: &[u8],
@@ -125,7 +148,7 @@ pub fn mint_grant_row(
         tag,
         commitment_entry: GrantSetEntry::new(tag, permission, pseudonym_pk),
         ledger_entry: GrantLedgerEntry::new(
-            recipient_identity_pk.to_sec1(),
+            recipient_identity_pk,
             recipient_enc_pub.to_bytes(),
             permission,
             tag,
@@ -171,8 +194,10 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// a committed entry share — the owner also signs each entry's `pseudonymPk`, but
 /// no ledger row carries one. So a row's `recipientIdentityPk`, `recipientEncPk`,
 /// and `expiresAt` go unchecked here and a write-grantee may alter them
-/// undetectably. The tag↔enc_pk binding is a resolve-time check; the
-/// deadline is not a capability boundary ([`GrantLedgerEntry::expires_at`]).
+/// undetectably. The tag↔enc_pk binding is [`entry_tag_is_bound`], which a
+/// re-seal runs over every row whenever the re-sealer holds the owner encryption
+/// subkey; the deadline is not a capability boundary
+/// ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -201,7 +226,6 @@ pub fn enforce_committed_ledger(
 mod tests {
     use super::*;
     use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
-    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
     use core::num::NonZeroU64;
 
     fn commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {

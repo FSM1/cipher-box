@@ -122,6 +122,8 @@ pub struct OwnerGrantKeys<'a> {
 /// re-seal at the same epoch.
 pub struct ParentScopePlan<'a> {
     /// The parent scope root's identity + signing capability.
+    /// [`ScopeRootIdentity::owner_enc_secret`] is overridden with the owner's own
+    /// subkey, so this plan cannot disable the parent's tag-binding check.
     pub identity: ScopeRootIdentity<'a>,
     /// The parent's current read-plane seeds (`prev = None`).
     pub seeds: ResealSeeds<'a>,
@@ -306,7 +308,7 @@ where
     // invite link goes through, keyed off the name derived above.
     let row = mint_grant_row(
         owner.enc_secret,
-        &recipient.identity_pk,
+        recipient.identity_pk.to_sec1(),
         recipient.enc_pub,
         &grantee.scope_id,
         name_bytes,
@@ -339,6 +341,7 @@ where
             scope_id: grantee.scope_id,
             ipns_name: name_bytes,
             owner_enc_pub: grantee.owner_enc_pub,
+            owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(grantee.parent_node_seed),
             pseudonym_signer: owner.pseudonym_signer,
         };
@@ -401,6 +404,7 @@ where
             scope_id: descendant.scope_id,
             ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
+            owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(&parent_node_seed),
             pseudonym_signer: &target.pseudonym_signer,
         };
@@ -465,9 +469,16 @@ where
             write_history_link: parent.write_history_link,
             direct_child_scope_index: &parent_index,
         };
+        // The owner runs this leg, so the tag binding is not the caller's to
+        // disable: the same subkey that re-wraps the parent's grant blobs decides
+        // which rows are still filed under a tag they derive.
+        let identity = ScopeRootIdentity {
+            owner_enc_secret: Some(owner.enc_secret),
+            ..parent.identity
+        };
         reseal_scope_root(
             entropy,
-            &parent.identity,
+            &identity,
             &parent.seeds,
             &committed,
             parent.carried_history_links,
@@ -532,9 +543,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grants::PublishedGrantBlob;
     use crate::grants::ledger::self_locate;
     use crate::grants::recipient_blinded_tag;
+    use crate::grants::{GrantRow, PublishedGrantBlob};
     use crate::mailbox::poll_verified;
     use crate::rotation::{PrevEpochSeed, ResolveFailure, SweepTarget};
     use crate::testkit::fakes::{InMemoryFloorStore, InMemoryMailboxHub};
@@ -778,6 +789,7 @@ mod tests {
                 scope_id: PARENT_SCOPE,
                 ipns_name: PARENT_NAME,
                 owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
                 parent_node_seed: None,
                 pseudonym_signer: &owner_pseudonym,
             },
@@ -823,6 +835,7 @@ mod tests {
         subtree: &[ChildScopeRef],
         floor: Option<([u8; 16], u64)>,
         net: FakeNet,
+        parent_grants: &[GrantRow],
     ) -> (
         Result<CreateGrantOutcome, CreateGrantError>,
         Vec<ResealedScopeRoot>,
@@ -852,12 +865,19 @@ mod tests {
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-            entries: Vec::new(),
+            entries: parent_grants
+                .iter()
+                .map(|g| g.commitment_entry.clone())
+                .collect(),
             unknown: PreservedFields::new(),
         };
         let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
             .unwrap()
             .to_compact();
+        let parent_ledger: Vec<GrantLedgerEntry> = parent_grants
+            .iter()
+            .map(|g| g.ledger_entry.clone())
+            .collect();
 
         let outcome = {
             let mut entropy = SeededEntropy::new(entropy_seed);
@@ -887,6 +907,7 @@ mod tests {
                     scope_id: PARENT_SCOPE,
                     ipns_name: PARENT_NAME,
                     owner_enc_pub: &owner_enc_pub,
+                    owner_enc_secret: None,
                     parent_node_seed: None,
                     pseudonym_signer: &owner_pseudonym,
                 },
@@ -900,7 +921,7 @@ mod tests {
                 },
                 commitment: &parent_commitment,
                 commitment_sig: &parent_commitment_sig,
-                grant_ledger: &[],
+                grant_ledger: &parent_ledger,
                 write_history_link: &[],
                 current_child_index: &[],
                 carried_history_links: &[],
@@ -923,7 +944,7 @@ mod tests {
 
     #[test]
     fn converged_subtree_mints_publishes_and_posts_the_share_pointer() {
-        let (outcome, published, hub) = run(7, &[], None, FakeNet::new(Ok(())));
+        let (outcome, published, hub) = run(7, &[], None, FakeNet::new(Ok(())), &[]);
         let outcome = outcome.expect("grant creation succeeds over a converged subtree");
 
         // Two records, grantee first (register-first / never-orphan / dest-first).
@@ -999,6 +1020,7 @@ mod tests {
             &subtree,
             Some((DESCENDANT_SCOPE, 2)),
             FakeNet::new(Err(ScopeRootPublishError::LostRace)),
+            &[],
         );
 
         match outcome {
@@ -1019,7 +1041,7 @@ mod tests {
         // A subtree scope root that will not resolve is a fail-closed convergence
         // abort, never a silent partial share.
         let subtree = vec![ChildScopeRef::new([0x99; 16], b"unresolvable".to_vec())];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
         assert_eq!(outcome.unwrap_err().check(), "converge-failed");
         assert!(published.is_empty());
     }
@@ -1036,6 +1058,7 @@ mod tests {
             &[],
             None,
             FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+            &[],
         );
 
         assert_eq!(
@@ -1069,6 +1092,7 @@ mod tests {
             &subtree,
             None,
             FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+            &[],
         );
 
         assert_eq!(
@@ -1099,8 +1123,8 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (a_outcome, a_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())));
-        let (b_outcome, b_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())));
+        let (a_outcome, a_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())), &[]);
+        let (b_outcome, b_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())), &[]);
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
     }
@@ -1153,7 +1177,7 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
         outcome.expect("grant creation succeeds over a converged subtree");
 
         // The grantee opens its grant blob to recover the fresh override seed.
@@ -1235,7 +1259,7 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
         outcome.expect("grant creation succeeds over a converged subtree");
 
         let descendant_record = published
@@ -1251,6 +1275,40 @@ mod tests {
             descendant_record.ipns_name,
             PARENT_NAME.to_vec(),
             "never republished under the parent scope-root name"
+        );
+    }
+
+    #[test]
+    fn a_swapped_recipient_key_in_the_parent_ledger_fails_closed_release_active() {
+        // A committed write-grantee of the PARENT scope swaps a victim's
+        // `recipientEncPk` under the victim's owner-committed tag. Tag and
+        // permission still match, so owner authority passes; only the owner's own
+        // subkey re-derives the tag and catches it. The owner runs this leg, so
+        // the parent re-seal must run that check too, or it wraps the parent's
+        // override seed and pointer read key to the swapped key. The refusal is a
+        // runtime `Err`, never a debug_assert. Active in release.
+        let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);
+        let attacker = X25519Secret::from_scalar([0x52; SECRET_LEN]);
+        let mut row = mint_grant_row(
+            &owner_enc(),
+            recipient_identity().to_sec1(),
+            &victim.public(),
+            &PARENT_SCOPE,
+            PARENT_NAME,
+            Permission::Read,
+        )
+        .expect("a contributory recipient key");
+        row.ledger_entry.recipient_enc_pk = attacker.public().to_bytes();
+
+        let (outcome, published, _hub) = run(7, &[], None, FakeNet::new(Ok(())), &[row]);
+
+        assert_eq!(
+            outcome.expect_err("the parent re-seal refuses the swapped key"),
+            CreateGrantError::ParentMint(ResealError::TagNotBoundToRecipient)
+        );
+        assert!(
+            published.iter().all(|r| r.scope_id != PARENT_SCOPE),
+            "no parent record reaches the network"
         );
     }
 }

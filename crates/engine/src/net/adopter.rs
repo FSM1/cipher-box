@@ -618,6 +618,7 @@ mod tests {
                 child_scope_index: Vec::new(),
                 parent_node_seed: None,
                 owner_write_blob_epoch: owb_write_epoch,
+                grants: Vec::new(),
             });
 
             Self {

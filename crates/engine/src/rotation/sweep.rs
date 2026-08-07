@@ -351,6 +351,9 @@ where
             // (see SweepTarget).
             ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
+            // A sweep runs for a write-grantee as readily as for the owner, and a
+            // resolved target carries the owner's public half only.
+            owner_enc_secret: None,
             parent_node_seed: target.parent_node_seed.as_deref(),
             pseudonym_signer: &target.pseudonym_signer,
         };

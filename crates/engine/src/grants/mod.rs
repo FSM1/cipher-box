@@ -39,7 +39,7 @@ pub use invite::{
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
-    mint_grant_row, recipient_blinded_tag, self_locate,
+    entry_tag_is_bound, mint_grant_row, recipient_blinded_tag, self_locate,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};

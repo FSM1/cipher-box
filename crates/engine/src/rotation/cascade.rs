@@ -526,6 +526,7 @@ where
                     scope_id: child.scope_id,
                     ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
+                    owner_enc_secret: root_plan.identity.owner_enc_secret,
                     parent_node_seed: Some(&child_parent_node_seed),
                     pseudonym_signer: &target.pseudonym_signer,
                 },
@@ -589,6 +590,7 @@ fn canonicalize_frontier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grants::recipient_blinded_tag;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
@@ -651,9 +653,13 @@ mod tests {
             [u8; ECDSA_SIG_LEN],
             Vec<GrantLedgerEntry>,
         ) {
-            let tag = [byte.wrapping_add(0xa0); 32];
+            let ipns_name = format!("ipns-{byte:02x}").into_bytes();
+            // Honestly minted, so a plan carrying `owner_enc_secret` passes
+            // `reseal_scope_root`'s recipient-tag binding.
+            let tag = recipient_blinded_tag(&self.enc, &self.grantee.public(), &ipns_name)
+                .expect("a contributory sharer key");
             let commitment = GrantSetCommitment {
-                ipns_name: format!("ipns-{byte:02x}").into_bytes(),
+                ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
                 unknown: PreservedFields::new(),
@@ -880,6 +886,7 @@ mod tests {
     /// `trigger.rs`; here the focus is the descendant cascade).
     struct RootFx {
         net: FakeNet,
+        bind_owner_enc_secret: bool,
         owner_pub: X25519Public,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
@@ -895,6 +902,7 @@ mod tests {
             let (commitment, commitment_sig, grant_ledger) = net.owner.committed(0x00);
             Self {
                 net,
+                bind_owner_enc_secret: false,
                 owner_pub,
                 commitment,
                 commitment_sig,
@@ -905,6 +913,13 @@ mod tests {
             }
         }
 
+        /// Carry the owner encryption subkey in the root identity, which the
+        /// cascade threads to every descendant plan.
+        fn tag_bound(mut self) -> Self {
+            self.bind_owner_enc_secret = true;
+            self
+        }
+
         fn plan<'a>(&'a self, root_children: &'a [ChildScopeRef]) -> RotateScopePlan<'a> {
             RotateScopePlan {
                 identity: ScopeRootIdentity {
@@ -912,6 +927,7 @@ mod tests {
                     scope_id: sid(0x00),
                     ipns_name: b"ipns-00",
                     owner_enc_pub: &self.owner_pub,
+                    owner_enc_secret: self.bind_owner_enc_secret.then_some(&self.net.owner.enc),
                     parent_node_seed: None,
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
@@ -957,7 +973,21 @@ mod tests {
         InMemoryFloorStore,
         usize,
     ) {
-        let fx = RootFx::new(net.clone());
+        run_fx(RootFx::new(net.clone()), net, root_index)
+    }
+
+    /// [`run_with_index`] over a caller-built root fixture.
+    #[allow(clippy::type_complexity)]
+    fn run_fx(
+        fx: RootFx,
+        net: FakeNet,
+        root_index: Vec<ChildScopeRef>,
+    ) -> (
+        Result<CascadeOutcome, CascadeError>,
+        FakeNet,
+        InMemoryFloorStore,
+        usize,
+    ) {
         let floors = InMemoryFloorStore::default();
         let scheduler = VirtualScheduler::new();
         let outcome = block_on(async {
@@ -1013,6 +1043,32 @@ mod tests {
             assert_eq!(block_on(floors.epoch_floor(&sid(s))).unwrap(), Some(5));
         }
         assert_eq!(spawned, 1, "one sweep enqueued after the cascade");
+    }
+
+    #[test]
+    fn tag_bound_root_cascades_over_honest_descendant_ledgers() {
+        // The root's owner encryption subkey threads into every descendant plan, so
+        // each descendant re-seal runs `reseal_scope_root`'s recipient-tag binding
+        // check; honestly minted ledger tags clear it at every depth.
+        let net = FakeNet::new()
+            .scope(0x0a, 4, &[0x0b, 0x0c])
+            .scope(0x0b, 4, &[])
+            .scope(0x0c, 4, &[]);
+        let (outcome, net, floors, _spawned) = run_fx(
+            RootFx::new(net.clone()).tag_bound(),
+            net,
+            vec![childref(0x0a)],
+        );
+        let outcome = outcome.expect("the tag-bound cascade completes");
+
+        assert_eq!(outcome.descendant_count(), 3);
+        for s in [0x0au8, 0x0b, 0x0c] {
+            assert!(
+                !ct_eq(&net.published_seed(s), &net.pre_cascade_seed(s)),
+                "scope {s:#x} re-sealed under a fresh seed"
+            );
+            assert_eq!(block_on(floors.epoch_floor(&sid(s))).unwrap(), Some(5));
+        }
     }
 
     #[test]
