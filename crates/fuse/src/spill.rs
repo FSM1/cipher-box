@@ -1,0 +1,389 @@
+//! Per-handle sealed spill files: where a kernel write lands before release
+//! turns it into one `updateContent` op (blueprint/desktop.md "Reads, writes,
+//! and the never-block law").
+//!
+//! The sealing key is minted per handle from injected entropy, lives only in
+//! this process's memory, and dies with the handle — a crash leaves ciphertext
+//! whose key is gone, which is what replaces v1's plaintext `cb-write-*` files.
+//! Nonces are a per-file counter: the key is fresh per handle, so a counter is
+//! unique under it by construction and needs no further entropy.
+
+use std::collections::BTreeSet;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
+use cipherbox_engine::Entropy;
+use zeroize::Zeroizing;
+
+use crate::error::VfsError;
+
+/// AAD domain for a spill block. The block index rides in the AAD, so a slot
+/// moved to another offset in the same file no longer opens.
+const SPILL_AAD_DOMAIN: &[u8] = b"cipherbox/spill/v1";
+
+/// The engine data dir's spill area: where every handle's sealed spill file is
+/// minted, and the one place the per-handle keys come from.
+pub struct SpillArea {
+    dir: PathBuf,
+    entropy: Box<dyn Entropy>,
+    minted: u64,
+}
+
+impl SpillArea {
+    /// Open the spill area at `dir`, creating it and sweeping whatever a
+    /// previous run left behind. That debris is unopenable — its key died with
+    /// that process — so it is deleted rather than overwritten.
+    pub fn open(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+        fs::create_dir_all(&dir)?;
+        restrict_dir(&dir)?;
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(Self {
+            dir,
+            entropy,
+            minted: 0,
+        })
+    }
+
+    /// Mint a spill file under a fresh per-handle key, framed in `block_bytes`
+    /// plaintext blocks.
+    pub(crate) fn create(&mut self, block_bytes: u64) -> Result<SpillFile, VfsError> {
+        let mut key = Zeroizing::new([0u8; KEY_LEN]);
+        self.entropy
+            .fill(key.as_mut_slice())
+            .map_err(|error| VfsError::Internal {
+                message: error.message().to_owned(),
+            })?;
+        self.minted += 1;
+        let path = self
+            .dir
+            .join(format!("spill.{}.{}", std::process::id(), self.minted));
+        let file = open_private(&path).map_err(spill_io)?;
+        Ok(SpillFile {
+            path,
+            file,
+            key,
+            block_bytes,
+            blocks: BTreeSet::new(),
+            next_nonce: 0,
+        })
+    }
+}
+
+/// One handle's spill: a slot per plaintext block, each sealed on its own.
+pub(crate) struct SpillFile {
+    path: PathBuf,
+    file: File,
+    key: Zeroizing<[u8; KEY_LEN]>,
+    block_bytes: u64,
+    /// The block indices this spill actually holds. A slot outside the set is
+    /// uninitialized, never zero bytes: the caller falls back to the base
+    /// version for it.
+    blocks: BTreeSet<u64>,
+    next_nonce: u64,
+}
+
+impl SpillFile {
+    /// The plaintext of block `index`, `None` when the spill never took it.
+    /// Always a whole block wide.
+    pub(crate) fn block(&mut self, index: u64) -> Result<Option<Zeroizing<Vec<u8>>>, VfsError> {
+        if !self.blocks.contains(&index) {
+            return Ok(None);
+        }
+        let mut sealed = vec![0u8; self.slot_bytes()];
+        self.file
+            .seek(SeekFrom::Start(self.slot_offset(index)?))
+            .map_err(spill_io)?;
+        self.file.read_exact(&mut sealed).map_err(spill_io)?;
+        let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
+        let nonce: &[u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
+        let plaintext = aead::decrypt(&self.key, nonce, &block_aad(index), ciphertext).ok_or(
+            VfsError::Internal {
+                message: "a spill block did not open".to_owned(),
+            },
+        )?;
+        Ok(Some(Zeroizing::new(plaintext)))
+    }
+
+    /// Seal a whole block of plaintext into slot `index`, replacing whatever
+    /// the slot held.
+    pub(crate) fn put(&mut self, index: u64, plaintext: &[u8]) -> Result<(), VfsError> {
+        if plaintext.len() as u64 != self.block_bytes {
+            return Err(VfsError::Internal {
+                message: "a spill block must be sealed whole".to_owned(),
+            });
+        }
+        let nonce = self.next_nonce()?;
+        let sealed = aead::encrypt(&self.key, &nonce, &block_aad(index), plaintext);
+        self.file
+            .seek(SeekFrom::Start(self.slot_offset(index)?))
+            .map_err(spill_io)?;
+        self.file.write_all(&nonce).map_err(spill_io)?;
+        self.file.write_all(&sealed).map_err(spill_io)?;
+        self.blocks.insert(index);
+        Ok(())
+    }
+
+    /// Forget everything at or past `len`: whole blocks are dropped, and the
+    /// tail of the block `len` falls inside is zeroed, so a later write past
+    /// `len` reads holes as zeros rather than as the bytes truncate removed.
+    pub(crate) fn truncate(&mut self, len: u64) -> Result<(), VfsError> {
+        let last = len / self.block_bytes;
+        self.blocks.retain(|index| *index <= last);
+        let within = (len % self.block_bytes) as usize;
+        if within == 0 {
+            self.blocks.remove(&last);
+            return Ok(());
+        }
+        if let Some(mut block) = self.block(last)? {
+            block[within..].fill(0);
+            self.put(last, &block)?;
+        }
+        Ok(())
+    }
+
+    fn slot_bytes(&self) -> usize {
+        NONCE_LEN + self.block_bytes as usize + TAG_LEN
+    }
+
+    /// Where slot `index` starts. Fails closed past the addressable file: a
+    /// wrapped offset would alias one block onto another's slot.
+    fn slot_offset(&self, index: u64) -> Result<u64, VfsError> {
+        index
+            .checked_mul(self.slot_bytes() as u64)
+            .ok_or_else(|| VfsError::Internal {
+                message: "spill offset is not addressable".to_owned(),
+            })
+    }
+
+    /// The next nonce for this file's key. Fails closed rather than wrapping:
+    /// a repeated nonce under one XChaCha20-Poly1305 key breaks both
+    /// confidentiality and integrity.
+    fn next_nonce(&mut self) -> Result<[u8; NONCE_LEN], VfsError> {
+        let counter = self.next_nonce;
+        self.next_nonce = self
+            .next_nonce
+            .checked_add(1)
+            .ok_or_else(|| VfsError::Internal {
+                message: "spill nonce space exhausted".to_owned(),
+            })?;
+        let mut nonce = [0u8; NONCE_LEN];
+        nonce[..8].copy_from_slice(&counter.to_le_bytes());
+        Ok(nonce)
+    }
+}
+
+impl Drop for SpillFile {
+    /// The spill dies with the handle. The ciphertext is not overwritten: the
+    /// key was memory-only and goes with it.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// The AAD binding one spill block to its slot.
+fn block_aad(index: u64) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(SPILL_AAD_DOMAIN.len() + 8);
+    aad.extend_from_slice(SPILL_AAD_DOMAIN);
+    aad.extend_from_slice(&index.to_le_bytes());
+    aad
+}
+
+/// Spill I/O never carries a path or a byte of content into the message.
+fn spill_io(error: io::Error) -> VfsError {
+    VfsError::Internal {
+        message: format!("spill file: {}", error.kind()),
+    }
+}
+
+#[cfg(unix)]
+fn open_private(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_private(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+#[cfg(unix)]
+fn restrict_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use cipherbox_engine::testkit::SeededEntropy;
+
+    use super::*;
+
+    /// The plaintext a spill holds at `index`, as a plain vector.
+    fn held(spill: &mut SpillFile, index: u64) -> Option<Vec<u8>> {
+        spill
+            .block(index)
+            .expect("the block opens")
+            .map(|b| b.to_vec())
+    }
+
+    fn area(dir: &Path) -> SpillArea {
+        SpillArea::open(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
+    }
+
+    #[test]
+    fn a_block_round_trips_through_its_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        assert_eq!(held(&mut spill, 0), None, "an unwritten slot is absent");
+        spill.put(3, b"abcdefgh").unwrap();
+        assert_eq!(held(&mut spill, 3), Some(b"abcdefgh".to_vec()));
+        assert_eq!(held(&mut spill, 2), None, "slots are independent");
+    }
+
+    #[test]
+    fn a_rewritten_block_never_repeats_a_nonce() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        spill.put(0, b"aaaaaaaa").unwrap();
+        let first = fs::read(&spill.path).unwrap();
+        spill.put(0, b"aaaaaaaa").unwrap();
+        let second = fs::read(&spill.path).unwrap();
+        assert_ne!(
+            first[..NONCE_LEN],
+            second[..NONCE_LEN],
+            "the same plaintext resealed must use a fresh nonce"
+        );
+    }
+
+    #[test]
+    fn plaintext_never_reaches_the_slot_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(16).unwrap();
+        spill.put(0, b"secret-plaintext").unwrap();
+        let bytes = fs::read(&spill.path).unwrap();
+        assert!(
+            !bytes
+                .windows(b"secret-plaintext".len())
+                .any(|window| window == b"secret-plaintext"),
+            "a spill file must hold ciphertext only"
+        );
+    }
+
+    #[test]
+    fn a_slot_moved_to_another_index_does_not_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        spill.put(0, b"abcdefgh").unwrap();
+        let slot = fs::read(&spill.path).unwrap();
+        // Transplant slot 0's bytes into slot 1 and claim the spill holds it.
+        spill
+            .file
+            .seek(SeekFrom::Start(spill.slot_offset(1).unwrap()))
+            .unwrap();
+        spill.file.write_all(&slot).unwrap();
+        spill.blocks.insert(1);
+        assert!(
+            matches!(spill.block(1), Err(VfsError::Internal { .. })),
+            "the block index is bound by the AAD"
+        );
+    }
+
+    #[test]
+    fn two_files_from_one_area_get_different_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut area = area(dir.path());
+        let mut first = area.create(8).unwrap();
+        let mut second = area.create(8).unwrap();
+        first.put(0, b"abcdefgh").unwrap();
+        second.put(0, b"abcdefgh").unwrap();
+        assert_ne!(*first.key, *second.key);
+        assert_ne!(
+            fs::read(&first.path).unwrap(),
+            fs::read(&second.path).unwrap(),
+            "one plaintext under two per-handle keys must not seal alike"
+        );
+    }
+
+    #[test]
+    fn truncation_drops_whole_blocks_and_zeroes_the_partial_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        spill.put(0, b"abcdefgh").unwrap();
+        spill.put(1, b"ijklmnop").unwrap();
+        spill.truncate(11).unwrap();
+        assert_eq!(held(&mut spill, 0), Some(b"abcdefgh".to_vec()));
+        assert_eq!(
+            held(&mut spill, 1),
+            Some(b"ijk\0\0\0\0\0".to_vec()),
+            "bytes past the new length must not survive as content"
+        );
+
+        spill.truncate(8).unwrap();
+        assert_eq!(
+            held(&mut spill, 1),
+            None,
+            "a block wholly past the new length is dropped"
+        );
+    }
+
+    #[test]
+    fn dropping_a_spill_removes_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        spill.put(0, b"abcdefgh").unwrap();
+        let path = spill.path.clone();
+        assert!(path.exists());
+        drop(spill);
+        assert!(!path.exists(), "a released handle leaves no spill behind");
+    }
+
+    #[test]
+    fn opening_the_area_sweeps_a_previous_runs_debris() {
+        let dir = tempfile::tempdir().unwrap();
+        let debris = dir.path().join("spill.1.1");
+        fs::write(&debris, b"unopenable ciphertext").unwrap();
+        let _area = area(dir.path());
+        assert!(!debris.exists());
+    }
+
+    #[test]
+    fn an_unaddressable_slot_is_refused_rather_than_wrapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        assert!(matches!(
+            spill.put(u64::MAX, &[0u8; 8]),
+            Err(VfsError::Internal { .. })
+        ));
+    }
+
+    #[test]
+    fn a_partial_block_is_refused_rather_than_padded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spill = area(dir.path()).create(8).unwrap();
+        assert!(matches!(
+            spill.put(0, b"short"),
+            Err(VfsError::Internal { .. })
+        ));
+    }
+}

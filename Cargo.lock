@@ -686,6 +686,7 @@ version = "0.0.0"
 dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
+ "tempfile",
  "zeroize",
 ]
 

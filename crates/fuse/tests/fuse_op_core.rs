@@ -7,9 +7,11 @@
 
 use std::cell::RefCell;
 use std::future::Future;
+use std::path::Path;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+use cipherbox_engine::seams::StagingStore;
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -18,8 +20,16 @@ use cipherbox_engine::{
 };
 use cipherbox_fuse::{
     Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
-    NameError, OperationCore, ROOT_INO, VfsError,
+    NameError, OperationCore, ROOT_INO, SpillArea, VfsError,
 };
+
+/// A spill area in a throwaway directory. The directory itself is left behind
+/// deliberately — a mount outlives any scope a `TempDir` guard could have, and
+/// every spill file inside it is removed when its handle closes.
+fn spill_area() -> SpillArea {
+    let dir = tempfile::tempdir().expect("a spill dir").keep();
+    SpillArea::open(dir, Box::new(SeededEntropy::new(11))).expect("the spill area opens")
+}
 
 /// A mount that records what it was told to invalidate.
 #[derive(Clone, Default)]
@@ -118,7 +128,7 @@ fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -
     for (name, kind) in root_children {
         seed_child(&mut engine, root, name, *kind);
     }
-    OperationCore::new(engine, adapter, CacheBudget::CI)
+    OperationCore::new(engine, adapter, CacheBudget::CI, spill_area())
 }
 
 /// Poll a future exactly once. `Ready` proves the operation reached its answer
@@ -247,9 +257,9 @@ fn create_opens_a_handle_that_releases_exactly_once() {
     assert_eq!(core.handle(handle).unwrap().node, attrs.node);
     assert!(core.handle(handle).unwrap().access.writable());
 
-    assert_eq!(core.release(handle), Ok(()));
+    assert_eq!(block_on(core.release(handle)), Ok(()));
     assert_eq!(core.handle(handle), Err(VfsError::BadHandle));
-    assert_eq!(core.release(handle), Err(VfsError::BadHandle));
+    assert_eq!(block_on(core.release(handle)), Err(VfsError::BadHandle));
 }
 
 #[test]
@@ -261,7 +271,7 @@ fn opening_a_directory_is_refused_and_opening_a_file_is_not() {
         Err(VfsError::IsADirectory)
     );
     let (file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Read)).unwrap();
-    core.release(handle).unwrap();
+    block_on(core.release(handle)).unwrap();
     let reopened = block_on(core.open(file.ino, Access::Read)).unwrap();
     assert_eq!(core.handle(reopened).unwrap().node, file.node);
 }
@@ -368,8 +378,12 @@ fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replac
         let (mut engine, root, staging) = started_engine_with_staging();
         let source = seed_child(&mut engine, root, "new.txt", NodeKind::File);
         let victim = seed_child(&mut engine, root, "target.txt", NodeKind::File);
-        let mut core =
-            OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
+        let mut core = OperationCore::new(
+            engine,
+            RecordingAdapter::push_capable(),
+            CacheBudget::CI,
+            spill_area(),
+        );
         staging.fail_enqueue_after(budget);
 
         let outcome = block_on(core.rename(ROOT_INO, "new.txt", ROOT_INO, "target.txt"));
@@ -395,7 +409,12 @@ fn renaming_a_node_onto_itself_journals_nothing() {
     // journal entry — proven by refusing every durable write.
     let (mut engine, root, staging) = started_engine_with_staging();
     seed_child(&mut engine, root, "f.txt", NodeKind::File);
-    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
+    let mut core = OperationCore::new(
+        engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    );
     staging.fail_enqueue_after(0);
 
     block_on(core.rename(ROOT_INO, "f.txt", ROOT_INO, "f.txt")).expect("a no-op rename succeeds");
@@ -411,7 +430,12 @@ fn replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fa
     let source = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     let victim = seed_child(&mut engine, root, "target", NodeKind::Folder);
     seed_child(&mut engine, victim, ".DS_Store", NodeKind::File);
-    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
+    let mut core = OperationCore::new(
+        engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    );
     // The junk delete lands; the move that would unlink the folder does not.
     staging.fail_enqueue_after(1);
 
@@ -665,7 +689,12 @@ fn seeded_junk_folder() -> Core {
     let (mut engine, root) = started_engine();
     let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     seed_child(&mut engine, dir, ".DS_Store", NodeKind::File);
-    OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI)
+    OperationCore::new(
+        engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    )
 }
 
 /// A `dir` holding one junk-prefixed folder, which itself holds a real file.
@@ -674,7 +703,12 @@ fn seeded_nested_junk_folder() -> Core {
     let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     let junk = seed_child(&mut engine, dir, ".Trash-1000", NodeKind::Folder);
     seed_child(&mut engine, junk, "buried.txt", NodeKind::File);
-    OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI)
+    OperationCore::new(
+        engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    )
 }
 
 // --- structurally impossible moves ---
@@ -740,6 +774,381 @@ fn a_read_through_a_write_only_handle_is_refused() {
     assert_eq!(
         block_on(core.read(HandleId(9999), 0, 16)),
         Err(VfsError::BadHandle)
+    );
+}
+
+// --- the content write path ---
+
+/// A mount spilling into `dir`, plus the durable queue behind it. The dir is
+/// the caller's, so a test can look at the ciphertext a write leaves there.
+fn mount_spilling_into(dir: &Path) -> (Core, InMemoryStagingStore) {
+    let (engine, _root, staging) = started_engine_with_staging();
+    let spill = SpillArea::open(dir.to_path_buf(), Box::new(SeededEntropy::new(11)))
+        .expect("the spill area opens");
+    let core = OperationCore::new(
+        engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill,
+    );
+    (core, staging)
+}
+
+/// How many ops the durable queue holds.
+fn queued(staging: &InMemoryStagingStore) -> usize {
+    block_on(staging.queued_ops())
+        .expect("the queue reads")
+        .len()
+}
+
+/// Every spill file's bytes, in a stable order.
+fn spill_files(dir: &Path) -> Vec<Vec<u8>> {
+    let mut files: Vec<Vec<u8>> = std::fs::read_dir(dir)
+        .expect("the spill dir reads")
+        .map(|entry| std::fs::read(entry.expect("an entry").path()).expect("spill bytes"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// A mount holding one writable handle on a fresh `f.txt`, with the create op
+/// already spent.
+fn writing_handle(core: &mut Core, access: Access) -> HandleId {
+    let (_attrs, handle) = block_on(core.create(ROOT_INO, "f.txt", access)).expect("the create");
+    handle
+}
+
+#[test]
+fn a_write_on_a_read_only_handle_is_refused() {
+    let (mut core, _adapter) = mount();
+    let (file, _reader) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
+    let handle = block_on(core.open(file.ino, Access::Read)).expect("the file opens");
+
+    assert_eq!(
+        block_on(core.write(handle, 0, b"denied")),
+        Err(VfsError::BadHandle),
+        "a read-only handle must refuse a write, not accept and drop it"
+    );
+    assert_eq!(
+        block_on(core.write(HandleId(9999), 0, b"denied")),
+        Err(VfsError::BadHandle)
+    );
+}
+
+#[test]
+fn releasing_a_handle_that_never_wrote_journals_nothing() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let after_create = queued(&staging);
+
+    block_on(core.release(handle)).expect("the handle closes");
+
+    assert_eq!(
+        queued(&staging),
+        after_create,
+        "a handle with nothing to say owes no op"
+    );
+    assert!(
+        spill_files(dir.path()).is_empty(),
+        "a handle that never wrote mints no spill file"
+    );
+}
+
+#[test]
+fn a_write_then_release_journals_exactly_one_update() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let after_create = queued(&staging);
+    let plaintext = b"SECRET-1 spanning more than one framing block";
+
+    assert_eq!(
+        block_on(core.write(handle, 0, plaintext)).expect("the write lands"),
+        plaintext.len() as u32
+    );
+    assert_eq!(queued(&staging), after_create, "a write journals nothing");
+
+    block_on(core.release(handle)).expect("the release commits");
+
+    assert_eq!(
+        queued(&staging),
+        after_create + 1,
+        "a whole file is one op, however many blocks it took"
+    );
+    // A queued `updateContent` is what projects a new size onto the node.
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "f.txt"))
+            .expect("the file")
+            .size,
+        Some(plaintext.len() as u64)
+    );
+}
+
+#[test]
+fn a_write_past_the_addressable_end_is_refused_rather_than_wrapped() {
+    let (mut core, _adapter) = mount();
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    // An offset whose slot cannot be addressed fails closed rather than
+    // wrapping onto another block's slot.
+    assert!(block_on(core.write(handle, u64::MAX - 4, b"xy")).is_err());
+    assert_eq!(
+        block_on(core.write(handle, u64::MAX, b"xy")),
+        Err(VfsError::Invalid),
+        "a window that cannot even be expressed is invalid"
+    );
+}
+
+#[test]
+fn the_bytes_a_handle_wrote_read_back_through_it() {
+    let (mut core, _adapter) = mount();
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let plaintext = b"the quick brown fox jumps over the lazy dog";
+    block_on(core.write(handle, 0, plaintext)).expect("the write lands");
+
+    assert_eq!(
+        block_on(core.read(handle, 0, plaintext.len() as u32)).expect("the read"),
+        plaintext.to_vec(),
+        "a handle reads what it wrote, before any op is journaled"
+    );
+    // Sparse: a write past the end leaves a hole, which reads as zeros.
+    block_on(core.write(handle, 64, b"tail")).expect("the far write lands");
+    let whole = block_on(core.read(handle, 0, 128)).expect("the read");
+    assert_eq!(whole.len(), 68);
+    assert_eq!(&whole[..plaintext.len()], plaintext);
+    assert_eq!(
+        &whole[plaintext.len()..64],
+        &vec![0u8; 64 - plaintext.len()]
+    );
+    assert_eq!(&whole[64..], b"tail");
+}
+
+#[test]
+fn a_write_into_the_spill_never_parks() {
+    // The never-block law: landing bytes locally waits on nothing at all.
+    let (mut core, _adapter) = mount();
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let Poll::Ready(outcome) = poll_once(core.write(handle, 0, b"bytes")) else {
+        panic!("a write parked instead of landing in the spill");
+    };
+    outcome.expect("the write lands");
+}
+
+#[test]
+fn a_write_is_refused_rather_than_acked_when_the_queue_cannot_journal_it() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let after_create = queued(&staging);
+    // Every further durable write fails: the op can never reach the platter.
+    staging.fail_enqueue_after(0);
+
+    block_on(core.write(handle, 0, b"unacked bytes")).expect("the write lands in the spill");
+    block_on(core.flush(handle)).expect_err("a flush that cannot journal must not ack");
+    block_on(core.release(handle)).expect_err("nor may the release");
+
+    assert_eq!(
+        queued(&staging),
+        after_create,
+        "a refused write leaves no half-formed op behind"
+    );
+    assert!(
+        spill_files(dir.path()).is_empty(),
+        "the handle's spill still dies with it"
+    );
+}
+
+#[test]
+fn a_spill_file_holds_no_plaintext() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+
+    let files = spill_files(dir.path());
+    assert_eq!(files.len(), 1, "one writable handle, one spill file");
+    assert!(
+        !files[0]
+            .windows(b"SECRET-1".len())
+            .any(|window| window == b"SECRET-1"),
+        "the spill file must be sealed at rest"
+    );
+}
+
+#[test]
+fn two_handles_on_one_node_seal_under_different_keys() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let (file, first) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
+    let second = block_on(core.open(file.ino, Access::Write)).expect("a second handle");
+    // The second handle opened `O_TRUNC`, so it too starts from nothing.
+    block_on(core.truncate(file.ino, 0, Some(second))).expect("the truncate");
+
+    block_on(core.write(first, 0, b"SECRET-1")).expect("the first write");
+    block_on(core.write(second, 0, b"SECRET-1")).expect("the second write");
+
+    let files = spill_files(dir.path());
+    assert_eq!(files.len(), 2);
+    assert_ne!(
+        files[0], files[1],
+        "one plaintext under two per-handle keys must not seal alike"
+    );
+}
+
+#[test]
+fn a_released_handle_leaves_no_spill_behind() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    assert_eq!(spill_files(dir.path()).len(), 1);
+
+    block_on(core.release(handle)).expect("the release commits");
+
+    assert!(
+        spill_files(dir.path()).is_empty(),
+        "the spill and the key that opens it go with the handle"
+    );
+}
+
+#[test]
+fn a_crash_between_the_spill_and_the_release_loses_the_write() {
+    // "Crash" is the mount going away with the handle still open: the process
+    // holding the only copy of the spill key is what dies.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let after_create = queued(&staging);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+
+    core.unmount();
+    drop(core);
+
+    assert_eq!(
+        queued(&staging),
+        after_create,
+        "an unreleased write journals no partial op"
+    );
+    assert!(
+        spill_files(dir.path()).is_empty(),
+        "nothing openable survives the mount"
+    );
+}
+
+#[test]
+fn a_second_flush_with_nothing_new_to_say_journals_nothing() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    let after_create = queued(&staging);
+
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush commits");
+    block_on(core.fsync(handle)).expect("an fsync with nothing new");
+    block_on(core.release(handle)).expect("the release closes");
+
+    assert_eq!(
+        queued(&staging),
+        after_create + 1,
+        "one file's worth of writes is one op, however often it is flushed"
+    );
+}
+
+#[test]
+fn truncating_an_open_handle_to_zero_is_never_silently_lost() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    block_on(core.write(handle, 0, b"bytes that go away")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush commits");
+    let after_write = queued(&staging);
+
+    let file = block_on(core.lookup(ROOT_INO, "f.txt")).expect("the file");
+    block_on(core.truncate(file.ino, 0, Some(handle))).expect("the truncate");
+    block_on(core.release(handle)).expect("the release commits");
+
+    assert_eq!(
+        queued(&staging),
+        after_write + 1,
+        "a truncate on an open handle rides that handle's own op"
+    );
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "f.txt"))
+            .expect("the file")
+            .size,
+        Some(0)
+    );
+}
+
+#[test]
+fn a_truncate_with_no_open_handle_journals_its_own_op() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    block_on(core.write(handle, 0, b"bytes that go away")).expect("the write lands");
+    block_on(core.release(handle)).expect("the release commits");
+    let after_write = queued(&staging);
+
+    let file = block_on(core.lookup(ROOT_INO, "f.txt")).expect("the file");
+    block_on(core.truncate(file.ino, 0, None)).expect("the truncate");
+
+    assert_eq!(
+        queued(&staging),
+        after_write + 1,
+        "nothing else would ever journal this length"
+    );
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "f.txt"))
+            .expect("the file")
+            .size,
+        Some(0)
+    );
+    assert!(spill_files(dir.path()).is_empty());
+}
+
+#[test]
+fn truncating_a_directory_is_refused() {
+    let (mut core, _adapter) = mount();
+    let dir = block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
+    assert_eq!(
+        block_on(core.truncate(dir.ino, 0, None)),
+        Err(VfsError::IsADirectory)
+    );
+}
+
+#[test]
+fn the_size_a_lookup_reports_follows_an_unjournaled_write() {
+    let (mut core, _adapter) = mount();
+    let handle = writing_handle(&mut core, Access::ReadWrite);
+    block_on(core.write(handle, 0, b"twelve bytes")).expect("the write lands");
+
+    let file = block_on(core.lookup(ROOT_INO, "f.txt")).expect("the file");
+    assert_eq!(
+        file.size,
+        Some(12),
+        "a program that stats what it just wrote must not see the old length"
+    );
+    assert_eq!(
+        block_on(core.getattr(file.ino)).expect("attrs").size,
+        Some(12)
+    );
+}
+
+#[test]
+fn a_partial_write_over_an_unreadable_base_fails_closed() {
+    // The file exists but its content plane has published nothing this mount
+    // can resolve, so the bytes a partial write would keep are unknown. Guessing
+    // zero would silently truncate what the version holds.
+    let (mut core, _adapter) = mount();
+    let (file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
+    block_on(core.release(handle)).expect("the create closes");
+    let reopened = block_on(core.open(file.ino, Access::Write)).expect("the file opens");
+
+    let outcome = block_on(core.write(reopened, 3, b"patch"));
+    assert!(
+        matches!(outcome, Err(VfsError::Unavailable { .. })),
+        "expected an availability verdict, got {outcome:?}"
     );
 }
 
@@ -1020,7 +1429,7 @@ mod published {
         pump(&mut tasks);
 
         let adapter = RecordingAdapter::push_capable();
-        let mut core = OperationCore::new(engine, adapter.clone(), budget);
+        let mut core = OperationCore::new(engine, adapter.clone(), budget, spill_area());
         let published =
             block_on(core.lookup(ROOT_INO, CLIP)).expect("the published file is rendered");
         adapter.drain();
@@ -1204,7 +1613,7 @@ mod published {
                     .unwrap_or_else(|err| panic!("round {round}: {err}")),
                 plaintext[..8]
             );
-            mount.core.release(handle).expect("the handle closes");
+            block_on(mount.core.release(handle)).expect("the handle closes");
             assert_eq!(
                 mount.core.cached_plaintext_bytes(),
                 0,
@@ -1252,7 +1661,7 @@ mod published {
             block_on(mount.core.read(first, 0, 8)).unwrap(),
             plaintext[..8]
         );
-        mount.core.release(first).expect("the first handle closes");
+        block_on(mount.core.release(first)).expect("the first handle closes");
 
         assert_eq!(
             block_on(mount.core.read(second, 0, 8)).unwrap(),
@@ -1270,7 +1679,7 @@ mod published {
             block_on(mount.core.read(first, 0, 8)).expect("the first version reads"),
             plaintext[..8]
         );
-        mount.core.release(first).expect("the handle closes");
+        block_on(mount.core.release(first)).expect("the handle closes");
         mount.adapter.drain();
 
         let edited: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0xff).collect();
@@ -1295,6 +1704,57 @@ mod published {
         assert!(
             pushed.contains(&Invalidation::Data { ino }),
             "expected a data invalidation for ino {ino}, got {pushed:?}"
+        );
+    }
+
+    /// Let the engine drain and publish what the mount just journaled.
+    fn drain(mount: &mut Mount) {
+        let cadence = mount.core.engine_mut().profile().poll_cadence;
+        mount.world.scheduler.advance(cadence);
+        pump(&mut mount.tasks);
+    }
+
+    #[test]
+    fn a_patch_over_a_published_version_keeps_the_bytes_it_did_not_touch() {
+        // The whole round trip: a partial write merges over the published
+        // version, releases as one op, publishes, and reads back.
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        let patch = b"PATCHED!";
+        let at = chunk() + 3;
+        block_on(mount.core.write(handle, at, patch)).expect("the write lands");
+        block_on(mount.core.release(handle)).expect("the release commits");
+        drain(&mut mount);
+
+        let mut expected = plaintext.clone();
+        expected[at as usize..at as usize + patch.len()].copy_from_slice(patch);
+        let reader = opened(&mut mount);
+        let read = block_on(mount.core.read(reader, 0, expected.len() as u32))
+            .expect("the published patch reads back");
+        assert_eq!(read, expected);
+    }
+
+    #[test]
+    fn a_write_extending_a_published_version_reads_back_whole() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        let tail = b"appended";
+        block_on(mount.core.write(handle, plaintext.len() as u64, tail)).expect("the append lands");
+        block_on(mount.core.release(handle)).expect("the release commits");
+        drain(&mut mount);
+
+        let mut expected = plaintext.clone();
+        expected.extend_from_slice(tail);
+        let reader = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(reader, 0, expected.len() as u32)).expect("the read"),
+            expected
         );
     }
 
