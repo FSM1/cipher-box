@@ -1615,6 +1615,7 @@ mod tests {
     use crate::grants::{
         GrantRow, PublishedGrantBlob, mint_grant_row, recipient_blinded_tag, self_locate,
     };
+    use cipherbox_core::codec::Value;
     use cipherbox_core::error::{CodecError, Malformed};
     use cipherbox_core::ipns::{IpnsRecord, VerifiedRecord};
     use cipherbox_core::seal::{
@@ -3666,6 +3667,68 @@ mod tests {
             row(&read_grantee()).expires_at,
             None,
             "and a row that never expired stays that way"
+        );
+    }
+
+    #[test]
+    fn the_re_mint_carries_each_grants_preserved_unknown_fields_forward() {
+        // The two halves come from different signed structures — the commitment
+        // entry from the owner-signed set, the ledger row from the write body —
+        // so each is asserted under its own key.
+        let field = |key: &str, v: u64| -> PreservedFields {
+            [(key.to_string(), Value::Unsigned(v))]
+                .into_iter()
+                .collect()
+        };
+        let mut rows = granted_rows();
+        rows[0].commitment_entry.unknown = field("zc", 7);
+        rows[0].ledger_entry.unknown = field("zl", 9);
+        let root = granted_root_with(rows, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+
+        let tag = recipient_blinded_tag(
+            &read_grantee(),
+            &owner_enc().public(),
+            moved.new_name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let entry = section
+            .commitment
+            .entries
+            .iter()
+            .find(|e| e.tag == tag)
+            .expect("the grantee's re-minted commitment entry");
+        assert_eq!(
+            entry.unknown.get("zc"),
+            Some(&Value::Unsigned(7)),
+            "a dropped unknown discards what another version committed"
+        );
+        let row = body
+            .grant_ledger
+            .iter()
+            .find(|e| e.tag == tag)
+            .expect("the grantee's re-minted ledger row");
+        assert_eq!(
+            row.unknown.get("zl"),
+            Some(&Value::Unsigned(9)),
+            "and the ledger half is carried under no owner signature at all"
         );
     }
 
