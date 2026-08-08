@@ -25,7 +25,9 @@ use core::cell::{Cell, RefCell};
 use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid, verify_cid};
+use cipherbox_core::content::{
+    decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
+};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -38,8 +40,9 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::content::{
-    ContentProfile, ContentVersion, Gateway, ProviderError, SealedContent, place_block, plan_prune,
-    pre_flight_quota_check,
+    ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
+    SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
+    read_block, version_cids,
 };
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
@@ -843,7 +846,7 @@ where
             None,
         )
         .await
-        .map_err(|_| Halt::Unclassified)?;
+        .map_err(|_| Halt::UploadAttempt)?;
         // The cache can be older than the floors — a restored data dir is
         // exactly that. The whole pass anchors here: this record's epoch
         // becomes the epoch every record it publishes is sealed at, so a
@@ -860,7 +863,7 @@ where
             floor::Strictness::AtFloor,
         )
         .await
-        .map_err(|_| Halt::Unclassified)?;
+        .map_err(|_| Halt::UploadAttempt)?;
         // Encode/decode fail-closed symmetry: this build authors exactly
         // `ENVELOPE_V`, so republishing a newer client's root would silently
         // downgrade `v` — the exact rollback the read-body AAD defends against.
@@ -868,7 +871,7 @@ where
             return Err(Halt::Unclassified);
         }
         let read_key = self.node_read_key(scope, &scope.root.0);
-        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::Unclassified)?;
+        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
             created_at,
             modified_at,
@@ -961,7 +964,7 @@ where
         let (adopted, envelope) = adopter
             .open_carried_at_floor(&name, &record_bytes)
             .await
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::UploadAttempt)?;
         // The same two rollback guards the root load makes: this build authors
         // exactly `ENVELOPE_V`, and re-sealing a node at another epoch than the
         // scope's would cross the AAD epoch binding.
@@ -1694,6 +1697,10 @@ where
         {
             return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
         }
+        // Ahead of the publish: a debt this pass cannot compute must leave the
+        // history it was read from standing, not a shortened one it never
+        // journaled.
+        let owed = self.prune_debt(&plan.retire_targets, survivors).await?;
         versions.truncate(survivors.len());
         let content_cids = survivors
             .iter()
@@ -1723,7 +1730,10 @@ where
             )
             .await
             .map_err(Halt::from)?;
-        self.owe_retires(scope, &plan.retire_targets).await?;
+        StagingRetireLedger::new(self.staging)
+            .owe(&owner_tag(scope.enc_secret), &owed)
+            .await
+            .map_err(seam)?;
         self.project_published_file(
             target,
             head_size,
@@ -1750,23 +1760,73 @@ where
             .collect()
     }
 
-    /// Journal the dropped roots as owed, under this identity's ledger scope.
-    async fn owe_retires(
+    /// What each doomed version still owes the registry once every target
+    /// another version of the same plan already accounts for is taken out of it
+    /// ([`Expansion::split_retained`]).
+    ///
+    /// A doomed root's link list is not this device's word for what that version
+    /// holds: in a shared scope a write-grantee authors versions of its own, and
+    /// their blocks register under the grantee's account until this one syncs —
+    /// so a root that content-addresses correctly can still name leaves the
+    /// owner is living on. Only the prune sees both sides of that.
+    ///
+    /// The same argument lets two *doomed* roots name one leaf. A pin row is
+    /// keyed `(account, cid)`, so that leaf is one row and belongs to exactly one
+    /// entry: charging it twice would over-report pending reclaim and hand the
+    /// registry the same CID under two debts.
+    async fn prune_debt(
         &self,
-        scope: &DrainScope<'_>,
         doomed: &[ContentVersion],
-    ) -> Result<(), Halt> {
-        let entries: Vec<OwedRetire> = doomed
-            .iter()
-            .map(|version| OwedRetire {
+        retained: &[ContentVersion],
+    ) -> Result<Vec<OwedRetire>, Halt> {
+        let mut protected = BTreeSet::new();
+        for version in retained {
+            protected.extend(self.expand_version(version).await?.cids());
+        }
+        let mut owed = Vec::with_capacity(doomed.len());
+        let mut charged: BTreeSet<&str> = BTreeSet::new();
+        for version in doomed {
+            // A history may name one root twice, and the ledger is keyed by
+            // target: the second naming owes nothing the first does not carry.
+            if !charged.insert(version.content_cid.as_str()) {
+                continue;
+            }
+            let expansion = self.expand_version(version).await?;
+            let (retirable, held) = expansion.split_retained(&protected);
+            protected.extend(retirable.cids());
+            owed.push(OwedRetire {
                 target: version.content_cid.clone(),
-                owed_bytes: version.pinned_bytes,
-            })
-            .collect();
-        StagingRetireLedger::new(self.staging)
-            .owe(&owner_tag(scope.enc_secret), &entries)
-            .await
-            .map_err(seam)
+                owed_bytes: retirable.pinned_bytes,
+                manifest_bytes: expansion.pinned_bytes,
+                retained: held,
+            });
+        }
+        Ok(owed)
+    }
+
+    /// One published version's whole CID set, off its own fetched root block.
+    async fn expand_version(&self, version: &ContentVersion) -> Result<Expansion, Halt> {
+        let expected = decode_content_cid_str(&version.content_cid)
+            .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))?;
+        let root_block = read_block(
+            self.gateway,
+            self.http,
+            &version.content_cid,
+            &expected,
+            ContentPlane::Root,
+        )
+        .await
+        // Charged, unlike a plain outage: a version whose root no source will
+        // serve is authorable by anyone holding the scope's write seed, and an
+        // uncharged retry would let one hold the whole queue behind its head.
+        .map_err(|_| Halt::UploadAttempt)?;
+        expand_retire_targets(
+            &version.content_cid,
+            &root_block,
+            self.content_profile,
+            version.pinned_bytes,
+        )
+        .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
     }
 
     // -----------------------------------------------------------------------
@@ -1826,7 +1886,7 @@ where
         // Resolved before any byte moves: a session that cannot authenticate the
         // member's placement choice holds its content ops rather than picking a
         // destination for them.
-        let placement = self.placement.as_ref().map_err(|_| Halt::Unclassified)?;
+        let placement = self.placement.as_ref().map_err(|_| Halt::UploadAttempt)?;
         // What the mark may claim, narrowed as the mirror misses blocks the mark
         // covers ([`Destinations::mirror_missed`]).
         let mut reached = placement.destinations();
@@ -1928,7 +1988,11 @@ where
         .await?;
         emit(OpPhase::UploadCompleted, total);
 
-        let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
+        let content_cids = version_cids(
+            &staged.root_cid,
+            content.leaf_cids().iter().map(Vec::as_slice),
+            RootPlacement::First,
+        );
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
@@ -2274,7 +2338,7 @@ where
             epoch,
         };
         let preflighted = preflight(&binding, &self.node_read_key(scope, node_id), head)
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::UploadAttempt)?;
         // The name and the seed the signer comes from have independent sources
         // for the scope root — the vault pointer's `currentRoot` and the
         // owner-write-blob. Publishing under a name this signer cannot sign for
@@ -2396,7 +2460,7 @@ where
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
         retire(self.api, &self.registered_by(scope, op).await)
             .await
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::UploadAttempt)?;
         self.dequeue_op(op_id).await
     }
 
@@ -2437,9 +2501,14 @@ where
                 .to_owned()
         });
         let content = match op.content_root_cid() {
-            Some(root_cid) => {
-                registry_cids(root_cid, &version_leaf_cids(self.staging, root_cid).await)
-            }
+            Some(root_cid) => version_cids(
+                root_cid,
+                version_leaf_cids(self.staging, root_cid)
+                    .await
+                    .iter()
+                    .map(Vec::as_slice),
+                RootPlacement::First,
+            ),
             None => Vec::new(),
         };
         name.into_iter().chain(content).collect()
@@ -2558,7 +2627,7 @@ where
         self.entropy
             .borrow_mut()
             .fill(&mut nonce)
-            .map_err(|_| Halt::Unclassified)?;
+            .map_err(|_| Halt::UploadAttempt)?;
         Ok(nonce)
     }
 }
@@ -2843,21 +2912,6 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
     is_wellformed_content_cid(cid)
         .then_some(cid)
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
-}
-
-/// One version as the registry names it: the root first, then every leaf in
-/// file order, read from the blocks this device staged.
-///
-/// Every block is its own accountable pin row (blueprint/api.md "Pin/name
-/// registry"), so a retirement naming fewer CIDs than the registration claimed
-/// spends account quota forever. The prune drain names the same set from the
-/// fetched root block instead ([`expand_retire_targets`]), because by then
-/// staging has released the leaves.
-fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
-    core::iter::once(root_cid)
-        .chain(leaf_cids.iter().map(Vec::as_slice))
-        .map(encode_content_cid_str)
-        .collect()
 }
 
 #[cfg(test)]

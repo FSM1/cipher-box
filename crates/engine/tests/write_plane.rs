@@ -25,9 +25,10 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
+use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, GatewaySource, PinMode, RetentionPolicy, SealedChunk,
-    decode_root,
+    assemble, decode_root,
 };
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::OrphanHeads;
@@ -6978,6 +6979,32 @@ fn file_with_history(
     node
 }
 
+/// Republish `file`'s record over a version list this engine would not author —
+/// what a co-grantee holding the scope's write seed can put on the wire.
+fn plant_versions(world: &FakeWorld, blocks: &Blocks, file: NodeId, versions: Vec<CoreVersion>) {
+    plant_record(
+        &world.record_store,
+        blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions,
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+}
+
+/// One such version, naming `content_cid` for `plaintext_bytes` of plaintext.
+fn planted_version(content_cid: &[u8], plaintext_bytes: u64) -> CoreVersion {
+    CoreVersion::new(content_cid.to_vec(), [0u8; 32], plaintext_bytes, 0)
+}
+
 /// Queue a prune of `file` against its currently published sequence.
 fn stage_prune(device: &FakeDevice, world: &FakeWorld, file: NodeId, keep_latest: u64) {
     let (sequence, _) = published(&world.record_store, file);
@@ -7196,4 +7223,275 @@ fn a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused() {
         "and no retire names the CID a survivor still holds"
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0);
+}
+
+/// A doomed root's link list is not this device's word for what that version
+/// holds: in a shared scope a write-grantee authors versions of its own, and
+/// their blocks register under the grantee's account until the owner syncs
+/// (blueprint/api.md "Pin/name registry"). A root that content-addresses
+/// correctly and whose link count matches the `size` it declares can therefore
+/// name the owner's own live leaves, which the registry's `(account, cid)` pin
+/// row would unpin under the owner's own token.
+#[test]
+fn a_doomed_root_naming_a_retained_versions_leaf_never_retires_that_leaf() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let body: Vec<u8> = (0..60u8).collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[body.clone()]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    let live_leaves = decode_root(
+        &blocks
+            .get(&encode_content_cid_str(&head.content_cid))
+            .expect("the head root block"),
+    )
+    .expect("a root manifest")
+    .leaf_cid_vecs();
+    assert!(
+        live_leaves.len() > 1,
+        "a multi-chunk head is the normal case"
+    );
+
+    // The planted root links the owner's first live leaf plus one block only the
+    // planted version names. Nothing about the block is malformed: it addresses
+    // to its own CID and declares a `size` its link count matches.
+    let chunk = ContentProfile::CI.chunk_size() as u64;
+    let hostage = live_leaves[0].clone();
+    let grantee_leaf = compute_cid(CONTENT_CID_CODEC, b"a block only the planted root names");
+    let planted = assemble(
+        &[hostage.clone(), grantee_leaf.clone()],
+        2 * chunk,
+        &ContentProfile::CI,
+    )
+    .expect("assembles");
+    let planted_root = blocks.put(planted.root_block.clone());
+    plant_versions(
+        &world,
+        &blocks,
+        file,
+        vec![
+            head.clone(),
+            planted_version(&planted.content_cid, 2 * chunk),
+        ],
+    );
+
+    // With the registry down the debt stands unpaid, so the vault reports the
+    // figure the prune quoted itself.
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        chunk + SEALED_LEAF_OVERHEAD + planted.root_block.len() as u64,
+        "the quote counts the planted block and the root, never the hostage leaf"
+    );
+
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        !retired.contains(&encode_content_cid_str(&hostage)),
+        "the leaf the retained head lives on is never retired"
+    );
+    assert!(
+        retired.contains(&encode_content_cid_str(&grantee_leaf)),
+        "the blocks the planted version really added still retire"
+    );
+    assert!(retired.contains(&planted_root), "and so does its own root");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the head still reads"),
+        body,
+        "the retained version's bytes are still retrievable"
+    );
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        0,
+        "the debt clears on the registry's own answer"
+    );
+}
+
+/// The same adversarial authoring lets two *doomed* roots name one leaf. A pin
+/// row is keyed `(account, cid)`, so that leaf is a single row: charging it to
+/// both debts would over-quote the reclaim and hand the registry one CID under
+/// two entries.
+#[test]
+fn a_leaf_two_doomed_roots_share_is_charged_to_exactly_one_of_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[(0..60u8).collect()]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+
+    // Two planted versions over one shared block, each with a block of its own.
+    let chunk = ContentProfile::CI.chunk_size() as u64;
+    let shared = compute_cid(CONTENT_CID_CODEC, b"a block both planted roots name");
+    let plant = |only_mine: &[u8]| {
+        let dag = assemble(
+            &[shared.clone(), compute_cid(CONTENT_CID_CODEC, only_mine)],
+            2 * chunk,
+            &ContentProfile::CI,
+        )
+        .expect("assembles");
+        blocks.put(dag.root_block.clone());
+        dag
+    };
+    let (older, newer) = (plant(b"only the older"), plant(b"only the newer"));
+    plant_versions(
+        &world,
+        &blocks,
+        file,
+        vec![
+            head,
+            planted_version(&newer.content_cid, 2 * chunk),
+            planted_version(&older.content_cid, 2 * chunk),
+        ],
+    );
+
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    let leaf = chunk + SEALED_LEAF_OVERHEAD;
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        3 * leaf + (older.root_block.len() + newer.root_block.len()) as u64,
+        "the shared block is quoted once, not once per doomed root"
+    );
+
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    let shared_cid = encode_content_cid_str(&shared);
+    assert_eq!(
+        retired.iter().filter(|cid| **cid == shared_cid).count(),
+        1,
+        "one pin row is named by one retire"
+    );
+    for dag in [&older, &newer] {
+        assert!(
+            retired.contains(&encode_content_cid_str(&dag.content_cid)),
+            "both doomed roots still retire"
+        );
+    }
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+}
+
+/// Nothing on the wire forbids one `contentCid` appearing twice in a version
+/// list. The repeat is the same pin rows, so it owes nothing the first naming
+/// does not already carry — and charging it again would leave an entry
+/// protecting its own expansion key, which could never drain.
+#[test]
+fn a_root_a_history_names_twice_owes_one_debt_that_still_drains() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[(0..60u8).collect()]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+
+    let chunk = ContentProfile::CI.chunk_size() as u64;
+    let leaves: Vec<Vec<u8>> = [b"twice-a".as_slice(), b"twice-b".as_slice()]
+        .iter()
+        .map(|seed| compute_cid(CONTENT_CID_CODEC, seed))
+        .collect();
+    let planted = assemble(&leaves, 2 * chunk, &ContentProfile::CI).expect("assembles");
+    blocks.put(planted.root_block.clone());
+    let repeated = planted_version(&planted.content_cid, 2 * chunk);
+    plant_versions(
+        &world,
+        &blocks,
+        file,
+        vec![head, repeated.clone(), repeated],
+    );
+
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        2 * (chunk + SEALED_LEAF_OVERHEAD) + planted.root_block.len() as u64,
+        "the repeat quotes nothing of its own"
+    );
+
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    for cid in leaves.iter().chain([&planted.content_cid]) {
+        assert!(
+            retired.contains(&encode_content_cid_str(cid)),
+            "the one debt still names its whole expansion"
+        );
+    }
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "and clears");
+}
+
+/// A version whose root block no source will serve is authorable by anyone
+/// holding the scope's write seed, and the prune has to fetch it to know what
+/// the retire may name. An uncharged retry would let one such version hold the
+/// FIFO head — and every op queued behind it — forever.
+#[test]
+fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let body: Vec<u8> = (0..60u8).collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    let unserved = compute_cid(DAG_ROOT_CODEC, b"a root block no source ever stored");
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![
+                    head,
+                    CoreVersion::new(
+                        unserved,
+                        [0u8; 32],
+                        ContentProfile::CI.chunk_size() as u64,
+                        0,
+                    ),
+                ],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 1);
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert!(passes > 1, "the budget is spent over several passes");
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted]
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "a prune that never expanded retires nothing"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "and journals no debt");
 }

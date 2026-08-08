@@ -15,8 +15,38 @@ pub struct OwedRetire {
     /// The doomed version's root `contentCid` (multibase string).
     pub target: String,
     /// The pinned bytes this entry stands for — the vault's pending-reclaim
-    /// figure is their sum.
+    /// figure is their sum. [`Self::retained`] is already subtracted, so it is
+    /// what the retire frees, not what the manifest accounts for.
+    ///
+    /// An **upper bound**, not an equality: a merged retained set only ever
+    /// widens, so the drain recomputes the figure off the root block and holds
+    /// the stored one as the ceiling.
     pub owed_bytes: u64,
+    /// The pinned total the doomed manifest must account for — the bound the
+    /// expansion holds a hand-framed root to.
+    pub manifest_bytes: u64,
+    /// Targets of this root's expansion that another entry of the prune already
+    /// accounts for — a version it **retained**, or a doomed one charged ahead
+    /// of this — so the retire must skip them
+    /// ([`Expansion::split_retained`](crate::content::Expansion::split_retained)).
+    ///
+    /// Normally empty — honestly-authored versions seal identical plaintext
+    /// under a fresh per-version key and a fresh per-chunk nonce, so their leaf
+    /// sets are disjoint by construction.
+    pub retained: Vec<String>,
+}
+
+impl OwedRetire {
+    /// A debt whose expansion aliases nothing a retained version names.
+    #[must_use]
+    pub fn whole(target: String, pinned_bytes: u64) -> Self {
+        Self {
+            target,
+            owed_bytes: pinned_bytes,
+            manifest_bytes: pinned_bytes,
+            retained: Vec::new(),
+        }
+    }
 }
 
 /// Durable per-owner set of retirements a published prune still owes the
@@ -34,9 +64,13 @@ pub struct OwedRetire {
 ///   account's paid debt from another's unpaid one
 ///   ([`RetireResult`](crate::api::RetireResult)).
 /// - **Keyed by target**: [`owe`](RetireLedger::owe)ing a target the store
-///   already holds keeps the stored `owed_bytes` rather than adding a second
-///   entry, so a replayed prune cannot double the pending figure. Order is not
-///   part of the contract.
+///   already holds keeps the stored entry rather than adding a second one, so a
+///   replayed prune cannot double the pending figure — unless the incoming entry
+///   names a [`retained`](OwedRetire::retained) target the held one does not, in
+///   which case the two retained sets **merge**, so protection only ever widens
+///   and never moves; the merged
+///   [`owed_bytes`](OwedRetire::owed_bytes) is the lower of the two. Order — of
+///   the entries, and of one entry's retained set — is not part of the contract.
 /// - **Never-discard**: nothing but `settle` removes an entry. There is no
 ///   attempt budget, no expiry, and no sweep — every failure mode is either
 ///   self-clearing or ours, and the byte figure is the only record of what was
@@ -45,8 +79,8 @@ pub struct OwedRetire {
 ///
 /// `owner_tag` is opaque engine-chosen bytes; the store never interprets it.
 pub trait RetireLedger {
-    /// Journals `entries` under `owner_tag`, keeping the stored `owed_bytes` of
-    /// any target already held.
+    /// Journals `entries` under `owner_tag`, merging any target already held
+    /// rather than adding a second entry for it.
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()>;
 
     /// Every entry owed under `owner_tag`, in unspecified order.
