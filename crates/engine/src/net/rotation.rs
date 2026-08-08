@@ -1221,8 +1221,16 @@ where
         node: &RepublishedNode,
         plane: &RootPlane,
     ) -> Result<RemintedGrants, WritePublishError> {
+        // Release-active (security rule 8). The gate owner-verifies the record's
+        // own committed set and binds it to the name it was read at
+        // (`gate/adoption.rs` stage 2), so equality with the authorized set is
+        // what proves the mint runs off the owner's own attestation
+        // ([`WriteWaveNet::authorized_commitment`]).
+        if plane.section.commitment != *self.authorized_commitment {
+            return Err(WritePublishError::Rejected);
+        }
+        let commitment = self.authorized_commitment;
         let ledger = &plane.write_body.grant_ledger;
-        let commitment = &plane.section.commitment;
         enforce_committed_ledger(commitment, ledger).map_err(|_| WritePublishError::Rejected)?;
         let old_name = commitment.ipns_name.as_slice();
         let new_name = node.new_name.as_str().as_bytes();
@@ -1295,16 +1303,8 @@ where
         fresh_write_scope_seed: &[u8; SECRET_LEN],
         read_epoch: u64,
     ) -> Result<GrantSection, WritePublishError> {
-        // Release-active (security rule 8). The gate owner-verifies the record's
-        // own committed set and binds it to the name it was read at
-        // (`gate/adoption.rs` stage 2), so equality with the authorized set is
-        // what proves the mint is the one the owner signed off on
-        // ([`WriteWaveNet::authorized_commitment`]).
-        if plane.section.commitment != *self.authorized_commitment {
-            return Err(WritePublishError::Rejected);
-        }
         let remint = self.remint_grants(node, plane)?;
-        let mut commitment = plane.section.commitment.clone();
+        let mut commitment = self.authorized_commitment.clone();
         commitment.ipns_name = node.new_name.as_str().as_bytes().to_vec();
         commitment.entries = remint.entries;
         let commitment_sig = sign_grant_set(self.owner, &commitment)
@@ -1401,14 +1401,16 @@ where
                 }
                 // `plane.write_epoch` is the floor as the enumeration saw it, and
                 // the whole interior wave has run since. The floor is monotonic
-                // and any pointer consult raises it, so sealing against that
-                // snapshot can publish a section at or below the live floor —
-                // a write plane `open_write_body` can never reopen.
+                // and rises on any pointer consult, so a floor above that
+                // snapshot means another device's re-point superseded the record
+                // this wave is carrying forward — and sealing against the
+                // snapshot would publish a section at or below the live floor,
+                // a write plane `open_write_body` could never reopen.
                 let write_floor = floor::write_epoch_floor(self.floors, &self.scope_id)
                     .await
                     .map_err(|_| WritePublishError::NotLanded)?
                     .ok_or(WritePublishError::NotLanded)?;
-                if node.write_epoch <= write_floor {
+                if write_floor > plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
@@ -3984,9 +3986,10 @@ mod tests {
         // The enumeration reads the root first and parks it, so the whole
         // child-first wave runs before the root republishes — and a concurrent
         // focus-window tick observing another device's re-point raises the
-        // monotonic write floor in between. Sealing the section at or below the
-        // live floor publishes a root whose write plane `open_write_body` can
-        // never reopen, including for the next rotation.
+        // monotonic write floor in between. Both sides of that rise are refused:
+        // the one the wave's own epoch still clears, where the parked record has
+        // silently been superseded, and the one that would seal the section at or
+        // below the live floor, where `open_write_body` could never reopen it.
         let harness = Harness::plain();
         let root = owner_root_fixture(OwnerRootSpec {
             owner_identity: &owner_identity(),
@@ -4005,6 +4008,21 @@ mod tests {
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
 
+        let mut ahead = order(SCOPE, &root.name, BTreeMap::new(), true);
+        ahead.write_epoch = OWNER_ROOT_EPOCH + 2;
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH + 1,
+        ))
+        .expect("the floor rise lands");
+        assert_eq!(
+            block_on(net.republish(&ahead)),
+            Err(WritePublishError::Rejected),
+            "a floor above the parked snapshot refuses even at an epoch it clears",
+        );
+        assert!(!published_at(&harness, &ahead.new_name));
+
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(floor::advance_write_epoch_on_sight(
             &harness.floors,
@@ -4012,7 +4030,6 @@ mod tests {
             moved.write_epoch,
         ))
         .expect("the floor rise lands");
-
         assert_eq!(
             block_on(net.republish(&moved)),
             Err(WritePublishError::Rejected),
