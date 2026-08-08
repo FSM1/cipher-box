@@ -76,23 +76,33 @@ where
             Err(ApiError::Status { status: 404, .. }) => {}
             Err(_) => return Err(VaultPointerProbe::Indeterminate),
         }
-        // Then the record plane itself, per endpoint so a failure is not read as
-        // an absence: any record at the name means the account has published.
-        let mut answered = false;
-        for endpoint in self.transport.endpoints() {
+        // Then the record plane, unanimously: **every** endpoint must answer, and
+        // every answer must be "no record". A tolerated failure is what makes a
+        // partial outage indistinguishable from a vacant name — the endpoint
+        // holding the account's pointer is down while a peer that never saw it
+        // answers `None` — and the mint that follows overwrites the one record
+        // naming the one root whose owner-write blob holds a write scope seed
+        // nobody can re-derive. Unanimity costs nothing on the refusing side: a
+        // single `Some` is already decisive.
+        let endpoints = self.transport.endpoints();
+        // The seam contracts this set as never empty; inferring vacancy from zero
+        // answers is the same bug in its degenerate form, so the guard is
+        // release-active rather than an assumption.
+        if endpoints.is_empty() {
+            return Err(VaultPointerProbe::Indeterminate);
+        }
+        for endpoint in endpoints {
             match self
                 .transport
                 .get_record(&endpoint, name.as_str(), MAX_RECORD_BYTES)
                 .await
             {
                 Ok(Some(_)) => return Err(VaultPointerProbe::AlreadyPublished),
-                Ok(None) => answered = true,
-                Err(_) => {}
+                Ok(None) => {}
+                Err(_) => return Err(VaultPointerProbe::Indeterminate),
             }
         }
-        answered
-            .then_some(())
-            .ok_or(VaultPointerProbe::Indeterminate)
+        Ok(())
     }
 
     async fn publish_root_record(
@@ -148,5 +158,191 @@ where
         .await
         .map_err(publish_verdict)?;
         landed(outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+
+    use crate::profile::SyncTimingProfile;
+    use crate::seams::{EndpointId, HttpResponse};
+    use crate::testkit::{FakeDevice, FakeWorld, block_on};
+
+    /// The vault-pointer name a first run would mint at.
+    fn pointer_name() -> IpnsName {
+        IpnsName::from_public_key(&kdf::vault_pointer_index(b"probe-secret", 0).verifying_key())
+    }
+
+    /// A signed record at `pointer_name` — the account's existing vault, as an
+    /// endpoint holds it.
+    fn published_pointer() -> Vec<u8> {
+        IpnsRecord::create_v2(
+            &kdf::vault_pointer_index(b"probe-secret", 0),
+            b"sealed-repoint-block",
+            1,
+            0,
+            "2099-01-01T00:00:00Z",
+        )
+        .marshal()
+    }
+
+    /// Queue the recovery-cache answer the probe reads first.
+    fn recovery_reply(device: &FakeDevice, status: u16) {
+        device.http.enqueue_response(HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: br#"{"statusCode":404}"#.to_vec(),
+        });
+    }
+
+    /// Run the production probe over `device`.
+    fn probe(device: &FakeDevice, profile: &SyncTimingProfile) -> Result<(), VaultPointerProbe> {
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let net = VaultProvisionNet {
+            transport: &device.record_store,
+            api: &api,
+            floors: &device.floor_store,
+            scheduler: &device.scheduler,
+            profile,
+        };
+        block_on(net.require_vacant_vault_pointer(&pointer_name()))
+    }
+
+    /// The partial outage: the endpoint holding the account's vault pointer is
+    /// down, and a peer that never saw it answers "no record". Reading that pair
+    /// as a vacant name mints a second genesis vault over the one record naming
+    /// the root whose owner-write blob holds the account's only write scope seed.
+    /// Unanimity is what makes the pair indeterminate instead.
+    #[test]
+    fn one_silent_endpoint_is_never_a_vacant_name() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        let holder = EndpointId::new("fake:someguy");
+        device
+            .record_store
+            .seed_record(&holder, pointer_name().as_str(), published_pointer());
+        device.record_store.fail_endpoint(&holder);
+        recovery_reply(&device, 404);
+
+        assert_eq!(
+            probe(&device, &SyncTimingProfile::CI),
+            Err(VaultPointerProbe::Indeterminate),
+            "a silent endpoint is not an absent record",
+        );
+    }
+
+    /// A healthy endpoint set with the record still on one of them refuses
+    /// outright — the refusing side needs no unanimity, one sighting is decisive.
+    #[test]
+    fn a_record_at_any_endpoint_refuses_the_mint() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        device.record_store.seed_record(
+            &EndpointId::new("fake:public-routing"),
+            pointer_name().as_str(),
+            published_pointer(),
+        );
+        recovery_reply(&device, 404);
+
+        assert_eq!(
+            probe(&device, &SyncTimingProfile::CI),
+            Err(VaultPointerProbe::AlreadyPublished),
+        );
+    }
+
+    /// The only admitting case: every authority answered, and none held a record.
+    #[test]
+    fn a_unanimous_no_record_is_the_only_vacancy() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        recovery_reply(&device, 404);
+
+        assert_eq!(probe(&device, &SyncTimingProfile::CI), Ok(()));
+    }
+
+    /// A transport that offers no endpoint answers nothing, which is the same
+    /// inference in its degenerate form — so the loop's `Ok(())` fall-through is
+    /// guarded rather than assumed, release-active. The seam contracts the set as
+    /// never empty; a host that breaks that contract must not mint a vault.
+    #[test]
+    fn an_empty_endpoint_set_answers_nothing_and_admits_nothing() {
+        #[derive(Clone)]
+        struct NoEndpoints;
+
+        impl RecordTransport for NoEndpoints {
+            fn endpoints(&self) -> Vec<EndpointId> {
+                Vec::new()
+            }
+            async fn get_record(
+                &self,
+                _endpoint: &EndpointId,
+                _routing_key: &str,
+                _max_bytes: usize,
+            ) -> crate::seams::SeamResult<Option<Vec<u8>>> {
+                unreachable!("no endpoint to ask")
+            }
+            async fn put_record(
+                &self,
+                _endpoint: &EndpointId,
+                _routing_key: &str,
+                _record: &[u8],
+            ) -> crate::seams::SeamResult<()> {
+                unreachable!("no endpoint to write")
+            }
+        }
+
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        recovery_reply(&device, 404);
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let net = VaultProvisionNet {
+            transport: &NoEndpoints,
+            api: &api,
+            floors: &device.floor_store,
+            scheduler: &device.scheduler,
+            profile: &SyncTimingProfile::CI,
+        };
+        assert_eq!(
+            block_on(net.require_vacant_vault_pointer(&pointer_name())),
+            Err(VaultPointerProbe::Indeterminate),
+        );
+    }
+
+    /// The recovery cache outlives an IPNS EOL lapse, so it answers for a vault
+    /// whose record has aged out of every routing table — and an API that will
+    /// not say is silence, never an absence.
+    #[test]
+    fn the_recovery_cache_refuses_before_the_record_plane_is_asked() {
+        for (status, expected) in [
+            (200, VaultPointerProbe::AlreadyPublished),
+            (500, VaultPointerProbe::Indeterminate),
+            (429, VaultPointerProbe::Indeterminate),
+        ] {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice");
+            recovery_reply(&device, status);
+            assert_eq!(
+                probe(&device, &SyncTimingProfile::CI),
+                Err(expected),
+                "recovery answered {status}",
+            );
+            assert_eq!(
+                device.http.requests().len(),
+                1,
+                "a decided recovery answer asks no endpoint",
+            );
+        }
     }
 }

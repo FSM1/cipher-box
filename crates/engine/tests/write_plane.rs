@@ -36,7 +36,7 @@ use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_chil
 use cipherbox_engine::net::{ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
-    StagingStore, UnixMillis,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
@@ -925,6 +925,89 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     assert_eq!(children.len(), 1, "device B resolves the provisioned write");
     assert_eq!(children[0].name, "photos");
     assert_eq!(children[0].id, view.children[0].id);
+}
+
+/// The index of every `POST /content/upload` this device made, in request order.
+fn upload_positions(device: &FakeDevice) -> Vec<usize> {
+    device
+        .http
+        .requests()
+        .iter()
+        .enumerate()
+        .filter(|(_, request)| request.url.ends_with("/content/upload"))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The first write onto a freshly provisioned vault rests on one ordering inside
+/// the tick body: the resolve adopts the genesis root — populating the snapshot
+/// cache and advancing the name's sequence floor — before the drain reads that
+/// cache in `load_scope_root`. Provisioning deliberately publishes without
+/// advancing the floor itself, precisely so the first resolve is an `Adopted`
+/// rather than a `Current` (which caches nothing), so both halves of that are
+/// asserted here rather than left to the downstream "the folder published".
+#[test]
+fn the_first_tick_adopts_the_genesis_root_before_the_drain_reads_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 64);
+    let (mut engine, _events) = engine_on_api(&alice, 42);
+    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+    let root_name = vault_root_name(&world);
+
+    // Provisioning publishes the root; it does not cache it. Nothing the drain
+    // could author onto exists yet.
+    assert_eq!(
+        block_on(alice.snapshot_cache.get(root_name.as_str().as_bytes())).unwrap(),
+        None,
+        "the mint caches nothing — the adopt is the cache's only source",
+    );
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+    // Counted on the same basis the assertion below indexes on, so the two
+    // cannot drift: the mint's own head upload must not be mistaken for the
+    // drain's.
+    let uploads_before = upload_positions(&alice).len();
+
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    // The tick's resolve adopted the genesis record, which is what a `Current`
+    // verdict would not have done.
+    assert!(
+        block_on(alice.snapshot_cache.get(root_name.as_str().as_bytes()))
+            .unwrap()
+            .is_some(),
+        "the first resolve adopted the genesis root",
+    );
+
+    // And it did so before the drain authored anything: the drain's first head
+    // upload follows the gateway read the adopt made.
+    let urls: Vec<String> = alice
+        .http
+        .requests()
+        .iter()
+        .map(|request| request.url.clone())
+        .collect();
+    let first_head_read = urls
+        .iter()
+        .position(|url| url.starts_with("https://gw.test/ipfs/"))
+        .expect("the adopt fetches the genesis head block");
+    let first_drain_upload = upload_positions(&alice)
+        .get(uploads_before)
+        .copied()
+        .expect("the drain uploads the child's head block");
+    assert!(
+        first_head_read < first_drain_upload,
+        "the drain authors onto state the same tick's resolve adopted",
+    );
 }
 
 #[test]

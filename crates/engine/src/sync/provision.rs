@@ -79,9 +79,9 @@ pub enum VaultPointerProbe {
     /// name that names the first, and the first carries the only copy of a
     /// write scope seed nobody can re-derive.
     AlreadyPublished,
-    /// Nothing that could answer did — an unreachable record plane, an endpoint
-    /// set whose every member failed, or an API that would not say. Never
-    /// evidence that an account is new.
+    /// Some authority that must answer did not — any endpoint that failed, or an
+    /// API that would not say. Never evidence that an account is new: one silent
+    /// endpoint is exactly how a partial outage impersonates a vacant name.
     Indeterminate,
 }
 
@@ -109,11 +109,12 @@ pub trait VaultProvisionPublisher {
     /// Fail-closed proof that `name` has never carried a vault pointer — the
     /// mint's one precondition.
     ///
-    /// A failed read is not that proof. The pointer walk yields nothing for a
-    /// total transport outage exactly as it does for a new account, because the
-    /// fan-out GET tolerates a per-endpoint failure as staleness
-    /// (`net/fanout.rs`), so the mint asks positively here instead: every
-    /// authority that could know must answer, and none may hold a record.
+    /// A failed read is not that proof. The pointer walk yields nothing for an
+    /// outage exactly as it does for a new account, because the fan-out GET
+    /// tolerates a per-endpoint failure as staleness (`net/fanout.rs`), so the
+    /// mint asks positively here instead — and **unanimously**: every authority
+    /// must answer, and none may hold a record. One tolerated silence is one
+    /// partial outage away from overwriting a live account's only vault.
     async fn require_vacant_vault_pointer(&self, name: &IpnsName) -> Result<(), VaultPointerProbe>;
 
     /// Upload the head block, then register-first CAS-publish the genesis root
