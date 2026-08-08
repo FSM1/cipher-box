@@ -19,7 +19,7 @@ use cipherbox_contract::{
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, sign_grant_set,
+    ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, ReadBody, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -38,8 +38,8 @@ use cipherbox_engine::net::REGISTRY_BATCH_MAX;
 use cipherbox_engine::rotation::{
     CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
     ResealedScopeRoot, ResolveFailure, ScopeRootIdentity, ScopeRootPublishError,
-    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptScope,
-    WriteHistory,
+    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode,
+    SweptScope, WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
@@ -1151,9 +1151,13 @@ impl Mailbox for ApiMailbox {
 }
 
 /// The grant's whole net arm, kept local: this leg asserts the *delivery* the
-/// grant path emits, not IPNS. The swept parent scope is empty, so the
-/// convergence gate passes with nothing to advance.
+/// grant path emits, not IPNS. The convergence gate measures the granted node
+/// and finds it already at the scope epoch, so it advances nothing.
 struct LocalNet;
+
+/// The parent scope's read epoch, shared by the scope root and the granted node
+/// so the node measures as converged.
+const LOCAL_NET_READ_EPOCH: u64 = 3;
 
 impl SweepResolver for LocalNet {
     async fn resolve_scope(
@@ -1161,7 +1165,7 @@ impl SweepResolver for LocalNet {
         _scope: &ChildScopeRef,
     ) -> Result<SweptScope, SweepResolveFailure> {
         Ok(SweptScope {
-            current_read_epoch: 3,
+            current_read_epoch: LOCAL_NET_READ_EPOCH,
             children: Vec::new(),
             direct_child_scope_index: Vec::new(),
         })
@@ -1179,7 +1183,18 @@ impl SweepResolver for LocalNet {
         _scope: &ChildScopeRef,
         _child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        Err(SweepResolveFailure::Rejected)
+        Ok(SweptChild::Interior(SweptNode {
+            current_read_epoch: LOCAL_NET_READ_EPOCH,
+            sequence: 1,
+            read_body: ReadBody::Folder {
+                created_at: 0,
+                modified_at: 0,
+                children: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        }))
     }
 }
 
