@@ -450,9 +450,16 @@ Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
-is behind its scope's current epoch. Runnable by any write-capable client;
-ordinary writes advance it for free. It also converges a subtree before a grant
-(the epoch-converged requirement) and self-heals the direct-child-scope index —
+is behind its scope's current epoch. Reading one is the single path that runs
+the sequence floor without the read-epoch floor — a lagging node sits below that
+floor by construction, and carries no seed, grant blob or commitment for the
+stage to protect; its body opens under the seed the scope's history-link ratchet
+walks back to. A node the retained window no longer reaches is readable by
+nobody: it is reported unreachable and neither swept nor descended into, never
+treated as a trust violation of its own record. Runnable by any write-capable
+client; ordinary writes advance it for free. It also converges the granted folder's own
+subtree before a grant (the epoch-converged requirement, FSM1/cipher-box-next#26 D2 — the folder's
+subtree, not the whole scope it sits in) and self-heals the direct-child-scope index —
 a scope root encountered but missing from its parent's index is repaired and
 flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
 re-sealed. Only a name the walk resolved current may be written to an index: a
@@ -625,8 +632,10 @@ the republish it already does.
   `writeScopeSeed` sealed to the owner's own enc subkey, beside that write-body
   (`reseal_scope_root`, so every root/interior write-scope cut, rotation, and
   cascade carries one) — the owner's recovery source for `write_name_signer`.
-  The sweep authors none: it re-seals interior nodes, which publish no
-  write-body for a blob to sit beside (FSM1/cipher-box-next#27 D6). This slice authors and
+  The sweep's interior re-seals author none — an interior node publishes no
+  write-body for a blob to sit beside (FSM1/cipher-box-next#27 D6) — while its
+  index self-heal, which republishes the scope root, authors one like any other
+  root re-seal. This slice authors and
   gate-verifies the blob; the owner read/consume that opens it into
   `HeldMaterial.write_scope_seed` rides a later facade slice.
 

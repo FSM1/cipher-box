@@ -55,7 +55,8 @@ use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window
 /// is the deepest epoch lag a backward walk can cover; a node past it is
-/// re-sealed forward by the next sweep rather than lost.
+/// readable by nobody, and the sweep reports it unreachable rather than
+/// re-sealing it forward.
 const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 
 // Under the decode bound, or a re-seal mints sections the decoder refuses; at
@@ -278,20 +279,34 @@ fn walkable_chain_start(
     let mut seed = Zeroizing::new(*head.seed);
     let mut epoch = head.epoch;
     for (i, link) in carried.iter().enumerate().rev() {
-        let key = kdf::structure_key(&seed, STRUCT_TAG_HISTORY_LINK);
-        let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
-        let Ok(payload) = open_history_link(key.as_bytes(), &ctx, &link.sealed) else {
+        let Some(prev) = ratchet_step(v, scope_id, &seed, epoch, link) else {
             return i + 1;
         };
-        // The ratchet only ever steps backward; a flat or rising epoch is a
-        // chain that cannot terminate.
-        if payload.prev_epoch >= epoch {
-            return i + 1;
-        }
-        seed = Zeroizing::new(*payload.prev_seed());
-        epoch = payload.prev_epoch;
+        (seed, epoch) = prev;
     }
     0
+}
+
+/// One backward step of the key-regression ratchet: open `link` under `seed`'s
+/// structure key at `epoch` and yield the epoch before it. `None` when the link
+/// will not open, or when its epoch does not descend — a chain that cannot
+/// terminate. The one home of the ratchet's key and AAD derivation, so the
+/// writer's retention decision ([`walkable_chain_start`]) and the reader's seed
+/// recovery ([`seed_at_epoch`]) can never disagree on it.
+fn ratchet_step(
+    v: u64,
+    scope_id: [u8; 16],
+    seed: &[u8; SECRET_LEN],
+    epoch: u64,
+    link: &SignedSealed,
+) -> Option<(Zeroizing<[u8; SECRET_LEN]>, u64)> {
+    let key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
+    let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
+    let payload = open_history_link(key.as_bytes(), &ctx, &link.sealed).ok()?;
+    if payload.prev_epoch >= epoch {
+        return None;
+    }
+    Some((Zeroizing::new(*payload.prev_seed()), payload.prev_epoch))
 }
 
 /// Walk a scope's key-regression ratchet backward from its current seed to the
@@ -319,15 +334,7 @@ pub fn seed_at_epoch(
         if epoch == target_epoch {
             return Some(seed);
         }
-        let key = kdf::structure_key(&seed, STRUCT_TAG_HISTORY_LINK);
-        let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
-        let payload = open_history_link(key.as_bytes(), &ctx, &link.sealed).ok()?;
-        // The ratchet only ever steps backward.
-        if payload.prev_epoch >= epoch {
-            return None;
-        }
-        seed = Zeroizing::new(*payload.prev_seed());
-        epoch = payload.prev_epoch;
+        (seed, epoch) = ratchet_step(v, scope_id, &seed, epoch, link)?;
     }
     (epoch == target_epoch).then_some(seed)
 }

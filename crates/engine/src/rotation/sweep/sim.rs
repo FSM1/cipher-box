@@ -32,6 +32,36 @@ pub(crate) fn scope_ref(byte: u8) -> ChildScopeRef {
     ChildScopeRef::new(id(byte), name(byte))
 }
 
+/// A folder body naming `children`, at each byte's own simulated name unless
+/// `overrides` gives this parent a different one for it — the C2 conflict,
+/// where two parents disagree on one node's name.
+pub(crate) fn folder_named(
+    parent: u8,
+    children: &[u8],
+    overrides: &HashMap<(u8, u8), Vec<u8>>,
+) -> ReadBody {
+    ReadBody::Folder {
+        created_at: 1,
+        modified_at: 2,
+        children: children
+            .iter()
+            .map(|b| ChildRef {
+                id: id(*b),
+                name: format!("n{b:02x}"),
+                ipns_name: overrides
+                    .get(&(parent, *b))
+                    .cloned()
+                    .unwrap_or_else(|| name(*b)),
+                kind: NodeKind::Folder,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            })
+            .collect(),
+        unknown: PreservedFields::new(),
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) fn folder(children: &[u8]) -> ReadBody {
     ReadBody::Folder {
         created_at: 1,
@@ -98,6 +128,8 @@ pub(crate) struct NetState {
     /// The published index, once a repair lands.
     pub(crate) repaired_index: Option<Vec<ChildScopeRef>>,
     pub(crate) index_repair_fault: Option<ScopeRootPublishError>,
+    /// `(parent, child)` pairs the parent names at a caller-chosen `ipnsName`.
+    pub(crate) child_names: HashMap<(u8, u8), Vec<u8>>,
 }
 
 /// The sweep's fake network: one scope, its interior nodes, and its pointer.
@@ -128,12 +160,13 @@ impl FakeNet {
         self
     }
 
-    /// A descendant scope root: the walk stops at it. `indexed` lists it in
-    /// the scope's `directChildScopeIndex`; omitting it is the #38 D6 gap.
-    pub(crate) fn scope_root(self, byte: u8, indexed: bool, children: &[u8]) -> Self {
+    /// A descendant scope root: the walk stops at it, so it never publishes a
+    /// body and never yields children. `indexed` lists it in the scope's
+    /// `directChildScopeIndex`; omitting it is the #38 D6 gap.
+    pub(crate) fn scope_root(self, byte: u8, indexed: bool) -> Self {
         {
             let mut state = self.state.borrow_mut();
-            let mut node = FakeNode::new(0, children);
+            let mut node = FakeNode::new(0, &[]);
             node.is_scope_root = true;
             state.nodes.insert(id(byte), node);
             if indexed {
@@ -179,6 +212,23 @@ impl FakeNet {
 
     pub(crate) fn pointer_to(self, byte: u8) -> Self {
         self.state.borrow_mut().pointer = Some(name(byte));
+        self
+    }
+
+    /// `parent` names `child` at a name of its own, so a second parent naming
+    /// the same child differently is the C2 conflict.
+    pub(crate) fn names_child(self, parent: u8, child: u8, ipns_name: &str) -> Self {
+        self.state
+            .borrow_mut()
+            .child_names
+            .insert((parent, child), ipns_name.as_bytes().to_vec());
+        self
+    }
+
+    /// Seed a **non-canonical** stored index: `byte` listed twice — the crash
+    /// residue #38 D6's repair also covers.
+    pub(crate) fn duplicate_index_entry(self, byte: u8) -> Self {
+        self.state.borrow_mut().index.push(byte);
         self
     }
 
@@ -228,7 +278,18 @@ impl SweepResolver for FakeNet {
             .unwrap_or_else(|| state.index.iter().map(|b| scope_ref(*b)).collect());
         Ok(SweptScope {
             current_read_epoch: state.scope_epoch,
-            children: state.root_children.iter().map(|b| node_ref(*b)).collect(),
+            children: state
+                .root_children
+                .iter()
+                .map(|b| NodeRef {
+                    node_id: id(*b),
+                    ipns_name: state
+                        .child_names
+                        .get(&(0x00, *b))
+                        .cloned()
+                        .unwrap_or_else(|| name(*b)),
+                })
+                .collect(),
             direct_child_scope_index: index,
         })
     }
@@ -241,7 +302,11 @@ impl SweepResolver for FakeNet {
         Ok(self.state.borrow().pointer.clone())
     }
 
-    async fn resolve_child(&self, child: &NodeRef) -> Result<SweptChild, SweepResolveFailure> {
+    async fn resolve_child(
+        &self,
+        _scope: &ChildScopeRef,
+        child: &NodeRef,
+    ) -> Result<SweptChild, SweepResolveFailure> {
         let state = self.state.borrow();
         if let Some(reason) = state.node_faults.get(&child.node_id) {
             return Err(*reason);
@@ -264,7 +329,8 @@ impl SweepResolver for FakeNet {
         }
         Ok(SweptChild::Interior(SweptNode {
             current_read_epoch: node.epoch,
-            read_body: folder(&node.children),
+            sequence: 1,
+            read_body: folder_named(child.node_id[0], &node.children, &state.child_names),
             carried_unknown: PreservedFields::new(),
             carried_epoch_tag_unknown: PreservedFields::new(),
         }))
@@ -272,7 +338,11 @@ impl SweepResolver for FakeNet {
 }
 
 impl SweepPublisher for FakeNet {
-    async fn publish_node(&self, node: &LaggingNode<'_>) -> Result<(), ScopeRootPublishError> {
+    async fn publish_node(
+        &self,
+        _scope: &ChildScopeRef,
+        node: &LaggingNode<'_>,
+    ) -> Result<(), ScopeRootPublishError> {
         let mut state = self.state.borrow_mut();
         let entry = state.nodes.get_mut(&node.node_id).expect("node");
         entry.publishes += 1;
@@ -335,7 +405,7 @@ impl Scenario {
             net = net.node(*byte, *epoch, &[]);
         }
         for (byte, indexed) in self.scope_roots {
-            net = net.scope_root(*byte, *indexed, &[]);
+            net = net.scope_root(*byte, *indexed);
         }
         net
     }

@@ -1174,13 +1174,21 @@ impl SweepResolver for LocalNet {
         Ok(None)
     }
 
-    async fn resolve_child(&self, _child: &NodeRef) -> Result<SweptChild, SweepResolveFailure> {
+    async fn resolve_child(
+        &self,
+        _scope: &ChildScopeRef,
+        _child: &NodeRef,
+    ) -> Result<SweptChild, SweepResolveFailure> {
         Err(SweepResolveFailure::Rejected)
     }
 }
 
 impl SweepPublisher for LocalNet {
-    async fn publish_node(&self, _node: &LaggingNode<'_>) -> Result<(), ScopeRootPublishError> {
+    async fn publish_node(
+        &self,
+        _scope: &ChildScopeRef,
+        _node: &LaggingNode<'_>,
+    ) -> Result<(), ScopeRootPublishError> {
         Ok(())
     }
 

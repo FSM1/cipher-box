@@ -64,7 +64,7 @@ pub use rotate_write::{
 };
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
-    SweepResolver, SweptChild, SweptNode, SweptScope, run_sweep, sweep_pass,
+    SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, sweep_pass,
 };
 pub use trigger::{
     RevokeError, RevokedCommittedSet, RotationTrigger, ScopeExitReport, ScopeExitRotator,
