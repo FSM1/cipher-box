@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "c340f74051bb",
+  "strategy": "manual-commit",
+  "branch": "chore/scope-wasm-host-opid-import-to-tests",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/wasm/src/host.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c3/40f74051bb/0/metadata.json",
+      "transcript": "/c3/40f74051bb/0/full.jsonl",
+      "compact_transcript": "/c3/40f74051bb/0/transcript.jsonl",
+      "content_hash": "/c3/40f74051bb/0/content_hash.txt",
+      "prompt": "/c3/40f74051bb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1127,
+    "cache_creation_tokens": 1581685,
+    "cache_read_tokens": 136292754,
+    "output_tokens": 475678,
+    "api_call_count": 566
+  }
+}

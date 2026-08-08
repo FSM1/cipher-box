@@ -1,0 +1,1358 @@
+<task-notification>
+<task-id>a1294070d16f0be0a</task-id>
+<tool-use-id>toolu_01UUswYFApsq7QFm7DAhqZwb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a1294070d16f0be0a.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve PR 1141 review threads" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The final sweep monitor is running. I will report once it reports CI settled or a late Greptile review appears.</result>
+<usage><subagent_tokens>102089</subagent_tokens><tool_uses>70</tool_uses><duration_ms>806255</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7fo7x7yd</task-id>
+<summary>Monitor event: "PR 1141 Windows CI leg and a late Greptile review"</summary>
+<event>CI Cargo Check &amp; Test (Windows): IN_PROGRESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7fo7x7yd</task-id>
+<summary>Monitor event: "PR 1141 Windows CI leg and a late Greptile review"</summary>
+<event>CI Cargo Check &amp; Test (Windows): SUCCESS</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+#1141 is merged - flip ADR004 and confirm the held records key question.
+
+---
+
+yeah please update #1136 with these details
+
+---
+
+please kick off wave 7 batches
+
+---
+
+<task-notification>
+<task-id>ad1ebd4fed3576bc8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/ad1ebd4fed3576bc8.output</output-file>
+<status>completed</status>
+<summary>Agent "B5 settings placement default" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+## B5 report — #1084
+
+**Branch** `fix/settings-unproven-first-run` · **PR** [#1149](https://github.com/FSM1/cipher-box/pull/1149) (draft, `Closes #1084`)
+
+**Files touched:** `crates/engine/src/settings.rs`, `crates/engine/tests/vault_settings.rs`, `crates/engine/tests/write_plane.rs` (appended only), `blueprint/engine.md`. No other batch's files.
+
+**Gates (committed tree):** fmt=0, clippy=0, `cargo test --workspace`=0, wasm32 check=0, `lint:tracker-refs`=0.
+
+### What shipped
+
+`DefaultsReason::NoRecord` was derived from the per-name sequence floor alone — a mark only a *confirmed adopt* raises. A settings record leaves three durable marks; the two the sequence floor misses are the ones that matter:
+
+- **The publish mint counter**, raised by `next_revision` ahead of everything a publish can fail at. A member whose placement save never landed still carries durable proof of the choice — the moment reverting it is cheapest.
+- **The adopted body revision**, raised by a store write separate from and not atomic with the sequence floor's (both `let _ =`, and `commit_floors` is documented non-atomic). A device that took one and lost the other demonstrably adopted a record.
+
+All three are now read on the withheld branch; any present makes a missing record `Suppressed`, which already refuses. Unreadable marks fail closed to `FloorUnreadable`. `NoRecord` → `UnprovenFirstRun`, because absence is only ever a verdict about *this device* and this is the one degraded arm that still authorises a write. No gate moved.
+
+### Design constraint worth knowing
+
+Refusing the unproven first run outright is not available: `publish_settings` has no production caller (#1144), so "no record" is the universal state and a blanket refusal would refuse every content write on every account. The mint-counter half is therefore dormant until a settings-save command is wired; the adopted-revision and unreadable-mark halves are live now.
+
+### Review gates
+
+- **`/simplify`** (4 angles): killed a `SettingsTraces` struct + helper as derivable state, a fallible `placement_of(&amp;default())` with a dead `Err` arm, five copies of one invariant, and a hard-coded `settings-revision/` prefix literal duplicated across the crate boundary. Extracted a `publish_unconfirmed` fixture shared with the test that already needed it.
+- **`/security-review`**: clean on trust boundaries, namespacing, determinism, and leaks. Flagged the adopted-revision mark I had dropped during simplify — restored it.
+- **`/crypto-privacy-review`**: confirmed no gate reordering, rule-8 symmetry intact, no new persisted state or traffic. Found one MEDIUM I could not fix (below), and correctly insisted I restore the byte-destination assertion the altitude reviewer had talked me out of.
+
+### Left undone — lives in B1's `facade.rs`
+
+The crypto review found the residual path *destroys* the signal that could close it. `hosted_quota_pre_flight` only runs on a placement that resolved — after this change, that includes the assumed `Hosted`. A fresh device with the record withheld therefore PATCHes the account to `byo=false`, clearing the account-wide flag on a placement nothing authenticated, and removing the server-side backstop that would have rejected its hosted upload. Also: `self.placement` is set once in `start` and never recomputed, so a successful in-session settings save cannot clear a `NoPlacement` refusal until restart — while the refusal's own message says "save your settings again".
+
+Filed as **[#1159](https://github.com/FSM1/cipher-box/issues/1159)** (`v2-build`, native `blocked_by` edge to #1084), with the two-part fix spelled out: gate the reconcile on an authenticated placement, and read the flag in the restricting direction only. Doing both closes #1084's documented residual — worth routing to whoever picks up the facade next.</result>
+<usage><subagent_tokens>268443</subagent_tokens><tool_uses>156</tool_uses><duration_ms>2127338</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad1ebd4fed3576bc8</worktreePath><worktreeBranch>worktree-agent-ad1ebd4fed3576bc8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab0ef8f80ee151750</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/ab0ef8f80ee151750.output</output-file>
+<status>completed</status>
+<summary>Agent "B7 client worker hardening" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both issues shipped as independent draft PRs off `main`, all CI green.
+
+## PR #1145 — #1037, zeroize the upload chunk in the engine worker
+
+`fix/1037-zeroize-worker-upload-chunk` · https://github.com/FSM1/cipher-box/pull/1145
+Files: `packages/client/src/worker/engineHost.ts`, `engineHost.test.ts`
+
+**Ownership finding (the thing the issue turned on):** the chunk reaches `EngineHost.pushChunk` by transfer at every hop — `transport.ts:135` and the follower's `broadcastTransport` → `leaderRelay` chain both `postMessage(..., [chunk])`, so the buffer is detached in the sender's realm. The worker is the terminal owner, and no same-realm caller still holds it. `crates/wasm/src/host.rs:289` takes `chunk: Vec&lt;u8&gt;`, so wasm-bindgen marshals the view into linear memory *before* `push_chunk` returns its promise; the wipe cannot race the copy.
+
+`EngineHost` now has one private `scrubbing` helper (wipe in a `finally`, so the reject path scrubs too); `start` and `pushChunk` share it instead of repeating the idiom. Two tests assert the buffer is zero after a resolved and a rejected push, with the WASM-side copy asserted to have seen real bytes so the wipe can't pass by firing too early.
+
+## PR #1150 — #1051, fail closed in `buildCommand`
+
+`fix/1051-fail-closed-build-command` · https://github.com/FSM1/cipher-box/pull/1150
+Files: `packages/client/src/worker/commandCodec.ts`, `commandCodec.test.ts`
+
+Every field of all 16 command kinds now passes a checker taking `unknown`. Beyond the issue's ask I also fixed `nodeKind`/`permission`, which silently fell through to `Folder`/**`Write`** on an unrecognised literal — the same coercion class, one layer down, and a silent privilege upgrade. The `default` arm uses the relay's house idiom (`unknownCommand(descriptor: never)`), verified by temporarily adding a 17th kind: `tsc` fails with *not assignable to type 'never'*. Six tests, driven against a fake whose every builder succeeds so only the codec can reject.
+
+**Note on #1144:** the exhaustiveness bound is a hard compile error, so whoever lands the new command kind must add a builder in the same diff — that is the intended cost, not a surprise.
+
+## Gates
+
+Both branches, from the committed tree: `pnpm typecheck` 0, `pnpm test` 0, `pnpm lint` 0, `pnpm lint:tracker-refs` 0. Full CI settled with zero non-success checks on both.
+
+## Two corrections I made mid-flight
+
+- The 1051 branch was accidentally cut from the 1037 branch (`git checkout main` fails in a worktree — main is checked out elsewhere). Caught it via `gh pr view --json files` showing four files instead of two; rebased `--onto d11bfce11`, re-ran all four gates, force-pushed with lease. PR #1150 is now two files, independent of #1145.
+- `/simplify`, `/security-review`, `/crypto-privacy-review` ran as subagents on #1145; the pool was saturated by sibling batches for #1150, so I did a manual pass and then got one independent crypto-privacy agent through. Findings folded in: the shared scrub helper, the house exhaustiveness idiom, and a coverage gap where nothing asserted the *second* literal of either mirror enum (`'folder'`, `'write'`).
+
+## Out-of-scope defects found and filed
+
+Both real, both outside `packages/client/src/worker/**` or outside the issue's surface, both with a native bidirectional dependency edge:
+
+- **#1154** (blocked by #1051) — `beginWrite`/`snapshot`/`download`/`openContentStream` read the same untrusted message with the same coercion. Sharper than the command case: wasm-bindgen's `passArray8ToWasm0` is `Uint8Array.prototype.set(arrayLike)`, so a 16-character *string* reaches `NodeId::from_bytes` as sixteen zero bytes and passes the Rust length check — a request against the wrong node rather than a refusal.
+- **#1155** (blocked by #1037) — `EngineClient.pushChunk` and `CorrelatedTransport.request` drop a chunk they refuse *before* any transfer, so it is never detached and never wiped. `EngineClient.start` and `LeaderRelay` already scrub on their equivalent refusals; only the sending side is missing it.
+
+Nothing was left undone in another batch's files. Expect a rebase on both if B1's `#1016` makes additive edits to these two files.</result>
+<usage><subagent_tokens>171846</subagent_tokens><tool_uses>166</tool_uses><duration_ms>2289295</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ab0ef8f80ee151750</worktreePath><worktreeBranch>worktree-agent-ab0ef8f80ee151750</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3288ee81617743c1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a3288ee81617743c1.output</output-file>
+<status>completed</status>
+<summary>Agent "B4 floor and revival chain" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Batch B4 complete: two PRs landed as drafts, one issue returned with an analysis instead of a rushed change.
+
+## PR #1148 — #775 (base `main`)
+`fix/775-cold-seed-anchor-role-from-scope-identity` — https://github.com/FSM1/cipher-box/pull/1148
+
+`gate::floor::cold_seed_checked` took `AnchorRole` as an argument, so a future shared-scope caller could have selected it from a `RepointObject` field and suppressed the read-epoch regression check at the vault anchor. The role is no longer an input at all — it is derived from the re-point's own `scope_id` against the session's root scope id, both trusted. The `AnchorRole` enum was deleted outright (review found it became dead public surface once nothing could pass it).
+
+Files: `crates/engine/src/gate/floor.rs`, `crates/engine/src/sync/boot.rs`, `crates/engine/tests/sync.rs`.
+
+**The recorded #1141 rebase check was a no-op in practice**: the new caller stayed in `gate/floor.rs` + `sync/boot.rs`, so it touched no `mint_grant_row` call and constructed no `ScopeRootIdentity`. No conflict with #1141, confirmed by a clean `cargo test --workspace` on top of `d11bfce11`.
+
+**A production `AnchorRole::Shared` caller could not be wired, and this is a real tracker gap.** The grantee-plane shared-scope resolve does not exist: `scope_pointer_name` derives the pointer name from the *owner's* `ownerPointerSeed`, which a grantee never holds, and no wire field carries that name to a grantee. `open_repoint` has no non-test caller, `grants::accept` persists a `pointerReadKey` nothing reads back, and `Command::AcceptShare` returns `Unimplemented`. The invariant is now structural so the future caller cannot get it wrong, which is what #775 actually asks for.
+
+## PR #1157 — #703 (base = the #775 branch)
+`fix/703-revival-corroborates-recovered-sequence` — https://github.com/FSM1/cipher-box/pull/1157
+
+`revive` trusted a single `recovery_fetch` record as its CAS basis. Now the routing fan-out corroborates it (taking the tie at `&gt;=`, since a same-sequence fork is designed-for after an unconfirmed publish retry), the head CID is read from the same record as the sequence, and a basis below the durable sequence floor fails closed as `ReviveError::StaleSource`.
+
+Files: `crates/engine/src/net/revival.rs`, `crates/engine/tests/net.rs`.
+
+## Review gates
+All three ran on each PR's own diff. Real findings folded in both times; full detail is in the PR bodies. Two worth flagging:
+
+- Security and crypto-privacy independently flagged that #775's derivation rests on an encoder-only invariant. I verified the mechanism rather than applying the suggested core-side check literally: the AEAD tag covers the AAD and the AAD is derived from `object.scope_id`, so a mismatched block cannot open. A decode-side check would be unreachable and could carry no reject vector, which `crates/core`'s coverage law requires. Pinned behaviourally instead.
+- **A review sub-agent ran `git checkout --` on my working tree** and destroyed three in-flight edits, mistaking concurrent work for a rogue agent. Recovered fully. Later reviewers were briefed with an explicit no-git-writes rule.
+
+Two #703 residuals were filed as **#1161** (`blocked_by` #703): `fanout_get_verify` cannot distinguish "no endpoint answered" from "no endpoint has it", and a basis exactly at the floor is admitted with any content. Neither is live — `revive` has no production caller.
+
+## #856 — not shipped, analysis posted instead
+https://github.com/FSM1/cipher-box/issues/856#issuecomment-5217819029
+
+The diagnosis holds. Both viable fixes are out of B4's reach:
+
+- **A.** Per-account `root_scope_id` needs a new frozen-KDF edge plus its KAT — the root scope id is a KDF input, a pointer-payload AAD field, and the envelope scope tag.
+- **B.** An account-namespacing `FloorStore` decorator (my file, `seams/floor_store.rs`) — every downstream consumer is already generic over `F: FloorStore`, so the *entire* cost is ~10 call sites in `facade.rs`, plus a fail-closed accessor because `load_settings` touches floors inside `start()` before the session is committed.
+
+B is the right design, but two of its ten sites fall inside B1's open `#1151` hunks (`@@ -2262,7 +2308 @@` and `@@ -2272,14 +2321 @@`). A ten-site restructure of that file from another batch, stacked behind two PRs, is the exact shape that leaves both branches `MERGEABLE` and still breaks `main`. **Recommend scheduling design B as its own slice once #1151 merges, with `facade.rs` ownership for the duration.**
+
+## Gates (committed tree, tip of the #703 branch)
+`fmt=0` · `clippy=0` · `test=0` · `wasm=0` — same four green on #1148's tip. `main` has not moved since `d11bfce11`; both PRs report `mergeable=clean` and remain drafts.</result>
+<usage><subagent_tokens>292194</subagent_tokens><tool_uses>168</tool_uses><duration_ms>2439700</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3288ee81617743c1</worktreePath><worktreeBranch>worktree-agent-a3288ee81617743c1</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a294a0265d9a6e17d</task-id>
+<tool-use-id>toolu_01KW2iUf8MMAAPpo8Nzwyf4C</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a294a0265d9a6e17d.output</output-file>
+<status>completed</status>
+<summary>Agent "B1 wire facade command arms" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Batch B1 complete.
+
+## Report
+
+**Branch:** `feat/wire-facade-contact-import-and-command-outcome`
+**PR:** [#1151](https://github.com/FSM1/cipher-box/pull/1151) — draft, MERGEABLE, `Closes #1016`
+
+### What landed
+
+**The shape change** (the thing the issue said to land first, never last — six issues sequence behind it). `Engine::command` now returns `Result&lt;CommandOutcome, EngineError&gt;` instead of `Result&lt;Option&lt;OpId&gt;, EngineError&gt;`: `Done`, `Queued { op_id }`, `ContactImported(Contact)`, plus `CommandOutcome::op_id()` for the event-correlation case.
+
+**`Command::ImportContact` fully wired** onto `grants::import_contact` — mandatory fail-closed binding verify, answering with the `Contact` itself (no public constructor, so holding one *is* the proof). Refusals split correctly: bad binding → `TrustViolation`, undecodable → new `EngineError::MalformedInput { check }`, over-cap → refused before the decoder via `MAX_CONTACT_CODE_BYTES`.
+
+### Six arms NOT wired — real blockers, not plumbing
+
+- **`RotateNow`/`Revoke`/`Downgrade`**: need a production `OwnerScopeKeys`. Its `writer_pseudonym` edge takes *pairwise material* and **no production code anywhere derives the owner's half** — every `owner_pseudonym_pk` producer in the tree is a test fixture. That's a KDF-catalog decision, not facade wiring. `rotate_scope` also needs a sweep task and **`SweepResolver` has no production impl**.
+- **`Grant`**: `create_read_grant` takes a `SweepResolver` (same gap) plus the recipient's enc subkey, which needs a contact book the engine doesn't have.
+- **`CreateInviteLink`**: `RecordedInvite` is the owner's authority over the link and no seam persists it; claim-to-grant conversion unlanded (issue says so).
+- **`AcceptShare`**: needs `ReceivedShareStore`, a grants-layer seam outside the nine host seams — adding a tenth changes `SeamSet` and every host.
+
+These are documented in the PR body with checkable conditions. **Worth filing as follow-up issues with dependency edges** — particularly the owner-pseudonym derivation, which blocks all three rotation arms and is currently an invisible tracker gap.
+
+### Gates (from the committed tree)
+
+| Gate | Exit |
+|---|---|
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown --all-targets` | 0 |
+
+No TypeScript work, so no TS gates; verified the diff carries no tracker refs.
+
+### Review gates
+
+- **`/simplify`** (4 angles): found `ImportedContact` duplicating `grants::Contact` → replaced with `Contact` itself; wasm `kind` was a numeric enum diverging from the `Event::kind` string precedent → made it a camelCase string; trimmed absence-justifying and restated docs; deleted a tautological test. All folded in, commit `967aec458`.
+- **`/security-review` + `/crypto-privacy-review`** (combined, crypto-privacy-reviewer): 0 Critical/High. **Medium** — unbounded `contact_code` into the CBOR decoder inside the single-writer lock → added `MAX_CONTACT_CODE_BYTES`. **Lows** — malformed collapsing into `TrustViolation` → added `MalformedInput`; missing `NotStarted` vector for the arm → added. **Info** — derived `Debug` leaking a peer's identity key → hand-wrote `Debug` like `Command`'s. Confirmed clean: binding verify unbypassable, no key material in error strings, no zeroization violation, no timing channel, encode/decode symmetry holds, unimplemented arms genuinely fail closed. Commit `2e1696e3c`.
+- Skipped one finding: wasm returns an exported class rather than a plain JS object (GC-latency, ~72 bytes/command). Every other boundary type here is an exported class, so this matches the existing design; noted rather than changed.
+
+### Ownership boundaries
+
+- **`crates/fuse/src/ops.rs` — NOT touched.** Its `command` helper already discards the value (`self.engine.command(command).await?; Ok(())`), so the signature change passes straight through. The issue's cited line numbers were stale.
+- **`crates/fuse/src/error.rs` — one line added.** B2 owns `crates/fuse/**`. The `From&lt;EngineError&gt; for VfsError` impl is deliberately exhaustive with no wildcard, so my new `MalformedInput` variant is a compile error there by design. Added `EngineError::MalformedInput { .. } =&gt; VfsError::Invalid`. **B2 should expect this one-line conflict.**
+- **`packages/client/src/worker/**` — NOT touched.** `engineHost.command` returns `Promise&lt;void&gt;` and discards, so B7 needs no change. Flagging for B7: the imported contact is currently unreachable from TS; wiring it means reading `identityPublicKey`/`encPublicKey` and calling `.free()`.
+- **`crates/engine/tests/write_plane.rs`** (shared with B3/B5): mechanical `.op_id()` insertions at the 14 sites that read a queue id. No restructuring, no test added or removed.
+- **`crates/wasm/Cargo.toml`**: added `cipherbox-core` as a wasm-target **dev**-dependency so the boundary test can sign a real contact code. Never enters the cdylib.</result>
+<usage><subagent_tokens>279016</subagent_tokens><tool_uses>146</tool_uses><duration_ms>2718313</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a294a0265d9a6e17d</worktreePath><worktreeBranch>worktree-agent-a294a0265d9a6e17d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4f8e775bc23f8bdc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a4f8e775bc23f8bdc.output</output-file>
+<status>completed</status>
+<summary>Agent "B8 stream tickets and media refusal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both PRs are open as drafts. Final verification of the pairwise merge is done.
+
+## Report — batch B8
+
+### PR 1 — #1126, resource-exhaustion bound
+- **Branch** `feat/bound-live-stream-tickets` → **PR** https://github.com/FSM1/cipher-box/pull/1146 (draft), `Closes #1126`
+- **Files**: `packages/client/src/media/{broker,service}.ts` + tests, `apps/web/src/hooks/useFileDownload.ts`, **new** `apps/web/src/hooks/useFileDownload.test.ts`, `apps/web/src/components/file-browser/FileBrowserActions.{tsx,test.tsx}`
+- **Design**: bounded by ticket *lifetime*, not a cap. `MediaBroker.whenIdle(ticket, startWithinMs)` resolves when the ticket's last body ends (cursor count → 0, so the 5s playback linger stays out of the wait) and reports whether a body ever claimed it. `MediaService.whenStreamIdle` maps a URL to it. `save` awaits and revokes in a `finally`, so `downloadSelection`'s sequential loop holds one ticket for a whole selection instead of one per file. `save` now returns `false` for a refused save and the batch stops there.
+
+### PR 2 — #1064, recoverable stream refusal
+- **Branch** `feat/media-player-recoverable-refusal` → **PR** https://github.com/FSM1/cipher-box/pull/1160 (draft), `Closes #1064`
+- **Files**: `packages/client/src/media/{broker,service,registry}.ts`, `correlatedTransport.ts`, `index.ts`, `service.test.ts`; `apps/web` — **new** `components/file-browser/MediaPlayer.tsx`, `FilePreviewDialog.tsx`, `hooks/useFilePreview.ts`, `vault/previewKind.ts`, `styles/dialogs.css`, `FileBrowserActions.test.tsx`
+- **Design**: `MediaBroker` reports every read it gives up on, classified by `engineErrorCode`/`isRecoverableEngineError`; `MediaService.onStreamError` hands the URL's holder a `MediaStreamFailure`. `MediaPlayer` shows a retryable notice for a ceiling refusal (reusing the vault browser's existing notice dialect), a terminal one otherwise, with the element's own `error` as the floor. Audio and video became preview kinds, streamed with no buffered fallback.
+
+**Deviation from the issue you should know about**: #1064 asks for `cb:media:error` to carry the engine's code across the port. Re-checked against the tree — that would be a dead field. The only `cb:media:error` carrying an engine code is raised by `MediaBroker.fail`, which runs **in the tab**, same context as the player; the SW's sole action on it is to error a body whose error a media element cannot read, and `MediaPipe`'s own failures have no engine code. So `protocol.ts` is untouched and the code is reported tab-side. Reasoning is written into the PR body.
+
+### Gates (committed tree, both branches)
+`pnpm typecheck` **0** · `pnpm test` **0** · `pnpm lint` **0** · `pnpm lint:tracker-refs` **0**. No Rust surface in either PR, so the cargo gates are N/A.
+
+### Review gates
+Both PRs ran `/simplify` and `/security-review` on their own diff; findings folded into a second commit on each.
+
+- **#1126 security found two real defects, both fixed**: (1) settling idle waiters in `MediaBroker.close` was wrong — a replaced port is the normal recovery for a killed Service Worker and the pipe re-opens against the fresh port, so settling revoked the ticket before the retry could name it and *every cold-worker download would 404*; `close` now re-arms. (2) The stall deadline could expire on an open body between pulls (Save-As dialog, paused download) and revoke a live transfer; the deadline now covers only the window before a body claims the ticket, and an expiry with a live cursor re-arms. It also flagged that a blocked batch would burn the deadline once per file — hence `save` returning a refusal and the loop breaking.
+- **#1064 security found nothing at or above the bar** (no plaintext/key leak in the report, MIME clamp + `nosniff` intact, single-code classifier so nothing widens into recoverable, listener unsubscribes on unmount and rebuild). Its nit plus `/simplify` gave: broker classifies instead of round-tripping a raw code, fan-out reuses `fanOut` for throwing-subscriber isolation, `onStreamError` refuses a post-`dispose` subscription, `StreamRegistry` owns the ticket-URL shape, three duplicated preview branches collapsed to one, player reuses the existing notice dialect.
+
+### Things you need to know
+- **The two PRs conflict in exactly one file.** `git merge-tree` between the two branches: everything auto-merges except `apps/web/src/components/file-browser/FileBrowserActions.test.tsx` — both add a method to the same hand-rolled `MediaService` fake in the streaming describe's `beforeEach`. Whichever merges second needs a one-hunk rebase keeping both `whenStreamIdle`/`fetched` (#1126) and `onStreamError`/`streamListeners` (#1160). `broker.ts`, `service.ts` and `service.test.ts` overlap but auto-merge cleanly.
+- **No Puppeteer verification.** The player surface needs a logged-in vault, a controlling Service Worker, and the engine at its open-stream ceiling — not reachable from the dev server alone. Manual steps are written into the #1064 PR body.
+- **Nothing left undone for ownership reasons.** Both PRs stayed inside B8's file set; `apps/web/src/vault/previewKind.ts`, `styles/dialogs.css`, `packages/client/src/{index,correlatedTransport}.ts` and `media/registry.ts` are unowned by any batch. `fanOut` in `correlatedTransport.ts` was widened to a generic — both existing call sites infer unchanged.
+- Pre-existing issue spotted but deliberately not widened into: `apps/web/src/engine/snapshotStore.ts:37` holds a third private copy of the `tooManyStreams` classification that could fold into `isRecoverableEngineError`.</result>
+<usage><subagent_tokens>314430</subagent_tokens><tool_uses>200</tool_uses><duration_ms>2905358</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4f8e775bc23f8bdc</worktreePath><worktreeBranch>worktree-agent-a4f8e775bc23f8bdc</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a63b0fc28ce39f26e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a63b0fc28ce39f26e.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of the diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Security review of `feat/fuse-content-write-path` (`git diff main...HEAD`) is complete. No files were edited, nothing committed or pushed.
+
+## 1. Non-zero `ftruncate` resurrects deleted plaintext into the published version
+
+`crates/fuse/src/ops.rs:517-552` — **Severity: MEDIUM**, confidence 9/10. Confirmed.
+
+**Mechanism.** `truncate_handle` records a shrink as only `pending.len = size`. It sets `pending.base = Base::Empty` only when `size == 0` (`ops.rs:547-549`), and `SpillFile::truncate` (`spill.rs:136-149`) only retains/zero-tails blocks the spill *already holds* — on a freshly opened handle the spill is empty, so it is a no-op. `Pending` (`ops.rs:70-79`) carries no truncation floor. Later, `version_block` (`ops.rs:642-652`) resolves any block the spill does not hold by reading the pinned **pre-truncate** base version via `engine.read_stream`, which knows nothing of `pending.len`. `push_version` (`ops.rs:592-598`) then walks `0..len` with no clamp and publishes those bytes.
+
+**Repro — two syscalls, no write needed.** File has a published 100-byte version. `open(O_RDWR)`; `ftruncate(fd, 10)` → `Pending { spill: None, len: 10, base: Version, dirty: true }`; `ftruncate(fd, 100)` → spill is `None` so the spill truncate is a no-op, `len = 100`, `base` stays `Version`; `close(fd)` → every block falls through to the base stream and the published version is byte-for-byte the original 100 bytes. The shrink is entirely undone. The shrink-then-write-past-the-cut variant yields the same for the gap region, which POSIX requires to read as zeros.
+
+**Why security-relevant.** The resurrected plaintext is re-sealed and published as a new *live* version, so (a) a file shared after the user truncated sensitive bytes away exposes those bytes to a recipient who never held the prior version, and (b) the deleted tail is carried into every later version and into a rotated epoch's reseal. Deterministic, no race, reachable from unprivileged `ftruncate(2)`. `create` correctly sets `Base::Empty` (`ops.rs:207`), so this hits exactly the pre-existing-file case where deleted content exists.
+
+**Fix.** Add a truncation floor to `Pending` (e.g. `zeroed_from: Option&lt;u64&gt;`, set on every shrink, raised/cleared as writes fill it). Have `version_block` return zeros — never a base read — for indices wholly at or past the floor, and zero the tail of the straddling block after the base read.
+
+**Test gap.** `crates/fuse/tests/fuse_op_core.rs` exercises truncate only at `size == 0` (lines 986, 1068, 1094, 1115) — the one case `Base::Empty` masks. Add shrink-then-grow and shrink-then-write-past tests.
+
+## 2. `SpillArea::open` sweep + non-atomic dir hardening — UNVALIDATED
+
+`crates/fuse/src/spill.rs:38-46` and `spill.rs:225-229` — candidate severity LOW. **I could not confirm this**: its validation agent never returned, so I have no verdict on it. Correcting an earlier statement of mine in this session that called it filtered — that was premature and wrong.
+
+Raw claim: `open` does `create_dir_all` → `set_permissions(0o700)` → delete **every regular file** in the directory, with no `symlink_metadata` check that the path is a real directory and with a window between creation and the chmod. Claimed consequences: a symlink planted at `&lt;account&gt;/spill` is followed, its target chmod'd `0o700` and its regular files deleted; and the function takes an arbitrary `PathBuf`, so a caller passing `account_data_dir` would wipe the floor store, snapshot cache and staging store. Caveat weighing against it: the attacker must already have same-uid write access to the mount's private data dir, which likely reduces this to hardening. Fix if you want it regardless: reject non-directory/symlink via `symlink_metadata`; create with `DirBuilder::mode(0o700)` so the mode is atomic with creation; scope the sweep to the `spill.&lt;pid&gt;.&lt;n&gt;` name shape.
+
+## Filtered out as false positives
+
+3. **Spill AAD binds no generation counter** (`spill.rs:191`) — FP, confidence 9. Nonce scheme verified **sound**: fresh Entropy-seam key per `SpillFile`, strictly monotone `u64` counter incremented on every `put` including slot rewrites, `checked_add` overflow → `Err`. No nonce is ever reused under a key. Key is `Zeroizing`, memory-only, never logged. The restore-old-ciphertext rollback needs a same-uid local process that can already write the mount directly — hardening, not a vuln.
+4. **`release` tears down `Pending` on a failed commit** (`ops.rs:457-465`) — FP, confidence 9. The security hook was factually wrong: `truncated.and(released)` with `release` returning `committed` means the no-handle truncate path returns `Err` on a failed commit, not a false success. `close(2)` is covered by `flush` (`ops.rs:444-446`), which propagates the commit error; the kernel discarding RELEASE's status is the FUSE protocol for every filesystem. Residual (mmap writeback after the last FLUSH) is reliability. Retaining spills after a failed commit would *increase* ciphertext-at-rest lifetime, inverting the PR's goal.
+5. **Zero-length write extends the file** (`ops.rs:403-404`) — FP, confidence 8. Mechanically real (`pending.len = pending.len.max(end)` runs unconditionally, so `write(fh, big_offset, &amp;[])` sets the length and marks dirty), but the impact is pure resource exhaustion and the same amplification is reachable via a legitimate one-byte sparse write or `truncate_handle` to any size. Linux VFS short-circuits `count == 0` before FUSE. Worth a one-line `if data.is_empty() { return Ok(0); }` as a correctness fix, not a security finding.
+
+## Verified sound (no finding)
+
+Integer arithmetic on kernel-controlled offsets fails closed throughout (`ops.rs:377` `checked_add`; `ops.rs:647` and `spill.rs:157-163` `checked_mul`). Spill files use `create_new(true)` + `mode(0o600)`, so `O_EXCL|O_CREAT` refuses a planted symlink. Spill truncation and cross-slot transplants fail closed (in-memory `blocks` set, `read_exact` over the full slot, block index in the AAD). `flush`/`fsync` ack only after `stage_op` succeeds and leave `dirty = true` for retry. Write and truncate both refuse non-writable handles (`ops.rs:373-375`, `ops.rs:519-521`). All new plaintext buffers are `Zeroizing`. `spill_io` errors carry only `io::ErrorKind`, never a path or content byte. Entropy is injected via `Box&lt;dyn Entropy&gt;` — no direct `OsRng`/`thread_rng` anywhere in the diff.</result>
+<usage><subagent_tokens>76997</subagent_tokens><tool_uses>1</tool_uses><duration_ms>56903</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abd827e5eeed25d4e</worktreePath></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0b765ec3cf59b612</task-id>
+<tool-use-id>toolu_01PfQdJkbmo12edf4FeG281L</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a0b765ec3cf59b612.output</output-file>
+<status>completed</status>
+<summary>Agent "File B1 facade blocker gaps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five reported blockers are real. No source files touched, no git writes; main tree is clean.
+
+## Verified gaps
+
+| # | Gap | Verdict | Evidence (`file:line`) | Issue | Parent | Edges |
+|---|---|---|---|---|---|---|
+| 1 | No production `OwnerScopeKeys` — owner's `pseudonym-sign` pairwise input unbound | **real, untracked** | trait `crates/engine/src/net/rotation.rs:79`; only impls `:1664` (`OwnerSeeds`), `:3115` (`WaveSeeds`), both inside `#[cfg(test)] mod tests` opening at `:1606`; owner half is test const `OWNER_ROOT_SECRET: [u8;32] = [0x6b;32]` at `:1657`; consumed at `:70`/`:588` and `:750`/`:1301`; `blueprint/core.md:278` names it only "owner: root secret"; `SessionIdentity::writer_pseudonym_signer` `crates/engine/src/session.rs:159` takes it as a param and has zero non-test callers | **#1163** | #635 | blocks #1016, #1019 |
+| 2 | `SweepResolver` has no production impl | **real, ALREADY TRACKED** | trait `crates/engine/src/rotation/sweep.rs:127`; impls `:705`,`:875`,`:1322` all after `#[cfg(test)]` at `:496`; `crates/engine/src/grants/create.rs:639` after `#[cfg(test)]` at `:543`; `crates/contract/tests/contract.rs:1137` is a test crate; self-declared at `crates/engine/src/rotation/mod.rs:34` | **reused #1025** | — | added missing edge: #1016 `blocked_by` #1025 |
+| 3 | No contact persistence — `Grant` carries only an identity key, `create_read_grant` needs the bound `enc_pub` | **real, untracked** | `crates/engine/src/facade.rs:465`; `GrantRecipient.enc_pub` `crates/engine/src/grants/create.rs:100`, used `:312`; `import_contact` `crates/engine/src/grants/contact.rs:49` returns a `Contact` nothing stores; zero hits for any contact store; `SeamSet` `crates/engine/src/seams/mod.rs:112` has no such field | **#1164** | #635 | blocks #1016 |
+| 4 | No `RecordedInvite` persistence | **real, untracked** | `crates/engine/src/grants/invite.rs:252`, doc `:272` "Persist it with the link"; consumed as input by `convert_invite_claim` `:499` and `revoke_invite_link` `:639`; published `expiresAt` is explicitly a forgeable hint `:259-262` | **#1165** | #635 | blocks #1016, #1128 |
+| 5 | `ReceivedShareStore` has no production impl; tenth-seam decision unmade | **real, untracked** | trait `crates/engine/src/grants/accept.rs:248`, used by `accept_share` `:396`; sole impl `crates/engine/src/testkit/fakes/received_share_store.rs:38`, and `crates/engine/Cargo.toml:14-15` says production builds never compile `test-kit`; `SeamSet` has nine fields `crates/engine/src/seams/mod.rs:112`; only two `SeamTypes` implementors (`crates/wasm/src/host.rs:45`, `crates/engine/src/testkit/world.rs:14`) | **#1166** | #991 | blocks #1016 |
+
+## Corrections to the report
+
+- **Gap 2 was already tracked** by open #1025, whose first line states the same thing. I did not file a duplicate — but #1016 was **not** `blocked_by` #1025 despite needing it for both `RotateNow` and `Grant`. That missing edge is now wired.
+- **`ScopeExitRotator` is a sixth trait with no production impl** (`crates/engine/src/rotation/trigger.rs:68`; impls at `:248` and `crates/engine/tests/sync.rs:682`), self-declared at `crates/engine/src/rotation/mod.rs:34`. Already tracked by open **#1107**, which names it explicitly. No filing.
+- **Gap 1 is also a `Downgrade`/write-plane blocker**, not just read-plane: the write-wave keys carry the same `scope_keys: &amp;dyn OwnerScopeKeys` (`crates/engine/src/net/rotation.rs:750`, called `:1301`), so #1019 is a second honest consumer.
+- **#962** is adjacent to gap 3 but does not cover it — it changes `GrantRecipient`'s field shape to require a `Contact`; it does not supply one. Cross-referenced in #1164's body; no edge, since #962's own blocker is a contract-suite fixture problem, not persistence.
+- **#1020** looked like a consumer of gap 4 but is not: it acts on the *ledger* expiry field, not on `RecordedInvite`. No edge wired, to keep the graph honest.
+
+Verified state: all four new issues are `open`, labelled `v2-build` + `comp:engine`, milestone `v2.0.0`, with `parent_issue_url` pointing at #635 (#1163/#1164/#1165) and #991 (#1166), and every dependency edge confirmed from both directions.</result>
+<usage><subagent_tokens>125666</subagent_tokens><tool_uses>58</tool_uses><duration_ms>485250</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a120a20e347c43e7c</task-id>
+<tool-use-id>toolu_01Vs43Hi63QVQVMsPnL7ogCm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a120a20e347c43e7c.output</output-file>
+<status>completed</status>
+<summary>Agent "B6 CI wasm build caching" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Everything green on PR #1147.
+
+## Report
+
+**Branch** `ci/1088-wasm-once-per-run` · **PR** https://github.com/FSM1/cipher-box/pull/1147 (draft) · **Closes** #1088
+
+**Files touched** (all within my owned set):
+- `.github/actions/wasm-bindgen-cli/action.yml` (new), `.github/actions/mock-ipns-routing/action.yml` (new)
+- `.github/workflows/ci.yml`, `web-e2e.yml`, `deploy-staging.yml`, `zizmor.yml`
+
+**What landed**
+1. New `Web Engine WASM` job builds `crates/wasm` once and uploads it as the `web-engine-wasm` artifact. `Web Bundle` now carries no Rust toolchain at all; `web-e2e.yml` gained an optional `wasm-artifact` input (`ci.yml` passes it; `ci-e2e.yml`, `tag-staging.yml` and `workflow_dispatch` still self-build).
+2. `target/release` — the host proc-macro/build-script tree — added to both wasm cargo caches, with a fresh key prefix since `actions/cache` won't re-save on an exact key hit.
+3. Two composite actions collapse the `wasm-bindgen-cli` install (5 jobs, 4 workflows, and the staging copy had drifted) and the `mock-ipns-routing` boot. zizmor now audits `.github/actions/` too.
+
+**Gates.** No Rust or TS source changed, so the four cargo gates were run by CI itself rather than locally, all green on run 31184508213: `Cargo Check &amp; Test (Linux)` (fmt + clippy `-D warnings` + workspace test) pass, `Core KATs (native + WASM)` (wasm32) pass, macOS/Windows pass, `Lint`/`Typecheck`/`Test`/`Tracker Refs` pass. Locally: `zizmor 1.25.2 --no-online-audits .github/workflows/ .github/actions/` → no findings; `check-tracker-refs.mjs` → clean. **All 30 checks pass.**
+
+**Measured before/after** (real runs, same hour):
+
+| cold cache | before (31181193884) | after (31182939871) |
+|---|---|---|
+| runner minutes, web chain | 422s | **293s (-31%)** |
+| wall-clock after Lint | 246s | 292s (+46s) |
+
+Warm cache: runner minutes 225s → 209s. **Proc-macro fix proven**: a PR touching one engine file recompiled **63 crates / 37s** before, **3 crates / 13s** after.
+
+**Honest gap:** the issue's wall-clock gate is *not* met on a cold cache — +46s. Cause measured, not guessed: 104s of the 158s cold producer job is `cargo install wasm-bindgen-cli` from source, which used to run twice in parallel and now runs once on the critical path.
+
+**Review gates.** `/simplify` (2 agents) and a rigorous `/security-review` pass ran on the diff; `/crypto-privacy-review` not applicable (no crypto). Both independently found the same **HIGH**: `Web Bundle` is a required context by name, so a producer failure would have *skipped* it and branch protection scores a skip as a pass. Fixed by gating both consumers on `lint` instead of `!failure()` — and run 31183649713 accidentally proved it end-to-end (producer failed → `Web Bundle` went red on `Artifact not found`, not skipped). That also let me revert the bespoke aggregate loop in `Web E2E Smoke Result` to its sibling form. Also fixed: the CLI version check was a `grep -qw` regex an empty version would satisfy against any binary (now exact compare + explicit abort); the e2e download moved to just after checkout so a bad handover fails before the stack boots; `wasm-engine` calls `pnpm --filter @cipherbox/web run build:wasm` rather than reaching past it to the script; dead `wasm-engine-cargo-` restore-key dropped.
+
+**Two follow-ups filed**, both with native `blocked_by #1088` edges:
+- #1152 — prebuilt `wasm-bindgen-cli`. I implemented this and had to revert it: **the repo's Actions allowlist rejects `taiki-e/*`**, so it needs an allowlist decision, not more code. Would take the producer 158s → ~54s cold and close the wall-clock gap.
+- #1153 — `ci.yml` triggers on `pull_request` only and caches are scoped to the writing ref, so **every PR's first run is cache-cold on every cargo job** (verified: 39 cache entries, exactly one on `refs/heads/main`).
+
+**Left undone:** `desktop-e2e.yml` still has a third, divergent inline copy of the mock-ipns-routing boot (uses `npm install`, no health wait). It's a three-OS matrix, dispatch-gated, and no PR gate would have exercised the conversion — I judged the unverifiable risk not worth it and documented that in the PR body. Nothing was blocked by another batch's files.
+
+**For an admin:** `Web Engine WASM` is worth adding to required contexts (path-filtered, so it reports `skipped` and satisfies protection on non-web PRs).</result>
+<usage><subagent_tokens>219256</subagent_tokens><tool_uses>145</tool_uses><duration_ms>3338603</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a120a20e347c43e7c</worktreePath><worktreeBranch>worktree-agent-a120a20e347c43e7c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68078a748ffa8953</task-id>
+<tool-use-id>toolu_01UKvWRP8ouKLW9mXetuzx6r</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a68078a748ffa8953.output</output-file>
+<status>completed</status>
+<summary>Agent "B3 prune and reclaim bytes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>B3 done. Report:
+
+## Branch / PR
+- Branch `feat/prune-retire-ledger`, PR **#1158** (draft, `MERGEABLE`): https://github.com/FSM1/cipher-box/pull/1158
+- Closes **#872**, and **#849 / #850 / #851** as folded in.
+- 4 commits: the rebased-in #1115 work (4 cherry-picks), the slice, its tests, the `/simplify` pass, the review-gate fixes.
+
+## What shipped
+- **Rebased in first**, as instructed — `git fetch` + cherry-pick of the four preserved commits off `fix/prune-leaf-expansion-and-pinned-units` onto `origin/main`, clean.
+- `RetireLedger` seam + `OwedRetire` (`crates/engine/src/seams/retire_ledger.rs`), its conformance kit (`crates/engine/src/testkit/conformance/retire_ledger.rs`), driven by the desktop file store in `crates/desktop-seams/tests/conformance.rs`.
+- `OpKind::Prune { keep_latest: NonZeroU64 }` + `Op::prune`, with rebase and overlay arms.
+- Drain: `publish_prune` (shortened history, journal after publish) and `drain_owed_retires` at pass end — leaves in `REGISTRY_BATCH_MAX` batches, root in its own final batch.
+- `Engine::pending_reclaim_bytes()`, fed by a `Cell&lt;u64&gt;` the drain rewrites each pass.
+- `ApiClient::retire` now decodes `{retired, unpinned}`; the contract suite asserts the counts and the `retired: 0` replay against a live API.
+- The ledger rides the staging store's key space, prefix-exempted from orphan GC.
+
+## Gates (committed tree)
+`fmt=0  clippy=0  test=0  wasm=0`
+
+## Review gates — all three ran, findings folded in
+- **`/simplify`** (4 parallel agents): dropped `RetireResult::merge` and the unused chunk fold; shared the published-file projection between `publish_update_content` and `publish_prune`; moved the sealed-version fixture into `testkit`; deleted a duplicated 20-line test responder; trimmed rationale that was stated 3–6 times; corrected two doc comments that had become false (`pending_reclaim`'s "read by snapshot", `registry_cids`' "retirement goes through here"); made `seams/mod.rs`'s "nine seams" header honest.
+- **`/security-review`** — 3 real fixes: the entry now settles *between* the leaf batches and the root's batch (a lost final ack could otherwise strand a debt whose expansion key is gone — permanent stall + phantom figure); a refused registry ends the pass instead of spending a root fetch per entry; `owe()` repairs an unreadable value instead of leaving it undrainable.
+- **`/crypto-privacy-review`** — 3 real fixes: the expansion is now bound to this build's framing *and* the plan's quoted pinned total, so a hand-framed root (any write-grantee can author one) can no longer make the owner's token delete up to ~113k arbitrary CIDs; a history naming one `contentCid` twice is refused rather than pruned; a record's `contentCid` is held to the frozen framing before it reaches `encode_content_cid_str`, whose guard is a release-active panic that would kill the wasm worker.
+- Also shortened the ledger key prefix and switched the target to its binary CID — the original 116-byte key spelled as a hex filename would have blown Windows' `MAX_PATH`.
+
+## Left undone — other batches' files
+- **`Command::Prune` on the facade** (B1's `crates/engine/src/facade.rs` command dispatch). The op therefore has no host entry point; the three end-to-end tests in `write_plane.rs` seal and enqueue it directly through the durable queue instead, so the drain path is genuinely exercised.
+- **A tenth `SeamSet` member for `RetireLedger`** — that needs `crates/wasm/src/host.rs` + `crates/wasm/src/lib.rs` (B1) and `crates/fuse/src/ops.rs` (B2). The seam trait and its kit ship; the engine supplies the only implementation over the existing `StagingStore`, so nothing is left unwired.
+- **`pending_reclaim_bytes` on the WASM/TS surface** — `crates/wasm/src/lib.rs` (B1). I deliberately made it an additive `Engine` **method** rather than a `SnapshotView` field, because the field would have broken B1's `SnapshotView::from_facade`. My only facade.rs edits are 5 purely additive lines, well away from the `Command` match arms.
+
+## Shared-file edits, flagged
+- `crates/engine/tests/write_plane.rs` (shared with B5): appended 3 tests + helpers, plus **two small non-append edits** — the `Blocks` fake gained a `retire_down` switch, and its `/registry/retire` reply now returns a real `{retired, unpinned}` body, which the stricter client requires.
+- Unowned files touched: `sync/rebase.rs`, `sync/overlay.rs`, `sync/staging.rs`, `net/rotation.rs` (test fixture), `api/*`, `testkit/*`, `tests/vault_settings.rs` (test fixture), `crates/contract/tests/contract.rs`.
+
+## Open follow-ups, not in scope
+**#1124** (subtract the retained set's *leaves* from a doomed expansion) and **#1125** (unify `registry_cids` with `expand_retire_targets`) stay open — both were filed as blocked on this slice. I did close the cheap, dangerous half of #1124 in-line (same-CID repeat refusal + framing/total binding); the full retained-leaf subtraction still needs the drain-time retained set. The external-provider unpin leg has no engine surface at all, so "mode-derived legs" is hosted-only today.</result>
+<usage><subagent_tokens>479115</subagent_tokens><tool_uses>307</tool_uses><duration_ms>4722988</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68078a748ffa8953</worktreePath><worktreeBranch>worktree-agent-a68078a748ffa8953</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5520dbd4b0a561c7</task-id>
+<tool-use-id>toolu_01D6kTy1aJFT8QXy8184Ldte</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a5520dbd4b0a561c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify pairwise merges compile" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All eleven wave-7 branches coexist. **No compile breakage found — I invented zero code fixes.** The only manual work was the two known textual conflicts, both pure keep-both resolutions in test files.
+
+## Part 1 — Rust cluster (cumulative merge off `d11bfce11`)
+
+| # | Merge step | Textually clean | `cargo check --workspace --all-targets` | `cargo check -p cipherbox-wasm --target wasm32` |
+|---|---|---|---|---|
+| 0 | baseline `main` | — | PASS | PASS |
+| 1 | `feat/wire-facade-contact-import-and-command-outcome` | yes | PASS | PASS |
+| 2 | `fix/703-revival-corroborates-recovered-sequence` (carries 775) | yes | PASS | PASS |
+| 3 | `fix/settings-unproven-first-run` | yes (auto-merged `write_plane.rs`) | PASS | PASS |
+| 4 | `feat/fuse-content-write-path` | yes | PASS | PASS |
+| 5 | `feat/prune-retire-ledger` | **NO** — 1 conflict | PASS (after resolve) | PASS |
+
+`cargo test --workspace` on the full cumulative merge: **PASS**, 1644 tests across 38 binaries, 0 failed. `cargo fmt --all --check`: PASS.
+
+### The one Rust conflict
+`crates/engine/tests/write_plane.rs`, step 5, between `fix/settings-unproven-first-run` and `feat/prune-retire-ledger`. Both append to the end of the file; git mis-aligned the shared 4-line test preamble (`FakeWorld::new()` / `Blocks::default()` / `seed_account` / `world.device(b"alice")`) as common context, producing 3 interleaved hunks that split each side's test body across the other's. Resolution: emit each side's block whole and sequentially. **Not a fix — pure append ordering.** ~60 lines of mechanical reassembly, no logic invented. Whichever of the two merges second owns it.
+
+### The shape-change risks that did *not* bite
+- `Engine::command` → `Result&lt;CommandOutcome, EngineError&gt;`: the only fuse call site is `crates/fuse/src/ops.rs:701`, `self.engine.command(command).await?;` — result discarded, so the widened return type is source-compatible.
+- `EngineError::MalformedInput { check }` vs. the exhaustive no-wildcard `From&lt;EngineError&gt; for VfsError`: the wire branch already added the arm in `crates/fuse/src/error.rs`, and no other branch adds an `EngineError` variant (prune's `OpKind::Prune` is a different enum). Clean.
+- `AnchorRole` deletion + `cold_seed_checked` signature change (775, carried by 703): no surviving references anywhere in the cluster.
+
+## Part 2 — TypeScript cluster (clean pass off `main`)
+
+| # | Merge step | Textually clean |
+|---|---|---|
+| 1 | `fix/1037-zeroize-worker-upload-chunk` | yes |
+| 2 | `fix/1051-fail-closed-build-command` | yes |
+| 3 | `feat/bound-live-stream-tickets` | yes |
+| 4 | `feat/media-player-recoverable-refusal` | **NO** — 1 conflict, 3 hunks |
+
+`pnpm install` PASS · `pnpm typecheck` PASS · `pnpm test` PASS (837 tests / 82 files: client 401, api 179, web 257) · `pnpm lint` PASS.
+
+### The one TS conflict
+`apps/web/src/components/file-browser/FileBrowserActions.test.tsx`, 3 hunks in the same `describe` block, resolved by keeping both sides as instructed (`fetched`/`whenStreamIdle` from tickets, `streamListeners`/`onStreamError` from the media player). **~10 lines**, no logic invented. Owned by `feat/media-player-recoverable-refusal` (merges second).
+
+Note the riskier files auto-merged and are genuinely correct, not silently clobbered: `packages/client/src/media/service.ts` carries **both** `onStreamError` (line 89) and `whenStreamIdle` (line 124) after the merge, and I re-ran the resolved test file in isolation — both branches' new tests execute and pass (`stops a batch at the first save the browser refuses` from tickets; `offers a retry for a ceiling refusal…`, `ignores a refusal reported for another stream`, `reports a playback failure the pipe never named` from the media player).
+
+## Part 3 — combined all-eleven (unasked, cheap, and it strengthens the verdict)
+
+Merged the Rust cumulative branch + the TS cumulative branch + `ci/1088-wasm-once-per-run` (workflows only; no conflict with anything, since no other branch touches `.github/`). Result: `cargo check --workspace --all-targets` PASS, wasm32 PASS, `pnpm typecheck` PASS, `pnpm test` PASS (837), `cargo fmt --all --check` PASS.
+
+## One thing to flag (not a break)
+
+`feat/wire-facade-contact-import-and-command-outcome` changes what the WASM `command()` promise resolves with — from `bigint | undefined` to a `CommandOutcome` object — but ships no TS change. It compiles and typechecks only because the sole consumer, `packages/client/src/worker/engineHost.ts:106`, discards the result (`await this.handle.command(buildCommand(...))`). So the new `contactImported` outcome and its two public keys are unreachable from TS today. That is a wiring gap for a follow-up, not a merge hazard — and worth knowing before someone assumes the contact-import path is live end-to-end.
+
+## Verdict
+
+**No branch needs a code fix before it merges.** The compile check found nothing a textual scan missed — every shape change is already absorbed on its own branch.
+
+Safe order (any order actually works; this one minimises conflict handling):
+
+1. `ci/1088-wasm-once-per-run` — isolated, merge whenever
+2. `feat/wire-facade-contact-import-and-command-outcome` — the shape change, land it early so the rest rebase onto it
+3. `fix/703-revival-corroborates-recovered-sequence` — **must land after or together with `fix/775-…`**, which it contains; do not merge 775 separately after 703
+4. `feat/fuse-content-write-path`
+5. `fix/settings-unproven-first-run`
+6. `feat/prune-retire-ledger` — **owner of the `write_plane.rs` conflict resolution** (append-both, ~60 lines)
+7. `fix/1037-zeroize-worker-upload-chunk`, `fix/1051-fail-closed-build-command`, `feat/bound-live-stream-tickets` — independent
+8. `feat/media-player-recoverable-refusal` — **owner of the `FileBrowserActions.test.tsx` conflict resolution** (keep-both, ~10 lines)
+
+Both conflicts are mechanical and belong to whichever of the pair merges second; if the merge order flips, the ownership flips with it.
+
+Nothing was pushed, no PR or issue was touched. Work lives on local branches `mergecheck-rust`, `mergecheck-ts`, `mergecheck-all` in my worktree; logs in `…/scratchpad/mergecheck/`.</result>
+<usage><subagent_tokens>101851</subagent_tokens><tool_uses>89</tool_uses><duration_ms>576729</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5520dbd4b0a561c7</worktreePath><worktreeBranch>worktree-agent-a5520dbd4b0a561c7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+why are there 11 prs when there were only meant to be 6? this is going to be a major pain to review at 1 pr per hour.
+
+---
+
+yeah please consolidate what can be consolidated and advise the new merge order.
+
+---
+
+ok now you can start handling the reviews using the bash script in the repo scratchpad in merge order. there should already be a coderabbit slot available right now to start with
+
+---
+
+<task-notification>
+<task-id>bgvaqjq6q</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bgvaqjq6q.output</output-file>
+<status>completed</status>
+<summary>Background command "Run review cycle on PR 1147" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok #1147 received a clean bill of health from coderabbit - I will merge it. regarding the followup of adding the wasm job to the required context list, will you handle this once the PR is merged?
+
+This batch of prs will be only coderabbit reviewing. Greptile quota will reset in mid aug, and I am hoping to be accepted to the macroscope OSS program so that I don't go broke reviewing these prs.
+
+---
+
+<task-notification>
+<task-id>benth75gt</task-id>
+<summary>Monitor event: "PR #1151 review cycle: waits for the 16:20Z CodeRabbit slot, flips ready, holds for the verdict, re-drafts"</summary>
+<event>#1151 head=2e1696e3cb60886b5b9d197473d9890d724732b6
+CI GREEN (31 checks settled)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+ok #1147 is merged
+
+---
+
+<task-notification>
+<task-id>blzldtn6m</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/blzldtn6m.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for 1157 CI to complete after rebase" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>benth75gt</task-id>
+<summary>Monitor event: "PR #1151 review cycle: waits for the 16:20Z CodeRabbit slot, flips ready, holds for the verdict, re-drafts"</summary>
+<event>waiting 3341s for the review slot</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>benth75gt</task-id>
+<summary>Monitor event: "PR #1151 review cycle: waits for the 16:20Z CodeRabbit slot, flips ready, holds for the verdict, re-drafts"</summary>
+<event>FLIPPED READY 16:21:19Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>benth75gt</task-id>
+<summary>Monitor event: "PR #1151 review cycle: waits for the 16:20Z CodeRabbit slot, flips ready, holds for the verdict, re-drafts"</summary>
+<event>MACROSCOPE OUT OF CREDITS on head @ 16:22:24Z - NOT REVIEWED, not waiting</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+coderabbit review is really taking its time - flipped 38 minutes ago and still no walkthrough or review.
+
+---
+
+<task-notification>
+<task-id>benth75gt</task-id>
+<summary>Monitor event: "PR #1151 review cycle: waits for the 16:20Z CodeRabbit slot, flips ready, holds for the verdict, re-drafts"</summary>
+<event>RE-DRAFTED 17:02:53Z
+=== RESULT on 2e1696e3cb60886b5b9d197473d9890d724732b6 ===</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+[Image #1] coderabbit still says processing
+
+---
+
+<task-notification>
+<task-id>bm4o72tcp</task-id>
+<summary>Monitor event: "PR #1157 review cycle on the freed CodeRabbit slot"</summary>
+<event>#1157 head=009aa7127a9e4b9264a7006ebcce33527f78ce52</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm4o72tcp</task-id>
+<summary>Monitor event: "PR #1157 review cycle on the freed CodeRabbit slot"</summary>
+<event>CI GREEN (27 checks settled)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+all the work is dependent on #1151 landing so we should focus on getting that reviewed by the web rather.
+
+---
+
+<task-notification>
+<task-id>b61ldwjxw</task-id>
+<tool-use-id>toolu_01GiJfnCFdo9fkrviD8jnnvP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b61ldwjxw.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review on 1151" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b9v8yxl6y</task-id>
+<tool-use-id>toolu_01TLzEjH7aGMrMEEufFBHYEc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b9v8yxl6y.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch 1157 in-flight review to test pipeline health" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a548633147fa64b85</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a548633147fa64b85.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix 1157 CodeRabbit findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #1157 is still open and still a draft, now at the new head.
+
+## Report
+
+**Finding 1 — restating doc comments (verified, applied).** Both doc comments were introduced by *this* PR's diff, so they were in scope. Deleted both:
+- `/// Assert no configured endpoint holds any record for `name`.` above `assert_no_endpoint_holds`
+- `/// The verified `Value` of the record the first endpoint holds for `name`.` above `head_value_at`
+
+Each was a pure restatement of a 5-8 line body whose name already says it. I did **not** touch the identically-shaped comment above `assert_all_endpoints_at` (line ~107) — `git diff main...HEAD` shows it is pre-existing, untouched code, and editing it would be the "unchanged-code apologia" scope creep AGENTS.md forbids.
+
+**Finding 2 — the same-sequence tie-break (verified, test added).** Confirmed the mechanism in `crates/engine/src/net/revival.rs` before writing anything:
+- line 97: `Some((observed, _)) if observed.sequence &gt;= recovered.sequence =&gt; observed` — the `&gt;=` is deliberate, the fan-out takes the tie.
+- line 115: `head_cid_from_value(&amp;basis.value)` — the CID is read off `basis`, the *same* record the sequence came from, so a corroborated sequence cannot be paired with a stale CID.
+
+Added `revive_takes_the_fan_out_side_of_a_same_sequence_fork` in `crates/engine/tests/net.rs`, beside the existing preference test. It seeds the recovery endpoint at `/ipfs/bafyrecoveryside` seq 5 and the fan-out endpoint at `/ipfs/bafyfanoutside` seq 5 — different CIDs, same sequence — then asserts `PublishOutcome::Published { sequence: 6 }`, all endpoints at 6, and the head value equal to the **fan-out** CID. Behaviour only; no source-text assertions.
+
+**Inversion check — done, and the test earns its place.** Flipping line 97 from `&gt;=` to `&gt;` made the new test the *only* failure in the `revive` set (7 passed / 1 failed), with the expected diff — got `/ipfs/bafyrecoveryside`, wanted `/ipfs/bafyfanoutside`. The five pre-existing revival tests all still passed under the inversion, which is exactly the gap this test closes. I restored the `&gt;=` and confirmed `git diff` on `revival.rs` is empty, i.e. byte-identical to the committed version; the commit touches `crates/engine/tests/net.rs` only.
+
+**Gate exit codes** (all from the committed tree, each redirected to a file with `$?` read directly — no pipes):
+
+| Gate | Exit |
+|---|---|
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | 0 |
+
+`cargo test --workspace` reported 38 `test result: ok` binaries with zero `FAILED` lines.
+
+**New head SHA: `c1d39abab`** (`c1d39ababd55cd8fb0948f311dd7b44ac0bafaea`), pushed as a plain non-forced push to `fix/703-revival-corroborates-recovered-sequence` (no rebase was needed — I branched from `origin/fix/703-...` at `009aa7127` as instructed, not from any existing worktree ref). PR #1157 confirmed still `draft: true`, `state: open`.
+
+Two notes worth passing on: the commit needed `--no-verify` because this worktree has no `node_modules`, so husky's `lint-staged` pre-commit hook aborts — the diff is Rust-only, so markdownlint/prettier/eslint had nothing to act on regardless. And per your instruction I did not look for or touch any GitHub review threads, since both findings were review-body nitpicks.</result>
+<usage><subagent_tokens>60260</subagent_tokens><tool_uses>37</tool_uses><duration_ms>279391</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a548633147fa64b85</worktreePath><worktreeBranch>worktree-agent-a548633147fa64b85</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blo5u76c6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/blo5u76c6.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for 1157 CI on the fix commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+definintely not worth it spending a re-review on #1157
+
+---
+
+shall I merge #1157 in the mean time?
+
+---
+
+ok #1157 is merged now
+
+---
+
+<task-notification>
+<task-id>bzyenvbob</task-id>
+<summary>Monitor event: "PR #1151 forced CodeRabbit web review at 18:34Z after its 16:21 run froze"</summary>
+<event>waiting 3654s for the review slot
+HEAD MOVED ( != 2e1696e3cb60886b5b9d197473d9890d724732b6) - aborting</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzyenvbob</task-id>
+<tool-use-id>toolu_01BPqmZDELMkSEqkkhqHh9hb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bzyenvbob.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #1151 forced CodeRabbit web review at 18:34Z after its 16:21 run froze" stream ended</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6tghszlz</task-id>
+<summary>Monitor event: "Wait for GitHub API recovery, then force the #1151 CodeRabbit review"</summary>
+<event>[18:37:42Z] GITHUB RECOVERED - starting #1151 forced review</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6tghszlz</task-id>
+<summary>Monitor event: "Wait for GitHub API recovery, then force the #1151 CodeRabbit review"</summary>
+<event>FLIPPED READY 18:37:50Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6tghszlz</task-id>
+<summary>Monitor event: "Wait for GitHub API recovery, then force the #1151 CodeRabbit review"</summary>
+<event>POSTED @coderabbitai review 18:38:01Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+the automatic review did not see any commits and did not review anything - I have manually requested a full review and this now seems to be processing [Image #2]
+
+---
+
+<task-notification>
+<task-id>b6tghszlz</task-id>
+<summary>Monitor event: "Wait for GitHub API recovery, then force the #1151 CodeRabbit review"</summary>
+<event>CR VERDICT WITH FINDINGS
+RE-DRAFTED 18:51:28Z
+coderabbit_reviewed=1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6tghszlz</task-id>
+<tool-use-id>toolu_01X9YBZ6uNkBLNGNjxXenZCh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b6tghszlz.output</output-file>
+<status>completed</status>
+<summary>Monitor "Wait for GitHub API recovery, then force the #1151 CodeRabbit review" stream ended</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bysiphlg9</task-id>
+<tool-use-id>toolu_015KKddh3DHvwdHnwPhz2bRn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bysiphlg9.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all four gates on the doc fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwcg6mfhe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bwcg6mfhe.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for 1151 CI on the doc fix commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yes please keep going - the PR will likely need a rebase after #1151 was merged
+
+---
+
+<task-notification>
+<task-id>bqf3xcqi5</task-id>
+<tool-use-id>toolu_016osM4ZH66gCuvPy6VVrGb8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bqf3xcqi5.output</output-file>
+<status>completed</status>
+<summary>Background command "Run gates on rebased 1156" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx0i7p0cq</task-id>
+<summary>Monitor event: "PR #1156 review cycle: FUSE write path, waits for CI then flips"</summary>
+<event>#1156 head=d312a25b3b365daa439bf6e9b100da26524c0115</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx0i7p0cq</task-id>
+<summary>Monitor event: "PR #1156 review cycle: FUSE write path, waits for CI then flips"</summary>
+<event>CI GREEN (24 checks settled)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx0i7p0cq</task-id>
+<summary>Monitor event: "PR #1156 review cycle: FUSE write path, waits for CI then flips"</summary>
+<event>FLIPPED READY 20:48:34Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx0i7p0cq</task-id>
+<summary>Monitor event: "PR #1156 review cycle: FUSE write path, waits for CI then flips"</summary>
+<event>CR VERDICT (findings) on head @ 20:55:52Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx0i7p0cq</task-id>
+<tool-use-id>toolu_01XGcrPBGFxroa6cm4o8aMDq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bx0i7p0cq.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #1156 review cycle: FUSE write path, waits for CI then flips" stream ended</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a51fc89ca38a3aece</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a51fc89ca38a3aece.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix 1156 CodeRabbit findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All done. PR #1156 is still a draft at head `2ace6f603`.
+
+## Per-finding verdicts
+
+**Finding 1 — MAJOR, confirmed and fixed.**
+Verified the mechanism first: `Invalidation::Data` exists (`crates/fuse/src/adapter.rs:17`) and its only other producer is `stream_for` (`crates/fuse/src/ops.rs:668`), which fires only at *bind* time when the resolved `contentCid` differs from `streamed`. A handle with a stream already attached returns early at `ops.rs:649` and never reaches it, and the kernel's page cache is never asked at all — so nothing on the commit path repainted data. Confirmed no other data invalidation on that path (`commit` calls `begin_write`/`push_version`/`commit_write`, then only `Attributes`; no `render()`).
+
+Fix: push `Invalidation::Data { ino }` before `Attributes` in `commit` (`crates/fuse/src/ops.rs:540`). The ordering is not cargo-cult — the two are separate ordered seam messages, and a kernel that learns the new size while still holding pre-commit pages serves them as the new version, including across a range a grown size just made valid. Data-first makes the intermediate state a short read, not a stale one; the test asserts the order.
+
+I deliberately did *not* also clear `self.streamed` on commit — a stale entry there can only cause an extra invalidation, never a missed one.
+
+**Failing-test proof.** New test `published::a_commit_repaints_the_pages_of_the_version_it_replaced` (`crates/fuse/tests/fuse_op_core.rs:1846`). With the `Data` line reverted:
+
+```
+thread 'published::a_commit_repaints_the_pages_of_the_version_it_replaced' panicked at
+crates/fuse/tests/fuse_op_core.rs:1865:9:
+a commit must drop the pages of the version it replaced, got [Attributes { ino: 2 }]
+```
+
+**Finding 2 — confirmed, reworded.** `write` calls `begin_pending` at `ops.rs:367` before the block loop, and `base_len` (`ops.rs:478`) falls through to `stream_for` whenever `attrs(node).size` is `None`, alignment irrelevant. Doc on `stream_for` now scopes the skip to an already-projected size with whole-block replacement, and states that an unprojected size resolves regardless because only the resolve yields the base length.
+
+**Finding 3 — confirmed, both halves done.** `writing_handle` (`fuse_op_core.rs:808`) returns the handle from `create`, and `create` inserts `Pending::over(0)` at `ops.rs:193`, so `begin_pending` hits its `contains_key` early return at `ops.rs:465` — no resolve was ever possible. Renamed to `a_write_into_a_created_handles_spill_never_parks` with a narrowed comment, and added `published::a_write_on_a_reopened_handle_never_parks_once_the_size_is_projected`, which asserts `Poll::Ready` *and* that `core.handle(handle).stream` is still `None` — direct evidence no resolution ran, not an inference from timing.
+
+**Finding 4 — taken.** Two doc lines on the non-unix `open_private` / `restrict_dir` arms in `crates/fuse/src/spill.rs`, stating the seal argument once and cross-referencing.
+
+**Finding 5 — deferred, issue filed: #1168.** Reasoning: the staleness worry the prompt raised does **not** apply — `ChunkCache` is keyed by `(StreamHandle, index)` and a stream pins one head version for its whole life (`crates/fuse/src/cache.rs` module header), so a cached block can never be served as a slice of a different version. But two other things make it not-small:
+
+1. `version_block` fetches `want = block_bytes.min(base_len - at)` and zero-fills the rest, because bytes past the floor a truncate left must read as a hole. That clamp is per-handle `Pending` state, not a property of the stream. Caching the clamped, zero-padded block under `(stream, index)` poisons `read` for any other handle sharing that stream; reading a cached full block without re-applying the clamp re-introduces exactly what `d312a25b3` — this branch's own previous commit — fixed.
+2. `push_version` walks the file linearly once, so inserting every base block it touches evicts the reader's hot blocks for zero reuse against a 64-block budget. The commit walk wants read-through-without-insert, which the cache doesn't offer.
+
+So the correct fix is a semantics change on the clamp the head commit just corrected plus a new cache mode. #1168 carries both constraints and acceptance criteria; labels `v2-build` + `comp:desktop`, milestone `v2.0.0`, `parent_issue_url` → `issues/991`, `blocked_by` → `[1110]` (all verified by re-read).
+
+## Gates (committed tree, exit codes read directly)
+
+| gate | exit |
+|---|---|
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | 0 |
+
+`fuse-op-core`: 65 passed, 0 failed.
+
+## Threads
+
+All three replied and resolved — `3738712677`, `3738712680`, `3738712694` (thread ids `PRRT_kwDOQ6DXvM6XY-5i` / `-5k` / `-5v`, all `isResolved: true`). Each reply states what I verified with `file:line` evidence. The two nitpicks have no threads, so they're answered in a top-level PR comment ([#issuecomment-5222009123](https://github.com/FSM1/cipher-box/pull/1156#issuecomment-5222009123)).
+
+New head: **`2ace6f603`** on `feat/fuse-content-write-path`. PR left draft, not merged.</result>
+<usage><subagent_tokens>112313</subagent_tokens><tool_uses>70</tool_uses><duration_ms>618302</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a51fc89ca38a3aece</worktreePath><worktreeBranch>worktree-agent-a51fc89ca38a3aece</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b026msmzi</task-id>
+<tool-use-id>toolu_01DeDxGymsmDWYivTQWHg1Sv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b026msmzi.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for 1156 CI on the fix head" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+no re-review needed, rebase #1149
+
+---
+
+no re-review needed, rebase #1149. #1156 has been merged
+
+---
+
+<task-notification>
+<task-id>bhti7o4zd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bhti7o4zd.output</output-file>
+<status>completed</status>
+<summary>Background command "Run gates on rebased 1149" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2d5oznnx</task-id>
+<summary>Monitor event: "PR #1149 review cycle: settings first-run, waits for CI then the 22:00Z slot"</summary>
+<event>#1149 head=52dce20859009f555df000c67b9d5f76be74bc53</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+the next slot is not at 22:00Z its in 16 minutes from now [Image #3]
+
+---
+
+<task-notification>
+<task-id>bx31ko1qg</task-id>
+<summary>Monitor event: "PR #1149 review cycle, rescheduled for the real 21:50Z slot reset"</summary>
+<event>CANNOT READ HEAD FOR #1149 - aborting, nothing flipped.</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx31ko1qg</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bx31ko1qg.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #1149 review cycle, rescheduled for the real 21:50Z slot reset" stream ended</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw2x57mvc</task-id>
+<summary>Monitor event: "PR #1149 review cycle, gated on GitHub API recovery, slot at 21:50Z"</summary>
+<event>[21:38:40Z] GITHUB HEALTHY - starting cycle for #1149</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bw2x57mvc</task-id>
+<summary>Monitor event: "PR #1149 review cycle, gated on GitHub API recovery, slot at 21:50Z"</summary>
+<event>#1149 head=52dce20859009f555df000c67b9d5f76be74bc53</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+is the residual from #1149 being tracked anywhere? There is mention of blueprint being updated to track the residual but this is honestly the wrong place to do so in my books. This repo tracks residuals in github issues that are edged and parented.
+
+---
+
+<task-notification>
+<task-id>bvsnzj6fd</task-id>
+<summary>Monitor event: "PR #1149 review cycle, health-gated, MINCHECKS tuned to its 27 contexts, slot 21:50Z"</summary>
+<event>[21:44:53Z] GITHUB HEALTHY - starting cycle for #1149</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+yes, cut the residual passage after the review lands
+
+---
+
+<task-notification>
+<task-id>bvsnzj6fd</task-id>
+<summary>Monitor event: "PR #1149 review cycle, health-gated, MINCHECKS tuned to its 27 contexts, slot 21:50Z"</summary>
+<event>waiting 313s for the review slot</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvsnzj6fd</task-id>
+<summary>Monitor event: "PR #1149 review cycle, health-gated, MINCHECKS tuned to its 27 contexts, slot 21:50Z"</summary>
+<event>FLIPPED READY 21:50:37Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvsnzj6fd</task-id>
+<summary>Monitor event: "PR #1149 review cycle, health-gated, MINCHECKS tuned to its 27 contexts, slot 21:50Z"</summary>
+<event>MACROSCOPE OUT OF CREDITS on head @ 21:51:42Z - NOT REVIEWED, not waiting</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvsnzj6fd</task-id>
+<summary>Monitor event: "PR #1149 review cycle, health-gated, MINCHECKS tuned to its 27 contexts, slot 21:50Z"</summary>
+<event>CR VERDICT (findings) on head @ 21:54:48Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b5ogv5p6j</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b5ogv5p6j.output</output-file>
+<status>completed</status>
+<summary>Background command "Run gates on the 1149 fix plus blueprint trim" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqal1gq0n</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bqal1gq0n.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for 1149 CI on the fix head" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br9rtjppn</task-id>
+<tool-use-id>toolu_01Kn2iNzEe4SSiPbXRSCotcR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/br9rtjppn.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CI run to finish then rerun failed jobs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bd0xa3rwh</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bd0xa3rwh.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch the Windows rerun" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+its merged
+
+---
+
+<task-notification>
+<task-id>bg79cj92i</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bg79cj92i.output</output-file>
+<status>completed</status>
+<summary>Background command "Run gates on the rebased 1158" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzc2vrmsb</task-id>
+<summary>Monitor event: "PR #1158 review cycle: prune retire ledger, health-gated, slot 22:51Z"</summary>
+<event>[22:20:26Z] GITHUB HEALTHY - starting cycle for #1158</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzc2vrmsb</task-id>
+<summary>Monitor event: "PR #1158 review cycle: prune retire ledger, health-gated, slot 22:51Z"</summary>
+<event>#1158 head=319341e36501cc00ab22133e873edc7757e264c8</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bn5p9fadw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bn5p9fadw.output</output-file>
+<status>completed</status>
+<summary>Background command "Run TS gates on rebased 1145" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzc2vrmsb</task-id>
+<summary>Monitor event: "PR #1158 review cycle: prune retire ledger, health-gated, slot 22:51Z"</summary>
+<event>CI GREEN (26 checks settled)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkkjmugxr</task-id>
+<tool-use-id>toolu_018GvYnFa6xYfTR6fQHTmkeo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bkkjmugxr.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch for the last required context on 1158" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+isnt there already an issue to investigate and resolve the flake in the web-e2e test?
+
+---
+
+ok I am afk till tomorrow morning. keep driving those reviews, I will merge all 3 in the morning.
+
+---
+
+<task-notification>
+<task-id>bvcgqndr1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bvcgqndr1.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all gates on the cumulative merge" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bsf02fqn1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bsf02fqn1.output</output-file>
+<status>completed</status>
+<summary>Background command "Relaunch 1158 cycle with keep-ready behavior" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a658c80f763e501c3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a658c80f763e501c3.output</output-file>
+<status>completed</status>
+<summary>Agent "Fold 1158 nitpicks" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 5 nitpicks implemented, nothing skipped. Pushed as **`31b59581817d5b378509384bf412d270fcefa406`** to `feat/prune-retire-ledger`. PR #1158 is still a draft (unchanged).
+
+## What landed
+
+1. **`crates/engine/src/sync/overlay.rs`** — two new tests matching the file's `overlay_*` naming and its `base()`/`id()`/`apply_overlay` helpers:
+   - `overlay_prune_caps_a_projected_content_version`
+   - `overlay_prune_leaves_an_unprojected_count_unknown`
+
+2. **`crates/engine/tests/write_plane.rs` (fixture, ~line 419)** — the retire handler now does `.expect("a retire call carries a body")` + `serde_json::from_slice::&lt;Vec&lt;String&gt;&gt;(body).expect("a retire body is a name array")`, matching the `retire_batches` helper's own expectations elsewhere in the file. No test regressed (the client always POSTs a JSON string array).
+
+3. **`crates/engine/tests/write_plane.rs`** — new test `a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused`. Uses the existing `plant_record`/`Planted` fixture to publish a file record whose version list names the head's `contentCid` twice, then stages a prune with `keep_latest=1`. Asserts `DeadLetterReason::PayloadRefused` on the first pass, the record sequence unchanged, and zero new retire targets.
+
+4. **`crates/engine/src/lib.rs`** — `Expansion` added to the root `pub use content::{…}` list (rustfmt reflowed the block).
+
+5. **`crates/engine/src/sync/staging.rs`** — `RETIRE_LEDGER_PREFIX` added to the seeded prefixes in `the_drains_own_bookkeeping_is_never_classed_an_orphan`, with the doc comment extended to cover the ledger case.
+
+`crates/engine/src/sync/drain.rs` was **not touched** — `publish_prune`'s publish/`owe_retires` ordering is byte-identical to what it was (verified: `git diff` of that file is empty).
+
+## Regression checks (both confirmed by temporarily reverting the production code)
+
+- Removing the duplicate-CID refusal branch in `drain.rs` makes the new test fail with `the attempt budget must be finite` (it never dead-letters). Restored afterwards.
+- Changing the fixture parse target to `Vec&lt;u64&gt;` makes `a_prune_publishes_a_shortened_history_and_reclaims_every_dropped_block` panic at `write_plane.rs:427` — so the new `expect` is genuinely reached, not dead code. Restored afterwards.
+
+## Gate exit codes (run from the worktree, no shared `CARGO_TARGET_DIR`)
+
+| Gate | Exit |
+|---|---|
+| `cargo fmt --all -- --check` | 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| `cargo test --workspace` | 0 (38 suites, 0 failures) |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | 0 |
+
+One note: the wasm check emits a pre-existing `unused import: cipherbox_engine::seams::OpId` warning at `crates/wasm/src/host.rs:22`. I confirmed by stashing that it is present at `319341e36` too — not caused by this change, and left alone as out of scope.</result>
+<usage><subagent_tokens>112581</subagent_tokens><tool_uses>46</tool_uses><duration_ms>448965</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkn49mhot</task-id>
+<tool-use-id>toolu_01Pk5NA7171HdwRLnbX6Jhnw</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/bkn49mhot.output</output-file>
+<status>failed</status>
+<summary>Background command "Watch 1158 CI on the new head until it settles" failed with exit code 3</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6sfq3s3c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b6sfq3s3c.output</output-file>
+<status>completed</status>
+<summary>Background command "Relaunch the 1145 to 1146 chain with keep-ready behavior" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b97n1a4fd</task-id>
+<tool-use-id>toolu_01AG7DFjEcS79vKNtk3jRVo7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b97n1a4fd.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch CodeRabbit response to the ready flips" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1bf1afd55accc22a</task-id>
+<tool-use-id>toolu_01CZvNWMQcFEccGcxRNBssZm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/a1bf1afd55accc22a.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve 1146 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three findings are resolved, pushed as **`1c27b32ae`** (PR still draft, tree clean).
+
+## Verdict on A — half refuted, half real
+
+**Refuted: the overwrite cannot happen.**
+- `MediaPlayer.tsx:45` — `onError: () =&gt; setRefusal((held) =&gt; held ?? { recoverable: false, message: FAULT_NOTICE })`. A held refusal wins; a recoverable one is never replaced and the retry control never disappears.
+- `broker.ts:441-446` — `fail()` posts `cb:media:error` to the port and calls `onFailure` on the next line, synchronously. The port message still has to reach the SW, error the response body, and surface as an element `error` event — all strictly later tasks. So a subscribed listener always hears the classified reason *before* the element's unclassifiable one.
+
+**Real: the subscription window.** `service.ts:89-93` keeps a plain listener `Set` with no replay — a failure reported before the subscription is lost, leaving `refusal` null so only the terminal notice shows.
+
+**Fix (minimal, no restructure):** `useEffect` → `useLayoutEffect` in `MediaPlayer.tsx:24`. Layout effects run inside the same synchronous commit that inserts the element, so no event-loop turn can deliver anything between the element getting its `src` and the listener existing. I did **not** add the reviewer's URL-scoped readiness state — withholding `src` would delay every playback for a race that needs several message round-trips to land inside one commit.
+
+## Changes
+- `apps/web/src/components/file-browser/MediaPlayer.tsx` — layout-timed subscription + 2-line why comment.
+- `apps/web/src/components/file-browser/FileBrowserActions.test.tsx` — describe-level fake gained an opt-in `transfers` map so `whenStreamIdle` parks until `endTransfer(url)` releases it (`fakePipe` shape); other tests leave it null and keep immediate resolution.
+- `apps/web/src/hooks/useFileDownload.test.ts` — timer test advances 999 ms → unmount → 1 ms.
+
+## Tests (new/changed) and red proof
+| Test | Red proof |
+|---|---|
+| `keeps the retry when the element reports the refusal it was already told about` (new) | Dropping `held ??` → `expected 'playback failed' to contain 'too many streams are open right now'` |
+| `saves a selection one ticket at a time` (rewritten) | Loop at `FileBrowserActions.tsx:93-96` → `Promise.all` → `expected [ … ] to have a length of 1 but got 2` |
+| `revokes each blob url on its own timer rather than at unmount` (rewritten) | `REVOKE_AFTER_MS=900` → 999 ms assertion fails; `=1_100` → final assertion fails; adding `URL.revokeObjectURL` to the unmount cleanup → post-unmount assertion fails |
+
+Literals stay literal in the timer test rather than importing `REVOKE_AFTER_MS` — importing it would let a delay change pass, which was the complaint.
+
+## Gates (all exit 0)
+`pnpm install --frozen-lockfile`, `build`, `typecheck`, `lint`, `lint:tracker-refs` all 0. `pnpm test` 0 — client 393, api 179, web 258 passing.
+
+All 3 threads replied to and resolved (`isResolved: true` ×3).</result>
+<usage><subagent_tokens>93926</subagent_tokens><tool_uses>40</tool_uses><duration_ms>466891</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7jbgpxzm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2b9a962d-e9c8-4465-b4ef-93584f21a390/tasks/b7jbgpxzm.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all gates on the final cumulative merge" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+`ok all 3 are merged now - add the Web Engine WASM required-context change, as well as implement the 1 liner fix.
+
+then please go ahead and plan wave 8
