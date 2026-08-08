@@ -8,40 +8,30 @@
 //! cache, which is contractually a cache of what the network can re-serve.
 
 use core::cell::RefCell;
-use core::cmp::Reverse;
 
 use crate::entropy::{Entropy, fresh_ephemeral};
 use crate::seams::{SeamError, SeamResult, StagingStore};
-use crate::sync::drain::owner_tag;
+use crate::sync::owner_scoped_key;
 use cipherbox_core::seal::{open_received_shares, seal_received_shares};
 use cipherbox_core::suite::x25519::X25519Secret;
 
-use super::accept::{ReceivedShareStore, ReceivedSharesList, StoredList};
+use super::accept::{
+    ReceivedShareStore, ReceivedSharesList, decode_stored_list, encode_stored_list,
+};
 
-/// The staging-key prefix the received-shares slots are stored under.
-///
-/// Scoped by the owner tag every per-identity durable record this device keeps
-/// is scoped by; [`orphan_staging_keys`] treats the whole prefix as referenced,
-/// every identity's slots included.
+/// The staging-key prefix the received-shares list is stored under, scoped per
+/// identity by [`owner_scoped_key`]. `is_bookkeeping` treats the whole prefix as
+/// referenced.
 ///
 /// Kept short: the desktop store spells a staging key as a hex filename, twice
-/// its byte length, inside Windows' whole-path budget.
-///
-/// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
+/// its byte length, inside Windows' whole-path budget — the bound every prefix
+/// in this space is held to.
 pub const RECEIVED_SHARES_PREFIX: &[u8] = b"cbx/rs/";
 
-/// The two slot suffixes a persist alternates between.
-///
-/// [`StagingStore::put_staged_bytes`] promises the write replaces the previous
-/// bytes, not that the replacement is atomic — a host that truncates before it
-/// writes can be interrupted and leave a partial blob. With one key that is
-/// terminal: the list would never open again, and the mailbox items that
-/// delivered those shares are acked and gone. A persist therefore always writes
-/// the slot with the least to lose ([`TargetPreference`]), so what survives an
-/// interruption is the slot worth keeping.
-const SLOTS: [u8; 2] = [b'a', b'b'];
-
 /// The received-shares store the engine ships over a host's [`StagingStore`].
+///
+/// One staging key holds the whole list; the replacement is failure-atomic at
+/// the seam ([`StagingStore::put_staged_bytes`]).
 ///
 /// The list is sealed HPKE-to-self under the session's `enc-subkey` before it
 /// reaches the host, so the `pointerReadKey` of every bookmarked scope stays
@@ -50,6 +40,7 @@ pub struct StagingReceivedShareStore<'a, St, E> {
     staging: &'a St,
     enc_secret: &'a X25519Secret,
     entropy: &'a RefCell<E>,
+    staging_key: Vec<u8>,
 }
 
 impl<'a, St: StagingStore, E: Entropy> StagingReceivedShareStore<'a, St, E> {
@@ -59,140 +50,44 @@ impl<'a, St: StagingStore, E: Entropy> StagingReceivedShareStore<'a, St, E> {
             staging,
             enc_secret,
             entropy,
+            staging_key: owner_scoped_key(RECEIVED_SHARES_PREFIX, enc_secret),
         }
     }
 
-    /// The staging keys this identity's slots occupy — the entries under
+    /// The staging key this identity's list occupies — the entry under
     /// [`RECEIVED_SHARES_PREFIX`] that orphan GC must treat as referenced.
-    pub fn slot_keys(&self) -> [Vec<u8>; 2] {
-        let tag = owner_tag(self.enc_secret);
-        SLOTS.map(|slot| {
-            let mut key = RECEIVED_SHARES_PREFIX.to_vec();
-            key.extend_from_slice(&tag);
-            key.push(slot);
-            key
-        })
+    pub fn staging_key(&self) -> &[u8] {
+        &self.staging_key
     }
-
-    /// Read one slot. A [`SeamError`] is a host read failure; bytes this build
-    /// cannot open or decode are [`Slot::Unreadable`], which is state to be
-    /// preserved rather than an outage to be retried.
-    async fn read_slot(&self, key: &[u8]) -> SeamResult<Slot> {
-        let Some(blob) = self.staging.staged_bytes(key).await? else {
-            return Ok(Slot::Empty);
-        };
-        let Ok(body) = open_received_shares(self.enc_secret, &blob) else {
-            return Ok(Slot::Unreadable);
-        };
-        Ok(match StoredList::decode(&body) {
-            Ok(stored) => Slot::Held(stored),
-            Err(_) => Slot::Unreadable,
-        })
-    }
-
-    async fn read_slots(&self) -> SeamResult<[Slot; 2]> {
-        let keys = self.slot_keys();
-        Ok([
-            self.read_slot(&keys[0]).await?,
-            self.read_slot(&keys[1]).await?,
-        ])
-    }
-}
-
-/// What one slot holds.
-enum Slot {
-    /// Nothing has been written here.
-    Empty,
-    /// Bytes this session cannot open or decode — a torn write, or another
-    /// identity's. Never treated as empty: overwriting the last readable slot
-    /// on the strength of an unreadable one is how a list is lost.
-    Unreadable,
-    /// A readable list at its revision.
-    Held(StoredList),
-}
-
-impl Slot {
-    fn revision(&self) -> Option<u64> {
-        match self {
-            Slot::Held(stored) => Some(stored.revision),
-            _ => None,
-        }
-    }
-
-    fn target_preference(&self) -> TargetPreference {
-        match self {
-            Slot::Held(stored) => TargetPreference::Held(Reverse(stored.revision)),
-            Slot::Unreadable => TargetPreference::Unreadable,
-            Slot::Empty => TargetPreference::Empty,
-        }
-    }
-}
-
-/// How willing a persist is to overwrite a slot — worst target first, so the
-/// greater of two slots is the one to write.
-///
-/// The order is the whole safety argument of the two-slot layout, and a
-/// revision comparison cannot carry it: `Empty` and `Unreadable` both have no
-/// revision, yet a free slot costs nothing to take while unreadable bytes are
-/// state some build still needs. A write that tears leaves its target
-/// unreadable, so the slot left alone must be the one worth keeping — the
-/// newest readable list above all, then any readable list, then bytes of
-/// unknown value, and last the free slot.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum TargetPreference {
-    /// A readable list; [`Reverse`] because the newer list is the worse target.
-    Held(Reverse<u64>),
-    /// Taken only when neither slot is free.
-    Unreadable,
-    /// Nothing to lose.
-    Empty,
 }
 
 impl<St: StagingStore, E: Entropy> ReceivedShareStore for StagingReceivedShareStore<'_, St, E> {
     async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
-        let slots = self.read_slots().await?;
-        let newest = slots[0].revision().max(slots[1].revision());
-        // Both unreadable is the one state with no safe target: either write
-        // would drop state this build cannot read.
-        let target = match (&slots[0], &slots[1]) {
-            (Slot::Unreadable, Slot::Unreadable) => {
-                return Err(SeamError::new(
-                    "received-shares: both slots are unreadable, refusing to overwrite either",
-                ));
-            }
-            (a, b) if b.target_preference() > a.target_preference() => 1,
-            _ => 0,
-        };
-
-        let body = StoredList::encode(shares, newest.unwrap_or(0).saturating_add(1))
+        let body = encode_stored_list(shares)
             .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
         let ephemeral = fresh_ephemeral(&mut *self.entropy.borrow_mut())
             .map_err(|e| SeamError::new(e.message().to_string()))?;
         let blob = seal_received_shares(self.enc_secret, &ephemeral, &body)
             .map_err(|e| SeamError::new(format!("received-shares seal failed: {e}")))?;
         self.staging
-            .put_staged_bytes(&self.slot_keys()[target], &blob)
+            .put_staged_bytes(self.staging_key(), &blob)
             .await
     }
 
     async fn load(&self) -> SeamResult<ReceivedSharesList> {
-        let slots = self.read_slots().await?;
-        // The higher revision wins; a torn slot beside a readable one loses
-        // rather than bricking the list. Only when nothing is readable and
-        // something is stored does this fail closed — reporting empty there
-        // would let the next persist overwrite bookmarks it never read.
-        match slots {
-            [Slot::Held(a), Slot::Held(b)] => Ok(if a.revision >= b.revision {
-                a.shares
-            } else {
-                b.shares
-            }),
-            [Slot::Held(held), _] | [_, Slot::Held(held)] => Ok(held.shares),
-            [Slot::Unreadable, _] | [_, Slot::Unreadable] => Err(SeamError::new(
-                "received-shares: the stored list did not open",
-            )),
-            [Slot::Empty, Slot::Empty] => Ok(ReceivedSharesList::new()),
-        }
+        let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
+            return Ok(ReceivedSharesList::new());
+        };
+        // Stored bytes this session cannot read are never reported as an empty
+        // list: the next persist would overwrite bookmarks it never saw, and the
+        // mailbox items that delivered them are acked and gone.
+        let body = open_received_shares(self.enc_secret, &blob)
+            .map_err(|_| SeamError::new("received-shares: the stored list did not open"))?;
+        decode_stored_list(&body).map_err(|e| {
+            SeamError::new(format!(
+                "received-shares: the stored list did not decode: {e}"
+            ))
+        })
     }
 }
 
@@ -263,7 +158,7 @@ mod tests {
         let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
         block_on(store.persist(&one_share())).expect("persist");
 
-        let stored = block_on(staging.staged_bytes(&store.slot_keys()[0]))
+        let stored = block_on(staging.staged_bytes(store.staging_key()))
             .expect("staged bytes")
             .expect("the list is stored");
         assert!(
@@ -287,11 +182,32 @@ mod tests {
         block_on(store.persist(&one_share())).expect("persist");
 
         // Same key space, unreadable bytes.
-        block_on(staging.put_staged_bytes(&store.slot_keys()[0], b"not a sealed list"))
+        block_on(staging.put_staged_bytes(store.staging_key(), b"not a sealed list"))
             .expect("clobber");
         assert!(
             block_on(store.load()).is_err(),
             "an unreadable stored list is an error, never an empty list"
+        );
+    }
+
+    /// The other arm of the same rule: bytes that open under this session's key
+    /// but carry a body grammar this build does not read are still state, not an
+    /// empty list.
+    #[test]
+    fn a_stored_list_this_build_cannot_decode_fails_closed_rather_than_reading_empty() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x32);
+        let entropy = RefCell::new(SeededEntropy::new(37));
+        let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
+        block_on(store.persist(&one_share())).expect("persist");
+
+        let ephemeral = fresh_ephemeral(&mut SeededEntropy::new(41)).expect("ephemeral");
+        let sealed = seal_received_shares(&secret, &ephemeral, b"opens, but is not a stored list")
+            .expect("seal");
+        block_on(staging.put_staged_bytes(store.staging_key(), &sealed)).expect("clobber");
+        assert!(
+            block_on(store.load()).is_err(),
+            "a body this build cannot decode is an error, never an empty list"
         );
     }
 
@@ -319,7 +235,7 @@ mod tests {
         let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
         assert!(block_on(store.persist(&one_share())).is_err());
         assert!(
-            block_on(staging.staged_bytes(&store.slot_keys()[0]))
+            block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged bytes")
                 .is_none(),
             "a refused seal writes nothing"
@@ -345,9 +261,9 @@ mod tests {
         );
     }
 
-    /// The failure the two-slot layout exists for: a host whose write is not
-    /// failure-atomic (the browser seam truncates before it writes, then drops
-    /// the file) must not be able to take the readable list with it.
+    /// The failure a durable whole-set record must survive: the host loses the
+    /// replacement write. `put_staged_bytes` is failure-atomic, so the list the
+    /// store already holds is what the next load must still read.
     #[test]
     fn a_lost_write_never_destroys_the_readable_list() {
         let staging = InMemoryStagingStore::default();
@@ -355,144 +271,24 @@ mod tests {
         let entropy = RefCell::new(SeededEntropy::new(19));
         let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
         block_on(store.persist(&one_share())).expect("first persist");
-        let first_slot = store.slot_keys()[0].clone();
-
-        // The next persist targets the *other* slot, so wiping the slot it
-        // writes leaves the original readable.
-        block_on(store.persist(&ReceivedSharesList::new())).expect("second persist");
-        assert!(block_on(store.load()).expect("load").is_empty());
-        block_on(staging.remove_staged_bytes(&store.slot_keys()[1])).expect("lose the new slot");
-        assert_eq!(
-            block_on(store.load()).expect("load").len(),
-            1,
-            "the surviving slot still holds the older list"
-        );
-        assert!(
-            block_on(staging.staged_bytes(&first_slot))
-                .expect("staged")
-                .is_some(),
-            "the first write was never the target of the second"
-        );
-    }
-
-    /// A torn slot beside a readable one loses; it does not brick the list.
-    #[test]
-    fn a_torn_slot_loses_to_the_readable_one() {
-        let staging = InMemoryStagingStore::default();
-        let secret = enc(0x91);
-        let entropy = RefCell::new(SeededEntropy::new(21));
-        let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&one_share())).expect("persist");
-
-        block_on(staging.put_staged_bytes(&store.slot_keys()[1], b"half a blob")).expect("tear");
-        assert_eq!(
-            block_on(store.load()).expect("load").len(),
-            1,
-            "the readable slot wins over a torn one"
-        );
-        // And the next persist overwrites the torn slot, never the good one.
-        block_on(store.persist(&one_share())).expect("persist over the torn slot");
-        assert_eq!(block_on(store.load()).expect("load").len(), 1);
-    }
-
-    /// The higher revision wins, so restoring a stale slot cannot silently roll
-    /// the bookmark list back.
-    #[test]
-    fn the_higher_revision_wins_a_load() {
-        let staging = InMemoryStagingStore::default();
-        let secret = enc(0xA1);
-        let entropy = RefCell::new(SeededEntropy::new(25));
-        let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&one_share())).expect("revision 1");
-        let stale = block_on(staging.staged_bytes(&store.slot_keys()[0]))
+        let stored = block_on(staging.staged_bytes(store.staging_key()))
             .expect("staged")
-            .expect("slot a holds revision 1");
+            .expect("the list is stored");
 
-        block_on(store.persist(&ReceivedSharesList::new())).expect("revision 2");
-        // Put the older list back in the slot it came from: both slots readable,
-        // and the newer revision must still win.
-        block_on(staging.put_staged_bytes(&store.slot_keys()[0], &stale)).expect("restore");
-        assert!(
-            block_on(store.load()).expect("load").is_empty(),
-            "revision 2 wins over the restored revision 1"
-        );
-    }
-
-    /// A free slot outranks an unreadable one in **both** orientations. Neither
-    /// carries a revision, so a revision comparison alone picks slot `a` twice
-    /// and destroys the unreadable bytes whenever they sit there.
-    #[test]
-    fn a_persist_takes_the_free_slot_over_the_unreadable_one() {
-        const TORN: &[u8] = b"half a sealed list";
-        for unreadable in [0usize, 1] {
-            let staging = InMemoryStagingStore::default();
-            let secret = enc(0xC1);
-            let entropy = RefCell::new(SeededEntropy::new(29));
-            let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
-            let keys = store.slot_keys();
-            block_on(staging.put_staged_bytes(&keys[unreadable], TORN)).expect("tear");
-
-            block_on(store.persist(&one_share())).expect("persist");
-
-            assert_eq!(
-                block_on(staging.staged_bytes(&keys[unreadable]))
-                    .expect("staged")
-                    .as_deref(),
-                Some(TORN),
-                "slot {unreadable}: unreadable bytes survive while a slot is free"
-            );
-            assert_eq!(
-                block_on(store.load()).expect("load").len(),
-                1,
-                "slot {unreadable}: the list landed in the free slot"
-            );
-        }
-    }
-
-    /// With no free slot the unreadable one is the target in both orientations:
-    /// overwriting the readable list would leave nothing to fall back to if
-    /// this write tears as well.
-    #[test]
-    fn a_persist_overwrites_the_unreadable_slot_before_a_readable_one() {
-        for torn in [0usize, 1] {
-            let staging = InMemoryStagingStore::default();
-            let secret = enc(0xD1);
-            let entropy = RefCell::new(SeededEntropy::new(31));
-            let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
-            let keys = store.slot_keys();
-            // Fill both slots, then tear one, so no slot is free.
-            block_on(store.persist(&one_share())).expect("first persist");
-            block_on(store.persist(&one_share())).expect("second persist");
-            block_on(staging.put_staged_bytes(&keys[torn], b"half a blob")).expect("tear");
-            let kept = block_on(staging.staged_bytes(&keys[1 - torn]))
+        staging.interrupt_staged_write_after(store.staging_key(), 0);
+        assert!(block_on(store.persist(&ReceivedSharesList::new())).is_err());
+        assert_eq!(
+            block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged")
-                .expect("the other slot is readable");
-
-            block_on(store.persist(&ReceivedSharesList::new())).expect("persist");
-
-            assert_eq!(
-                block_on(staging.staged_bytes(&keys[1 - torn]))
-                    .expect("staged")
-                    .as_deref(),
-                Some(kept.as_slice()),
-                "slot {torn} torn: the readable slot is never the target"
-            );
-        }
-    }
-
-    /// Both slots unreadable is the one state with no safe write target: either
-    /// would drop bookmarks this build cannot read.
-    #[test]
-    fn a_persist_refuses_when_neither_slot_is_readable() {
-        let staging = InMemoryStagingStore::default();
-        let secret = enc(0xB1);
-        let entropy = RefCell::new(SeededEntropy::new(27));
-        let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
-        for key in store.slot_keys() {
-            block_on(staging.put_staged_bytes(&key, b"not a sealed list")).expect("clobber");
-        }
-        assert!(block_on(store.load()).is_err());
-        assert!(block_on(store.persist(&one_share())).is_err());
+                .as_deref(),
+            Some(stored.as_slice()),
+            "the lost replacement left the stored blob byte-identical"
+        );
+        assert_eq!(
+            block_on(store.load()).expect("load").len(),
+            1,
+            "the list the store already held is still the one it serves"
+        );
     }
 
     #[test]

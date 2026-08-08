@@ -43,8 +43,8 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
-    record_content_root_cid,
+    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY,
+    owner_scoped_key, record_content_root_cid,
 };
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
@@ -4521,12 +4521,12 @@ fn a_cancel_after_the_version_published_is_refused() {
 /// This account's published-op mark key. The mark is per-identity, so a store
 /// shared with another account keeps one mark each.
 fn mark_key() -> Vec<u8> {
-    op_mark_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
+    owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
 }
 
 /// This account's drained-op mark key.
 fn drained_key() -> Vec<u8> {
-    op_mark_key(DRAINED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
+    owner_scoped_key(DRAINED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
 }
 
 /// Plant a published-op mark over `op_id` under `enc_secret`'s identity,
@@ -4534,7 +4534,7 @@ fn drained_key() -> Vec<u8> {
 /// removal from the queue.
 fn plant_published_mark_for(device: &FakeDevice, enc_secret: &X25519Secret, op_id: OpId) {
     block_on(device.staging_store.put_staged_bytes(
-        &op_mark_key(PUBLISHED_OP_MARK_PREFIX, enc_secret),
+        &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, enc_secret),
         &op_id.0.to_be_bytes(),
     ))
     .unwrap();
@@ -5038,7 +5038,7 @@ fn another_identitys_drained_mark_never_discards_this_ones_queued_op() {
 
     let stranger = kdf::enc_subkey(&[9u8; 32]);
     block_on(alice.staging_store.put_staged_bytes(
-        &op_mark_key(DRAINED_OP_MARK_PREFIX, &stranger),
+        &owner_scoped_key(DRAINED_OP_MARK_PREFIX, &stranger),
         &(op_id.0 + 100).to_be_bytes(),
     ))
     .unwrap();
