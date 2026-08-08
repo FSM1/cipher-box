@@ -11,7 +11,7 @@
 //! [`KeyringCredentialStore`] keeps only the rotating refresh token and the
 //! last-account id in the OS keyring — never a seed or an unwrapped key.
 //!
-//! The nine seams split by concern:
+//! The eight seams split by concern:
 //!
 //! - [`FileFloorStore`], [`FileStagingStore`], [`FileSnapshotCache`] —
 //!   fsync-barriered files (the v1 high-water / write-journal discipline

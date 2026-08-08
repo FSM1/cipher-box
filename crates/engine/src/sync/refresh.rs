@@ -17,15 +17,19 @@ use std::rc::Rc;
 
 use futures_channel::oneshot;
 
-/// What a manual refresh reports back to the host.
+/// What a manual refresh reports back to the host. The two failures stay
+/// distinct all the way out: a host retries availability and must never retry a
+/// trust verdict (rule 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefreshVerdict {
+pub(crate) enum RefreshVerdict {
     /// The pass reconciled gate-passing state off the record plane.
     Reconciled,
-    /// The pass ran and no gate-passing record came back — an unreachable
-    /// record plane, or a fail-closed rejection. Availability or a trust
-    /// verdict, never a silent success off the cache.
-    Unreconciled,
+    /// No endpoint served a record this pass could adopt. Availability, and
+    /// never a silent success off the cache the pass skipped.
+    Unreachable,
+    /// The record plane served a record the adoption gate rejected —
+    /// fail-closed, not staleness.
+    Rejected,
 }
 
 #[derive(Default)]
@@ -42,7 +46,7 @@ struct Inner {
 
 /// The shared handle both the tick loop and the command path hold.
 #[derive(Clone, Default)]
-pub struct ManualRefresh {
+pub(crate) struct ManualRefresh {
     inner: Rc<RefCell<Inner>>,
 }
 
@@ -63,8 +67,8 @@ impl ManualRefresh {
                 return None;
             }
             match &mut inner.running {
-                // Coalesce onto the pass already running: it started after this
-                // request's own cause and answers it honestly.
+                // Join the running pass rather than queueing a second: two
+                // clicks cost one network pass.
                 Some(running) => {
                     running.push(sender);
                     None
@@ -173,9 +177,9 @@ mod tests {
             "the late request coalesced onto the running pass"
         );
 
-        manual.settle(RefreshVerdict::Unreconciled);
-        assert_eq!(block_on(first), Ok(RefreshVerdict::Unreconciled));
-        assert_eq!(block_on(second), Ok(RefreshVerdict::Unreconciled));
+        manual.settle(RefreshVerdict::Unreachable);
+        assert_eq!(block_on(first), Ok(RefreshVerdict::Unreachable));
+        assert_eq!(block_on(second), Ok(RefreshVerdict::Unreachable));
     }
 
     #[test]

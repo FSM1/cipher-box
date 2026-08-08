@@ -9,7 +9,7 @@ import { useSnapshotStore } from '../providers/EngineProvider';
  * on-screen-and-online drives one nocache refresh — the transition only, never
  * the mount.
  */
-export function useRefreshHints(): void {
+export function useRefreshOnWake(): void {
   const store = useSnapshotStore();
   const online = useOnlineStatus();
   const visible = useVisibility();

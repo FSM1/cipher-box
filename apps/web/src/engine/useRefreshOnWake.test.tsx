@@ -2,7 +2,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
 import { fakeEngine, setOnline, setVisible } from './testFakes';
-import { useRefreshHints } from './useRefreshHints';
+import { useRefreshOnWake } from './useRefreshOnWake';
 
 afterEach(() => {
   setOnline(true);
@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 function Hints() {
-  useRefreshHints();
+  useRefreshOnWake();
   return null;
 }
 
@@ -22,7 +22,7 @@ function draw(client: ReturnType<typeof fakeEngine>['client']) {
   );
 }
 
-describe('refresh hints', () => {
+describe('refresh on wake', () => {
   it('does not refresh on mount', async () => {
     const engine = fakeEngine();
     draw(engine.client);

@@ -155,6 +155,10 @@ export class LeaderRelay {
   private readonly unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
+  // Focus-driven refresh collapse: at most one pass in flight, at most one
+  // trailing pass behind it (see `forceRefresh`).
+  private refreshInFlight = false;
+  private refreshTrailing = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
   // message so followers reject a forged beacon or port rendezvous from a
   // non-leader same-origin context (integrity defense-in-depth; same-origin is
@@ -581,12 +585,28 @@ export class LeaderRelay {
   }
 
   /**
-   * A tab's focus changed the union: force a pass over the new window. The
-   * relay is an accelerator, so a refusal costs staleness, never correctness —
-   * the tab that asked for it reports its own refresh failures.
+   * A tab's focus changed the union: force a pass over the new window. A burst
+   * of union changes collapses onto one trailing pass rather than queueing a
+   * network pass per change — the engine serializes commands, so a stacked
+   * burst would park every other call behind it. The relay is an accelerator,
+   * so a refusal costs staleness, never correctness: the tab that asked for a
+   * refresh reports its own failures.
    */
   private forceRefresh(): void {
-    void this.transport.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
+    if (this.refreshInFlight) {
+      this.refreshTrailing = true;
+      return;
+    }
+    this.refreshInFlight = true;
+    void this.transport
+      .command({ kind: 'manualRefresh' }, [])
+      .catch(() => undefined)
+      .finally(() => {
+        this.refreshInFlight = false;
+        if (!this.refreshTrailing) return;
+        this.refreshTrailing = false;
+        this.forceRefresh();
+      });
   }
 
   private post(message: LeaderMessage): void {

@@ -112,6 +112,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     for (const listener of listeners) listener();
   };
 
+  // A failure only lands if no newer intent has superseded the call that raised
+  // it; every async leg reports through this one continuation.
+  const failIfCurrent =
+    (id: number) =>
+    (error: unknown): void => {
+      if (id === generation) commit({ error: describe(error) });
+    };
+
   const pull = (): void => {
     if (disposed) return;
     if (inFlight) {
@@ -123,19 +131,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     const seq = stalenessSeq;
     void client.facade
       .snapshot(focus)
-      .then(
-        (view) => {
-          if (id !== generation) return;
-          commit({
-            view,
-            error: null,
-            staleness: seq === stalenessSeq ? view.staleness : undefined,
-          });
-        },
-        (error: unknown) => {
-          if (id === generation) commit({ error: describe(error) });
-        }
-      )
+      .then((view) => {
+        if (id !== generation) return;
+        commit({
+          view,
+          error: null,
+          staleness: seq === stalenessSeq ? view.staleness : undefined,
+        });
+      }, failIfCurrent(id))
       .finally(() => {
         inFlight = false;
         if (!coalesced) return;
@@ -148,14 +151,9 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     if (disposed) return;
     client.reportFocus(focus);
     const id = ++generation;
-    client.facade.setFocus(focus).then(
-      () => {
-        if (id === generation) pull();
-      },
-      (error: unknown) => {
-        if (id === generation) commit({ error: describe(error) });
-      }
-    );
+    client.facade.setFocus(focus).then(() => {
+      if (id === generation) pull();
+    }, failIfCurrent(id));
   };
 
   const unsubscribe = client.facade.subscribe((event) => {
@@ -190,16 +188,11 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     refresh() {
       if (disposed) return;
       const id = generation;
-      void client.facade.manualRefresh().then(
-        () => {
-          if (id === generation) pull();
-        },
-        // A refused pass leaves the rendered view exactly where it was, so it
-        // is reported rather than repainted over as though it had landed.
-        (error: unknown) => {
-          if (id === generation) commit({ error: describe(error) });
-        }
-      );
+      // A refused pass leaves the rendered view exactly where it was, so it is
+      // reported rather than repainted over as though it had landed.
+      void client.facade.manualRefresh().then(() => {
+        if (id === generation) pull();
+      }, failIfCurrent(id));
     },
     dispose() {
       disposed = true;

@@ -815,9 +815,10 @@ pub enum EngineError {
         /// The seal check that fired; never key material.
         check: &'static str,
     },
-    /// A forced refresh ([`Command::ManualRefresh`]) ran and reconciled
-    /// nothing: no endpoint served a gate-passing record, the record it served
-    /// was rejected, or no sync loop is running to force a pass at all. The
+    /// A forced refresh ([`Command::ManualRefresh`]) could not land: no
+    /// endpoint served a record the pass could adopt, or no sync loop is
+    /// running to force a pass at all. Availability, retryable — a rejected
+    /// record is [`TrustViolation`](EngineError::TrustViolation) instead. The
     /// rendered view is unchanged last-known-good, so a host reports the
     /// refresh as failed rather than repainting as though it had landed.
     RefreshFailed {
@@ -1495,7 +1496,7 @@ const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
     seams: SeamSet<T>,
-    /// Seeds, nonces, jitter, and command-path node-id minting. Shared with the
+    /// Seeds, nonces, and command-path node-id minting. Shared with the
     /// spawned drain, which needs a fresh seal nonce per authored record.
     entropy: Rc<RefCell<Box<dyn Entropy>>>,
     profile: SyncTimingProfile,
@@ -2195,22 +2196,23 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 // `Adopted`/`Current` are the reconciled outcomes: both prove the
                 // record plane answered with gate-passing state, so both stamp
-                // the ladder's `last_success` (#33 D4).
-                let reconciled = matches!(
-                    &resolved,
-                    Ok(r) if matches!(
-                        r.outcome,
-                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
-                    )
-                );
+                // the ladder's `last_success` (#33 D4). A gate rejection is a
+                // trust verdict, never the staleness the other failures are.
+                let verdict = match &resolved {
+                    Ok(r) => match &r.outcome {
+                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
+                            RefreshVerdict::Reconciled
+                        }
+                        ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
+                        ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
+                    },
+                    Err(_) => RefreshVerdict::Unreachable,
+                };
+                let reconciled = verdict == RefreshVerdict::Reconciled;
                 // Answer the manual requests on the read legs: a refresh reports
                 // what the record plane served, and the drain below reports its
                 // own progress through the op events.
-                manual.settle(if reconciled {
-                    RefreshVerdict::Reconciled
-                } else {
-                    RefreshVerdict::Unreconciled
-                });
+                manual.settle(verdict);
                 // The drain rides the same tick: it publishes onto exactly the
                 // gate-passing state this pass just reconciled. Both scope seeds
                 // are required — without them there is no name to publish under
@@ -2435,10 +2437,9 @@ impl<T: SeamTypes> Engine<T> {
     /// counts, and an unreachable plane is a failure rather than a silent
     /// repaint off last-known-good.
     ///
-    /// Requests coalesce onto one pass ([`ManualRefresh`]), and the pass runs
-    /// on the tick loop, so a forced refresh never runs a second pass beside
-    /// the poll leg. The drain rides the same pass but reports through its own
-    /// op events; this returns on the read legs.
+    /// Requests coalesce onto one pass, which the tick loop runs
+    /// ([`ManualRefresh`]). The drain rides that pass but reports through its
+    /// own op events; this returns on the read legs.
     async fn manual_refresh(&self) -> Result<(), EngineError> {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
@@ -2449,9 +2450,14 @@ impl<T: SeamTypes> Engine<T> {
             .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
         match verdict.await {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
-            Ok(RefreshVerdict::Unreconciled) => Err(failed(
-                "no gate-passing record came back from the record plane",
-            )),
+            Ok(RefreshVerdict::Unreachable) => {
+                Err(failed("no endpoint served a record this pass could adopt"))
+            }
+            // Fail-closed, and reported as the verdict it is: a host retries
+            // availability and must never retry a rejection (rule 6).
+            Ok(RefreshVerdict::Rejected) => Err(EngineError::TrustViolation {
+                message: "the record plane served a record the adoption gate rejected".to_owned(),
+            }),
             Err(_) => Err(failed("the sync loop stopped before the pass ran")),
         }
     }

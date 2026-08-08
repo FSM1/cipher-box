@@ -27,7 +27,7 @@ pub mod pointer;
 pub(crate) mod project;
 pub mod rebase;
 pub mod record;
-pub mod refresh;
+pub(crate) mod refresh;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
@@ -53,12 +53,11 @@ pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
     record_content_root_cid,
 };
-pub use refresh::{ManualRefresh, RefreshVerdict};
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,
-    focus_folders_due, focus_set, on_access_refresh_due, resolve_mode, run_tick_loop,
+    focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
 };
 
 /// Whole milliseconds of `duration`, truncating and saturating — the engine's

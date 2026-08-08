@@ -2,7 +2,7 @@
 //! (blueprint/engine.md "Sync core"; CONTEXT.md "Focus window"; #33 D2).
 //!
 //! One model, two triggers: the poll timer and a host `ManualRefresh`, which
-//! brings the next pass forward through [`ManualRefresh`]. A tick refreshes
+//! brings the next pass forward. A tick refreshes
 //! the **focus window**: the vault pointer, the open folder, its full ancestor
 //! chain to root, the scope pointers of open shared scopes, and the mailbox
 //! poll — everything else refreshes on access past the staleness threshold, so
@@ -167,11 +167,10 @@ where
 /// `on_tick` performs the actual focus resolve (the net/pointer wiring the
 /// caller composes) and decides whether to continue.
 ///
-/// The loop is the only pass executor, so passes never overlap. It settles the
-/// manual requests the pass took after `on_tick` returns, which answers a pass
-/// that stopped before settling them itself; the settled-already case is a
-/// no-op.
-pub async fn run_tick_loop<Sch>(
+/// Settles the requests the pass took after `on_tick` returns, so a pass that
+/// stopped before settling them itself still answers them (see
+/// [`ManualRefresh`]).
+pub(crate) async fn run_tick_loop<Sch>(
     scheduler: &Sch,
     manual: &ManualRefresh,
     cadence: Duration,
@@ -185,7 +184,7 @@ pub async fn run_tick_loop<Sch>(
             manual.begin();
         }
         let control = on_tick(cause).await;
-        manual.settle(RefreshVerdict::Unreconciled);
+        manual.settle(RefreshVerdict::Unreachable);
         if control == TickControl::Stop {
             break;
         }
@@ -363,7 +362,7 @@ mod tests {
             async |_| TickControl::Stop,
         ));
 
-        assert_eq!(block_on(waiter), Ok(RefreshVerdict::Unreconciled));
+        assert_eq!(block_on(waiter), Ok(RefreshVerdict::Unreachable));
     }
 
     #[test]

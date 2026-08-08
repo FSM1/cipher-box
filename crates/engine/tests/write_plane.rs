@@ -854,6 +854,40 @@ fn a_manual_refresh_reports_an_unreachable_record_plane_as_a_failure() {
 }
 
 #[test]
+fn a_manual_refresh_reports_a_rejected_record_as_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let seeded = world
+        .record_store
+        .record_at(&endpoint, root_name.as_str())
+        .expect("the account's seeded root record");
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+    tick(&world, &engine, &mut tasks); // republishes the root, raising its floor
+
+    // A replay of the record this device already moved past: fail-closed, and
+    // reported as the verdict it is rather than as retryable staleness.
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), seeded.clone());
+    }
+    assert!(matches!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Err(EngineError::TrustViolation { .. })
+    ));
+}
+
+#[test]
 fn a_folder_create_publishes_and_resolves_back() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
