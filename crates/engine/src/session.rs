@@ -51,6 +51,10 @@ pub(crate) struct SessionIdentity {
     /// The owner pointer seed (`owner-pointer-seed` edge). Per-scope pointer
     /// signers and pointer read keys derive from it lazily. Zeroizes on drop.
     owner_pointer_seed: SecretBytes,
+    /// The owner pseudonym seed (`owner-pseudonym-seed` edge) — the owner's
+    /// `pseudonym-sign` input, kept off the encryption and pointer planes
+    /// (FSM1/cipher-box-next ADR 0005). Zeroizes on drop.
+    owner_pseudonym_seed: SecretBytes,
     /// The owner ECDSA identity: the login-secret scalar adopted directly (v1
     /// Web3Auth TSS export is the secp256k1 identity key), not a catalog edge.
     /// Signs the login challenge and structure commitments; its verifier is the
@@ -78,6 +82,7 @@ impl SessionIdentity {
             login_secret: Zeroizing::new(bytes.to_vec()),
             enc_subkey: kdf::enc_subkey(bytes),
             owner_pointer_seed: kdf::owner_pointer_seed(bytes),
+            owner_pseudonym_seed: kdf::owner_pseudonym_seed(bytes),
             identity,
         })
     }
@@ -149,19 +154,29 @@ impl SessionIdentity {
         kdf::ipns_keypair(write_seed.as_bytes())
     }
 
-    /// The writer-pseudonym signer (`pseudonym-sign` edge): the per-(scope,
-    /// writer) signing keypair the rotator detached-signs re-sealed structures
-    /// with, from the pairwise material (owner root secret or grant ECDH) and
-    /// the scope id. The pairwise material already fully encodes the
-    /// owner/writer identity, so — unlike every sibling factory — this one
-    /// consults no stored session field; its output is keyed solely by its
-    /// arguments.
-    pub(crate) fn writer_pseudonym_signer(
+    /// The owner's writer-pseudonym signer for a scope: the `pseudonym-sign`
+    /// edge over the session's `ownerPseudonymSeed`.
+    ///
+    /// Takes only the scope id, so the owner's pairwise input cannot be
+    /// supplied — and mis-supplied — by a caller. A provisioned
+    /// `ownerPseudonymPk` is committed epoch-free and never revised, so wrong
+    /// bytes here are a permanent `SignerNotCommitted` on every later rotation.
+    pub(crate) fn owner_writer_pseudonym_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+        kdf::pseudonym_sign(self.owner_pseudonym_seed.as_bytes(), scope_id)
+    }
+
+    /// A **grantee's** writer-pseudonym signer (`pseudonym-sign` edge): the
+    /// per-(scope, writer) signing keypair a re-sealed structure is
+    /// detach-signed under, from the grant's pairwise ECDH secret and the scope
+    /// id. That secret already fully encodes the writer's identity, so — unlike
+    /// every sibling factory — this one consults no stored session field. The
+    /// owner arm is [`Self::owner_writer_pseudonym_signer`].
+    pub(crate) fn grantee_writer_pseudonym_signer(
         &self,
-        pairwise_material: &[u8; 32],
+        grant_ecdh: &[u8; 32],
         scope_id: &[u8; 16],
     ) -> Ed25519Signer {
-        kdf::pseudonym_sign(pairwise_material, scope_id)
+        kdf::pseudonym_sign(grant_ecdh, scope_id)
     }
 }
 
@@ -276,31 +291,31 @@ mod tests {
     }
 
     #[test]
-    fn writer_pseudonym_signer_binds_pairwise_material_and_scope() {
+    fn grantee_writer_pseudonym_signer_binds_pairwise_material_and_scope() {
         let id = identity(&[7u8; 32]);
         let pairwise = [2u8; 32];
         let scope = [3u8; 16];
         let base = id
-            .writer_pseudonym_signer(&pairwise, &scope)
+            .grantee_writer_pseudonym_signer(&pairwise, &scope)
             .verifying_key()
             .to_bytes();
         assert_eq!(
             base,
-            id.writer_pseudonym_signer(&pairwise, &scope)
+            id.grantee_writer_pseudonym_signer(&pairwise, &scope)
                 .verifying_key()
                 .to_bytes(),
             "same pairwise material and scope must yield the same pseudonym signer",
         );
         assert_ne!(
             base,
-            id.writer_pseudonym_signer(&[9u8; 32], &scope)
+            id.grantee_writer_pseudonym_signer(&[9u8; 32], &scope)
                 .verifying_key()
                 .to_bytes(),
             "different pairwise material is a different pseudonym",
         );
         assert_ne!(
             base,
-            id.writer_pseudonym_signer(&pairwise, &[4u8; 16])
+            id.grantee_writer_pseudonym_signer(&pairwise, &[4u8; 16])
                 .verifying_key()
                 .to_bytes(),
             "a different scope is a different pseudonym",
