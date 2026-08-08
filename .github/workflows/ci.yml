@@ -216,7 +216,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
             target/release
             target/wasm32-unknown-unknown
           key: wasm-engine-cargo-${{ hashFiles('Cargo.lock') }}
@@ -571,7 +570,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
             target
           key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: core-kats-cargo-
@@ -661,7 +659,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
             target
           key: client-browser-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: client-browser-cargo-

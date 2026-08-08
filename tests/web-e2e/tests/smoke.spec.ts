@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
 import { VaultPage } from '../page-objects/vault.page';
@@ -10,6 +10,14 @@ test('the front door offers every built login method', async ({ page }) => {
   await expect(login.googleButton).toBeVisible();
   await expect(login.emailInput).toBeVisible();
   await expect(login.walletButton).toBeVisible();
+});
+
+test('the tab comes under the app-shell service worker', async ({ page }) => {
+  await page.goto('/');
+
+  await expect
+    .poll(() => page.evaluate(() => navigator.serviceWorker.controller?.scriptURL ?? null))
+    .toMatch(/\/sw\.js$/);
 });
 
 test('an unauthenticated deep link lands on the front door', async ({ page }) => {
