@@ -178,6 +178,9 @@ mod tests {
             EngineError::ContentUnavailable {
                 message: "no reachable source".into(),
             },
+            EngineError::RefreshFailed {
+                message: "no endpoint served a record this pass could adopt".into(),
+            },
             EngineError::UnsupportedContentFormat { version: 9 },
         ] {
             assert!(matches!(

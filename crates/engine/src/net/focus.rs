@@ -20,7 +20,24 @@ use crate::gate::{GateError, RejectionReason};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::project_folder;
+use crate::sync::refresh::RefreshVerdict;
 use crate::sync::tick::ResolveMode;
+
+/// What one focus-folder pass did. The verdict is the pass's own read legs, kept
+/// separate from the root's so a forced refresh reports every folder it was
+/// asked to bring forward rather than the root alone.
+pub(crate) struct FolderRefreshReport {
+    /// Whether the base moved.
+    pub(crate) changed: bool,
+    /// The worst verdict any folder leg earned.
+    pub(crate) verdict: RefreshVerdict,
+}
+
+impl FolderRefreshReport {
+    fn fold(&mut self, verdict: RefreshVerdict) {
+        self.verdict = self.verdict.worst(verdict);
+    }
+}
 
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
@@ -59,9 +76,13 @@ where
     /// Every failure is per-folder and non-fatal: an unresolvable record is
     /// availability staleness, an attributable gate rejection is fail-closed and
     /// surfaced as [`Event::AttributableAbuse`], and both leave last-known-good
-    /// rendering without stopping the pass.
-    pub(crate) async fn run(&self, folders: &[NodeId]) -> bool {
-        let mut changed = false;
+    /// rendering without stopping the pass. Each still lands in the report, so
+    /// the caller's verdict covers the folders as well as the root.
+    pub(crate) async fn run(&self, folders: &[NodeId]) -> FolderRefreshReport {
+        let mut report = FolderRefreshReport {
+            changed: false,
+            verdict: RefreshVerdict::Reconciled,
+        };
         for folder in folders.iter().rev() {
             let Some(name) = self.folder_name(*folder) else {
                 continue;
@@ -87,13 +108,19 @@ where
                 // Availability: the base keeps rendering last-known-good.
                 Err(
                     ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
-                ) => continue,
+                ) => {
+                    report.fold(RefreshVerdict::Unreachable);
+                    continue;
+                }
                 Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
                     // A folder the lazy wave has not swept yet is epoch-lagged
                     // (CONTEXT.md): sweep-pending staleness, not abuse. Every
                     // other rejection here is an attributable one.
-                    if !matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) {
+                    if matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) {
+                        report.fold(RefreshVerdict::Unreachable);
+                    } else {
                         emit_trust_violation(self.events, name.as_str(), rejection);
+                        report.fold(RefreshVerdict::Rejected);
                     }
                     continue;
                 }
@@ -111,9 +138,10 @@ where
                     name.as_str(),
                     "sealed file body behind a folder child ref",
                 );
+                report.fold(RefreshVerdict::Rejected);
                 continue;
             };
-            changed |= project_folder(
+            report.changed |= project_folder(
                 &mut self.base.borrow_mut(),
                 *folder,
                 children,
@@ -121,7 +149,7 @@ where
                 *modified_at,
             );
         }
-        changed
+        report
     }
 
     /// The folder's write-plane name as its parent's `ChildRef` carried it.

@@ -887,6 +887,51 @@ fn a_manual_refresh_reports_a_rejected_record_as_a_trust_violation() {
     ));
 }
 
+/// The forced pass reads the focus window as well as the root, so a folder in
+/// view that no endpoint served leaves the user on last-known-good — reporting
+/// that pass as landed would be a silent lie about what was reconciled.
+#[test]
+fn a_manual_refresh_reports_an_unreachable_focus_folder_as_a_failure() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    // Authored on another device, so the focusing device really descends into
+    // the folder instead of reading back its own staged state.
+    let author = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &author, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let alice = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 7);
+    block_on(engine.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Ok(CommandOutcome::Done),
+        "the whole window answers while the folder's record stands"
+    );
+
+    // Only the focused folder's record goes dark; the root still answers, so a
+    // root-only verdict would call this pass reconciled.
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(photos).as_str(), Vec::new());
+    }
+    assert!(matches!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Err(EngineError::RefreshFailed { .. })
+    ));
+}
+
 #[test]
 fn a_folder_create_publishes_and_resolves_back() {
     let world = FakeWorld::new();

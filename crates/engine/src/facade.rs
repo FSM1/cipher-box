@@ -2172,10 +2172,11 @@ impl<T: SeamTypes> Engine<T> {
                 // so the queue rebases onto the deepest state this pass
                 // reconciled, not just the root's.
                 let open = focus_folders(&base.borrow(), &focus.borrow());
+                let mut folder_verdict = RefreshVerdict::Reconciled;
                 if let Some(read_seed) = &read_seed
                     && !open.is_empty()
                 {
-                    let changed = FolderRefresh {
+                    let report = FolderRefresh {
                         transport: &transport,
                         snapshot_cache: &snapshot_cache,
                         http: &http,
@@ -2190,15 +2191,16 @@ impl<T: SeamTypes> Engine<T> {
                     .run(&open)
                     .await;
                     stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
-                    if changed {
+                    if report.changed {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
+                    folder_verdict = report.verdict;
                 }
                 // `Adopted`/`Current` are the reconciled outcomes: both prove the
                 // record plane answered with gate-passing state, so both stamp
                 // the ladder's `last_success` (#33 D4). A gate rejection is a
                 // trust verdict, never the staleness the other failures are.
-                let verdict = match &resolved {
+                let root_verdict = match &resolved {
                     Ok(r) => match &r.outcome {
                         ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
                             RefreshVerdict::Reconciled
@@ -2208,11 +2210,15 @@ impl<T: SeamTypes> Engine<T> {
                     },
                     Err(_) => RefreshVerdict::Unreachable,
                 };
-                let reconciled = verdict == RefreshVerdict::Reconciled;
-                // Answer the manual requests on the read legs: a refresh reports
-                // what the record plane served, and the drain below reports its
-                // own progress through the op events.
-                manual.settle(verdict);
+                // The ladder measures the record plane, which the root leg alone
+                // proves answered: one focused folder that did not is staleness
+                // on that folder, not a plane-wide outage.
+                let reconciled = root_verdict == RefreshVerdict::Reconciled;
+                // Answer the manual requests on every read leg the pass forced,
+                // the focus window included — a refresh that left the folder in
+                // view unresolved has not landed. The drain below reports its own
+                // progress through the op events.
+                manual.settle(root_verdict.worst(folder_verdict));
                 // The drain rides the same tick: it publishes onto exactly the
                 // gate-passing state this pass just reconciled. Both scope seeds
                 // are required — without them there is no name to publish under
@@ -2479,7 +2485,7 @@ impl<T: SeamTypes> Engine<T> {
         let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
             return false;
         };
-        let changed = FolderRefresh {
+        let report = FolderRefresh {
             transport: &self.seams.record_transport,
             snapshot_cache: &self.seams.snapshot_cache,
             http: &self.seams.http,
@@ -2494,7 +2500,7 @@ impl<T: SeamTypes> Engine<T> {
         .run(&due)
         .await;
         stamp_focus_refreshed(&self.focus_refreshed, &due, now);
-        changed
+        report.changed
     }
 
     // -----------------------------------------------------------------------

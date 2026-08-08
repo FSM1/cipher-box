@@ -32,6 +32,20 @@ pub(crate) enum RefreshVerdict {
     Rejected,
 }
 
+impl RefreshVerdict {
+    /// The verdict a pass settles when its legs disagree: the worst one. A
+    /// rejection outranks availability, so a leg that reconciled can never mask
+    /// one that fail-closed into the retry a trust verdict must never get
+    /// (rule 6).
+    pub(crate) fn worst(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Rejected, _) | (_, Self::Rejected) => Self::Rejected,
+            (Self::Unreachable, _) | (_, Self::Unreachable) => Self::Unreachable,
+            (Self::Reconciled, Self::Reconciled) => Self::Reconciled,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     /// Requests no pass has taken yet; the next pass answers all of them.
@@ -135,6 +149,22 @@ mod tests {
             Poll::Ready(())
         }));
         ready
+    }
+
+    #[test]
+    fn the_worst_leg_settles_the_pass() {
+        use RefreshVerdict::{Reconciled, Rejected, Unreachable};
+        assert_eq!(Reconciled.worst(Reconciled), Reconciled);
+        for verdict in [Reconciled, Unreachable, Rejected] {
+            assert_eq!(
+                verdict.worst(Rejected),
+                Rejected,
+                "a rejection is never masked by another leg"
+            );
+            assert_eq!(Rejected.worst(verdict), Rejected);
+        }
+        assert_eq!(Reconciled.worst(Unreachable), Unreachable);
+        assert_eq!(Unreachable.worst(Reconciled), Unreachable);
     }
 
     #[test]

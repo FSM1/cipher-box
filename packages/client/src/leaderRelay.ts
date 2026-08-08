@@ -593,6 +593,9 @@ export class LeaderRelay {
    * refresh reports its own failures.
    */
   private forceRefresh(): void {
+    // A pass in flight at close settles afterwards and would dispatch its
+    // trailing pass from a relay that has already stepped down.
+    if (this.closed) return;
     if (this.refreshInFlight) {
       this.refreshTrailing = true;
       return;

@@ -340,8 +340,7 @@ describe('a manual refresh', () => {
     store.refresh();
     await flush();
 
-    // The pass never landed, so there is nothing new to pull — and the failure
-    // is reported rather than swallowed.
+    // A failed refresh must not trigger a follow-up pull.
     expect(engine.pulls).toHaveLength(1);
     expect(store.getSnapshot()).toEqual({
       view: listed,

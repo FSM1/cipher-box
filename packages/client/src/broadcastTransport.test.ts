@@ -315,6 +315,26 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(forced()).toBe(2);
   });
 
+  it('drops the trailing pass a step-down overtook', async () => {
+    const { engine, follower, relay } = wire();
+    let settle = (): void => undefined;
+    engine.respond = () => new Promise<void>((resolve) => (settle = () => resolve()));
+    const forced = (): number => engine.commands.filter((c) => c.kind === 'manualRefresh').length;
+
+    relay.reportLocalFocus('leader', new Uint8Array([1]));
+    await tick();
+    follower.reportFocus(new Uint8Array([2])); // arms a trailing pass behind it
+    await tick();
+    expect(forced()).toBe(1);
+
+    relay.close();
+    engine.respond = () => Promise.resolve();
+    settle();
+    await tick();
+
+    expect(forced()).toBe(1);
+  });
+
   it('round-trips a follower snapshot through the leader engine', async () => {
     const { engine, follower } = wire();
     const view: SnapshotDescriptor = {
