@@ -8,6 +8,7 @@
 //! cache, which is contractually a cache of what the network can re-serve.
 
 use core::cell::RefCell;
+use core::cmp::Reverse;
 
 use crate::entropy::{Entropy, fresh_ephemeral};
 use crate::seams::{SeamError, SeamResult, StagingStore};
@@ -36,8 +37,8 @@ pub const RECEIVED_SHARES_PREFIX: &[u8] = b"cbx/rs/";
 /// writes can be interrupted and leave a partial blob. With one key that is
 /// terminal: the list would never open again, and the mailbox items that
 /// delivered those shares are acked and gone. A persist therefore always writes
-/// the slot that is *not* currently newest, so the readable one survives the
-/// interruption untouched.
+/// the slot with the least to lose ([`TargetPreference`]), so what survives an
+/// interruption is the slot worth keeping.
 const SLOTS: [u8; 2] = [b'a', b'b'];
 
 /// The received-shares store the engine ships over a host's [`StagingStore`].
@@ -117,22 +118,49 @@ impl Slot {
             _ => None,
         }
     }
+
+    fn target_preference(&self) -> TargetPreference {
+        match self {
+            Slot::Held(stored) => TargetPreference::Held(Reverse(stored.revision)),
+            Slot::Unreadable => TargetPreference::Unreadable,
+            Slot::Empty => TargetPreference::Empty,
+        }
+    }
+}
+
+/// How willing a persist is to overwrite a slot — worst target first, so the
+/// greater of two slots is the one to write.
+///
+/// The order is the whole safety argument of the two-slot layout, and a
+/// revision comparison cannot carry it: `Empty` and `Unreadable` both have no
+/// revision, yet a free slot costs nothing to take while unreadable bytes are
+/// state some build still needs. A write that tears leaves its target
+/// unreadable, so the slot left alone must be the one worth keeping — the
+/// newest readable list above all, then any readable list, then bytes of
+/// unknown value, and last the free slot.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum TargetPreference {
+    /// A readable list; [`Reverse`] because the newer list is the worse target.
+    Held(Reverse<u64>),
+    /// Taken only when neither slot is free.
+    Unreadable,
+    /// Nothing to lose.
+    Empty,
 }
 
 impl<St: StagingStore, E: Entropy> ReceivedShareStore for StagingReceivedShareStore<'_, St, E> {
     async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
         let slots = self.read_slots().await?;
         let newest = slots[0].revision().max(slots[1].revision());
-        // Write over the stale slot, so an interrupted write cannot take the
-        // readable one with it. Both unreadable is the one case with no safe
-        // target: either write would drop state this build cannot read.
+        // Both unreadable is the one state with no safe target: either write
+        // would drop state this build cannot read.
         let target = match (&slots[0], &slots[1]) {
             (Slot::Unreadable, Slot::Unreadable) => {
                 return Err(SeamError::new(
                     "received-shares: both slots are unreadable, refusing to overwrite either",
                 ));
             }
-            (a, b) if a.revision() > b.revision() => 1,
+            (a, b) if b.target_preference() > a.target_preference() => 1,
             _ => 0,
         };
 
@@ -388,6 +416,68 @@ mod tests {
             block_on(store.load()).expect("load").is_empty(),
             "revision 2 wins over the restored revision 1"
         );
+    }
+
+    /// A free slot outranks an unreadable one in **both** orientations. Neither
+    /// carries a revision, so a revision comparison alone picks slot `a` twice
+    /// and destroys the unreadable bytes whenever they sit there.
+    #[test]
+    fn a_persist_takes_the_free_slot_over_the_unreadable_one() {
+        const TORN: &[u8] = b"half a sealed list";
+        for unreadable in [0usize, 1] {
+            let staging = InMemoryStagingStore::default();
+            let secret = enc(0xC1);
+            let entropy = RefCell::new(SeededEntropy::new(29));
+            let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
+            let keys = store.slot_keys();
+            block_on(staging.put_staged_bytes(&keys[unreadable], TORN)).expect("tear");
+
+            block_on(store.persist(&one_share())).expect("persist");
+
+            assert_eq!(
+                block_on(staging.staged_bytes(&keys[unreadable]))
+                    .expect("staged")
+                    .as_deref(),
+                Some(TORN),
+                "slot {unreadable}: unreadable bytes survive while a slot is free"
+            );
+            assert_eq!(
+                block_on(store.load()).expect("load").len(),
+                1,
+                "slot {unreadable}: the list landed in the free slot"
+            );
+        }
+    }
+
+    /// With no free slot the unreadable one is the target in both orientations:
+    /// overwriting the readable list would leave nothing to fall back to if
+    /// this write tears as well.
+    #[test]
+    fn a_persist_overwrites_the_unreadable_slot_before_a_readable_one() {
+        for torn in [0usize, 1] {
+            let staging = InMemoryStagingStore::default();
+            let secret = enc(0xD1);
+            let entropy = RefCell::new(SeededEntropy::new(31));
+            let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
+            let keys = store.slot_keys();
+            // Fill both slots, then tear one, so no slot is free.
+            block_on(store.persist(&one_share())).expect("first persist");
+            block_on(store.persist(&one_share())).expect("second persist");
+            block_on(staging.put_staged_bytes(&keys[torn], b"half a blob")).expect("tear");
+            let kept = block_on(staging.staged_bytes(&keys[1 - torn]))
+                .expect("staged")
+                .expect("the other slot is readable");
+
+            block_on(store.persist(&ReceivedSharesList::new())).expect("persist");
+
+            assert_eq!(
+                block_on(staging.staged_bytes(&keys[1 - torn]))
+                    .expect("staged")
+                    .as_deref(),
+                Some(kept.as_slice()),
+                "slot {torn} torn: the readable slot is never the target"
+            );
+        }
     }
 
     /// Both slots unreadable is the one state with no safe write target: either
