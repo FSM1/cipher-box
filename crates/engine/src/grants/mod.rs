@@ -17,11 +17,12 @@ pub mod create;
 pub mod invite;
 pub mod ledger;
 pub mod owner_entry;
+pub mod received_share_store;
 pub mod revocation;
 
 pub use accept::{
     AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
-    SentShare, SharePointer, accept_share,
+    SentShare, SharePointer, SharesCodecError, accept_share,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
@@ -42,4 +43,5 @@ pub use ledger::{
     entry_tag_is_bound, mint_grant_row, recipient_blinded_tag, self_locate,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
+pub use received_share_store::{RECEIVED_SHARES_PREFIX, StagingReceivedShareStore};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};

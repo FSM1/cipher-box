@@ -67,6 +67,10 @@ pub const STRUCT_TAG_SETTINGS_RECORD: u8 = 0x0b;
 /// Local durable state like `op-record`, and bound to its own epoch rather than
 /// an [`AadContext`].
 pub const STRUCT_TAG_CONTENT_KEY: u8 = 0x0c;
+/// `received-shares` — the recipient's share bookmarks HPKE-sealed to their own
+/// enc subkey ([`super::received_shares`]). Local durable state like
+/// `op-record`, so it binds its own clear header instead of an [`AadContext`].
+pub const STRUCT_TAG_RECEIVED_SHARES: u8 = 0x0d;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -77,7 +81,7 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The twelve structure tags, in registry (byte) order. Every new tag extends
+/// The thirteen structure tags, in registry (byte) order. Every new tag extends
 /// this table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
@@ -127,6 +131,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "content-key",
         tag: STRUCT_TAG_CONTENT_KEY,
+    },
+    StructTagSpec {
+        name: "received-shares",
+        tag: STRUCT_TAG_RECEIVED_SHARES,
     },
 ];
 
@@ -187,8 +195,8 @@ mod tests {
         }
         assert_eq!(
             STRUCT_TAGS.len(),
-            12,
-            "the frozen byte-space is twelve tags"
+            13,
+            "the frozen byte-space is thirteen tags"
         );
     }
 

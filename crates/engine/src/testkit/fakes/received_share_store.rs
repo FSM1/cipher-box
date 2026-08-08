@@ -14,6 +14,9 @@ struct Inner {
     /// How many persists have succeeded — lets a test prove a durable write
     /// happened (or did not) around a self-healing re-accept.
     persists: u32,
+    /// The persisted list as encoded bytes, so a reopen goes through the same
+    /// codec a real backing does.
+    stored: Option<Vec<u8>>,
 }
 
 /// In-memory durable store for the recipient's received-shares list. Clones
@@ -36,12 +39,25 @@ impl InMemoryReceivedShareStore {
 }
 
 impl ReceivedShareStore for InMemoryReceivedShareStore {
-    async fn persist(&self, _shares: &ReceivedSharesList) -> SeamResult<()> {
+    async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
+        let encoded = shares
+            .encode()
+            .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
         let mut inner = self.inner.lock().expect("lock");
         if inner.failing {
             return Err(SeamError::new("received-share store offline"));
         }
         inner.persists += 1;
+        inner.stored = Some(encoded);
         Ok(())
+    }
+
+    async fn load(&self) -> SeamResult<ReceivedSharesList> {
+        let stored = self.inner.lock().expect("lock").stored.clone();
+        match stored {
+            None => Ok(ReceivedSharesList::new()),
+            Some(bytes) => ReceivedSharesList::decode(&bytes)
+                .map_err(|e| SeamError::new(format!("received-shares decode failed: {e}"))),
+        }
     }
 }

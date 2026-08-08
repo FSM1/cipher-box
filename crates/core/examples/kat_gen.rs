@@ -36,24 +36,26 @@ use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
     ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
     HistoryLinkPayload, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader,
-    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields, ReadBody,
+    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields,
+    RECEIVED_SHARES_HPKE_INFO, RECEIVED_SHARES_V, ReadBody, ReceivedSharesHeader,
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
     STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
-    WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
-    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
-    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
-    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
-    encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob,
-    open_history_link, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body,
-    open_settings_record, seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link,
-    seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, seal_settings_record,
-    settings_record_aad, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set,
-    verify_structure,
+    STRUCT_TAG_RECEIVED_SHARES, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    SettingsRecordHeader, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
+    StructureSigInput, Version, WriteBody, build_aad, content_key_aad, decode_ascent_link,
+    decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
+    encode_read_body, encode_write_body, op_record_aad, open_ascent_link, open_content_key,
+    open_grant_blob, open_history_link, open_op_record, open_owner_blob, open_owner_write_blob,
+    open_read_body, open_received_shares, open_settings_record, received_shares_aad,
+    seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link, seal_op_record,
+    seal_owner_blob, seal_owner_write_blob, seal_read_body, seal_received_shares,
+    seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
+    structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -223,6 +225,49 @@ struct Manifest {
     op_record: OpRecordSection,
     settings_record: SettingsRecordSection,
     content_key: ContentKeySection,
+    received_shares: ReceivedSharesSection,
+}
+
+// --- Received-shares section: the recipient's share bookmarks, HPKE-auth-to-
+// --- self under the owner's enc subkey with its clear header as the AAD.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceivedSharesSection {
+    struct_tag: u8,
+    v: u64,
+    /// RFC 9180 mode: auth, so only the enc subkey's holder can author a blob —
+    /// the recipient half is public by construction here.
+    hpke_mode: u8,
+    hpke_info: String,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+/// A received-shares accept vector: the fixed owner enc keypair and injected
+/// ephemeral, and the whole blob — a re-seal must reproduce `blob`
+/// byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceivedSharesAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    body: String,
+    blob: String,
+}
+
+/// A received-shares reject vector: a blob that must fail closed when opened
+/// under `ownerSecret`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceivedSharesRejectVector {
+    name: String,
+    owner_secret: String,
+    blob: String,
+    check: String,
+    class: String,
 }
 
 // --- Settings-record section: the vault settings record, HPKE-auth-to-self
@@ -908,6 +953,7 @@ fn main() {
     let op_record_dir = vectors_dir.join("op_record");
     let settings_record_dir = vectors_dir.join("settings_record");
     let content_key_dir = vectors_dir.join("content_key");
+    let received_shares_dir = vectors_dir.join("received_shares");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -921,6 +967,7 @@ fn main() {
         &op_record_dir,
         &settings_record_dir,
         &content_key_dir,
+        &received_shares_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -1106,6 +1153,18 @@ fn main() {
         &content_key_reject,
     );
 
+    let received_shares_accept = build_received_shares_accept();
+    let received_shares_reject = build_received_shares_reject();
+
+    write_pretty(
+        &received_shares_dir.join("received_shares_accept.json"),
+        &received_shares_accept,
+    );
+    write_pretty(
+        &received_shares_dir.join("received_shares_reject.json"),
+        &received_shares_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -1143,6 +1202,8 @@ fn main() {
         settings_record_reject: &settings_record_reject,
         content_key_accept: &content_key_accept,
         content_key_reject: &content_key_reject,
+        received_shares_accept: &received_shares_accept,
+        received_shares_reject: &received_shares_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -1155,8 +1216,9 @@ fn main() {
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
          {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
          {} op-record-accept, {} op-record-reject, {} settings-record-accept, \
-         {} settings-record-reject, {} content-key-accept, \
-         {} content-key-reject vectors + manifest.json",
+         {} settings-record-reject, {} content-key-accept, {} content-key-reject, \
+         {} received-shares-accept, \
+         {} received-shares-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -1193,6 +1255,8 @@ fn main() {
         settings_record_reject.len(),
         content_key_accept.len(),
         content_key_reject.len(),
+        received_shares_accept.len(),
+        received_shares_reject.len(),
     );
 }
 
@@ -1958,6 +2022,8 @@ struct ManifestInputs<'a> {
     settings_record_reject: &'a [SettingsRecordRejectVector],
     content_key_accept: &'a [ContentKeyAcceptVector],
     content_key_reject: &'a [ContentKeyRejectVector],
+    received_shares_accept: &'a [ReceivedSharesAcceptVector],
+    received_shares_reject: &'a [ReceivedSharesRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -2194,6 +2260,27 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 count: m.content_key_reject.len(),
                 checks: checks_surface_ordered(
                     &m.content_key_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
+        },
+        received_shares: ReceivedSharesSection {
+            struct_tag: STRUCT_TAG_RECEIVED_SHARES,
+            v: RECEIVED_SHARES_V,
+            hpke_mode: MODE_AUTH,
+            hpke_info: String::from_utf8(RECEIVED_SHARES_HPKE_INFO.to_vec())
+                .expect("the received-shares info string is ASCII"),
+            accept: FileCount {
+                file: "vectors/received_shares/received_shares_accept.json".to_string(),
+                count: m.received_shares_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/received_shares/received_shares_reject.json".to_string(),
+                count: m.received_shares_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.received_shares_reject
                         .iter()
                         .map(|v| v.check.as_str())
                         .collect(),
@@ -6751,6 +6838,258 @@ fn content_key_reject_vector(
         scope: hexstr(&at.scope),
         epoch: at.epoch,
         content_cid: hexstr(&at.content_cid),
+        blob: hexstr(blob),
+        check: check.to_string(),
+        class: class.to_string(),
+    }
+}
+
+// ===========================================================================
+// Received shares: the recipient's share bookmarks, the durable carrier of
+// every bookmarked scope's pointerReadKey. Sealed HPKE auth-mode to the owner's
+// own enc subkey under a fixed injected ephemeral, so every blob is
+// byte-reproducible; the clear header is the AAD, so a header swap fails at the
+// AEAD tag rather than merely mismatching.
+// ===========================================================================
+
+/// The frozen owner enc subkey the received-shares vectors seal to, and its
+/// scalar.
+fn received_shares_owner() -> ([u8; 32], X25519Secret) {
+    let scalar: [u8; 32] = std::array::from_fn(|i| (0x71 + i) as u8);
+    let secret = X25519Secret::from_scalar(scalar);
+    (scalar, secret)
+}
+
+fn build_received_shares_accept() -> Vec<ReceivedSharesAcceptVector> {
+    let (scalar, owner) = received_shares_owner();
+    vec![
+        received_shares_accept_vector(
+            "empty-body",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0x81 + i) as u8),
+            b"",
+        ),
+        received_shares_accept_vector(
+            "bookmark-body",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0xa1 + i) as u8),
+            &received_shares_bookmark_body(),
+        ),
+    ]
+}
+
+/// A stand-in bookmark list: core seals the engine's encoded list opaquely, so
+/// the only property the vector pins is that a non-empty body round-trips.
+fn received_shares_bookmark_body() -> Vec<u8> {
+    encode(&Value::Array(vec![Value::Array(vec![
+        Value::Bytes([0xc1; 16].to_vec()),
+        Value::Bytes([0x5a; SECRET_LEN].to_vec()),
+    ])]))
+    .expect("bookmark body encodes")
+}
+
+/// Build + self-check one received-shares accept vector: the seal is
+/// deterministic and the open recovers the body.
+fn received_shares_accept_vector(
+    name: &str,
+    owner_scalar: [u8; 32],
+    owner: &X25519Secret,
+    eph: [u8; 32],
+    body: &[u8],
+) -> ReceivedSharesAcceptVector {
+    let blob = seal_received_shares(owner, &eph, body)
+        .unwrap_or_else(|e| panic!("received-shares {name}: seal ({e})"));
+    assert_eq!(
+        seal_received_shares(owner, &eph, body).unwrap(),
+        blob,
+        "received-shares {name}: not deterministic"
+    );
+
+    let plaintext = open_received_shares(owner, &blob)
+        .unwrap_or_else(|e| panic!("received-shares {name}: open ({e})"));
+    assert_eq!(
+        &plaintext[..],
+        body,
+        "received-shares {name}: body round-trip"
+    );
+
+    ReceivedSharesAcceptVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&owner_scalar),
+        owner_public: hexstr(&owner.public().to_bytes()),
+        ephemeral_scalar: hexstr(&eph),
+        body: hexstr(body),
+        blob: hexstr(&blob),
+    }
+}
+
+fn build_received_shares_reject() -> Vec<ReceivedSharesRejectVector> {
+    let (scalar, owner) = received_shares_owner();
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xc1 + i) as u8);
+    let blob = seal_received_shares(&owner, &eph, b"reject-probe bookmarks").unwrap();
+
+    let tampered_ciphertext = reframe_record(&blob, |m| {
+        let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+        ct[0] ^= 0x01;
+        m.insert("ciphertext", Value::Bytes(ct));
+    });
+    let forward_version = reframe_record(&blob, |m| {
+        m.insert("v", Value::Unsigned(RECEIVED_SHARES_V + 1));
+    });
+    // A fourth key at this version: outside the AAD, so it opens cleanly unless
+    // the three keys are enforced as exhaustive.
+    let unknown_field = reframe_record(&blob, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
+    });
+    let short_enc = reframe_record(&blob, |m| {
+        let mut enc = m.get("enc").unwrap().as_bytes().unwrap().to_vec();
+        enc.truncate(ENC_LEN - 1);
+        m.insert("enc", Value::Bytes(enc));
+    });
+    // A low-order point drives the KEM to an all-zero shared secret.
+    let low_order_enc = reframe_record(&blob, |m| {
+        m.insert("enc", Value::Bytes(low_order_x25519_point().to_vec()));
+    });
+    let missing_enc = reframe_record(&blob, |m| {
+        m.remove("enc");
+    });
+    let missing_ciphertext = reframe_record(&blob, |m| {
+        m.remove("ciphertext");
+    });
+    // A settings record handed over verbatim: the two families share the frame
+    // and the version byte, so nothing but the struct tag and the info string
+    // can refuse it — the vector that proves they are non-transplantable.
+    let cross_family_transplant = seal_settings_record(&owner, &eph, b"config").unwrap();
+    let base_mode_forgery = forged_base_mode_received_shares(&owner.public());
+    // A stranger's enc subkey: it rebuilds a different owner tag, so it derives
+    // a different AAD rather than merely failing a comparison.
+    let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x31 + i) as u8);
+
+    vec![
+        received_shares_reject_vector(
+            "tampered-ciphertext",
+            scalar,
+            &tampered_ciphertext,
+            "hpke-open-failed",
+            "trust",
+        ),
+        received_shares_reject_vector(
+            "foreign-recipient",
+            stranger_scalar,
+            &blob,
+            "hpke-open-failed",
+            "trust",
+        ),
+        received_shares_reject_vector(
+            "cross-family-transplant",
+            scalar,
+            &cross_family_transplant,
+            "hpke-open-failed",
+            "trust",
+        ),
+        received_shares_reject_vector(
+            "short-enc",
+            scalar,
+            &short_enc,
+            "invalid-field-length",
+            "malformed",
+        ),
+        received_shares_reject_vector(
+            "low-order-enc",
+            scalar,
+            &low_order_enc,
+            "hpke-non-contributory",
+            "trust",
+        ),
+        received_shares_reject_vector(
+            "missing-enc",
+            scalar,
+            &missing_enc,
+            "missing-field",
+            "malformed",
+        ),
+        received_shares_reject_vector(
+            "missing-ciphertext",
+            scalar,
+            &missing_ciphertext,
+            "missing-field",
+            "malformed",
+        ),
+        received_shares_reject_vector(
+            "forward-version",
+            scalar,
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+        ),
+        received_shares_reject_vector(
+            "unknown-header-field",
+            scalar,
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+        ),
+        received_shares_reject_vector(
+            "base-mode-forgery",
+            scalar,
+            &base_mode_forgery,
+            "hpke-open-failed",
+            "trust",
+        ),
+    ]
+}
+
+/// A blob a forger holding only the owner's public tag can build: correctly
+/// framed and correctly AAD-bound, sealed HPKE **base** mode.
+fn forged_base_mode_received_shares(owner_pub: &X25519Public) -> Vec<u8> {
+    let header = ReceivedSharesHeader {
+        version: RECEIVED_SHARES_V,
+        owner_tag: owner_pub.to_bytes().to_vec(),
+    };
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xd1 + i) as u8);
+    let sealed = hpke_seal(
+        owner_pub,
+        &eph,
+        RECEIVED_SHARES_HPKE_INFO,
+        &received_shares_aad(&header),
+        b"attacker bookmarks",
+    );
+    let mut m = Map::new();
+    m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
+    m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+    m.insert("v", Value::Unsigned(header.version));
+    encode(&Value::Map(m)).expect("forged received-shares blob encodes")
+}
+
+/// Build + self-check one received-shares reject vector.
+fn received_shares_reject_vector(
+    name: &str,
+    opener_scalar: [u8; 32],
+    blob: &[u8],
+    check: &str,
+    class: &str,
+) -> ReceivedSharesRejectVector {
+    let opener = X25519Secret::from_scalar(opener_scalar);
+    let err = match open_received_shares(&opener, blob) {
+        Err(e) => e,
+        Ok(_) => panic!("received-shares reject {name}: open accepted it"),
+    };
+    assert_eq!(
+        err.check(),
+        check,
+        "received-shares reject {name}: check ({err})"
+    );
+    assert_eq!(
+        err.class(),
+        class,
+        "received-shares reject {name}: class ({err})"
+    );
+
+    ReceivedSharesRejectVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&opener_scalar),
         blob: hexstr(blob),
         check: check.to_string(),
         class: class.to_string(),

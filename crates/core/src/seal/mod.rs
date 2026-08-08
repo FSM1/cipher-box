@@ -16,6 +16,7 @@ pub mod content_key;
 pub mod envelope;
 pub mod grant;
 pub mod op_record;
+pub mod received_shares;
 pub mod section;
 pub mod settings_record;
 pub mod structure;
@@ -25,8 +26,8 @@ pub use aad::{
     AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
-    StructTagSpec, build_aad,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_RECEIVED_SHARES, STRUCT_TAG_SETTINGS_RECORD,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructTagSpec, build_aad,
 };
 pub use body::{
     ChildRef, NodeKind, PreservedFields, ReadBody, Version, decode_read_body, encode_read_body,
@@ -53,6 +54,10 @@ pub use grant::{
 pub use op_record::{
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, decode_op_record_header, op_record_aad,
     open_op_record, seal_op_record,
+};
+pub use received_shares::{
+    RECEIVED_SHARES_HPKE_INFO, RECEIVED_SHARES_V, ReceivedSharesHeader, open_received_shares,
+    received_shares_aad, seal_received_shares,
 };
 pub use section::{
     GrantSection, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, SignedAscentLink, SignedGrantBlob,

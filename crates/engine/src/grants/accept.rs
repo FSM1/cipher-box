@@ -17,7 +17,9 @@ use core::fmt;
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{AadContext, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob};
+use cipherbox_core::seal::{
+    AadContext, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
+};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -98,7 +100,9 @@ pub struct ReceivedShare {
     /// The granted permission (from the resolved/committed grant).
     pub permission: Permission,
     /// The scope's stable pointer read key, persisted for scope-pointer resolve.
-    pointer_read_key: SecretBytes,
+    /// Crate-visible so the durable store's codec and its conformance kit build
+    /// one; never public, so no host ever frames a bookmark's secret.
+    pub(crate) pointer_read_key: SecretBytes,
 }
 
 impl ReceivedShare {
@@ -158,7 +162,7 @@ impl ReceivedSharesList {
     /// drifted, no-op if byte-identical (blueprint/engine.md "self-healing
     /// bookmarks"). The returned [`Reconciled`] carries the pre-image
     /// [`revert`](Self::revert) needs if the durable persist then fails.
-    fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
+    pub(crate) fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
         match self
             .entries
             .iter_mut()
@@ -212,11 +216,140 @@ impl ReceivedSharesList {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Encode the list to det-CBOR for the durable store, entries in scope-root
+    /// order so one list has one spelling.
+    ///
+    /// Rejects a duplicate scope root release-active, the invariant
+    /// [`decode`](Self::decode) hard-rejects (AGENTS.md rule 8): a list with two
+    /// bookmarks for one scope has no defined authority, and emitting one would
+    /// durably store bytes this build's own reader refuses.
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, SharesCodecError> {
+        let mut sorted: Vec<&ReceivedShare> = self.entries.iter().collect();
+        sorted.sort_by(|a, b| name_cmp(&a.scope_root_name, &b.scope_root_name));
+        if sorted
+            .windows(2)
+            .any(|pair| pair[0].scope_root_name == pair[1].scope_root_name)
+        {
+            return Err(SharesCodecError::DuplicateScopeRoot);
+        }
+        let shares = sorted
+            .into_iter()
+            .map(|share| {
+                let mut m = Map::new();
+                m.insert("displayName", Value::Text(share.display_name.clone()));
+                m.insert(
+                    "permission",
+                    Value::Text(share.permission.as_wire().to_string()),
+                );
+                m.insert(
+                    "pointerReadKey",
+                    Value::Bytes(share.pointer_read_key().to_vec()),
+                );
+                m.insert("scopeRootName", Value::Bytes(share.scope_root_name.clone()));
+                m.insert(
+                    "sharerIdentityPk",
+                    Value::Bytes(share.sharer_identity_pk.to_vec()),
+                );
+                Value::Map(m)
+            })
+            .collect();
+        let mut body = Map::new();
+        body.insert("shares", Value::Array(shares));
+        Ok(encode_fixed_depth(&Value::Map(body)))
+    }
+
+    /// Decode a stored list (strict det-CBOR). A missing/mistyped field, an
+    /// unknown key, or a duplicate scope root is [`Malformed`].
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, SharesCodecError> {
+        let value = decode(bytes)?;
+        let map = value.as_map()?;
+        reject_unknown(map, &["shares"])?;
+        let mut entries: Vec<ReceivedShare> = Vec::new();
+        for item in req(map, "shares")?.as_array()? {
+            let share = item.as_map()?;
+            reject_unknown(
+                share,
+                &[
+                    "displayName",
+                    "permission",
+                    "pointerReadKey",
+                    "scopeRootName",
+                    "sharerIdentityPk",
+                ],
+            )?;
+            let scope_root_name = req(share, "scopeRootName")?.as_bytes()?.to_vec();
+            if entries.iter().any(|e| e.scope_root_name == scope_root_name) {
+                return Err(SharesCodecError::DuplicateScopeRoot);
+            }
+            entries.push(ReceivedShare {
+                sharer_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
+                    req(share, "sharerIdentityPk")?,
+                    "sharerIdentityPk",
+                )?,
+                display_name: req(share, "displayName")?.as_text()?.to_string(),
+                permission: Permission::from_wire(req(share, "permission")?.as_text()?)
+                    .ok_or(Malformed::InvalidPermission)?,
+                pointer_read_key: SecretBytes::new(fixed::<32>(
+                    req(share, "pointerReadKey")?,
+                    "pointerReadKey",
+                )?),
+                scope_root_name,
+            });
+        }
+        Ok(Self { entries })
+    }
+}
+
+/// Why encoding or decoding a stored received-shares list failed.
+///
+/// [`DuplicateScopeRoot`](Self::DuplicateScopeRoot) is engine-owned rather than
+/// a [`CodecError`]: the list body is engine framing, and core emits only the
+/// checks it can itself produce.
+#[derive(Debug)]
+pub enum SharesCodecError {
+    /// The det-CBOR framing was malformed.
+    Codec(CodecError),
+    /// Two bookmarks named one scope root — a list with no defined authority
+    /// for that scope, refused in both directions (AGENTS.md rule 8).
+    DuplicateScopeRoot,
+}
+
+impl fmt::Display for SharesCodecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SharesCodecError::Codec(e) => write!(f, "received-shares codec: {e}"),
+            SharesCodecError::DuplicateScopeRoot => {
+                f.write_str("received-shares list names one scope root twice")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SharesCodecError {}
+
+impl<E: Into<CodecError>> From<E> for SharesCodecError {
+    fn from(e: E) -> Self {
+        SharesCodecError::Codec(e.into())
+    }
+}
+
+/// Reject any key outside `known` — this build wrote the bytes, so a key it does
+/// not emit is not a list it may act on.
+fn reject_unknown(map: &Map, known: &[&str]) -> Result<(), CodecError> {
+    match map
+        .entries()
+        .iter()
+        .find(|(key, _)| !known.contains(&key.as_str()))
+    {
+        Some((key, _)) => Err(Malformed::UnknownRecordField { key: key.clone() }.into()),
+        None => Ok(()),
+    }
 }
 
 /// What reconciling a freshly-verified grant did to the received-shares
 /// bookmark — the durable action the accept flow must persist before it acks.
-enum Reconciled {
+pub(crate) enum Reconciled {
     /// No entry existed for the scope; a new bookmark was appended.
     Added,
     /// An entry existed but its authority or pointer key had drifted; it was
@@ -235,20 +368,33 @@ impl Reconciled {
     }
 }
 
-/// Durable persistence for the recipient's received-shares bookmark — the seam
-/// the accept flow writes through before it acks the mailbox item.
+/// Durable persistence for the recipient's received-shares bookmark — what the
+/// accept flow writes through before it acks the mailbox item.
 ///
-/// Both the ack and the durable sequence-floor advance happen **only** after this
-/// returns `Ok` (blueprint/engine.md "Mailbox logic — ack after durable"): a floor
-/// that advanced ahead of a failed persist would strand the share below it forever.
-/// Persist-fail returns un-acked with the floor untouched, so the item redelivers
-/// and re-accepts idempotently (the bookmark self-heals). Injected as a grants-layer
-/// seam, not one of the nine host seams; the facade wires a concrete store when the
-/// accept flow is mounted.
+/// Both the ack and the durable sequence-floor advance happen **only** after
+/// [`persist`](Self::persist) returns `Ok` (blueprint/engine.md "Mailbox logic —
+/// ack after durable"): a floor that advanced ahead of a failed persist would
+/// strand the share below it forever. Persist-fail returns un-acked with the
+/// floor untouched, so the item redelivers and re-accepts idempotently (the
+/// bookmark self-heals).
+///
+/// A grants-layer contract rather than a tenth host seam, on the [`RetireLedger`]
+/// shape ([`crate::seams`]): the engine ships
+/// [`StagingReceivedShareStore`](super::StagingReceivedShareStore) over the
+/// durable [`StagingStore`](crate::seams::StagingStore) every host already
+/// implements, so a host supplies one only if it has a better backing.
 pub trait ReceivedShareStore {
     /// Durably persist the whole received-shares list. A failure returns a
     /// [`SeamError`] and the accept flow does not ack.
     async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()>;
+
+    /// The persisted list, or an empty one on a backing that holds none.
+    ///
+    /// Fail-closed on bytes it cannot read: an acked mailbox item is gone, so a
+    /// stored list this build cannot open is unrecoverable state, and reporting
+    /// it as empty would let the next [`persist`](Self::persist) overwrite every
+    /// bookmark behind it.
+    async fn load(&self) -> SeamResult<ReceivedSharesList>;
 }
 
 /// One owner-side sent-share record — the denormalized index the owner keeps.
@@ -679,6 +825,73 @@ mod tests {
             ct_eq(stored.pointer_read_key(), &[0x8A; 32]),
             "pointer read key mismatch"
         );
+    }
+
+    fn share(scope_root_name: &[u8], key_byte: u8) -> ReceivedShare {
+        ReceivedShare {
+            scope_root_name: scope_root_name.to_vec(),
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "s".into(),
+            permission: Permission::Read,
+            pointer_read_key: SecretBytes::new([key_byte; 32]),
+        }
+    }
+
+    #[test]
+    fn the_stored_list_round_trips_byte_stable_and_keeps_the_pointer_read_key() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"zzz", 0x9C));
+        list.reconcile(share(b"aaa", 0x8A));
+        let bytes = list.encode().expect("encodes");
+
+        let decoded = ReceivedSharesList::decode(&bytes).expect("decodes");
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded.encode().expect("re-encodes"), bytes, "byte-stable");
+        let first = decoded.iter().next().unwrap();
+        assert_eq!(first.scope_root_name, b"aaa", "entries ride in scope order");
+        assert!(ct_eq(first.pointer_read_key(), &[0x8A; 32]));
+    }
+
+    /// Rule 8: the decoder hard-rejects two bookmarks for one scope, so the
+    /// encoder must refuse to emit them — with a returned `Err` that survives a
+    /// release build, never a stripped assert.
+    #[test]
+    fn a_duplicate_scope_root_is_refused_in_both_directions() {
+        let mut duplicated = ReceivedSharesList::new();
+        duplicated.entries.push(share(b"n", 0x8A));
+        duplicated.entries.push(share(b"n", 0x9C));
+        assert!(
+            matches!(
+                duplicated.encode(),
+                Err(SharesCodecError::DuplicateScopeRoot)
+            ),
+            "the encoder refuses a list with no defined authority for a scope"
+        );
+
+        let mut one = ReceivedSharesList::new();
+        one.reconcile(share(b"n", 0x8A));
+        let single = decode(&one.encode().unwrap()).unwrap();
+        let mut map = single.as_map().unwrap().clone();
+        let mut shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
+        shares.push(shares[0].clone());
+        map.insert("shares", Value::Array(shares));
+        assert!(
+            matches!(
+                ReceivedSharesList::decode(&encode(&Value::Map(map)).unwrap()),
+                Err(SharesCodecError::DuplicateScopeRoot)
+            ),
+            "the decoder refuses the same list it would never emit"
+        );
+    }
+
+    #[test]
+    fn a_stored_list_with_an_unknown_key_is_refused() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"n", 0x8A));
+        let decoded = decode(&list.encode().unwrap()).unwrap();
+        let mut map = decoded.as_map().unwrap().clone();
+        map.insert("extra", Value::Unsigned(1));
+        assert!(ReceivedSharesList::decode(&encode(&Value::Map(map)).unwrap()).is_err());
     }
 
     #[test]
