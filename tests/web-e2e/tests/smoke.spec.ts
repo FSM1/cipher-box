@@ -64,3 +64,31 @@ test('signing out returns the tab to the front door', async ({ page }) => {
   await expect(new LoginPage(page).googleButton).toBeVisible();
   await expect(files.browser).toHaveCount(0);
 });
+
+/**
+ * The whole accepted key set: Core Kit's own store, which is the only one this
+ * app hands out (`apps/web/src/auth/coreKit.ts`), and the log level `loglevel`
+ * writes on import, one key per named logger the torus dependencies build.
+ */
+const ALLOWED_STORAGE_KEY = /^(?:loglevel(?::[\w.-]+)?|corekit_store)$/;
+
+/**
+ * This build carries no Web3Auth credentials, so Core Kit never constructs and
+ * the suite signs in through the introspection hook — what this gates is that
+ * the login flow and cold start persist nothing of their own beside that set.
+ */
+test('the login flow leaves nothing outside the storage allow-list', async ({ page }) => {
+  const vault = new VaultPage(page);
+
+  await vault.open();
+  await vault.coldStart();
+  await vault.settled();
+
+  const stored = await page.evaluate(() => ({
+    local: Object.keys(localStorage),
+    session: Object.keys(sessionStorage),
+  }));
+
+  expect(stored.local.filter((key) => !ALLOWED_STORAGE_KEY.test(key))).toEqual([]);
+  expect(stored.session).toEqual([]);
+});
