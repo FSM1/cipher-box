@@ -34,6 +34,7 @@ export interface CoreKitSession extends LoginSecretExporter {
 class Web3AuthSession implements CoreKitSession {
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
+    private readonly store: Storage,
     private readonly verifier: string,
     private readonly clientId: string
   ) {}
@@ -74,7 +75,14 @@ class Web3AuthSession implements CoreKitSession {
   }
 
   async logout(): Promise<void> {
-    if (this.isLoggedIn()) await this.coreKit.logout();
+    try {
+      if (this.isLoggedIn()) await this.coreKit.logout();
+    } finally {
+      // The SDK's own logout blanks its session id in place and leaves the rest
+      // of its store standing — a device factor share among it, once MFA is
+      // reachable. A refused logout must not leave that behind either.
+      this.store.removeItem(this.coreKit._storageKey);
+    }
   }
 
   _UNSAFE_exportTssKey(): Promise<string> {
@@ -83,31 +91,33 @@ class Web3AuthSession implements CoreKitSession {
 }
 
 /**
- * How long a persisted Core Kit session stays restorable, well under the SDK's
- * 86400s default. The store below holds a session id that reconstitutes a
- * logged-in Core Kit, so this is the ceiling on how long a reader of the origin's
- * storage holds a path to the login secret — the storage scope cannot be that
- * ceiling, because the session has to be restorable in a tab that did not log in.
+ * Bounds two things at once, which is what sets the value: the Web3Auth-held
+ * session record the stored id redeems, and `session_token_exp_second` on the
+ * signatures a login secret re-export needs. So it has to outlast a working
+ * session — a tab past it cannot be promoted to leader — while still not
+ * surviving a night on a shared machine, which the SDK's 86400s default does.
  */
-const SESSION_SECONDS = 2 * 60 * 60;
+const SESSION_SECONDS = 8 * 60 * 60;
 
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSession {
   const { clientId, verifier } = loginEnv(env);
+  // Origin-wide by decision, not by default: a tab promoted to leader re-exports
+  // the login secret from its own restored Core Kit session
+  // (`EngineClient.promote`), so a per-tab store would strand every tab that did
+  // not itself log in. What sits in it is a secp256k1 scalar that both addresses
+  // and decrypts a Web3Auth-held record holding the shares an export needs, so
+  // it is bearer key material and `SESSION_SECONDS` is its only other bound.
+  const store = window.localStorage;
 
   const coreKit = new Web3AuthMPCCoreKit({
     web3AuthClientId: clientId,
     web3AuthNetwork:
       environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
-    // Origin-wide by decision, not by default. A tab promoted to leader on
-    // failover re-exports the login secret from its own restored Core Kit
-    // session (`EngineClient.promote` in `packages/client`, which has no other
-    // source), so per-tab `sessionStorage` would leave every tab that did not
-    // itself log in unable to stand the engine up.
-    storage: window.localStorage,
+    storage: store,
     sessionTime: SESSION_SECONDS,
     manualSync: true,
     tssLib,
   });
-  return new Web3AuthSession(coreKit, verifier, clientId);
+  return new Web3AuthSession(coreKit, store, verifier, clientId);
 }

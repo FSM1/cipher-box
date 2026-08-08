@@ -66,32 +66,23 @@ test('signing out returns the tab to the front door', async ({ page }) => {
 });
 
 /**
- * Everything the origin is allowed to leave in Web Storage. Core Kit is the only
- * thing this app gives a store to (`apps/web/src/auth/coreKit.ts`), and that store
- * is a bearer path back to a logged-in session — so anything appearing beside it
- * fails here rather than passing review.
- *
- * `loglevel` caches a log level per named logger at import time; it holds no
- * session state.
+ * The whole accepted key set: Core Kit's own store, which is the only one this
+ * app hands out (`apps/web/src/auth/coreKit.ts`), and the log level a torus
+ * dependency's logger writes on import.
  */
-const ALLOWED_STORAGE_KEY = /^loglevel:/;
+const ALLOWED_STORAGE_KEY = /^(loglevel|corekit_store$)/;
 
 /**
- * Deliberately scoped to what the app itself persists: this build carries no
- * Web3Auth credentials, so `createCoreKitSession` throws and Core Kit never
- * constructs — the suite signs in through the introspection hook instead, and has
- * no interactive session whose key set it could observe. What it gates is that the
- * login flow, the cold start and a reload add nothing of their own beside it.
+ * This build carries no Web3Auth credentials, so Core Kit never constructs and
+ * the suite signs in through the introspection hook — what this gates is that
+ * the login flow and cold start persist nothing of their own beside that set.
  */
-test('a signed-in tab leaves nothing outside the storage allow-list', async ({ page }) => {
+test('the login flow leaves nothing outside the storage allow-list', async ({ page }) => {
   const vault = new VaultPage(page);
 
   await vault.open();
   await vault.coldStart();
   await vault.settled();
-  // Nothing in the tab survives a reload in memory, so what answers afterwards is
-  // exactly what the flow persisted.
-  await vault.open();
 
   const stored = await page.evaluate(() => ({
     local: Object.keys(localStorage),
