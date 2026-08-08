@@ -164,12 +164,9 @@ pub enum ExpandError {
     ForeignManifest,
 }
 
-/// Where a version's root rides in the CID set that names it.
-///
-/// The register and retire paths need opposite orders because the expansion key
-/// differs: registration recovers its leaves from staging, so the root carries
-/// nothing; retirement recovers them from the fetched root block, so the root
-/// must outlive everything it expands to.
+/// Where a version's root rides in the CID set that names it. The caller says
+/// which, because only the caller knows whether the root is its expansion key
+/// (see [`expand_retire_targets`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootPlacement {
     /// The root first, then every leaf in file order — registration.
@@ -184,6 +181,9 @@ pub enum RootPlacement {
 /// block is its own accountable pin row (blueprint/api.md "Pin/name registry"),
 /// so a retirement naming fewer CIDs than the registration claimed spends
 /// account quota forever, and one naming more unpins live blocks.
+///
+/// # Panics
+/// If any CID is not the frozen content-plane CIDv1 framing.
 #[must_use]
 pub fn version_cids<'a>(
     root_cid: &[u8],
@@ -226,27 +226,40 @@ impl Expansion {
             .collect()
     }
 
-    /// Drop every target a retained version also names, and re-total what the
-    /// remainder frees.
+    /// Split at the retained boundary: what a retire may still name, and the
+    /// targets a retained version holds hostage (deduplicated — a manifest may
+    /// repeat a link).
     ///
     /// A pin row is keyed `(account, cid)` and physical unpin fires at global
     /// refcount zero (blueprint/api.md "Pin/name registry"), so retiring a CID a
     /// retained version also names unpins live content. Which versions are
     /// retained is a whole-plan property the prune op decides, never one a
-    /// single root's expansion can see. A subtracted target frees nothing, so
-    /// the total is re-summed rather than kept in the manifest's closed form.
+    /// single root's expansion can see. A held target frees nothing, so the
+    /// total is re-summed rather than kept in the manifest's closed form.
     #[must_use]
-    pub fn minus_retained(&self, retained: &BTreeSet<String>) -> Self {
-        let targets: Vec<RetireTarget> = self
+    pub fn split_retained(&self, retained: &BTreeSet<String>) -> (Self, Vec<String>) {
+        let (held, retirable): (Vec<RetireTarget>, Vec<RetireTarget>) = self
             .targets
             .iter()
-            .filter(|target| !retained.contains(&target.cid))
             .cloned()
-            .collect();
-        Self {
-            pinned_bytes: sum_pinned(&targets),
-            targets,
-        }
+            .partition(|target| retained.contains(&target.cid));
+        (
+            Self {
+                pinned_bytes: sum_pinned(&retirable),
+                targets: retirable,
+            },
+            held.into_iter()
+                .map(|target| target.cid)
+                .collect::<BTreeSet<String>>()
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// What a retire may still name once every retained target is out of it.
+    #[must_use]
+    pub fn minus_retained(&self, retained: &BTreeSet<String>) -> Self {
+        self.split_retained(retained).0
     }
 }
 
@@ -277,11 +290,13 @@ impl From<DagError> for ExpandError {
 /// where a root-first order would leave its leaves unnameable and charged.
 ///
 /// The manifest is held to `profile`'s framing and to `pinned_bytes`, the total
-/// the plan quoted. Anyone holding a scope's write seed can author a version
-/// record, so without both bounds a hand-framed root — correctly addressed, and
-/// internally consistent under a `chunkSize` of its own choosing — could name up
-/// to [`MAX_RESOLVED_RECORD_BYTES`]-worth of CIDs the owner's own token would
-/// then delete.
+/// the plan quoted, which bounds the link count to what that framing implies —
+/// without them a root framed under a `chunkSize` of its own choosing could name
+/// up to [`MAX_RESOLVED_RECORD_BYTES`]-worth of CIDs. Neither bound establishes
+/// *provenance*: anyone holding the scope's write seed authors both the root and
+/// the record `size` the plan quotes from, so the links can still be CIDs of
+/// that author's choosing. Keeping those off the retire is
+/// [`Expansion::split_retained`]'s job, at the plan that knows what it keeps.
 pub fn expand_retire_targets(
     content_cid: &str,
     root_block: &[u8],

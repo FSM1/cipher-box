@@ -22,19 +22,17 @@ pub struct OwedRetire {
     /// expansion holds a hand-framed root to.
     pub manifest_bytes: u64,
     /// Targets of this root's expansion that a version the prune **retained**
-    /// also names, so the retire must skip them.
+    /// also names, so the retire must skip them
+    /// ([`Expansion::split_retained`](crate::content::Expansion::split_retained)).
     ///
-    /// Which versions are retained is a whole-plan property only the prune op
-    /// sees; a single root's expansion cannot derive it. Normally empty —
-    /// honestly-authored versions seal identical plaintext under a fresh
-    /// per-version key and a fresh per-chunk nonce, so their leaf sets are
-    /// disjoint by construction.
+    /// Normally empty — honestly-authored versions seal identical plaintext
+    /// under a fresh per-version key and a fresh per-chunk nonce, so their leaf
+    /// sets are disjoint by construction.
     pub retained: Vec<String>,
 }
 
 impl OwedRetire {
-    /// The debt of a doomed version whose expansion aliases nothing a retained
-    /// version names — every prune's normal case.
+    /// A debt whose expansion aliases nothing a retained version names.
     #[must_use]
     pub fn whole(target: String, pinned_bytes: u64) -> Self {
         Self {
@@ -61,9 +59,11 @@ impl OwedRetire {
 ///   account's paid debt from another's unpaid one
 ///   ([`RetireResult`](crate::api::RetireResult)).
 /// - **Keyed by target**: [`owe`](RetireLedger::owe)ing a target the store
-///   already holds keeps the stored `owed_bytes` rather than adding a second
-///   entry, so a replayed prune cannot double the pending figure. Order is not
-///   part of the contract.
+///   already holds keeps the stored entry rather than adding a second one, so a
+///   replayed prune cannot double the pending figure — unless the incoming entry
+///   names a [`retained`](OwedRetire::retained) target the held one does not, in
+///   which case it replaces it whole, so protection only ever widens. Order is
+///   not part of the contract.
 /// - **Never-discard**: nothing but `settle` removes an entry. There is no
 ///   attempt budget, no expiry, and no sweep — every failure mode is either
 ///   self-clearing or ours, and the byte figure is the only record of what was

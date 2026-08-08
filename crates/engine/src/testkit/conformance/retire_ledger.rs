@@ -139,27 +139,40 @@ where
     reopened.settle(alice, &[]).await.unwrap();
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
-    // The retained set is the only record of what this entry must not retire,
-    // so it is as durable as the figure beside it.
+    // The retained set is the only record of what an entry must not retire, so
+    // it is as durable as the figure beside it, and an entry that protects less
+    // never displaces one that protects more.
     let aliased = OwedRetire {
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
         retained: vec![root(4), root(5)],
     };
-    reopened
-        .owe(alice, core::slice::from_ref(&aliased))
-        .await
-        .unwrap();
-    let after_reopen = open().await;
-    assert_eq!(
-        after_reopen
+    let held_of = async |ledger: &L, target: &str| {
+        ledger
             .owed(alice)
             .await
             .unwrap()
             .into_iter()
-            .find(|entry| entry.target == aliased.target),
+            .find(|entry| entry.target == target)
+    };
+    reopened
+        .owe(alice, &[owed(&aliased.target, 90), aliased.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        held_of(&reopened, &aliased.target).await,
+        Some(aliased.clone()),
+        "a wider retained set replaces the entry it widens"
+    );
+    reopened
+        .owe(alice, &[owed(&aliased.target, 90)])
+        .await
+        .unwrap();
+    let after_reopen = open().await;
+    assert_eq!(
+        held_of(&after_reopen, &aliased.target).await,
         Some(aliased),
-        "an entry must survive reopen whole, retained set included"
+        "protection only ever widens, and survives reopen whole"
     );
 }

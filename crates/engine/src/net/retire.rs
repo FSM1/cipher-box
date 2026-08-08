@@ -132,9 +132,8 @@ where
 pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 
 /// The fixed head of one stored entry: the owed figure then the manifest total,
-/// both big-endian `u64`. Whatever follows is the retained-target list, one
-/// binary content CID each.
-const ENTRY_HEAD_LEN: usize = 16;
+/// both big-endian `u64`, followed by the retained-target list as binary CIDs.
+const ENTRY_HEAD_LEN: usize = 2 * size_of::<u64>();
 
 /// The [`RetireLedger`] every host gets for free, over the durable staging store
 /// it already implements.
@@ -176,10 +175,16 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
         for entry in entries {
             let key = Self::key(owner_tag, &entry.target)?;
             let stored = encode_entry(entry)?;
-            // A readable entry keeps its stored figure, so a replayed prune
-            // cannot double what the vault reports as pending; an unreadable one
-            // is repaired rather than left to sit undrainable forever.
-            if decode_entry(&entry.target, self.0.staged_bytes(&key).await?).is_none() {
+            // A held entry keeps its stored figure, so a replayed prune cannot
+            // double what the vault reports as pending; an unreadable one is
+            // repaired rather than left to sit undrainable forever. One target
+            // can ride two nodes' histories, though, so an entry that protects
+            // less than this one is replaced whole — figure and retained set
+            // together, since the two must stay consistent.
+            let held = decode_entry(self.0.staged_bytes(&key).await?);
+            if held.is_none_or(|(.., retained)| {
+                !entry.retained.iter().all(|cid| retained.contains(cid))
+            }) {
                 self.0.put_staged_bytes(&key, &stored).await?;
             }
         }
@@ -196,11 +201,17 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             else {
                 continue;
             };
-            let target = encode_content_cid_str(cid);
-            let Some(entry) = decode_entry(&target, self.0.staged_bytes(&key).await?) else {
+            let Some((owed_bytes, manifest_bytes, retained)) =
+                decode_entry(self.0.staged_bytes(&key).await?)
+            else {
                 continue;
             };
-            entries.push(entry);
+            entries.push(OwedRetire {
+                target: encode_content_cid_str(cid),
+                owed_bytes,
+                manifest_bytes,
+                retained,
+            });
         }
         // Store enumeration order is host-dependent, and a pass can stop early;
         // sorted, it at least stops at the same place on every host.
@@ -233,25 +244,26 @@ fn encode_entry(entry: &OwedRetire) -> SeamResult<Vec<u8>> {
     Ok(stored)
 }
 
-/// One entry read back, or `None` for bytes this build did not write. A partial
-/// or over-long trailer reads as unwritten rather than as a shorter retained
-/// list, which would retire a target the prune excluded.
-fn decode_entry(target: &str, stored: Option<Vec<u8>>) -> Option<OwedRetire> {
+/// One entry's owed figure, manifest total, and retained targets — or `None` for
+/// bytes this build did not write. A partial or over-long trailer reads as
+/// unwritten rather than as a shorter retained list, which would retire a target
+/// the prune excluded. The target itself comes from the key, never the value.
+fn decode_entry(stored: Option<Vec<u8>>) -> Option<(u64, u64, Vec<String>)> {
     let stored = stored?;
-    if stored.len() < ENTRY_HEAD_LEN || (stored.len() - ENTRY_HEAD_LEN) % CONTENT_CID_LEN != 0 {
+    if (stored.len().checked_sub(ENTRY_HEAD_LEN)?) % CONTENT_CID_LEN != 0 {
         return None;
     }
-    let (head, rest) = stored.split_at(ENTRY_HEAD_LEN);
+    let (owed, rest) = stored.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (manifest, rest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
     let retained = rest
         .chunks_exact(CONTENT_CID_LEN)
         .map(|cid| is_wellformed_content_cid(cid).then(|| encode_content_cid_str(cid)))
         .collect::<Option<Vec<String>>>()?;
-    Some(OwedRetire {
-        target: target.to_owned(),
-        owed_bytes: u64::from_be_bytes(<[u8; 8]>::try_from(&head[..8]).ok()?),
-        manifest_bytes: u64::from_be_bytes(<[u8; 8]>::try_from(&head[8..]).ok()?),
+    Some((
+        u64::from_be_bytes(*owed),
+        u64::from_be_bytes(*manifest),
         retained,
-    })
+    ))
 }
 
 /// Work the ledger once and report the pinned bytes still owed afterwards — the
@@ -783,8 +795,8 @@ mod tests {
         };
         let stored = encode_entry(&entry).expect("encodes");
         assert_eq!(
-            decode_entry(&entry.target, Some(stored.clone())),
-            Some(entry.clone()),
+            decode_entry(Some(stored.clone())),
+            Some((entry.owed_bytes, entry.manifest_bytes, entry.retained)),
             "a round trip is the whole entry"
         );
         for bytes in [
@@ -793,8 +805,81 @@ mod tests {
             [&stored[..], &[7u8; CONTENT_CID_LEN - 1]].concat(),
             [&stored[..], &[7u8; CONTENT_CID_LEN]].concat(),
         ] {
-            assert_eq!(decode_entry(&entry.target, Some(bytes)), None);
+            assert_eq!(decode_entry(Some(bytes)), None);
         }
+    }
+
+    /// One root `contentCid` can ride two nodes' histories, so a held entry that
+    /// protects less than the incoming one must not stand: the second prune's
+    /// retained set is the only record that its own survivors alias these bytes.
+    #[test]
+    fn an_entry_that_protects_less_than_the_incoming_one_is_replaced() {
+        let (whole, root_block, leaf_cids) = owed_version(&[2u8; 100]);
+        let expansion = expand_retire_targets(
+            &whole.target,
+            &root_block,
+            &ContentProfile::CI,
+            whole.manifest_bytes,
+        )
+        .expect("expands");
+        let hostage = leaf_cids[0].clone();
+        let protecting = OwedRetire {
+            owed_bytes: expansion
+                .minus_retained(&BTreeSet::from([hostage.clone()]))
+                .pinned_bytes,
+            retained: vec![hostage.clone()],
+            ..whole.clone()
+        };
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &whole);
+        owe(&store, OWNER, &protecting);
+        assert_eq!(
+            block_on(StagingRetireLedger::new(&store).owed(OWNER)).expect("owed"),
+            vec![protecting.clone()],
+            "the wider protection replaces the narrower entry whole"
+        );
+
+        owe(&store, OWNER, &whole);
+        assert_eq!(
+            block_on(StagingRetireLedger::new(&store).owed(OWNER)).expect("owed"),
+            vec![protecting],
+            "and a replay that protects nothing does not narrow it again"
+        );
+    }
+
+    /// The ledger is not authenticated, so a store that lost or bent an entry
+    /// must never let a leaf ride the final batch in the root's place.
+    #[test]
+    fn an_entry_whose_retained_set_names_its_own_root_retires_nothing() {
+        let (whole, root_block, _) = owed_version(&[4u8; 100]);
+        let expansion = expand_retire_targets(
+            &whole.target,
+            &root_block,
+            &ContentProfile::CI,
+            whole.manifest_bytes,
+        )
+        .expect("expands");
+        let entry = OwedRetire {
+            // Consistent with the bent retained set, so the byte gate passes and
+            // the missing expansion key is the only thing left to catch it.
+            owed_bytes: expansion
+                .minus_retained(&BTreeSet::from([whole.target.clone()]))
+                .pinned_bytes,
+            retained: vec![whole.target.clone()],
+            ..whole
+        };
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let (remaining, owed) = drain(&store, OWNER, &http);
+
+        assert!(
+            retired_targets(&http).is_empty(),
+            "an entry that cannot name its own expansion key retires nothing"
+        );
+        assert_eq!(owed, vec![entry.clone()], "and stays owed");
+        assert_eq!(remaining, entry.owed_bytes);
     }
 
     #[test]

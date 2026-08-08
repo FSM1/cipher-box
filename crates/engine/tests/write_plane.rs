@@ -7297,3 +7297,64 @@ fn a_doomed_root_naming_a_retained_versions_leaf_never_retires_that_leaf() {
         "the debt clears on the registry's own answer"
     );
 }
+
+/// A version whose root block no source will serve is authorable by anyone
+/// holding the scope's write seed, and the prune has to fetch it to know what
+/// the retire may name. An uncharged retry would let one such version hold the
+/// FIFO head — and every op queued behind it — forever.
+#[test]
+fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let body: Vec<u8> = (0..60u8).collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    let unserved = compute_cid(DAG_ROOT_CODEC, b"a root block no source ever stored");
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![
+                    head,
+                    CoreVersion::new(
+                        unserved,
+                        [0u8; 32],
+                        ContentProfile::CI.chunk_size() as u64,
+                        0,
+                    ),
+                ],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 1);
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert!(passes > 1, "the budget is spent over several passes");
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted]
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "a prune that never expanded retires nothing"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0, "and journals no debt");
+}
