@@ -135,6 +135,14 @@ Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`
 
 Enforcement: commitlint is configured via `commitlint.config.js`, and PR titles are validated in CI by `.github/workflows/pr-title.yml`. Note that the husky `commit-msg` hook was replaced by an Entire CLI wrapper and currently does not run commitlint locally — follow the format regardless, since CI will reject non-conforming PR titles.
 
+### No Tool Attribution
+
+A commit message, a PR title, a PR body, an issue, and a review comment carry **no attribution to the tool that wrote them** — no `🤖 Generated with …` line, no `Co-Authored-By:` trailer naming an assistant, no session link. This holds however the text was produced.
+
+The authorship that matters is the commit author and the PR author, which git and GitHub already record. A generated-by line adds nothing a reader can act on and turns every PR body into an advertisement.
+
+Agent harnesses commonly append such a line by default. That default does not apply here: strip it before opening or editing a PR, and check the rendered body afterwards rather than trusting that it was never added.
+
 ### Mandatory PR Review Flow
 
 Every code PR runs these review gates after it is opened as a **draft**, before it is driven toward merge — mandatory, not optional:
