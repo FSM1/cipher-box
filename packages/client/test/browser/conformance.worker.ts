@@ -16,6 +16,7 @@ import init, {
   runSchedulerConformance,
   runSnapshotCacheConformance,
   runStagingStoreConformance,
+  runStagingStoreFailedFirstPutConformance,
   runStagingStoreFailedPutConformance,
 } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
@@ -260,6 +261,18 @@ async function run(seam: string): Promise<void> {
           () => Promise.resolve(arm())
         );
         await assertStagedEntryCount(`${name}-staged`, 1);
+      }
+      return;
+    }
+    case 'stagingStoreFailedFirstPut': {
+      const name = 'conf-staging-failed-first-put';
+      for (const arm of [armShortWrite, armThrowingWrite]) {
+        await clearOpfsDir(`${name}-staged`);
+        await runStagingStoreFailedFirstPutConformance(
+          () => Promise.resolve(new OpfsStagingStore(name)),
+          () => Promise.resolve(arm())
+        );
+        await assertStagedEntryCount(`${name}-staged`, 0);
       }
       return;
     }

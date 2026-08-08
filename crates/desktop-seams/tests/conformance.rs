@@ -63,6 +63,22 @@ fn file_staging_store_passes_the_failed_put_kit() {
     ));
 }
 
+/// The failed-put kit's fresh-backing case: a first put that fails must land
+/// nothing at the key. Unix only — the lever has to be armed before the key
+/// exists, and Windows honours no denial on a path that is not there yet, so
+/// its leg runs the replacement case above.
+#[cfg(unix)]
+#[test]
+fn file_staging_store_passes_the_failed_first_put_kit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let denial = WriteDenial::for_store(&path);
+    block_on(conformance::staging_store::check_failed_first_put(
+        async || FileStagingStore::open(&path).unwrap(),
+        async || denial.arm(),
+    ));
+}
+
 /// Denies writes to the path `atomic_write` must touch, restoring access on
 /// drop so a kit panic still leaves the temp dir reclaimable.
 struct WriteDenial(std::path::PathBuf);
@@ -84,18 +100,21 @@ impl WriteDenial {
     }
 
     fn arm(&self) {
-        set_denied(&self.0, true);
+        set_denied(&self.0, true).expect("the kit's lever must be armed, or it proves nothing");
     }
 }
 
 impl Drop for WriteDenial {
     fn drop(&mut self) {
-        set_denied(&self.0, false);
+        // Best-effort: drop runs while a kit panic unwinds, and a second panic
+        // there aborts the process over the failure worth reporting. What is
+        // left behind is a temp dir the harness reclaims.
+        let _ = set_denied(&self.0, false);
     }
 }
 
-fn set_denied(path: &std::path::Path, denied: bool) {
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
+fn set_denied(path: &std::path::Path, denied: bool) -> std::io::Result<()> {
+    let mut perms = std::fs::metadata(path)?.permissions();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -103,7 +122,7 @@ fn set_denied(path: &std::path::Path, denied: bool) {
     }
     #[cfg(not(unix))]
     perms.set_readonly(denied);
-    std::fs::set_permissions(path, perms).unwrap();
+    std::fs::set_permissions(path, perms)
 }
 
 /// The retire ledger rides the durable staging store, so the desktop's

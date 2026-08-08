@@ -16,6 +16,7 @@ const kitSeams = [
   'snapshotCache',
   'stagingStore',
   'stagingStoreFailedPut',
+  'stagingStoreFailedFirstPut',
   'credentialStore',
   'scheduler',
   'recordTransport',

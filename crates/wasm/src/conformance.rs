@@ -98,6 +98,26 @@ pub async fn run_staging_store_failed_put_conformance(factory: Function, arm_fai
     .await;
 }
 
+/// Runs the `StagingStore` failed-first-put kit case against a JS
+/// `StagingStoreSeam`: the same lever, armed before the key's first put, so the
+/// backing this runner is handed must start empty.
+#[wasm_bindgen(js_name = runStagingStoreFailedFirstPutConformance)]
+pub async fn run_staging_store_failed_first_put_conformance(
+    factory: Function,
+    arm_failed_put: Function,
+) {
+    console_error_panic_hook::set_once();
+    conformance::staging_store::check_failed_first_put(
+        async || StagingStoreAdapter {
+            js: open_seam(&factory).await.unchecked_into(),
+        },
+        async || {
+            call_async(&arm_failed_put, "failed-put arm").await;
+        },
+    )
+    .await;
+}
+
 /// Runs the `CredentialStore` conformance kit against a JS `CredentialStoreSeam`
 /// (web's no-op is a valid pass).
 #[wasm_bindgen(js_name = runCredentialStoreConformance)]

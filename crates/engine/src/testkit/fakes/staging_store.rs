@@ -14,6 +14,7 @@ struct Inner {
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<(Vec<u8>, u64)>,
     destructive_write_budget: Option<(Vec<u8>, u64)>,
+    partial_write_budget: Option<(Vec<u8>, u64)>,
     staged_removal_budget: Option<(Vec<u8>, u64)>,
     dropped_removal_budget: Option<(Vec<u8>, u64)>,
 }
@@ -29,6 +30,7 @@ impl Default for Inner {
             enqueue_budget: None,
             staged_write_budget: None,
             destructive_write_budget: None,
+            partial_write_budget: None,
             staged_removal_budget: None,
             dropped_removal_budget: None,
         }
@@ -74,6 +76,14 @@ impl InMemoryStagingStore {
     /// replacement is not failure-atomic.
     pub fn destroy_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").destructive_write_budget =
+            Some((staging_key.to_vec(), budget));
+    }
+
+    /// Fails the next write at `staging_key` past `budget` **after** landing
+    /// half of the new bytes — the write-in-place shape of a host whose failed
+    /// put strands a partial record where the key held none.
+    pub fn strand_staged_write_after(&self, staging_key: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").partial_write_budget =
             Some((staging_key.to_vec(), budget));
     }
 
@@ -150,6 +160,11 @@ impl StagingStore for InMemoryStagingStore {
         }
         if interrupts(&mut inner.destructive_write_budget, staging_key) {
             inner.staged.remove(staging_key);
+            return Err(SeamError::new("put_staged_bytes unavailable"));
+        }
+        if interrupts(&mut inner.partial_write_budget, staging_key) {
+            let half = bytes[..bytes.len() / 2].to_vec();
+            inner.staged.insert(staging_key.to_vec(), half);
             return Err(SeamError::new("put_staged_bytes unavailable"));
         }
         inner.staged.insert(staging_key.to_vec(), bytes.to_vec());

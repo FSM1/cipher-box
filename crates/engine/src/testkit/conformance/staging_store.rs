@@ -3,8 +3,8 @@
 
 use crate::seams::StagingStore;
 
-/// The staging key [`check_failed_put`] writes, so a host whose fault
-/// injector is scoped to one key can arm exactly the put the kit makes fail.
+/// The staging key the failed-put cases write, so a host whose fault injector
+/// is scoped to one key can arm exactly the put the kit makes fail.
 pub const FAILED_PUT_KEY: &[u8] = b"failed-put-key";
 
 /// Runs the `StagingStore` contract against an implementation.
@@ -13,8 +13,9 @@ pub const FAILED_PUT_KEY: &[u8] = b"failed-put-key";
 /// (reopen semantics); the backing must start empty.
 ///
 /// The failure-atomicity half of `put_staged_bytes` needs a fault lever this
-/// function cannot supply, so it lives in [`check_failed_put`]; a host passes
-/// both or it is only half held to the contract.
+/// function cannot supply, so it lives in [`check_failed_put`] and
+/// [`check_failed_first_put`]; a host passes all three or it is only part-held
+/// to the contract.
 ///
 /// # Panics
 /// Panics on the first contract violation.
@@ -132,9 +133,10 @@ where
     );
 }
 
-/// Runs the failure-atomicity half of [`StagingStore::put_staged_bytes`]
-/// against an implementation: a put that returns `Err` must leave the previous
-/// bytes exactly as it found them.
+/// Runs the replacement case of [`StagingStore::put_staged_bytes`]'s failure
+/// atomicity against an implementation: a put that returns `Err` over an
+/// existing record must leave the previous bytes exactly as it found them.
+/// [`check_failed_first_put`] covers the same put into fresh backing.
 ///
 /// Separate from [`check`] because it needs a lever [`check`] cannot supply —
 /// `arm_failed_put` must make the next `put_staged_bytes` at
@@ -192,5 +194,63 @@ where
         reopened.staged_bytes_total().await.unwrap(),
         total,
         "a failed put must leave the staging budget on the surviving bytes"
+    );
+}
+
+/// Runs the fresh-backing case of [`StagingStore::put_staged_bytes`]'s failure
+/// atomicity: a put that returns `Err` for a key that held nothing must leave
+/// that key absent — never an empty or half-written record.
+///
+/// A separate entry point rather than a phase of [`check_failed_put`] because
+/// the two cases cannot share one backing: this one needs the lever armed
+/// before the key's first put, while [`check_failed_put`] needs an unarmed put
+/// to establish the bytes it then defends.
+///
+/// `arm_failed_put` and `open` carry [`check_failed_put`]'s contracts, and the
+/// backing must start empty.
+///
+/// # Panics
+/// Panics on the first contract violation.
+pub async fn check_failed_first_put<S, F, G>(mut open: F, arm_failed_put: G)
+where
+    S: StagingStore,
+    F: AsyncFnMut() -> S,
+    G: AsyncFnOnce(),
+{
+    let store = open().await;
+    assert!(
+        store.staged_keys().await.unwrap().is_empty(),
+        "this case reads the key's absence as the result, so the backing must start empty"
+    );
+
+    arm_failed_put().await;
+    assert!(
+        store
+            .put_staged_bytes(FAILED_PUT_KEY, b"a-first-record-that-must-not-land")
+            .await
+            .is_err(),
+        "an armed put must report the failure rather than succeed"
+    );
+
+    // Read back through a fresh handle: what must be absent is the durable
+    // record, not what the handle that failed still remembers.
+    let reopened = open().await;
+    assert_eq!(
+        reopened.staged_bytes(FAILED_PUT_KEY).await.unwrap(),
+        None,
+        "a failed first put must leave no record at the key"
+    );
+    assert!(
+        !reopened
+            .staged_keys()
+            .await
+            .unwrap()
+            .contains(&FAILED_PUT_KEY.to_vec()),
+        "a failed first put must not publish a key the caller never staged"
+    );
+    assert_eq!(
+        reopened.staged_bytes_total().await.unwrap(),
+        0,
+        "a failed first put must charge the staging budget nothing"
     );
 }
