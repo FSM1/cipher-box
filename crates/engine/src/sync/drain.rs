@@ -1760,8 +1760,8 @@ where
             .collect()
     }
 
-    /// What each doomed version still owes the registry once every target a
-    /// retained version also names is taken out of it
+    /// What each doomed version still owes the registry once every target
+    /// another version of the same plan already accounts for is taken out of it
     /// ([`Expansion::split_retained`]).
     ///
     /// A doomed root's link list is not this device's word for what that version
@@ -1769,6 +1769,11 @@ where
     /// their blocks register under the grantee's account until this one syncs —
     /// so a root that content-addresses correctly can still name leaves the
     /// owner is living on. Only the prune sees both sides of that.
+    ///
+    /// The same argument lets two *doomed* roots name one leaf. A pin row is
+    /// keyed `(account, cid)`, so that leaf is one row and belongs to exactly one
+    /// entry: charging it twice would over-report pending reclaim and hand the
+    /// registry the same CID under two debts.
     async fn prune_debt(
         &self,
         doomed: &[ContentVersion],
@@ -1779,9 +1784,16 @@ where
             protected.extend(self.expand_version(version).await?.cids());
         }
         let mut owed = Vec::with_capacity(doomed.len());
+        let mut charged: BTreeSet<&str> = BTreeSet::new();
         for version in doomed {
+            // A history may name one root twice, and the ledger is keyed by
+            // target: the second naming owes nothing the first does not carry.
+            if !charged.insert(version.content_cid.as_str()) {
+                continue;
+            }
             let expansion = self.expand_version(version).await?;
             let (retirable, held) = expansion.split_retained(&protected);
+            protected.extend(retirable.cids());
             owed.push(OwedRetire {
                 target: version.content_cid.clone(),
                 owed_bytes: retirable.pinned_bytes,
