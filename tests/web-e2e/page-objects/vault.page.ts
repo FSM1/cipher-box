@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { expect, type Page } from '@playwright/test';
 import type { IntrospectedView, Plain } from '@web/engine/introspection';
 import type { EventDescriptor } from '@cipherbox/client';
@@ -21,14 +20,15 @@ export class VaultPage {
    * Cold-starts a vault nobody else in the run shares and follows the app's own
    * redirect onto it. The login secret is a fresh 32-byte scalar, and the API
    * creates its account on first challenge login — so per-test isolation costs
-   * no fixture setup.
+   * no fixture setup. It is minted in the page because an `evaluate` argument is
+   * recorded verbatim in the trace this suite uploads from a public repo.
    */
   async coldStart(): Promise<void> {
-    const secret = randomBytes(32).toString('hex');
-    await this.page.evaluate(
-      (loginSecretHex) => window.__CIPHERBOX_ENGINE__!.signIn(loginSecretHex),
-      secret
-    );
+    await this.page.evaluate(async () => {
+      const secret = crypto.getRandomValues(new Uint8Array(32));
+      const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      await window.__CIPHERBOX_ENGINE__!.signIn(hex);
+    });
     await this.page.waitForURL('**/files');
   }
 

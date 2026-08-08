@@ -56,7 +56,6 @@ jobs:
       DB_USERNAME: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: cipherbox_test
-      NODE_ENV: test
       JWT_SECRET: web-e2e-jwt-secret
       # Every test cold-starts its own account from one runner IP, so the
       # per-IP auth bucket would otherwise cap how many specs can exist.
@@ -111,8 +110,13 @@ jobs:
 
       - uses: ./.github/actions/mock-ipns-routing
 
+      # `NODE_ENV` stays on the API's own steps. Vite reads it to decide whether a
+      # build is a production one, so job-wide it would hand the suite a
+      # development bundle of the app it is meant to test as it ships.
       - name: Apply migrations to a fresh database
         run: pnpm --filter @cipherbox/api migration:run
+        env:
+          NODE_ENV: test
 
       - name: Build and boot the API
         run: |
@@ -120,6 +124,8 @@ jobs:
           node apps/api/dist/main.js > /tmp/api.log 2>&1 &
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
             || { echo '--- API log ---'; cat /tmp/api.log; exit 1; }
+        env:
+          NODE_ENV: test
 
       # One engine module feeds both bundles below; only the hook flag differs
       # between them.

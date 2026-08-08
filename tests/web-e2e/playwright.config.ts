@@ -37,6 +37,10 @@ export default defineConfig({
   timeout: 120_000,
   reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
+    // Chrome's own headless, not Playwright's default `chrome-headless-shell`:
+    // the shell segfaults on a page that registers a Service Worker, killing the
+    // browser under whichever assertion is in flight.
+    channel: 'chromium',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
