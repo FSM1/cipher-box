@@ -82,6 +82,15 @@ class Web3AuthSession implements CoreKitSession {
   }
 }
 
+/**
+ * How long a persisted Core Kit session stays restorable, well under the SDK's
+ * 86400s default. The store below holds a session id that reconstitutes a
+ * logged-in Core Kit, so this is the ceiling on how long a reader of the origin's
+ * storage holds a path to the login secret — the storage scope cannot be that
+ * ceiling, because the session has to be restorable in a tab that did not log in.
+ */
+const SESSION_SECONDS = 2 * 60 * 60;
+
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSession {
   const { clientId, verifier } = loginEnv(env);
@@ -90,11 +99,13 @@ export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSessio
     web3AuthClientId: clientId,
     web3AuthNetwork:
       environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
-    // Core Kit persists its own device-factor share and session id here. The
-    // login secret is not among them — it only ever leaves this realm as the
-    // transferred buffer — but this store is a bearer path back to a logged-in
-    // Core Kit.
+    // Origin-wide by decision, not by default. A tab promoted to leader on
+    // failover re-exports the login secret from its own restored Core Kit
+    // session (`EngineClient.promote` in `packages/client`, which has no other
+    // source), so per-tab `sessionStorage` would leave every tab that did not
+    // itself log in unable to stand the engine up.
     storage: window.localStorage,
+    sessionTime: SESSION_SECONDS,
     manualSync: true,
     tssLib,
   });
