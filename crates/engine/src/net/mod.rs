@@ -27,6 +27,7 @@ pub const REGISTRY_BATCH_MAX: usize = 1000;
 pub mod author;
 pub mod eol;
 pub mod liveness;
+pub mod provision;
 pub mod publish;
 pub mod record_publish;
 pub mod register;
@@ -48,6 +49,7 @@ pub use liveness::{
     eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use pointer_fetch::RecordPointerFetch;
+pub use provision::VaultProvisionNet;
 pub use publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,
     publish_inline,

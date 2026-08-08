@@ -25,6 +25,7 @@ pub mod op;
 pub mod overlay;
 pub mod pointer;
 pub(crate) mod project;
+pub mod provision;
 pub mod rebase;
 pub mod record;
 pub(crate) mod refresh;
@@ -44,6 +45,10 @@ pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,
     resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint, should_consult,
     vault_pointer_name,
+};
+pub use provision::{
+    GENESIS_EPOCH, GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionPlan, ProvisionedVault,
+    VaultProvisionPublisher, provision_vault,
 };
 pub use rebase::{
     AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,

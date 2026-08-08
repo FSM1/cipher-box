@@ -41,7 +41,9 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::settings::{
     Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
 };
-use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::pointer::{
+    SessionRole, open_repoint, seal_repoint, vault_pointer_name,
+};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
     owner_scoped_key, record_content_root_cid,
@@ -69,6 +71,9 @@ const TTL_NANOS: u64 = 2_000_000_000;
 /// The destination set the upload mark opens on.
 const DESTINATIONS_LEN: usize = Destinations::LEN;
 const EOL: &str = "2099-01-01T00:00:00Z";
+/// Shaped as the API issues one; only the provisioning scenario logs in.
+const LOGIN_CHALLENGE: &str =
+    "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&SECRET).expect("valid scalar")
@@ -365,6 +370,30 @@ impl Blocks {
             self.put_declared(&declared, block);
             return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
         }
+        // The recovery cache has seen nothing: the vacancy probe first-run
+        // provisioning runs before it mints anything.
+        if url.contains("/recovery/") {
+            return Ok(HttpResponse {
+                status: 404,
+                headers: Vec::new(),
+                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#.to_vec(),
+            });
+        }
+        // The auth handshake, for the one scenario that runs against a
+        // configured API rather than offline (first-run provisioning).
+        if url.ends_with("/auth/challenge") {
+            return ok(format!(
+                r#"{{"challenge":"{LOGIN_CHALLENGE}","expiresAt":"2099-01-01T00:00:00Z"}}"#
+            )
+            .into_bytes());
+        }
+        if url.ends_with("/auth/login") {
+            return ok(format!(
+                r#"{{"accessToken":"jwt-1","refreshToken":"{}","isNewUser":true}}"#,
+                "a".repeat(64)
+            )
+            .into_bytes());
+        }
         if url.ends_with("/account/quota") && self.quota_down.load(Ordering::Relaxed) {
             return Err(SeamError::new("the quota endpoint is unreachable"));
         }
@@ -550,6 +579,62 @@ fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, 
 
 fn secret() -> LoginSecret {
     LoginSecret::new(SECRET.to_vec())
+}
+
+/// The same engine against a configured API — the only mode that provisions a
+/// first-run vault, since register-first has no offline form.
+fn engine_on_api(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, EventStream) {
+    Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(entropy_seed)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::parse("http://api.test").expect("a configured base"),
+        GatewayConfig {
+            accelerator: Some(GatewaySource {
+                base_url: "https://gw.test".into(),
+                bearer: None,
+            }),
+            public_fallbacks: Vec::new(),
+        },
+    )
+}
+
+/// The scope root the account's vault pointer currently names, read the way a
+/// cold start reads it: the record at pointer index 0, opened under the owner's
+/// own pointer read key.
+fn vault_root_name(world: &FakeWorld) -> IpnsName {
+    let pointer_name = vault_pointer_name(&SECRET, 0);
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
+        .expect("a vault pointer is published");
+    let block = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(&pointer_name))
+        .expect("the pointer record verifies under its own name")
+        .value;
+    open_repoint(
+        kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
+        POINTER_PAYLOAD_VERSION,
+        &SCOPE,
+        &owner_identity().verifying_key(),
+        &block,
+    )
+    .expect("the owner's own pointer read key opens the re-point")
+    .current_root
+}
+
+/// The sequence of the record published at `name`, verified under it.
+fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .expect("a record is published at the name");
+    IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the published record verifies under its own name")
+        .sequence
 }
 
 /// A waker that only records that it fired — enough to tell a cooperative
@@ -762,6 +847,85 @@ fn child_id(engine: &Engine<FakeSeamTypes>, parent: NodeId, name: &str) -> NodeI
 }
 
 // ---------------------------------------------------------------------------
+
+/// The first-run path with **no account fixture**: nothing is published when the
+/// engine starts, so `start` must mint the vault itself. Every other test in this
+/// file plants the pointer and the root by hand; this one proves the step that
+/// produces them, and that a write against a self-provisioned vault reaches the
+/// record plane.
+#[test]
+fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 64);
+    let (mut engine, _events) = engine_on_api(&alice, 42);
+
+    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+
+    // The pointer chain is no longer empty, and the root it names is published.
+    let root_name = vault_root_name(&world);
+    assert_eq!(
+        sequence_at(&world, &root_name),
+        1,
+        "the genesis root publishes at sequence 1"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "a provisioned vault starts empty"
+    );
+
+    let op_id = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages")
+    .op_id();
+
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    // The write reached the record plane: the child is in gate-passing state and
+    // the provisioned root republished over its own genesis record.
+    let view = block_on(engine.snapshot(ROOT)).unwrap();
+    assert_eq!(view.children.len(), 1, "the create published");
+    assert_eq!(view.children[0].name, "photos");
+    assert_eq!(
+        view.children[0].pending,
+        PendingClass::None,
+        "a published op is no longer pending"
+    );
+    assert_eq!(
+        sequence_at(&world, &root_name),
+        2,
+        "the root advanced past its own genesis sequence"
+    );
+    assert!(
+        uploaded_node_ids(&alice).contains(&view.children[0].id.0),
+        "the child's own head block was uploaded"
+    );
+    assert_eq!(
+        block_on(drained_mark(&alice)),
+        op_id.map(|id| id.0),
+        "the drained op raised the durable completion mark"
+    );
+
+    // The other end of the chain: a second device of the same account, with its
+    // own floors, cache and queue, cold-starts off nothing but what provisioning
+    // published — so the pointer, the root, and the seeds it hands out are the
+    // ones `cold_start` reads back.
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 16);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret()))
+        .expect("the second device cold-starts off the provisioned vault");
+    let children = block_on(engine_b.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1, "device B resolves the provisioned write");
+    assert_eq!(children[0].name, "photos");
+    assert_eq!(children[0].id, view.children[0].id);
+}
 
 #[test]
 fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
