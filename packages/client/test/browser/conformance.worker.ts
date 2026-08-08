@@ -16,6 +16,7 @@ import init, {
   runSchedulerConformance,
   runSnapshotCacheConformance,
   runStagingStoreConformance,
+  runStagingStoreFailedPutConformance,
 } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
@@ -57,6 +58,111 @@ async function clearOpfsDir(name: string): Promise<void> {
     if (error instanceof DOMException && error.name === 'NotFoundError') return;
     throw error;
   }
+}
+
+/**
+ * Replaces the next `createSyncAccessHandle` result with `patch`'s wrapper,
+ * then restores the platform method. This is the failed-put kit's fault lever:
+ * patching the OPFS boundary leaves the seam itself under test, and a
+ * constrained OPFS write is exactly a wrapped handle away — the spec lets it
+ * report either a short count or a throw.
+ */
+function patchNextSyncAccessHandle(
+  patch: (handle: FileSystemSyncAccessHandle) => FileSystemSyncAccessHandle
+): void {
+  const original = FileSystemFileHandle.prototype.createSyncAccessHandle;
+  FileSystemFileHandle.prototype.createSyncAccessHandle = async function (
+    this: FileSystemFileHandle
+  ) {
+    FileSystemFileHandle.prototype.createSyncAccessHandle = original;
+    return patch(await original.call(this));
+  };
+}
+
+/** Wraps `handle`, delegating every method of the type except `write`. */
+function withWrite(
+  handle: FileSystemSyncAccessHandle,
+  write: FileSystemSyncAccessHandle['write']
+): FileSystemSyncAccessHandle {
+  return {
+    write,
+    read: (buffer, options) => handle.read(buffer, options),
+    truncate: (size) => handle.truncate(size),
+    getSize: () => handle.getSize(),
+    flush: () => handle.flush(),
+    close: () => handle.close(),
+  };
+}
+
+/** Arms the next staged write to move every byte but the last. */
+function armShortWrite(): void {
+  patchNextSyncAccessHandle((handle) =>
+    withWrite(handle, (buffer, options) => {
+      const bytes = buffer as Uint8Array;
+      return handle.write(bytes.subarray(0, Math.max(0, bytes.byteLength - 1)), options);
+    })
+  );
+}
+
+/** Arms the next staged write to throw the way an over-quota write does. */
+function armThrowingWrite(): void {
+  patchNextSyncAccessHandle((handle) =>
+    withWrite(handle, () => {
+      throw new DOMException('simulated quota exhaustion', 'QuotaExceededError');
+    })
+  );
+}
+
+/**
+ * Asserts the staged directory holds exactly the records staged under it — an
+ * in-flight temp abandoned by a failed put is invisible to `stagedKeys` and
+ * `stagedBytesTotal`, so orphan GC could never reclaim it.
+ */
+async function assertStagedEntryCount(dirName: string, expected: number): Promise<void> {
+  const root = await navigator.storage.getDirectory();
+  const dir = await root.getDirectoryHandle(dirName);
+  const names: string[] = [];
+  for await (const name of dir.keys()) names.push(name);
+  if (names.length !== expected) {
+    throw new Error(
+      `staged dir holds ${names.length} entries [${names.join(', ')}], expected ${expected}`
+    );
+  }
+}
+
+/**
+ * In-flight write debris — the temp a killed put leaves behind — is not a
+ * staged record: it stays out of the orphan-GC enumeration and the staging
+ * budget, and a reopened store reclaims it (nothing else can, precisely
+ * because it is invisible to both).
+ */
+async function runStagingDebrisBehavioral(): Promise<void> {
+  const name = 'conf-staging-debris';
+  const dirName = `${name}-staged`;
+  await clearOpfsDir(dirName);
+
+  const store = new OpfsStagingStore(name);
+  const key = new Uint8Array([1, 2, 3]);
+  await store.putStagedBytes(key, new Uint8Array([9, 9, 9, 9]));
+
+  const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(dirName);
+  const strandedFile = await dir.getFileHandle('.cbtmp.stranded', { create: true });
+  const stranded = await strandedFile.createSyncAccessHandle();
+  stranded.write(new Uint8Array(64), { at: 0 });
+  stranded.flush();
+  stranded.close();
+
+  const keys = await store.stagedKeys();
+  if (keys.length !== 1 || toHex(keys[0]) !== toHex(key)) {
+    throw new Error(`stagedKeys surfaced write debris: [${keys.map(toHex).join(', ')}]`);
+  }
+  const total = await store.stagedBytesTotal();
+  if (total !== 4) {
+    throw new Error(`stagedBytesTotal charged write debris: ${total}`);
+  }
+
+  await new OpfsStagingStore(name).stagedKeys();
+  await assertStagedEntryCount(dirName, 1);
 }
 
 async function runHttpBehavioral(): Promise<void> {
@@ -145,6 +251,18 @@ async function run(seam: string): Promise<void> {
       await runStagingStoreConformance(() => Promise.resolve(new OpfsStagingStore(name)));
       return;
     }
+    case 'stagingStoreFailedPut': {
+      const name = 'conf-staging-failed-put';
+      for (const arm of [armShortWrite, armThrowingWrite]) {
+        await clearOpfsDir(`${name}-staged`);
+        await runStagingStoreFailedPutConformance(
+          () => Promise.resolve(new OpfsStagingStore(name)),
+          () => Promise.resolve(arm())
+        );
+        await assertStagedEntryCount(`${name}-staged`, 1);
+      }
+      return;
+    }
     case 'credentialStore': {
       await runCredentialStoreConformance(() => Promise.resolve(new NoopCredentialStore()));
       return;
@@ -170,6 +288,10 @@ async function run(seam: string): Promise<void> {
       const { origin } = scope.location;
       const mailbox = new ApiMailbox(new FetchHttp(), `${origin}/mock-api/${toHex(ownPublicKey)}`);
       await runMailboxConformance(mailbox, ownPublicKey);
+      return;
+    }
+    case 'stagingStoreDebris': {
+      await runStagingDebrisBehavioral();
       return;
     }
     case 'http': {

@@ -19,6 +19,14 @@ import type { StagingStoreSeam } from './types.js';
 const OPS_STORE = 'ops';
 
 /**
+ * Names an in-flight staged write. Staged records are named in hex, so no key
+ * can collide with a temp, and enumeration skips temps: an unfinished write is
+ * not a staged record, must not be charged to the staging budget, and must not
+ * be handed to orphan GC as a key.
+ */
+const TEMP_PREFIX = '.cbtmp.';
+
+/**
  * A staged-byte read or write that did not move every requested byte. OPFS sync
  * access handles signal that either as a short count or as a thrown storage
  * error, so this is the seam's fail-closed signal for both, never a recoverable
@@ -44,6 +52,7 @@ async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Pr
 export class OpfsStagingStore implements StagingStoreSeam {
   private readonly dirName: string;
   private readonly open: () => Promise<IDBDatabase>;
+  private stagedDirectory: Promise<FileSystemDirectoryHandle> | undefined;
 
   constructor(name = 'cipherbox-staging') {
     this.dirName = `${name}-staged`;
@@ -54,9 +63,37 @@ export class OpfsStagingStore implements StagingStoreSeam {
     });
   }
 
-  private async stagedDir(): Promise<FileSystemDirectoryHandle> {
+  private stagedDir(): Promise<FileSystemDirectoryHandle> {
+    // A failed open must not poison the memo, or every later staged op on this
+    // store fails with no retry path.
+    this.stagedDirectory ??= this.openStagedDir().catch((error: unknown) => {
+      this.stagedDirectory = undefined;
+      throw error;
+    });
+    return this.stagedDirectory;
+  }
+
+  /** Opens the staged directory, once per store, sweeping the temps a killed
+   * write left behind — enumeration skips them, so nothing else reclaims them. */
+  private async openStagedDir(): Promise<FileSystemDirectoryHandle> {
     const root = await navigator.storage.getDirectory();
-    return root.getDirectoryHandle(this.dirName, { create: true });
+    const dir = await root.getDirectoryHandle(this.dirName, { create: true });
+    const debris: string[] = [];
+    for await (const name of dir.keys()) {
+      if (name.startsWith(TEMP_PREFIX)) debris.push(name);
+    }
+    // Collected first: removing during the walk mutates what it iterates.
+    // Best-effort per entry, like the desktop sweep — a temp a killed writer
+    // still holds open must not fail the open; the next one reclaims it.
+    await Promise.all(debris.map((name) => removeIfPresent(dir, name).catch(() => undefined)));
+    return dir;
+  }
+
+  /** The staged record names in `dir`; an in-flight temp is not a record. */
+  private async *recordNames(dir: FileSystemDirectoryHandle): AsyncGenerator<string> {
+    for await (const name of dir.keys()) {
+      if (!name.startsWith(TEMP_PREFIX)) yield name;
+    }
   }
 
   async enqueueOp(op: Uint8Array): Promise<number> {
@@ -96,11 +133,14 @@ export class OpfsStagingStore implements StagingStoreSeam {
     const fileName = toHex(stagingKey);
     const staged = bytes.slice();
     const dir = await this.stagedDir();
-    const fileHandle = await dir.getFileHandle(fileName, { create: true });
-    const handle = await fileHandle.createSyncAccessHandle();
+    // Every byte lands in a temp the engine cannot see, and the rename is the
+    // commit point: a constrained write (a short count, or the throw the spec
+    // names QuotaExceededError) leaves the key's previous bytes untouched.
+    const tempName = `${TEMP_PREFIX}${globalThis.crypto.randomUUID()}`;
+    const tempHandle = await dir.getFileHandle(tempName, { create: true });
+    const handle = await tempHandle.createSyncAccessHandle();
     let failure: { message: string; cause?: unknown } | undefined;
     try {
-      handle.truncate(0);
       const written = handle.write(staged, { at: 0 });
       handle.flush();
       if (written !== staged.byteLength) {
@@ -113,13 +153,15 @@ export class OpfsStagingStore implements StagingStoreSeam {
     } finally {
       handle.close();
     }
-    if (!failure) return;
-    // A constrained write either returns a short count or throws (the spec names
-    // QuotaExceededError). Either way `truncate(0)` has already landed, so a
-    // partial file is on disk; staging a truncated block would later upload
-    // bytes whose CID the engine's read path always rejects. Fail closed and
-    // drop the file so a retry starts from empty rather than resuming it.
-    const cleanupError = await removeIfPresent(dir, fileName).then(
+    if (!failure) {
+      try {
+        await tempHandle.move(fileName);
+        return;
+      } catch (error) {
+        failure = { message: 'staged write commit failed', cause: error };
+      }
+    }
+    const cleanupError = await removeIfPresent(dir, tempName).then(
       () => undefined,
       (error: unknown) => error
     );
@@ -165,7 +207,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
   async stagedKeys(): Promise<Uint8Array[]> {
     const dir = await this.stagedDir();
     const keys: Uint8Array[] = [];
-    for await (const name of dir.keys()) {
+    for await (const name of this.recordNames(dir)) {
       keys.push(fromHex(name));
     }
     return keys;
@@ -174,10 +216,16 @@ export class OpfsStagingStore implements StagingStoreSeam {
   async stagedBytesTotal(): Promise<number> {
     const dir = await this.stagedDir();
     let total = 0;
-    for await (const name of dir.keys()) {
-      const fileHandle = await dir.getFileHandle(name);
-      const file = await fileHandle.getFile();
-      total += file.size;
+    for await (const name of this.recordNames(dir)) {
+      try {
+        const fileHandle = await dir.getFileHandle(name);
+        total += (await fileHandle.getFile()).size;
+      } catch (error) {
+        // A record removed between the walk and the stat contributes zero,
+        // matching the desktop host rather than failing the budget read.
+        if (error instanceof DOMException && error.name === 'NotFoundError') continue;
+        throw error;
+      }
     }
     return total;
   }

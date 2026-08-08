@@ -30,18 +30,24 @@ use crate::seams_bridge::{
     SnapshotCacheAdapter, StagingStoreAdapter,
 };
 
+/// Calls a JS `() => Promise<T>` and awaits its resolution, labelling any
+/// misuse with `what`.
+async fn call_async(f: &Function, what: &str) -> JsValue {
+    let result = f
+        .call0(&JsValue::UNDEFINED)
+        .unwrap_or_else(|_| panic!("{what} must not throw"));
+    let promise: Promise = result
+        .dyn_into()
+        .unwrap_or_else(|_| panic!("{what} must return a Promise"));
+    JsFuture::from(promise)
+        .await
+        .unwrap_or_else(|_| panic!("{what} promise must resolve"))
+}
+
 /// Calls a JS `() => Promise<Seam>` factory and awaits the fresh seam handle
 /// (the conformance kits' "reopen" contract).
 async fn open_seam(factory: &Function) -> JsValue {
-    let result = factory
-        .call0(&JsValue::UNDEFINED)
-        .expect("seam factory must not throw");
-    let promise: Promise = result
-        .dyn_into()
-        .expect("seam factory must return a Promise");
-    JsFuture::from(promise)
-        .await
-        .expect("seam factory promise must resolve")
+    call_async(factory, "seam factory").await
 }
 
 /// Runs the `FloorStore` conformance kit against a JS `FloorStoreSeam`,
@@ -72,6 +78,23 @@ pub async fn run_staging_store_conformance(factory: Function) {
     conformance::staging_store::check(async || StagingStoreAdapter {
         js: open_seam(&factory).await.unchecked_into(),
     })
+    .await;
+}
+
+/// Runs the `StagingStore` failed-put kit case against a JS
+/// `StagingStoreSeam`. `armFailedPut` is the host's fault lever: it must make
+/// the seam's next `putStagedBytes` at the kit's key fail.
+#[wasm_bindgen(js_name = runStagingStoreFailedPutConformance)]
+pub async fn run_staging_store_failed_put_conformance(factory: Function, arm_failed_put: Function) {
+    console_error_panic_hook::set_once();
+    conformance::staging_store::check_failed_put(
+        async || StagingStoreAdapter {
+            js: open_seam(&factory).await.unchecked_into(),
+        },
+        async || {
+            call_async(&arm_failed_put, "failed-put arm").await;
+        },
+    )
     .await;
 }
 

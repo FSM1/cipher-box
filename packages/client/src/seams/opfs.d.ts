@@ -18,5 +18,7 @@ declare global {
 
   interface FileSystemFileHandle {
     createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle>;
+    /** Renames within the directory, replacing any entry already at `name`. */
+    move(name: string): Promise<void>;
   }
 }

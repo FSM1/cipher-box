@@ -13,6 +13,7 @@ struct Inner {
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<(Vec<u8>, u64)>,
+    destructive_write_budget: Option<(Vec<u8>, u64)>,
     staged_removal_budget: Option<(Vec<u8>, u64)>,
     dropped_removal_budget: Option<(Vec<u8>, u64)>,
 }
@@ -27,6 +28,7 @@ impl Default for Inner {
             fail_remove_op: false,
             enqueue_budget: None,
             staged_write_budget: None,
+            destructive_write_budget: None,
             staged_removal_budget: None,
             dropped_removal_budget: None,
         }
@@ -65,6 +67,14 @@ impl InMemoryStagingStore {
     /// disarms — a caller dropped at an exact step whose retry still proceeds.
     pub fn interrupt_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_write_budget = Some((staging_key.to_vec(), budget));
+    }
+
+    /// Fails the next write at `staging_key` past `budget` **after** dropping
+    /// the bytes already there — the truncate-in-place shape of a host whose
+    /// replacement is not failure-atomic.
+    pub fn destroy_staged_write_after(&self, staging_key: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").destructive_write_budget =
+            Some((staging_key.to_vec(), budget));
     }
 
     /// The removal counterpart of [`Self::interrupt_staged_write_after`]: the
@@ -136,6 +146,10 @@ impl StagingStore for InMemoryStagingStore {
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
         if interrupts(&mut inner.staged_write_budget, staging_key) {
+            return Err(SeamError::new("put_staged_bytes unavailable"));
+        }
+        if interrupts(&mut inner.destructive_write_budget, staging_key) {
+            inner.staged.remove(staging_key);
             return Err(SeamError::new("put_staged_bytes unavailable"));
         }
         inner.staged.insert(staging_key.to_vec(), bytes.to_vec());

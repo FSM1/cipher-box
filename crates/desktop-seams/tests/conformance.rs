@@ -47,6 +47,65 @@ fn file_staging_store_passes_the_staging_store_kit() {
     }));
 }
 
+/// The failed-put kit case. The lever is a permission denial `atomic_write`
+/// hits on its way to the sidecar: on Unix the `staged/` directory is made
+/// unwritable, so the temp file cannot be created; on Windows the sidecar
+/// itself is made read-only, which `MoveFileEx` refuses to replace. Either way
+/// the failure lands before the sidecar's bytes can change.
+#[test]
+fn file_staging_store_passes_the_failed_put_kit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let denial = WriteDenial::for_store(&path);
+    block_on(conformance::staging_store::check_failed_put(
+        async || FileStagingStore::open(&path).unwrap(),
+        async || denial.arm(),
+    ));
+}
+
+/// Denies writes to the path `atomic_write` must touch, restoring access on
+/// drop so a kit panic still leaves the temp dir reclaimable.
+struct WriteDenial(std::path::PathBuf);
+
+impl WriteDenial {
+    fn for_store(store_root: &std::path::Path) -> Self {
+        let staged = store_root.join("staged");
+        // Windows honours a read-only file, not a read-only directory, so the
+        // denial has to sit on the sidecar the kit's key names.
+        Self(if cfg!(windows) {
+            let name: String = conformance::staging_store::FAILED_PUT_KEY
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            staged.join(format!("{name}.bin"))
+        } else {
+            staged
+        })
+    }
+
+    fn arm(&self) {
+        set_denied(&self.0, true);
+    }
+}
+
+impl Drop for WriteDenial {
+    fn drop(&mut self) {
+        set_denied(&self.0, false);
+    }
+}
+
+fn set_denied(path: &std::path::Path, denied: bool) {
+    let mut perms = std::fs::metadata(path).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(if denied { 0o555 } else { 0o755 });
+    }
+    #[cfg(not(unix))]
+    perms.set_readonly(denied);
+    std::fs::set_permissions(path, perms).unwrap();
+}
+
 /// The retire ledger rides the durable staging store, so the desktop's
 /// owed-retirement contract is the file store's. Each reopened handle is leaked
 /// for the kit's borrow; the test process is its owner.
