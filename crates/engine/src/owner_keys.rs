@@ -14,7 +14,6 @@ use crate::session::SessionIdentity;
 /// Borrows the session rather than copying seeds out of it: a cascade discovers
 /// its scope ids at runtime, so the derivations must stay lazy, and the session
 /// stays the terminal owner of the secrets they come from.
-// The facade's rotation commands do not construct this yet.
 #[allow(dead_code)]
 pub(crate) struct OwnerSessionKeys<'a> {
     session: &'a SessionIdentity,
