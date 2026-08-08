@@ -19,7 +19,6 @@ use std::rc::Rc;
 
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
-use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
     ContentProfile, Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes,
     StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
@@ -499,6 +498,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_engine::facade::CommandOutcome as Outcome;
     use cipherbox_engine::import_contact;
+    use cipherbox_engine::seams::OpId;
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
 
