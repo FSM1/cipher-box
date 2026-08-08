@@ -40,7 +40,15 @@ class Web3AuthSession implements CoreKitSession {
   ) {}
 
   async restore(): Promise<void> {
-    await this.coreKit.init();
+    try {
+      await this.coreKit.init();
+    } catch (failure) {
+      // Only an unreadable store wedges the next login through that same read.
+      // A restore that failed for any other reason — the SDK's feature check
+      // has no network — must leave a good store standing.
+      if (!this.storeIsReadable()) this.clearStore();
+      throw failure;
+    }
   }
 
   isLoggedIn(): boolean {
@@ -86,10 +94,23 @@ class Web3AuthSession implements CoreKitSession {
   /**
    * The SDK's own logout blanks its session id in place and leaves the rest of
    * its store standing — a device factor share among it, once MFA is reachable.
-   * So every path that ends a session, refused or partial, clears it here.
+   * So every path that leaves this device without a usable session clears it
+   * here, whether the session ended, was refused, or was never readable.
    */
   private clearStore(): void {
     this.store.removeItem(this.coreKit._storageKey);
+  }
+
+  /** The SDK reads its store as `JSON.parse(raw || '{}')[key]`; nothing else opens. */
+  private storeIsReadable(): boolean {
+    const raw = this.store.getItem(this.coreKit._storageKey);
+    if (!raw) return true;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return typeof parsed === 'object' && parsed !== null;
+    } catch {
+      return false;
+    }
   }
 
   _UNSAFE_exportTssKey(): Promise<string> {
