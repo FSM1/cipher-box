@@ -62,7 +62,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 15,
+    "count": 16,
     "edges": [
       {
         "name": "node-seed",
@@ -108,6 +108,11 @@
         "name": "blinded-tag",
         "context": "cipherbox/v2/blinded-tag",
         "inputLayout": "derive_key(ctx, ecdh[32] || scopeRootIpnsName[var])"
+      },
+      {
+        "name": "owner-pseudonym-seed",
+        "context": "cipherbox/v2/owner-pseudonym-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
       },
       {
         "name": "pseudonym-sign",
