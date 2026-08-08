@@ -303,8 +303,8 @@ where
     // publish lost the race: either way the grantee could descend into a node
     // still sealed at an epoch its fresh seed does not reach.
     if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
-        let mut unconverged = swept.dropped_lost_race;
-        unconverged.extend(swept.unreachable);
+        let mut unconverged = swept.dropped_lost_race.clone();
+        unconverged.extend(swept.unreachable_nodes());
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
@@ -1249,28 +1249,35 @@ mod tests {
         );
     }
 
+    /// A node this device cannot read is as unproven as one whose publish lost
+    /// the race: the grantee could descend into it.
     #[test]
     fn an_unreachable_node_in_the_granted_folder_refuses_the_grant() {
-        // A node this device cannot read is as unproven as one whose publish
-        // lost the race: the grantee could descend into it. The pass isolates
-        // both rather than aborting, so this refusal is the fail-closed answer.
-        for net in [
-            FakeNet::new(Ok(()))
-                .with_interior(INTERIOR_NODE, 1)
-                .unreadable(INTERIOR_NODE),
-            FakeNet::new(Ok(()))
-                .with_interior(INTERIOR_NODE, 1)
-                .unresolvable(INTERIOR_NODE),
-        ] {
-            let (outcome, published, _hub) = run(7, &[], net, &[]);
-            match outcome {
-                Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
-                    assert_eq!(unconverged, vec![INTERIOR_NODE]);
-                }
-                other => panic!("expected SubtreeNotConverged, got {other:?}"),
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .unreadable(INTERIOR_NODE);
+        refuses_as_unconverged(net);
+    }
+
+    /// The pass isolates an unresolvable node rather than aborting, so this
+    /// refusal — not the abort — is what keeps the grant fail-closed.
+    #[test]
+    fn an_unresolvable_interior_node_is_rejected_fail_closed() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .unresolvable(INTERIOR_NODE);
+        refuses_as_unconverged(net);
+    }
+
+    fn refuses_as_unconverged(net: FakeNet) {
+        let (outcome, published, _hub) = run(7, &[], net, &[]);
+        match outcome {
+            Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
+                assert_eq!(unconverged, vec![INTERIOR_NODE]);
             }
-            assert!(published.is_empty());
+            other => panic!("expected SubtreeNotConverged, got {other:?}"),
         }
+        assert!(published.is_empty());
     }
 
     #[test]

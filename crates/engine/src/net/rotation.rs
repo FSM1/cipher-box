@@ -470,6 +470,28 @@ async fn gated_scope_root<H: Http, F: FloorStore>(
     }
 }
 
+/// Gate `record_bytes` as the scope root of `expected_id`, a claimed **child**
+/// scope of the one `adopter` carries the parent node seed for.
+///
+/// Two bindings prove it, and the caller supplies neither: the owner-signed
+/// commitment binds the name, and the **ascent link** — required here,
+/// release-active — binds the record to `nodeSeed(parent read seed, child)`. The
+/// gate verifies an ascent link only when the record carries one and the vault
+/// root carries none, so without this requirement any owner-signed root planted
+/// by a committed writer would gate cleanly as this scope's descendant.
+async fn gated_child_root<H: Http, F: FloorStore>(
+    adopter: &RootAdopter<'_, H, F>,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    expected_id: [u8; 16],
+) -> Result<GatedScopeRoot, RootGateVerdict> {
+    let gated = gated_scope_root(adopter, name, record_bytes).await?;
+    if gated.envelope.id != expected_id || gated.section.ascent_link.is_none() {
+        return Err(RootGateVerdict::Rejected);
+    }
+    Ok(gated)
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerRotationNet<'_, T, H, C, F, Sch, E>
 where
     T: RecordTransport,
@@ -846,17 +868,11 @@ where
             .ok_or(SweepResolveFailure::Rejected)
     }
 
-    /// Prove a walked child really is a descendant scope root **of this scope**,
-    /// and report the name it gated current at.
+    /// Prove a walked child really is a descendant scope root **of this scope**
+    /// ([`gated_child_root`]), and report the name it gated current at.
     ///
     /// The read body is authored by any committed writer, so the `ChildRef` that
-    /// led here proves nothing. Two bindings do: the owner-signed commitment
-    /// binds the name, and the **ascent link** — required here, release-active —
-    /// binds the record to `nodeSeed(this scope's read seed, child)`. The gate
-    /// verifies an ascent link only when the record carries one, and a vault root
-    /// carries none; without this the owner's own vault root, planted as a
-    /// `ChildRef`, would gate cleanly and be repaired into this scope's committed
-    /// index, where a later cascade would re-key it under this scope's seed.
+    /// led here proves nothing at all.
     async fn gated_child_scope_root(
         &self,
         source: &SweptScopeSource,
@@ -876,12 +892,9 @@ where
         )
         .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
         adopter.hold_local_head(head);
-        let gated = gated_scope_root(&adopter, name, record_bytes)
+        gated_child_root(&adopter, name, record_bytes, child.node_id)
             .await
             .map_err(SweepResolveFailure::from)?;
-        if gated.envelope.id != child.node_id || gated.section.ascent_link.is_none() {
-            return Err(SweepResolveFailure::Rejected);
-        }
         Ok(SweptChild::ScopeRoot(ChildScopeRef::new(
             child.node_id,
             name.as_str().as_bytes().to_vec(),
@@ -1638,18 +1651,9 @@ where
     /// `directChildScopeIndex` is authored by any committed writer — including
     /// the grantee this rotation is cutting — so an entry naming an ordinary
     /// in-scope node would carve that node out of the wave and leave it live at
-    /// a name the revokee's retired write scope seed still derives. Only the
-    /// owner-signed commitment names a scope root's own `ipnsName`, so the root
-    /// gate is the proof, over the seed the root's own owner blob yielded
-    /// (`OwnerRotationNet::gated_write_plane` gates the same index).
-    ///
-    /// Two bindings make that proof, exactly as in
-    /// [`OwnerRotationNet::gated_child_scope_root`]: the commitment binds the
-    /// name, and the **ascent link** — required here, release-active — binds the
-    /// record to `nodeSeed(this scope's read seed, child)`. The gate verifies an
-    /// ascent link only when the record carries one, and the vault root carries
-    /// none, so without this an index entry naming the owner's own vault root
-    /// would gate cleanly and be recorded as this scope's boundary.
+    /// a name the revokee's retired write scope seed still derives.
+    /// [`gated_child_root`] is the proof, over the seed the root's own owner
+    /// blob yielded.
     async fn record_scope_boundary(
         &self,
         index: &[ChildScopeRef],
@@ -1671,14 +1675,9 @@ where
                 child.scope_id,
             )
             .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
-            // The gate binds `envelope.scope` to the label above; a scope root's
-            // node id is its scope id, and only this binds it.
-            let gated = gated_scope_root(&adopter, &name, &record_bytes)
+            gated_child_root(&adopter, &name, &record_bytes, child.scope_id)
                 .await
                 .map_err(ResolveFailure::from)?;
-            if gated.envelope.id != child.scope_id || gated.section.ascent_link.is_none() {
-                return Err(ResolveFailure::Rejected);
-            }
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
@@ -5867,11 +5866,14 @@ mod tests {
             Err(SweepResolveFailure::Rejected),
         );
 
-        // The pass isolates it instead of aborting, and it is still never
-        // repaired into the index: it never became a proven scope root.
+        // The pass isolates it under the verdict that condemned it, and the
+        // index it commits to never names it.
         let net = harness.net(&[]);
         let outcome = block_on(sweep_pass(&net, &net, &scope)).expect("the pass completes");
-        assert_eq!(outcome.unreachable, vec![vault_scope]);
+        assert_eq!(
+            outcome.unreachable,
+            vec![(vault_scope, SweepResolveFailure::Rejected)]
+        );
         assert!(outcome.flagged_indexes.is_empty());
         assert!(outcome.skipped_scope_roots.is_empty());
     }
