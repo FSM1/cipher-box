@@ -26,7 +26,8 @@ export interface EngineHostLike {
   command(command: CommandDescriptor): Promise<void>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
-  /** Takes ownership of `chunk`: the host scrubs the plaintext once it lands. */
+  /** Takes ownership of `chunk`: the host is its terminal owner, so it scrubs the
+   * plaintext to bound the lifetime of a copy no caller can reach. */
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
