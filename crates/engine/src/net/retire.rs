@@ -10,9 +10,10 @@
 //! ordered it ([`drain_owed_retires`]).
 
 use core::cell::RefCell;
+use std::collections::BTreeSet;
 
 use cipherbox_core::content::{
-    decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
+    CONTENT_CID_LEN, decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
 };
 
 use super::REGISTRY_BATCH_MAX;
@@ -130,8 +131,10 @@ where
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 
-/// The owed bytes as one ledger entry stores them.
-const OWED_BYTES_LEN: usize = 8;
+/// The fixed head of one stored entry: the owed figure then the manifest total,
+/// both big-endian `u64`. Whatever follows is the retained-target list, one
+/// binary content CID each.
+const ENTRY_HEAD_LEN: usize = 16;
 
 /// The [`RetireLedger`] every host gets for free, over the durable staging store
 /// it already implements.
@@ -172,13 +175,12 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()> {
         for entry in entries {
             let key = Self::key(owner_tag, &entry.target)?;
+            let stored = encode_entry(entry)?;
             // A readable entry keeps its stored figure, so a replayed prune
             // cannot double what the vault reports as pending; an unreadable one
             // is repaired rather than left to sit undrainable forever.
-            if owed_bytes(self.0.staged_bytes(&key).await?).is_none() {
-                self.0
-                    .put_staged_bytes(&key, &entry.owed_bytes.to_be_bytes())
-                    .await?;
+            if decode_entry(&entry.target, self.0.staged_bytes(&key).await?).is_none() {
+                self.0.put_staged_bytes(&key, &stored).await?;
             }
         }
         Ok(())
@@ -194,13 +196,11 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             else {
                 continue;
             };
-            let Some(owed_bytes) = owed_bytes(self.0.staged_bytes(&key).await?) else {
+            let target = encode_content_cid_str(cid);
+            let Some(entry) = decode_entry(&target, self.0.staged_bytes(&key).await?) else {
                 continue;
             };
-            entries.push(OwedRetire {
-                target: encode_content_cid_str(cid),
-                owed_bytes,
-            });
+            entries.push(entry);
         }
         // Store enumeration order is host-dependent, and a pass can stop early;
         // sorted, it at least stops at the same place on every host.
@@ -218,12 +218,40 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     }
 }
 
-/// One entry's stored figure, or `None` for bytes this build did not write.
-fn owed_bytes(stored: Option<Vec<u8>>) -> Option<u64> {
+/// One entry as the staging store holds it.
+fn encode_entry(entry: &OwedRetire) -> SeamResult<Vec<u8>> {
+    let mut stored = Vec::with_capacity(ENTRY_HEAD_LEN + entry.retained.len() * CONTENT_CID_LEN);
+    stored.extend_from_slice(&entry.owed_bytes.to_be_bytes());
+    stored.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
+    for cid in &entry.retained {
+        stored.extend_from_slice(
+            &decode_content_cid_str(cid).map_err(|_| {
+                SeamError::new("retire-ledger retained target is not a content CID")
+            })?,
+        );
+    }
+    Ok(stored)
+}
+
+/// One entry read back, or `None` for bytes this build did not write. A partial
+/// or over-long trailer reads as unwritten rather than as a shorter retained
+/// list, which would retire a target the prune excluded.
+fn decode_entry(target: &str, stored: Option<Vec<u8>>) -> Option<OwedRetire> {
     let stored = stored?;
-    <[u8; OWED_BYTES_LEN]>::try_from(&stored[..])
-        .ok()
-        .map(u64::from_be_bytes)
+    if stored.len() < ENTRY_HEAD_LEN || (stored.len() - ENTRY_HEAD_LEN) % CONTENT_CID_LEN != 0 {
+        return None;
+    }
+    let (head, rest) = stored.split_at(ENTRY_HEAD_LEN);
+    let retained = rest
+        .chunks_exact(CONTENT_CID_LEN)
+        .map(|cid| is_wellformed_content_cid(cid).then(|| encode_content_cid_str(cid)))
+        .collect::<Option<Vec<String>>>()?;
+    Some(OwedRetire {
+        target: target.to_owned(),
+        owed_bytes: u64::from_be_bytes(<[u8; 8]>::try_from(&head[..8]).ok()?),
+        manifest_bytes: u64::from_be_bytes(<[u8; 8]>::try_from(&head[8..]).ok()?),
+        retained,
+    })
 }
 
 /// Work the ledger once and report the pinned bytes still owed afterwards — the
@@ -290,7 +318,8 @@ enum RetireOutcome {
     RegistryDown,
 }
 
-/// Retire one owed version's whole block set.
+/// Retire one owed version's block set, less every target the prune's retained
+/// versions also name ([`OwedRetire::retained`]).
 ///
 /// The entry settles **between** the leaf batches and the root's own final
 /// batch. The root is the expansion key, so an entry still owed once its root is
@@ -320,13 +349,23 @@ where
         return RetireOutcome::Deferred;
     };
     let Ok(expansion) =
-        expand_retire_targets(&entry.target, &root_block, profile, entry.owed_bytes)
+        expand_retire_targets(&entry.target, &root_block, profile, entry.manifest_bytes)
     else {
         return RetireOutcome::Deferred;
     };
-    let Some((root, leaves)) = expansion.targets.split_last() else {
+    let retirable = expansion.minus_retained(&BTreeSet::from_iter(entry.retained.iter().cloned()));
+    // The stored figure is what the prune promised this entry frees; a store
+    // whose retained list no longer produces it is not one to retire from.
+    if retirable.pinned_bytes != entry.owed_bytes {
+        return RetireOutcome::Deferred;
+    }
+    let targets = retirable.cids();
+    let Some((root, leaves)) = targets.split_last() else {
         return RetireOutcome::Deferred;
     };
+    if root != &entry.target {
+        return RetireOutcome::Deferred;
+    }
     if retire(api, leaves).await.is_err() {
         return RetireOutcome::RegistryDown;
     }
@@ -442,10 +481,7 @@ mod tests {
     fn owed_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
         let (version, root_block, leaf_cids) = doomed_version(plaintext);
         (
-            OwedRetire {
-                target: version.content_cid,
-                owed_bytes: version.pinned_bytes,
-            },
+            OwedRetire::whole(version.content_cid, version.pinned_bytes),
             root_block,
             leaf_cids,
         )
@@ -688,6 +724,77 @@ mod tests {
         );
         assert!(owed.is_empty());
         assert_eq!(remaining, 0);
+    }
+
+    /// Which versions a prune retained is a whole-plan property only the prune
+    /// saw, so it rides the entry. A target it names must never reach the
+    /// registry, and the vault must owe only what the rest frees.
+    #[test]
+    fn a_retained_target_is_never_named_by_the_retire_that_carries_it() {
+        let (whole, root_block, leaf_cids) = owed_version(&[9u8; 100]);
+        let expansion = expand_retire_targets(
+            &whole.target,
+            &root_block,
+            &ContentProfile::CI,
+            whole.manifest_bytes,
+        )
+        .expect("expands");
+        let hostage = leaf_cids[0].clone();
+        let entry = OwedRetire {
+            target: whole.target.clone(),
+            owed_bytes: expansion
+                .minus_retained(&BTreeSet::from([hostage.clone()]))
+                .pinned_bytes,
+            manifest_bytes: whole.manifest_bytes,
+            retained: vec![hostage.clone()],
+        };
+        assert!(
+            entry.owed_bytes < entry.manifest_bytes,
+            "an aliased expansion frees less than its manifest accounts for"
+        );
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let (remaining, owed) = drain(&store, OWNER, &http);
+
+        assert_eq!(
+            retired_targets(&http),
+            leaf_cids[1..]
+                .iter()
+                .cloned()
+                .chain([entry.target.clone()])
+                .collect::<Vec<_>>(),
+            "the retained target is skipped; everything else keeps its order"
+        );
+        assert!(owed.is_empty(), "the entry still settles");
+        assert_eq!(remaining, 0);
+    }
+
+    /// The retained list is the only record of what an entry must not retire, so
+    /// a trailer this build did not write reads as no entry at all rather than
+    /// as a shorter list.
+    #[test]
+    fn a_stored_entry_this_build_did_not_write_reads_as_nothing() {
+        let (whole, ..) = owed_version(&[1u8; 40]);
+        let entry = OwedRetire {
+            retained: vec![whole.target.clone()],
+            ..whole
+        };
+        let stored = encode_entry(&entry).expect("encodes");
+        assert_eq!(
+            decode_entry(&entry.target, Some(stored.clone())),
+            Some(entry.clone()),
+            "a round trip is the whole entry"
+        );
+        for bytes in [
+            Vec::new(),
+            vec![0u8; ENTRY_HEAD_LEN - 1],
+            [&stored[..], &[7u8; CONTENT_CID_LEN - 1]].concat(),
+            [&stored[..], &[7u8; CONTENT_CID_LEN]].concat(),
+        ] {
+            assert_eq!(decode_entry(&entry.target, Some(bytes)), None);
+        }
     }
 
     #[test]

@@ -25,7 +25,9 @@ use core::cell::{Cell, RefCell};
 use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid, verify_cid};
+use cipherbox_core::content::{
+    decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
+};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -38,8 +40,9 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::content::{
-    ContentProfile, ContentVersion, Gateway, ProviderError, SealedContent, place_block, plan_prune,
-    pre_flight_quota_check,
+    ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
+    SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
+    read_block, version_cids,
 };
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
@@ -1694,6 +1697,10 @@ where
         {
             return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
         }
+        // Ahead of the publish: a debt this pass cannot compute must leave the
+        // history it was read from standing, not a shortened one it never
+        // journaled.
+        let owed = self.prune_debt(&plan.retire_targets, survivors).await?;
         versions.truncate(survivors.len());
         let content_cids = survivors
             .iter()
@@ -1723,7 +1730,7 @@ where
             )
             .await
             .map_err(Halt::from)?;
-        self.owe_retires(scope, &plan.retire_targets).await?;
+        self.owe_retires(scope, &owed).await?;
         self.project_published_file(
             target,
             head_size,
@@ -1750,21 +1757,76 @@ where
             .collect()
     }
 
+    /// What each doomed version still owes the registry once every target a
+    /// retained version also names is taken out of it.
+    ///
+    /// A pin row is keyed `(account, cid)` and physical unpin fires at global
+    /// refcount zero (blueprint/api.md "Pin/name registry"), so retiring a CID a
+    /// retained version also names unpins the live file. A doomed root's link
+    /// list is not this device's word for what that version holds: in a shared
+    /// scope a write-grantee authors versions of its own, and their blocks
+    /// register under the grantee's account until this one syncs — so a root
+    /// that content-addresses correctly can still name leaves the owner is
+    /// living on. Only the prune sees both sides of that, which is why the
+    /// subtraction happens here rather than inside a single root's expansion.
+    async fn prune_debt(
+        &self,
+        doomed: &[ContentVersion],
+        retained: &[ContentVersion],
+    ) -> Result<Vec<OwedRetire>, Halt> {
+        let mut protected = BTreeSet::new();
+        for version in retained {
+            protected.extend(self.expand_version(version).await?.cids());
+        }
+        let mut owed = Vec::with_capacity(doomed.len());
+        for version in doomed {
+            let expansion = self.expand_version(version).await?;
+            owed.push(OwedRetire {
+                target: version.content_cid.clone(),
+                owed_bytes: expansion.minus_retained(&protected).pinned_bytes,
+                manifest_bytes: expansion.pinned_bytes,
+                retained: expansion
+                    .targets
+                    .into_iter()
+                    .filter(|target| protected.contains(&target.cid))
+                    .map(|target| target.cid)
+                    .collect(),
+            });
+        }
+        Ok(owed)
+    }
+
+    /// One published version's whole CID set, off its own fetched root block.
+    async fn expand_version(&self, version: &ContentVersion) -> Result<Expansion, Halt> {
+        let expected = decode_content_cid_str(&version.content_cid)
+            .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))?;
+        let root_block = read_block(
+            self.gateway,
+            self.http,
+            &version.content_cid,
+            &expected,
+            ContentPlane::Root,
+        )
+        .await
+        // A root no source served is this pass's problem, not the version's.
+        .map_err(|_| Halt::Unclassified)?;
+        expand_retire_targets(
+            &version.content_cid,
+            &root_block,
+            self.content_profile,
+            version.pinned_bytes,
+        )
+        .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
+    }
+
     /// Journal the dropped roots as owed, under this identity's ledger scope.
     async fn owe_retires(
         &self,
         scope: &DrainScope<'_>,
-        doomed: &[ContentVersion],
+        entries: &[OwedRetire],
     ) -> Result<(), Halt> {
-        let entries: Vec<OwedRetire> = doomed
-            .iter()
-            .map(|version| OwedRetire {
-                target: version.content_cid.clone(),
-                owed_bytes: version.pinned_bytes,
-            })
-            .collect();
         StagingRetireLedger::new(self.staging)
-            .owe(&owner_tag(scope.enc_secret), &entries)
+            .owe(&owner_tag(scope.enc_secret), entries)
             .await
             .map_err(seam)
     }
@@ -1928,7 +1990,11 @@ where
         .await?;
         emit(OpPhase::UploadCompleted, total);
 
-        let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
+        let content_cids = version_cids(
+            &staged.root_cid,
+            content.leaf_cids().iter().map(Vec::as_slice),
+            RootPlacement::First,
+        );
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
@@ -2437,9 +2503,14 @@ where
                 .to_owned()
         });
         let content = match op.content_root_cid() {
-            Some(root_cid) => {
-                registry_cids(root_cid, &version_leaf_cids(self.staging, root_cid).await)
-            }
+            Some(root_cid) => version_cids(
+                root_cid,
+                version_leaf_cids(self.staging, root_cid)
+                    .await
+                    .iter()
+                    .map(Vec::as_slice),
+                RootPlacement::First,
+            ),
             None => Vec::new(),
         };
         name.into_iter().chain(content).collect()
@@ -2843,21 +2914,6 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
     is_wellformed_content_cid(cid)
         .then_some(cid)
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
-}
-
-/// One version as the registry names it: the root first, then every leaf in
-/// file order, read from the blocks this device staged.
-///
-/// Every block is its own accountable pin row (blueprint/api.md "Pin/name
-/// registry"), so a retirement naming fewer CIDs than the registration claimed
-/// spends account quota forever. The prune drain names the same set from the
-/// fetched root block instead ([`expand_retire_targets`]), because by then
-/// staging has released the leaves.
-fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
-    core::iter::once(root_cid)
-        .chain(leaf_cids.iter().map(Vec::as_slice))
-        .map(encode_content_cid_str)
-        .collect()
 }
 
 #[cfg(test)]

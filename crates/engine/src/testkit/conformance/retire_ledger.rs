@@ -14,10 +14,7 @@ fn root(seed: u8) -> String {
 }
 
 fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
-    OwedRetire {
-        target: target.into(),
-        owed_bytes,
-    }
+    OwedRetire::whole(target.into(), owed_bytes)
 }
 
 /// The entries as a map, so a kit assertion never depends on an order the
@@ -141,4 +138,28 @@ where
     reopened.owe(alice, &[]).await.unwrap();
     reopened.settle(alice, &[]).await.unwrap();
     assert_eq!(held(&reopened, alice).await.len(), 2);
+
+    // The retained set is the only record of what this entry must not retire,
+    // so it is as durable as the figure beside it.
+    let aliased = OwedRetire {
+        target: root(3),
+        owed_bytes: 11,
+        manifest_bytes: 90,
+        retained: vec![root(4), root(5)],
+    };
+    reopened
+        .owe(alice, core::slice::from_ref(&aliased))
+        .await
+        .unwrap();
+    let after_reopen = open().await;
+    assert_eq!(
+        after_reopen
+            .owed(alice)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.target == aliased.target),
+        Some(aliased),
+        "an entry must survive reopen whole, retained set included"
+    );
 }

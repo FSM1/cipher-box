@@ -15,8 +15,35 @@ pub struct OwedRetire {
     /// The doomed version's root `contentCid` (multibase string).
     pub target: String,
     /// The pinned bytes this entry stands for — the vault's pending-reclaim
-    /// figure is their sum.
+    /// figure is their sum. [`Self::retained`] is already subtracted, so it is
+    /// what the retire frees, not what the manifest accounts for.
     pub owed_bytes: u64,
+    /// The pinned total the doomed manifest must account for — the bound the
+    /// expansion holds a hand-framed root to.
+    pub manifest_bytes: u64,
+    /// Targets of this root's expansion that a version the prune **retained**
+    /// also names, so the retire must skip them.
+    ///
+    /// Which versions are retained is a whole-plan property only the prune op
+    /// sees; a single root's expansion cannot derive it. Normally empty —
+    /// honestly-authored versions seal identical plaintext under a fresh
+    /// per-version key and a fresh per-chunk nonce, so their leaf sets are
+    /// disjoint by construction.
+    pub retained: Vec<String>,
+}
+
+impl OwedRetire {
+    /// The debt of a doomed version whose expansion aliases nothing a retained
+    /// version names — every prune's normal case.
+    #[must_use]
+    pub fn whole(target: String, pinned_bytes: u64) -> Self {
+        Self {
+            target,
+            owed_bytes: pinned_bytes,
+            manifest_bytes: pinned_bytes,
+            retained: Vec::new(),
+        }
+    }
 }
 
 /// Durable per-owner set of retirements a published prune still owes the

@@ -7,6 +7,7 @@
 //! pure: it selects retire targets, and the net plane runs the retire.
 
 use core::num::NonZeroU64;
+use std::collections::BTreeSet;
 
 use cipherbox_core::content::{decode_content_cid_str, encode_content_cid_str, verify_cid};
 use cipherbox_core::error::CodecError;
@@ -163,13 +164,98 @@ pub enum ExpandError {
     ForeignManifest,
 }
 
+/// Where a version's root rides in the CID set that names it.
+///
+/// The register and retire paths need opposite orders because the expansion key
+/// differs: registration recovers its leaves from staging, so the root carries
+/// nothing; retirement recovers them from the fetched root block, so the root
+/// must outlive everything it expands to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootPlacement {
+    /// The root first, then every leaf in file order — registration.
+    First,
+    /// Every leaf in file order, then the root — retirement.
+    Last,
+}
+
+/// Every CID one version pins, spelled as the registry names them.
+///
+/// The one derivation both the register and the retire path go through: every
+/// block is its own accountable pin row (blueprint/api.md "Pin/name registry"),
+/// so a retirement naming fewer CIDs than the registration claimed spends
+/// account quota forever, and one naming more unpins live blocks.
+#[must_use]
+pub fn version_cids<'a>(
+    root_cid: &[u8],
+    leaf_cids: impl IntoIterator<Item = &'a [u8]>,
+    root: RootPlacement,
+) -> Vec<String> {
+    let root_cid = encode_content_cid_str(root_cid);
+    let leaves = leaf_cids.into_iter().map(encode_content_cid_str);
+    match root {
+        RootPlacement::First => core::iter::once(root_cid).chain(leaves).collect(),
+        RootPlacement::Last => leaves.chain(core::iter::once(root_cid)).collect(),
+    }
+}
+
+/// One block a retire must name, and what its own pin row charges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireTarget {
+    /// The block's content CID (multibase string).
+    pub cid: String,
+    /// The pinned bytes this block's row accounts for.
+    pub pinned_bytes: u64,
+}
+
 /// One doomed version's whole retire set and what retiring it frees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expansion {
     /// Every leaf in file order, then the root **last**.
-    pub targets: Vec<String>,
-    /// The pinned bytes the manifest accounts for.
+    pub targets: Vec<RetireTarget>,
+    /// The pinned bytes the targets account for.
     pub pinned_bytes: u64,
+}
+
+impl Expansion {
+    /// The targets as the registry names them, in retire order.
+    #[must_use]
+    pub fn cids(&self) -> Vec<String> {
+        self.targets
+            .iter()
+            .map(|target| target.cid.clone())
+            .collect()
+    }
+
+    /// Drop every target a retained version also names, and re-total what the
+    /// remainder frees.
+    ///
+    /// A pin row is keyed `(account, cid)` and physical unpin fires at global
+    /// refcount zero (blueprint/api.md "Pin/name registry"), so retiring a CID a
+    /// retained version also names unpins live content. Which versions are
+    /// retained is a whole-plan property the prune op decides, never one a
+    /// single root's expansion can see. A subtracted target frees nothing, so
+    /// the total is re-summed rather than kept in the manifest's closed form.
+    #[must_use]
+    pub fn minus_retained(&self, retained: &BTreeSet<String>) -> Self {
+        let targets: Vec<RetireTarget> = self
+            .targets
+            .iter()
+            .filter(|target| !retained.contains(&target.cid))
+            .cloned()
+            .collect();
+        Self {
+            pinned_bytes: sum_pinned(&targets),
+            targets,
+        }
+    }
+}
+
+/// What a target set accounts for, saturating so a hand-framed manifest can
+/// never wrap the figure to a small one.
+fn sum_pinned(targets: &[RetireTarget]) -> u64 {
+    targets.iter().fold(0u64, |total, target| {
+        total.saturating_add(target.pinned_bytes)
+    })
 }
 
 impl From<DagError> for ExpandError {
@@ -216,23 +302,38 @@ pub fn expand_retire_targets(
     }
     verify_cid(&expected, root_block).map_err(ExpandError::TrustViolation)?;
     let manifest = decode_root(root_block)?;
-
-    let accounted = manifest
-        .size
-        .saturating_add((manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD))
-        .saturating_add(root_block.len() as u64);
-    if manifest.chunk_size != profile.chunk_size() as u64 || accounted != pinned_bytes {
+    if manifest.chunk_size != profile.chunk_size() as u64 {
         return Err(ExpandError::ForeignManifest);
     }
 
-    let mut targets = Vec::with_capacity(manifest.leaf_cids.len() + 1);
-    targets.extend(
+    // Every leaf but the tail carries a whole chunk; the tail carries what is
+    // left. Per-target rather than the manifest's closed form, because a
+    // subtracted target must be able to drop its own bytes out of the total.
+    let leaf_bytes = |index: usize| {
         manifest
-            .leaf_cids
-            .iter()
-            .map(|cid| encode_content_cid_str(cid)),
-    );
-    targets.push(content_cid.to_owned());
+            .size
+            .saturating_sub((index as u64).saturating_mul(manifest.chunk_size))
+            .min(manifest.chunk_size)
+            .saturating_add(SEALED_LEAF_OVERHEAD)
+    };
+    let targets: Vec<RetireTarget> = version_cids(
+        &expected,
+        manifest.leaf_cids.iter().map(|cid| &cid[..]),
+        RootPlacement::Last,
+    )
+    .into_iter()
+    .zip(
+        (0..manifest.leaf_cids.len())
+            .map(leaf_bytes)
+            .chain([root_block.len() as u64]),
+    )
+    .map(|(cid, pinned_bytes)| RetireTarget { cid, pinned_bytes })
+    .collect();
+
+    let accounted = sum_pinned(&targets);
+    if accounted != pinned_bytes {
+        return Err(ExpandError::ForeignManifest);
+    }
     Ok(Expansion {
         targets,
         pinned_bytes: accounted,
@@ -378,18 +479,106 @@ mod tests {
             "a multi-chunk version is the normal case"
         );
 
-        let expected: Vec<String> = leaf_cids
-            .into_iter()
-            .chain([doomed.content_cid.clone()])
-            .collect();
+        let expansion = expand(&doomed, &root_block).expect("expands");
         assert_eq!(
-            expand(&doomed, &root_block).expect("expands"),
-            Expansion {
-                targets: expected,
-                pinned_bytes: doomed.pinned_bytes,
-            },
+            expansion.cids(),
+            leaf_cids
+                .into_iter()
+                .chain([doomed.content_cid.clone()])
+                .collect::<Vec<_>>(),
             "every leaf in file order, then the expansion key last"
         );
+        assert_eq!(expansion.pinned_bytes, doomed.pinned_bytes);
+    }
+
+    /// The register and the retire path must name the same blocks: naming fewer
+    /// on retire spends account quota forever, naming more unpins live blocks.
+    /// Only their order differs, and it differs because the caller says so.
+    #[test]
+    fn the_retire_expansion_names_exactly_what_registration_pinned() {
+        let plaintext: Vec<u8> = (0..100u8).collect();
+        let (doomed, root_block, _) = doomed_version(&plaintext);
+        let root = decode_content_cid_str(&doomed.content_cid).expect("a canonical root address");
+        let leaves = decode_root(&root_block)
+            .expect("a root manifest")
+            .leaf_cid_vecs();
+
+        let registered = version_cids(
+            &root,
+            leaves.iter().map(Vec::as_slice),
+            RootPlacement::First,
+        );
+        let retired = expand(&doomed, &root_block).expect("expands").cids();
+
+        assert_ne!(registered, retired, "the two orders are not the same order");
+        assert_eq!(
+            BTreeSet::from_iter(registered.iter().cloned()),
+            BTreeSet::from_iter(retired.iter().cloned()),
+            "a retire batch names exactly what a register batch claimed"
+        );
+        assert_eq!(
+            registered.len(),
+            retired.len(),
+            "and names each of them once"
+        );
+    }
+
+    /// A pin row is keyed `(account, cid)`, so a doomed root naming a CID a
+    /// retained version also names would unpin live content.
+    #[test]
+    fn a_target_a_retained_version_also_names_is_never_retired() {
+        let plaintext: Vec<u8> = (0..100u8).collect();
+        let (doomed, root_block, leaf_cids) = doomed_version(&plaintext);
+        let expansion = expand(&doomed, &root_block).expect("expands");
+
+        let retained = BTreeSet::from([leaf_cids[0].clone()]);
+        let reduced = expansion.minus_retained(&retained);
+
+        assert!(
+            !reduced.cids().contains(&leaf_cids[0]),
+            "the retained leaf is not a retire target"
+        );
+        assert_eq!(
+            reduced.cids(),
+            leaf_cids[1..]
+                .iter()
+                .cloned()
+                .chain([doomed.content_cid.clone()])
+                .collect::<Vec<_>>(),
+            "everything else keeps its retire order"
+        );
+    }
+
+    /// The figure a prune quotes must be what the retire frees, so a subtracted
+    /// target takes its own bytes out of the total rather than leaving the
+    /// manifest's closed form standing.
+    #[test]
+    fn the_reclaim_figure_counts_only_the_targets_a_retire_still_names() {
+        for size in [0usize, 1, 15, 16, 17, 40, 100] {
+            let (doomed, root_block, leaf_cids) = doomed_version(&vec![3u8; size]);
+            let expansion = expand(&doomed, &root_block).expect("expands");
+
+            let all_leaves = BTreeSet::from_iter(leaf_cids.iter().cloned());
+            let root_only = expansion.minus_retained(&all_leaves);
+            assert_eq!(
+                root_only.pinned_bytes,
+                root_block.len() as u64,
+                "size {size}: an all-aliased expansion frees its root block alone"
+            );
+
+            let nothing = expansion.minus_retained(&BTreeSet::new());
+            assert_eq!(
+                nothing, expansion,
+                "size {size}: subtracting nothing changes nothing"
+            );
+
+            let whole = BTreeSet::from_iter(expansion.cids());
+            assert_eq!(
+                expansion.minus_retained(&whole).pinned_bytes,
+                0,
+                "size {size}: an expansion that frees nothing quotes nothing"
+            );
+        }
     }
 
     /// The expansion under the framing the fixture used.
@@ -430,7 +619,7 @@ mod tests {
             doomed.pinned_bytes,
         )
         .expect("expands")
-        .targets;
+        .cids();
         assert_eq!(targets.len(), leaves + 1);
         assert!(
             targets.len() > REGISTRY_BATCH_MAX,

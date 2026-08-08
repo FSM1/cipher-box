@@ -25,9 +25,10 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
+use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, GatewaySource, PinMode, RetentionPolicy, SealedChunk,
-    decode_root,
+    assemble, decode_root,
 };
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::OrphanHeads;
@@ -7196,4 +7197,103 @@ fn a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused() {
         "and no retire names the CID a survivor still holds"
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0);
+}
+
+/// A doomed root's link list is not this device's word for what that version
+/// holds: in a shared scope a write-grantee authors versions of its own, and
+/// their blocks register under the grantee's account until the owner syncs
+/// (blueprint/api.md "Pin/name registry"). A root that content-addresses
+/// correctly and whose link count matches the `size` it declares can therefore
+/// name the owner's own live leaves, which the registry's `(account, cid)` pin
+/// row would unpin under the owner's own token.
+#[test]
+fn a_doomed_root_naming_a_retained_versions_leaf_never_retires_that_leaf() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let body: Vec<u8> = (0..60u8).collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[body.clone()]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    let live_leaves = decode_root(
+        &blocks
+            .get(&encode_content_cid_str(&head.content_cid))
+            .expect("the head root block"),
+    )
+    .expect("a root manifest")
+    .leaf_cid_vecs();
+    assert!(
+        live_leaves.len() > 1,
+        "a multi-chunk head is the normal case"
+    );
+
+    // The planted root links the owner's first live leaf plus one block only the
+    // planted version names. Nothing about the block is malformed: it addresses
+    // to its own CID and declares a `size` its link count matches.
+    let chunk = ContentProfile::CI.chunk_size() as u64;
+    let hostage = live_leaves[0].clone();
+    let grantee_leaf = compute_cid(CONTENT_CID_CODEC, b"a block only the planted root names");
+    let planted = assemble(
+        &[hostage.clone(), grantee_leaf.clone()],
+        2 * chunk,
+        &ContentProfile::CI,
+    )
+    .expect("assembles");
+    let planted_root = blocks.put(planted.root_block.clone());
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![
+                    head.clone(),
+                    CoreVersion::new(planted.content_cid.clone(), [0u8; 32], 2 * chunk, 0),
+                ],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+
+    // With the registry down the debt stands unpaid, so the vault reports the
+    // figure the prune quoted itself.
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        chunk + SEALED_LEAF_OVERHEAD + planted.root_block.len() as u64,
+        "the quote counts the planted block and the root, never the hostage leaf"
+    );
+
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert!(
+        !retired.contains(&encode_content_cid_str(&hostage)),
+        "the leaf the retained head lives on is never retired"
+    );
+    assert!(
+        retired.contains(&encode_content_cid_str(&grantee_leaf)),
+        "the blocks the planted version really added still retire"
+    );
+    assert!(retired.contains(&planted_root), "and so does its own root");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the head still reads"),
+        body,
+        "the retained version's bytes are still retrievable"
+    );
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        0,
+        "the debt clears on the registry's own answer"
+    );
 }
