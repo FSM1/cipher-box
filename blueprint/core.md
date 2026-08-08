@@ -88,7 +88,7 @@ Functional decomposition, not final file layout:
   binding verify mandatory and fail-closed at import) are core exports.
 - Writer pseudonyms sign with **Ed25519** (deterministic derivation from the
   pairwise secret, or from `ownerPseudonymSeed` for the owner; secp256k1 stays
-  confined to identity signing per #27 D3).
+  confined to identity signing per FSM1/cipher-box-next#27 D3).
 - HPKE envelopes are spec-defined with a full-envelope KAT under a fixed
   ephemeral key — the eciesjs lesson (a library major bump must never be able
   to silently orphan stored ciphertexts).
