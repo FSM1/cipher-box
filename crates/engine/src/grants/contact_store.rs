@@ -35,7 +35,7 @@ use crate::seams::{SeamError, StagingStore};
 use crate::sync::owner_scoped_key;
 
 use super::accept::{TooLong, reject_unknown, req, within};
-use super::contact::{Contact, MAX_CONTACT_CODE_BYTES, import_contact};
+use super::contact::{Contact, MAX_CONTACT_CODE_BYTES};
 
 /// The staging-key prefix the contact book is stored under, scoped per identity
 /// by [`owner_scoped_key`]. `is_bookkeeping` treats the whole prefix as
@@ -219,7 +219,7 @@ struct Recorded {
 /// Verify a contact code and return it alongside its canonical re-encoding.
 fn import_recorded(bytes: &[u8]) -> Result<(Contact, Vec<u8>), CodecError> {
     let code = import_contact_code(bytes)?;
-    Ok((import_contact(bytes)?, code.encode()))
+    Ok((Contact::from(&code), code.encode()))
 }
 
 /// The contact book the engine ships over a host's [`StagingStore`], under one
@@ -377,6 +377,7 @@ mod tests {
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+    use super::super::contact::import_contact;
     use super::*;
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{block_on, conformance};

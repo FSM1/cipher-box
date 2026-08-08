@@ -95,9 +95,11 @@ pub const DRAINED_OP_MARK_PREFIX: &[u8] = b"cipherbox/drained-op/";
 /// is *for* is [`Drain::mark_published`].
 pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 
-/// One identity's key under `prefix`, scoped by the same owner tag
-/// [`RecordReader`] classifies queue records against — the shape every
-/// per-identity durable record this device keeps takes.
+/// One identity's key under `prefix`: the prefix followed directly by the owner
+/// tag [`RecordReader`] classifies queue records against. Use it only where the
+/// key ends at the tag — a prefix that appends a further suffix has to delimit
+/// the tag itself, as [`StagingRetireLedger`](crate::net::StagingRetireLedger)
+/// does.
 ///
 /// The op-id high-water marks are the load-bearing case. The durable queue is
 /// shared — a `RecordReader` holds another account's records as

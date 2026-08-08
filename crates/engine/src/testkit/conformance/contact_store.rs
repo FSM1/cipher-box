@@ -14,6 +14,21 @@ fn code(scalar: u8, subkey_scalar: u8) -> Vec<u8> {
     ContactCode::create(&identity, kdf::enc_subkey(&[subkey_scalar; 32]).public()).encode()
 }
 
+/// A code whose subkey the binding signature does not cover — the
+/// key-substitution shape import exists to refuse. Same-length substitution, so
+/// the code still decodes and the verify is what rejects it.
+fn substituted_subkey(scalar: u8, substitute: u8) -> Vec<u8> {
+    let mut bytes = code(scalar, scalar);
+    let bound = kdf::enc_subkey(&[scalar; 32]).public().to_bytes();
+    let forged = kdf::enc_subkey(&[substitute; 32]).public().to_bytes();
+    let at = bytes
+        .windows(bound.len())
+        .position(|w| w == bound)
+        .expect("the encoded code carries the subkey it bound");
+    bytes[at..at + forged.len()].copy_from_slice(&forged);
+    bytes
+}
+
 /// The recorded contacts as `(identity, subkey)` byte pairs, sorted so a kit
 /// assertion never depends on an order the contract does not promise.
 async fn held<S: ContactStore>(store: &S) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -116,17 +131,17 @@ where
     );
 
     // The import is the write path, so a code whose binding does not verify
-    // never reaches the backing.
-    let mut forged = code(0x23, 0x23);
-    let last = forged.len() - 1;
-    forged[last] ^= 0xFF;
-    assert!(
-        matches!(
-            store.record(&forged).await,
-            Err(ContactStoreError::Import(_))
+    // never reaches the backing. The forgery is a decodable code carrying a
+    // subkey the signature does not cover, so the rejection can only come from
+    // the binding verify.
+    match store.record(&substituted_subkey(0x23, 0x24)).await {
+        Err(ContactStoreError::Import(e)) => assert_eq!(
+            e.check(),
+            "subkey-binding-invalid",
+            "the forged code is refused by the binding verify, not by decoding"
         ),
-        "a code that does not import is refused, never recorded"
-    );
+        other => panic!("a code whose binding does not verify must be refused: {other:?}"),
+    }
     assert_eq!(
         held(&open().await).await.len(),
         1,

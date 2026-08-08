@@ -26,8 +26,13 @@ fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
     )
 }
 
+/// The login secret every test in this file starts the engine with. The staging
+/// stores the tests reach into directly derive their keys from it, so the two
+/// stay in step.
+const SECRET: [u8; 32] = [7u8; 32];
+
 fn secret() -> LoginSecret {
-    LoginSecret::new(vec![7u8; 32])
+    LoginSecret::new(SECRET.to_vec())
 }
 
 /// Commands whose pipeline slice has not landed: the still-unimplemented
@@ -210,7 +215,7 @@ fn an_imported_contact_survives_a_session_restart() {
     .expect("the code imports");
     drop(engine);
 
-    let enc_subkey = kdf::enc_subkey(&[7u8; 32]);
+    let enc_subkey = kdf::enc_subkey(&SECRET);
     let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
     let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
     let resolved = block_on(resolve_recipient(
@@ -235,7 +240,7 @@ fn an_import_the_book_cannot_take_is_not_reported_as_imported() {
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
 
-    let enc_subkey = kdf::enc_subkey(&[7u8; 32]);
+    let enc_subkey = kdf::enc_subkey(&SECRET);
     let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
     device
         .staging_store
