@@ -23,7 +23,19 @@ runs:
       id: locked
       shell: bash
       run: |
-        VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        FOUND=$(awk '
+          /^\[\[package\]\]$/       { hit = 0 }
+          /^name = "wasm-bindgen"$/ { hit = 1; next }
+          hit && /^version = /      { gsub(/^version = "|"$/, ""); print; hit = 0 }
+        ' Cargo.lock)
+        # The PATH check below compares against this same value, so picking one
+        # of several silently would pass its own safety net.
+        COUNT=$(printf '%s' "${FOUND}" | grep -c . || true)
+        if [ "${COUNT:-0}" -ne 1 ]; then
+          echo "::error::Cargo.lock must pin exactly one wasm-bindgen package, found ${COUNT}"
+          exit 1
+        fi
+        VERSION="${FOUND}"
         # install-action splits its tool input on whitespace and commas, so a
         # version carrying either would install a second, unpinned crate.
         if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
