@@ -371,6 +371,13 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::TooManyCommittedGrants);
     }
 
+    // Fail-closed BEFORE any seal (see `ResealError::HistoryLinkNotDescending`).
+    if let WriteHistory::Cut(prev) = &seeds.write_history
+        && prev.epoch >= seeds.write_epoch
+    {
+        return Err(ResealError::HistoryLinkNotDescending);
+    }
+
     // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
     // and the module's revocation-completeness rule).
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
@@ -542,19 +549,14 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- The write-plane history link: carried, or minted by the cut itself. ---
     let write_history_link = match &seeds.write_history {
         WriteHistory::Carried(sealed) => sealed.to_vec(),
-        WriteHistory::Cut(prev) => {
-            if prev.epoch >= seeds.write_epoch {
-                return Err(ResealError::HistoryLinkNotDescending);
-            }
-            mint_history_link(
-                entropy,
-                identity.v,
-                scope_id,
-                seeds.write_scope_seed,
-                seeds.write_epoch,
-                prev,
-            )?
-        }
+        WriteHistory::Cut(prev) => mint_history_link(
+            entropy,
+            identity.v,
+            scope_id,
+            seeds.write_scope_seed,
+            seeds.write_epoch,
+            prev,
+        )?,
     };
 
     // --- Write-body: sealed under the write key at the write epoch. ---
@@ -656,6 +658,16 @@ mod tests {
     const SCOPE: [u8; 16] = [0x5c; 16];
     /// The name every honestly minted fixture set binds.
     const MINTED_NAME: &[u8] = b"minted-scope-root-name";
+
+    /// An entropy seam that panics the moment it is drawn — the probe that turns
+    /// "eventually refused" into "refused before the first seal", since every
+    /// seal `reseal_scope_root` performs draws a nonce or an HPKE scalar first.
+    struct UndrawnEntropy;
+    impl Entropy for UndrawnEntropy {
+        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+            panic!("the guard must reject before any seal draws entropy");
+        }
+    }
 
     struct Fixture {
         owner_enc: X25519Secret,
@@ -1338,15 +1350,7 @@ mod tests {
     #[test]
     fn a_committed_ledger_past_the_codec_bound_fails_closed_before_any_seal() {
         // The commitment stays inside the bound, so only the ledger — the side the
-        // wrap loop walks — trips the guard. Entropy panics if drawn, pinning the
-        // rejection ahead of the first HPKE wrap rather than merely eventual.
-        struct UndrawnEntropy;
-        impl Entropy for UndrawnEntropy {
-            fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-                panic!("the bound rejects before any wrap draws entropy");
-            }
-        }
-
+        // wrap loop walks — trips the guard.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let (commitment, sig, _) = fx.committed();
@@ -1794,14 +1798,16 @@ mod tests {
     }
 
     #[test]
-    fn a_write_cut_that_does_not_advance_the_write_epoch_is_refused_release_active() {
+    fn a_write_cut_that_does_not_advance_the_write_epoch_is_refused_before_any_seal() {
         // A link over an epoch the cut does not advance past is one the ratchet
         // could only drop, so it is never sealed. `assert_eq!` on the verdict, not
-        // a `debug_assert!` — this must fire in a release build.
+        // a `debug_assert!` — this must fire in a release build. An interior
+        // scope root, so `UndrawnEntropy` pins the refusal ahead of every seal
+        // the section carries, the ascent link included.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed();
         let owner_pub = fx.owner_enc.public();
-        let id = identity(&fx, &owner_pub, MINTED_NAME, None);
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
         let override_seed = [0x0e; 32];
         let cs = committed_set(&commitment, &sig, &ledger);
         for prev_epoch in [5, 6] {
@@ -1814,9 +1820,8 @@ mod tests {
                 },
                 5,
             );
-            let mut e = SeededEntropy::new(71);
             assert_eq!(
-                reseal_scope_root(&mut e, &id, &s, &cs, &[])
+                reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[])
                     .expect_err("a non-advancing cut seals nothing")
                     .check(),
                 "history-link-not-descending"

@@ -4323,29 +4323,43 @@ mod tests {
 
     #[test]
     fn a_reseal_seam_failure_stays_retryable_and_a_trust_failure_does_not() {
-        assert_eq!(
-            reseal_verdict(ResealError::Entropy(EntropyError::new("seam down"))),
-            WritePublishError::NotLanded,
-            "the entropy seam being down is availability, not a verdict on the section"
-        );
-
-        for terminal in [
+        // One sample per `ResealError` variant. The `match` below is the
+        // enforcement: a variant added without a classification here stops this
+        // test compiling, so none can be silently omitted from the axis.
+        for sample in [
+            ResealError::Entropy(EntropyError::new("seam down")),
             ResealError::LedgerDivergesFromCommitment,
             ResealError::SignerNotCommitted,
             ResealError::UnusableRecipientKey,
+            ResealError::TagNotBoundToRecipient,
             ResealError::AscentLinkMismatch,
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
+            ResealError::HistoryLinkNotDescending,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
         ] {
-            let check = terminal.check();
-            assert_eq!(
-                reseal_verdict(terminal),
-                WritePublishError::Rejected,
-                "{check} is deterministic on inputs the wave already gated; retrying never converges"
-            );
+            let (expected, why) = match &sample {
+                ResealError::Entropy(_) => (
+                    WritePublishError::NotLanded,
+                    "the entropy seam being down is availability, not a verdict on the section",
+                ),
+                ResealError::LedgerDivergesFromCommitment
+                | ResealError::SignerNotCommitted
+                | ResealError::UnusableRecipientKey
+                | ResealError::TagNotBoundToRecipient
+                | ResealError::AscentLinkMismatch
+                | ResealError::TooManyHistoryLinks
+                | ResealError::TooManyCommittedGrants
+                | ResealError::HistoryLinkNotDescending
+                | ResealError::Encode(_) => (
+                    WritePublishError::Rejected,
+                    "deterministic on inputs the wave already gated; retrying never converges",
+                ),
+            };
+            let check = sample.check();
+            assert_eq!(reseal_verdict(sample), expected, "{check}: {why}");
         }
     }
 
