@@ -11,20 +11,29 @@
 //! trust an unverified identity by construction.
 
 use cipherbox_core::error::CodecError;
-use cipherbox_core::suite::contact::import_contact_code;
+use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Public;
 
 /// A verified contact: an identity (signing) key and the encryption subkey it
-/// bound. There is deliberately no public constructor — the only way to hold a
-/// `Contact` is [`import_contact`], which fails closed on a bad binding, so a
-/// `Contact` in hand is proof the binding verified. This is the engine-side
-/// anchor the mailbox sender-check and the adoption gate's commitment-verify
-/// authenticate against.
+/// bound. There is deliberately no field constructor — a `Contact` is only ever
+/// built from a [`ContactCode`], which [`import_contact_code`] returns only on a
+/// passing binding verify, so a `Contact` in hand is proof the binding verified.
+/// This is the engine-side anchor the mailbox sender-check and the adoption
+/// gate's commitment-verify authenticate against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Contact {
     identity_pk: EcdsaVerifier,
     enc_subkey: X25519Public,
+}
+
+impl From<&ContactCode> for Contact {
+    fn from(code: &ContactCode) -> Self {
+        Self {
+            identity_pk: code.identity_pk(),
+            enc_subkey: code.enc_subkey(),
+        }
+    }
 }
 
 impl Contact {
@@ -41,17 +50,25 @@ impl Contact {
     }
 }
 
+/// The largest contact code the engine accepts. Every entry point applies it to
+/// the offered bytes before [`import_contact`] sees them — the `ImportContact`
+/// command and the stored-book codec in
+/// [`contact_store`](super::contact_store) — so a new caller must apply it too.
+///
+/// The bundle is three fixed-width keys — a real one is under 200 bytes — and
+/// the bytes arrive as an unbounded host paste or camera scan. Decoding is
+/// linear in length, but a decoded `Value` costs far more than the byte it came
+/// from, so the cap is what stops a paste from exhausting the engine worker
+/// (the resolve path bounds its own reads the same way).
+pub const MAX_CONTACT_CODE_BYTES: usize = 1024;
+
 /// Import a contact code, verifying the subkey binding mandatorily and
 /// fail-closed. A structural defect surfaces as [`CodecError`] of class
 /// `malformed`; a well-formed code whose binding does not verify surfaces as
 /// class `trust` (`subkey-binding-invalid`) — the caller distinguishes them via
 /// [`CodecError::class`], but neither ever yields a `Contact`.
 pub fn import_contact(bytes: &[u8]) -> Result<Contact, CodecError> {
-    let code = import_contact_code(bytes)?;
-    Ok(Contact {
-        identity_pk: code.identity_pk(),
-        enc_subkey: code.enc_subkey(),
-    })
+    Ok(Contact::from(&import_contact_code(bytes)?))
 }
 
 #[cfg(test)]

@@ -217,23 +217,13 @@ impl ReceivedSharesList {
     }
 }
 
-/// The durable received-shares body: the bookmarks plus the monotonic revision
-/// the two-slot store picks a winner by
-/// ([`StagingReceivedShareStore`](super::StagingReceivedShareStore)).
-///
-/// This is a frozen at-rest format. A renamed field or a changed width orphans
-/// every stored list, and the mailbox items that delivered those shares are
-/// acked — hence [`STORED_LIST_V`] and the byte vector pinning it.
-pub(crate) struct StoredList {
-    /// Strictly increasing per persist; the higher slot wins a load.
-    pub(crate) revision: u64,
-    /// The bookmarks themselves.
-    pub(crate) shares: ReceivedSharesList,
-}
-
 /// The stored-body grammar version this build writes and can read. Distinct
 /// from the seal frame's version, which the blob carries: this one versions the
 /// engine's list shape inside it.
+///
+/// The body is a frozen at-rest format. A renamed field or a changed width
+/// orphans every stored list, and the mailbox items that delivered those shares
+/// are acked — hence this constant and the byte vector pinning the encoding.
 pub(crate) const STORED_LIST_V: u64 = 1;
 
 /// The frozen bound on bookmarked shares, and on the two attacker-supplied
@@ -251,147 +241,160 @@ pub(crate) const MAX_DISPLAY_NAME_BYTES: usize = 256;
 /// The bound on a bookmarked scope root's opaque `ipnsName`.
 pub(crate) const MAX_SCOPE_ROOT_NAME_BYTES: usize = 128;
 
+/// A collection or field past its frozen bound. Shared by the grants layer's
+/// stored-body codecs, which all enforce their bounds in both directions
+/// (AGENTS.md rule 8).
+#[derive(Debug)]
+pub struct TooLong {
+    /// Which bounded field breached.
+    pub field: &'static str,
+    /// The length found.
+    pub len: usize,
+    /// The frozen bound.
+    pub limit: usize,
+}
+
+impl fmt::Display for TooLong {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { field, len, limit } = self;
+        write!(f, "{field} is {len}, past its bound {limit}")
+    }
+}
+
 /// A bound both codec directions enforce.
-fn within(field: &'static str, len: usize, limit: usize) -> Result<(), ReceivedSharesCodecError> {
+pub(super) fn within(field: &'static str, len: usize, limit: usize) -> Result<(), TooLong> {
     if len > limit {
-        return Err(ReceivedSharesCodecError::TooLong { field, len, limit });
+        return Err(TooLong { field, len, limit });
     }
     Ok(())
 }
 
-impl StoredList {
-    /// Encode to det-CBOR for the durable store, entries in scope-root order so
-    /// one list has one spelling.
-    ///
-    /// Rejects a duplicate scope root release-active, the invariant
-    /// [`decode`](Self::decode) hard-rejects (AGENTS.md rule 8): a list with two
-    /// bookmarks for one scope has no defined authority, and emitting one would
-    /// durably store bytes this build's own reader refuses.
-    pub(crate) fn encode(
-        shares: &ReceivedSharesList,
-        revision: u64,
-    ) -> Result<Zeroizing<Vec<u8>>, ReceivedSharesCodecError> {
-        let mut sorted: Vec<&ReceivedShare> = shares.entries.iter().collect();
-        sorted.sort_by(|a, b| name_cmp(&a.scope_root_name, &b.scope_root_name));
-        if sorted
-            .windows(2)
-            .any(|pair| pair[0].scope_root_name == pair[1].scope_root_name)
-        {
+/// Encode the durable received-shares body to det-CBOR, entries in scope-root
+/// order so one list has one spelling.
+///
+/// Rejects a duplicate scope root release-active, the invariant
+/// [`decode_stored_list`] hard-rejects (AGENTS.md rule 8): a list with two
+/// bookmarks for one scope has no defined authority, and emitting one would
+/// durably store bytes this build's own reader refuses.
+pub(crate) fn encode_stored_list(
+    shares: &ReceivedSharesList,
+) -> Result<Zeroizing<Vec<u8>>, ReceivedSharesCodecError> {
+    let mut sorted: Vec<&ReceivedShare> = shares.entries.iter().collect();
+    sorted.sort_by(|a, b| name_cmp(&a.scope_root_name, &b.scope_root_name));
+    if sorted
+        .windows(2)
+        .any(|pair| pair[0].scope_root_name == pair[1].scope_root_name)
+    {
+        return Err(ReceivedSharesCodecError::DuplicateScopeRoot);
+    }
+    within("shares", sorted.len(), MAX_RECEIVED_SHARES)?;
+    for share in &sorted {
+        within(
+            "displayName",
+            share.display_name.len(),
+            MAX_DISPLAY_NAME_BYTES,
+        )?;
+        within(
+            "scopeRootName",
+            share.scope_root_name.len(),
+            MAX_SCOPE_ROOT_NAME_BYTES,
+        )?;
+    }
+    let encoded_shares = sorted
+        .into_iter()
+        .map(|share| {
+            let mut m = Map::new();
+            m.insert("displayName", Value::Text(share.display_name.clone()));
+            m.insert(
+                "permission",
+                Value::Text(share.permission.as_wire().to_string()),
+            );
+            m.insert(
+                "pointerReadKey",
+                Value::Bytes(share.pointer_read_key().to_vec()),
+            );
+            m.insert("scopeRootName", Value::Bytes(share.scope_root_name.clone()));
+            m.insert(
+                "sharerIdentityPk",
+                Value::Bytes(share.sharer_identity_pk.to_vec()),
+            );
+            Value::Map(m)
+        })
+        .collect();
+    let mut body = Map::new();
+    body.insert("shares", Value::Array(encoded_shares));
+    body.insert("v", Value::Unsigned(STORED_LIST_V));
+    // Terminal owner of the transient tree: it holds a verbatim copy of
+    // every bookmark's pointer read key.
+    let mut tree = Value::Map(body);
+    let encoded = Zeroizing::new(encode_fixed_depth(&tree));
+    tree.zeroize_bytes();
+    Ok(encoded)
+}
+
+/// Decode a stored body (strict det-CBOR). A missing/mistyped field, an
+/// unknown key, an unreadable version, or a duplicate scope root is a
+/// [`ReceivedSharesCodecError`].
+pub(crate) fn decode_stored_list(
+    bytes: &[u8],
+) -> Result<ReceivedSharesList, ReceivedSharesCodecError> {
+    let mut tree = decode(bytes)?;
+    let decoded = read_stored_list(&tree);
+    // Terminal owner of the decoded tree: every pointer read key inside is
+    // wiped on every exit, the early returns a malformed body takes included.
+    tree.zeroize_bytes();
+    decoded
+}
+
+fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCodecError> {
+    let map = tree.as_map()?;
+    reject_unknown(map, &["shares", "v"])?;
+    let version = req(map, "v")?.as_unsigned()?;
+    if version != STORED_LIST_V {
+        return Err(ReceivedSharesCodecError::UnsupportedVersion { version });
+    }
+    let raw = req(map, "shares")?.as_array()?;
+    within("shares", raw.len(), MAX_RECEIVED_SHARES)?;
+    let mut entries: Vec<ReceivedShare> = Vec::with_capacity(raw.len());
+    for item in raw {
+        let share = item.as_map()?;
+        reject_unknown(
+            share,
+            &[
+                "displayName",
+                "permission",
+                "pointerReadKey",
+                "scopeRootName",
+                "sharerIdentityPk",
+            ],
+        )?;
+        let scope_root_name = req(share, "scopeRootName")?.as_bytes()?.to_vec();
+        within(
+            "scopeRootName",
+            scope_root_name.len(),
+            MAX_SCOPE_ROOT_NAME_BYTES,
+        )?;
+        if entries.iter().any(|e| e.scope_root_name == scope_root_name) {
             return Err(ReceivedSharesCodecError::DuplicateScopeRoot);
         }
-        within("shares", sorted.len(), MAX_RECEIVED_SHARES)?;
-        for share in &sorted {
-            within(
-                "displayName",
-                share.display_name.len(),
-                MAX_DISPLAY_NAME_BYTES,
-            )?;
-            within(
-                "scopeRootName",
-                share.scope_root_name.len(),
-                MAX_SCOPE_ROOT_NAME_BYTES,
-            )?;
-        }
-        let encoded_shares = sorted
-            .into_iter()
-            .map(|share| {
-                let mut m = Map::new();
-                m.insert("displayName", Value::Text(share.display_name.clone()));
-                m.insert(
-                    "permission",
-                    Value::Text(share.permission.as_wire().to_string()),
-                );
-                m.insert(
-                    "pointerReadKey",
-                    Value::Bytes(share.pointer_read_key().to_vec()),
-                );
-                m.insert("scopeRootName", Value::Bytes(share.scope_root_name.clone()));
-                m.insert(
-                    "sharerIdentityPk",
-                    Value::Bytes(share.sharer_identity_pk.to_vec()),
-                );
-                Value::Map(m)
-            })
-            .collect();
-        let mut body = Map::new();
-        body.insert("revision", Value::Unsigned(revision));
-        body.insert("shares", Value::Array(encoded_shares));
-        body.insert("v", Value::Unsigned(STORED_LIST_V));
-        // Terminal owner of the transient tree: it holds a verbatim copy of
-        // every bookmark's pointer read key.
-        let mut tree = Value::Map(body);
-        let encoded = Zeroizing::new(encode_fixed_depth(&tree));
-        tree.zeroize_bytes();
-        Ok(encoded)
+        let display_name = req(share, "displayName")?.as_text()?.to_string();
+        within("displayName", display_name.len(), MAX_DISPLAY_NAME_BYTES)?;
+        entries.push(ReceivedShare {
+            sharer_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
+                req(share, "sharerIdentityPk")?,
+                "sharerIdentityPk",
+            )?,
+            display_name,
+            permission: Permission::from_wire(req(share, "permission")?.as_text()?)
+                .ok_or(Malformed::InvalidPermission)?,
+            pointer_read_key: SecretBytes::new(fixed::<32>(
+                req(share, "pointerReadKey")?,
+                "pointerReadKey",
+            )?),
+            scope_root_name,
+        });
     }
-
-    /// Decode a stored body (strict det-CBOR). A missing/mistyped field, an
-    /// unknown key, an unreadable version, or a duplicate scope root is a
-    /// [`ReceivedSharesCodecError`].
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ReceivedSharesCodecError> {
-        let mut tree = decode(bytes)?;
-        let decoded = Self::read(&tree);
-        // Terminal owner of the decoded tree: every pointer read key inside is
-        // wiped on every exit, the early returns a malformed body takes
-        // included.
-        tree.zeroize_bytes();
-        decoded
-    }
-
-    fn read(tree: &Value) -> Result<Self, ReceivedSharesCodecError> {
-        let map = tree.as_map()?;
-        reject_unknown(map, &["revision", "shares", "v"])?;
-        let version = req(map, "v")?.as_unsigned()?;
-        if version != STORED_LIST_V {
-            return Err(ReceivedSharesCodecError::UnsupportedVersion { version });
-        }
-        let revision = req(map, "revision")?.as_unsigned()?;
-        let raw = req(map, "shares")?.as_array()?;
-        within("shares", raw.len(), MAX_RECEIVED_SHARES)?;
-        let mut entries: Vec<ReceivedShare> = Vec::with_capacity(raw.len());
-        for item in raw {
-            let share = item.as_map()?;
-            reject_unknown(
-                share,
-                &[
-                    "displayName",
-                    "permission",
-                    "pointerReadKey",
-                    "scopeRootName",
-                    "sharerIdentityPk",
-                ],
-            )?;
-            let scope_root_name = req(share, "scopeRootName")?.as_bytes()?.to_vec();
-            within(
-                "scopeRootName",
-                scope_root_name.len(),
-                MAX_SCOPE_ROOT_NAME_BYTES,
-            )?;
-            if entries.iter().any(|e| e.scope_root_name == scope_root_name) {
-                return Err(ReceivedSharesCodecError::DuplicateScopeRoot);
-            }
-            let display_name = req(share, "displayName")?.as_text()?.to_string();
-            within("displayName", display_name.len(), MAX_DISPLAY_NAME_BYTES)?;
-            entries.push(ReceivedShare {
-                sharer_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
-                    req(share, "sharerIdentityPk")?,
-                    "sharerIdentityPk",
-                )?,
-                display_name,
-                permission: Permission::from_wire(req(share, "permission")?.as_text()?)
-                    .ok_or(Malformed::InvalidPermission)?,
-                pointer_read_key: SecretBytes::new(fixed::<32>(
-                    req(share, "pointerReadKey")?,
-                    "pointerReadKey",
-                )?),
-                scope_root_name,
-            });
-        }
-        Ok(Self {
-            revision,
-            shares: ReceivedSharesList { entries },
-        })
-    }
+    Ok(ReceivedSharesList { entries })
 }
 
 /// Why encoding or decoding a stored received-shares body failed.
@@ -411,11 +414,7 @@ pub(crate) enum ReceivedSharesCodecError {
     /// interpret them.
     UnsupportedVersion { version: u64 },
     /// A collection or field past its frozen bound.
-    TooLong {
-        field: &'static str,
-        len: usize,
-        limit: usize,
-    },
+    TooLong(TooLong),
 }
 
 impl fmt::Display for ReceivedSharesCodecError {
@@ -428,17 +427,18 @@ impl fmt::Display for ReceivedSharesCodecError {
             ReceivedSharesCodecError::UnsupportedVersion { version } => {
                 write!(f, "received-shares body version {version} is not readable")
             }
-            ReceivedSharesCodecError::TooLong { field, len, limit } => {
-                write!(
-                    f,
-                    "received-shares {field} is {len}, past its bound {limit}"
-                )
-            }
+            ReceivedSharesCodecError::TooLong(e) => write!(f, "received-shares {e}"),
         }
     }
 }
 
 impl std::error::Error for ReceivedSharesCodecError {}
+
+impl From<TooLong> for ReceivedSharesCodecError {
+    fn from(e: TooLong) -> Self {
+        ReceivedSharesCodecError::TooLong(e)
+    }
+}
 
 impl<E: Into<CodecError>> From<E> for ReceivedSharesCodecError {
     fn from(e: E) -> Self {
@@ -448,7 +448,7 @@ impl<E: Into<CodecError>> From<E> for ReceivedSharesCodecError {
 
 /// Reject any key outside `known` — this build wrote the bytes, so a key it does
 /// not emit is not a list it may act on.
-fn reject_unknown(map: &Map, known: &[&str]) -> Result<(), CodecError> {
+pub(super) fn reject_unknown(map: &Map, known: &[&str]) -> Result<(), CodecError> {
     match map
         .entries()
         .iter()
@@ -804,13 +804,13 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
 }
 
 /// A required map field, or [`Malformed::MissingField`].
-fn req<'a>(map: &'a Map, field: &'static str) -> Result<&'a Value, CodecError> {
+pub(super) fn req<'a>(map: &'a Map, field: &'static str) -> Result<&'a Value, CodecError> {
     map.get(field)
         .ok_or_else(|| Malformed::MissingField { field }.into())
 }
 
 /// A fixed-length byte field, or [`Malformed::InvalidFieldLength`].
-fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u8; N], CodecError> {
+pub(super) fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u8; N], CodecError> {
     let b = v.as_bytes()?;
     b.try_into().map_err(|_| {
         Malformed::InvalidFieldLength {
@@ -961,17 +961,16 @@ mod tests {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share(b"zzz", 0x9C));
         list.reconcile(share(b"aaa", 0x8A));
-        let bytes = StoredList::encode(&list, 7).expect("encodes");
+        let bytes = encode_stored_list(&list).expect("encodes");
 
-        let decoded = StoredList::decode(&bytes).expect("decodes");
-        assert_eq!(decoded.revision, 7, "the revision round-trips");
-        assert_eq!(decoded.shares.len(), 2);
+        let decoded = decode_stored_list(&bytes).expect("decodes");
+        assert_eq!(decoded.len(), 2);
         assert_eq!(
-            StoredList::encode(&decoded.shares, 7).expect("re-encodes"),
+            encode_stored_list(&decoded).expect("re-encodes"),
             bytes,
             "byte-stable"
         );
-        let first = decoded.shares.iter().next().unwrap();
+        let first = decoded.iter().next().unwrap();
         assert_eq!(first.scope_root_name, b"aaa", "entries ride in scope order");
         assert!(ct_eq(first.pointer_read_key(), &[0x8A; 32]));
     }
@@ -986,7 +985,7 @@ mod tests {
         duplicated.entries.push(share(b"n", 0x9C));
         assert!(
             matches!(
-                StoredList::encode(&duplicated, 1),
+                encode_stored_list(&duplicated),
                 Err(ReceivedSharesCodecError::DuplicateScopeRoot)
             ),
             "the encoder refuses a list with no defined authority for a scope"
@@ -994,14 +993,14 @@ mod tests {
 
         let mut one = ReceivedSharesList::new();
         one.reconcile(share(b"n", 0x8A));
-        let single = decode(&StoredList::encode(&one, 1).unwrap()).unwrap();
+        let single = decode(&encode_stored_list(&one).unwrap()).unwrap();
         let mut map = single.as_map().unwrap().clone();
         let mut shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
         shares.push(shares[0].clone());
         map.insert("shares", Value::Array(shares));
         assert!(
             matches!(
-                StoredList::decode(&encode(&Value::Map(map)).unwrap()),
+                decode_stored_list(&encode(&Value::Map(map)).unwrap()),
                 Err(ReceivedSharesCodecError::DuplicateScopeRoot)
             ),
             "the decoder refuses the same list it would never emit"
@@ -1012,10 +1011,10 @@ mod tests {
     fn a_stored_list_with_an_unknown_key_is_refused() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share(b"n", 0x8A));
-        let decoded = decode(&StoredList::encode(&list, 1).unwrap()).unwrap();
+        let decoded = decode(&encode_stored_list(&list).unwrap()).unwrap();
         let mut map = decoded.as_map().unwrap().clone();
         map.insert("extra", Value::Unsigned(1));
-        assert!(StoredList::decode(&encode(&Value::Map(map)).unwrap()).is_err());
+        assert!(decode_stored_list(&encode(&Value::Map(map)).unwrap()).is_err());
     }
 
     /// Frozen: this is the durable at-rest format. A renamed field, a reordered
@@ -1023,19 +1022,18 @@ mod tests {
     /// that delivered those shares are acked — so a byte vector pins it rather
     /// than a self-referential round trip.
     const STORED_LIST_V1: &str = concat!(
-        "a36176016673686172657381a56a7065726d697373696f6e64726561646b646973706c",
+        "a26176016673686172657381a56a7065726d697373696f6e64726561646b646973706c",
         "61794e616d6561736d73636f7065526f6f744e616d654c6b353173636f7065726f6f74",
         "6e706f696e746572526561644b657958208a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a",
         "8a8a8a8a8a8a8a8a8a8a8a8a8a8a707368617265724964656e74697479506b58210202",
-        "0202020202020202020202020202020202020202020202020202020202020268726576",
-        "6973696f6e07",
+        "02020202020202020202020202020202020202020202020202020202020202",
     );
 
     #[test]
     fn the_stored_list_encoding_is_frozen() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share(b"k51scoperoot", 0x8A));
-        let bytes = StoredList::encode(&list, 7).expect("encodes");
+        let bytes = encode_stored_list(&list).expect("encodes");
         assert_eq!(
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             STORED_LIST_V1,
@@ -1045,11 +1043,10 @@ mod tests {
         let raw: Vec<u8> = (0..STORED_LIST_V1.len() / 2)
             .map(|i| u8::from_str_radix(&STORED_LIST_V1[i * 2..i * 2 + 2], 16).expect("hex"))
             .collect();
-        let decoded = StoredList::decode(&raw).expect("the frozen bytes still decode");
-        assert_eq!(decoded.revision, 7);
-        assert_eq!(decoded.shares.len(), 1);
+        let decoded = decode_stored_list(&raw).expect("the frozen bytes still decode");
+        assert_eq!(decoded.len(), 1);
         assert!(ct_eq(
-            decoded.shares.iter().next().unwrap().pointer_read_key(),
+            decoded.iter().next().unwrap().pointer_read_key(),
             &[0x8A; 32]
         ));
     }
@@ -1058,12 +1055,12 @@ mod tests {
     fn a_stored_body_at_an_unreadable_version_is_refused() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share(b"n", 0x8A));
-        let decoded = decode(&StoredList::encode(&list, 1).unwrap()).unwrap();
+        let decoded = decode(&encode_stored_list(&list).unwrap()).unwrap();
         let mut map = decoded.as_map().unwrap().clone();
         map.insert("v", Value::Unsigned(STORED_LIST_V + 1));
         assert!(
             matches!(
-                StoredList::decode(&encode(&Value::Map(map)).unwrap()),
+                decode_stored_list(&encode(&Value::Map(map)).unwrap()),
                 Err(ReceivedSharesCodecError::UnsupportedVersion { .. })
             ),
             "a forward body version is named, never read as empty"
@@ -1081,27 +1078,27 @@ mod tests {
             ..share(b"n", 0x8A)
         });
         assert!(matches!(
-            StoredList::encode(&long_label, 1),
-            Err(ReceivedSharesCodecError::TooLong {
+            encode_stored_list(&long_label),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
                 field: "displayName",
                 ..
-            })
+            }))
         ));
 
         let mut long_name = ReceivedSharesList::new();
         long_name.reconcile(share(&[b'n'; MAX_SCOPE_ROOT_NAME_BYTES + 1], 0x8A));
         assert!(matches!(
-            StoredList::encode(&long_name, 1),
-            Err(ReceivedSharesCodecError::TooLong {
+            encode_stored_list(&long_name),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
                 field: "scopeRootName",
                 ..
-            })
+            }))
         ));
 
         // The decoder refuses the same shapes its encoder will not emit.
         let mut one = ReceivedSharesList::new();
         one.reconcile(share(b"n", 0x8A));
-        let decoded = decode(&StoredList::encode(&one, 1).unwrap()).unwrap();
+        let decoded = decode(&encode_stored_list(&one).unwrap()).unwrap();
         let mut map = decoded.as_map().unwrap().clone();
         let mut entry = map.get("shares").unwrap().as_array().unwrap()[0]
             .as_map()
@@ -1113,11 +1110,11 @@ mod tests {
         );
         map.insert("shares", Value::Array(vec![Value::Map(entry)]));
         assert!(matches!(
-            StoredList::decode(&encode(&Value::Map(map)).unwrap()),
-            Err(ReceivedSharesCodecError::TooLong {
+            decode_stored_list(&encode(&Value::Map(map)).unwrap()),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
                 field: "displayName",
                 ..
-            })
+            }))
         ));
     }
 
@@ -1128,11 +1125,11 @@ mod tests {
             list.reconcile(share(format!("n{i}").as_bytes(), 0x8A));
         }
         assert!(matches!(
-            StoredList::encode(&list, 1),
-            Err(ReceivedSharesCodecError::TooLong {
+            encode_stored_list(&list),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
                 field: "shares",
                 ..
-            })
+            }))
         ));
     }
 

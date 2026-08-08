@@ -95,24 +95,27 @@ pub const DRAINED_OP_MARK_PREFIX: &[u8] = b"cipherbox/drained-op/";
 /// is *for* is [`Drain::mark_published`].
 pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 
-/// One identity's op-id high-water key, under the same owner tag
-/// [`RecordReader`] classifies queue records against.
+/// One identity's key under `prefix`: the prefix followed directly by the owner
+/// tag [`RecordReader`] classifies queue records against. Use it only where the
+/// key ends at the tag — a prefix that appends a further suffix has to delimit
+/// the tag itself, as [`StagingRetireLedger`](crate::net::StagingRetireLedger)
+/// does.
 ///
-/// **Both marks are per-identity.** The durable queue is shared — a
-/// `RecordReader` holds another account's records as
+/// The op-id high-water marks are the load-bearing case. The durable queue is
+/// shared — a `RecordReader` holds another account's records as
 /// [`Retained`](crate::sync::record::RecordClass::Retained) rather than
 /// deleting them — and `OpId`s are per *store*, not per identity. A device-wide
 /// high-water would therefore let one account's progress discard another's
 /// queued op: as restore residue under the drained mark, or as already
 /// published under the other.
 ///
-/// [`orphan_staging_keys`] treats both prefixes as referenced, including marks
-/// this session cannot read — their owner is exactly the identity that still
-/// needs them.
+/// [`orphan_staging_keys`] treats each such prefix as referenced, including
+/// entries this session cannot read — their owner is exactly the identity that
+/// still needs them.
 ///
 /// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
 #[must_use]
-pub fn op_mark_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
+pub fn owner_scoped_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
     let mut key = prefix.to_vec();
     key.extend_from_slice(&owner_tag(enc_secret));
     key
@@ -2566,8 +2569,11 @@ where
         };
         // Monotonic by construction: the engine is the single writer, and the
         // mark only ever names ops that have already left the queue.
-        self.raise_op_mark(&op_mark_key(DRAINED_OP_MARK_PREFIX, scope.enc_secret), mark)
-            .await
+        self.raise_op_mark(
+            &owner_scoped_key(DRAINED_OP_MARK_PREFIX, scope.enc_secret),
+            mark,
+        )
+        .await
     }
 
     /// Raise this identity's published-op mark over `op_id`
@@ -2587,7 +2593,7 @@ where
     async fn mark_published(&self, scope: &DrainScope<'_>, op_id: OpId) {
         let _ = self
             .raise_op_mark(
-                &op_mark_key(PUBLISHED_OP_MARK_PREFIX, scope.enc_secret),
+                &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, scope.enc_secret),
                 op_id.0,
             )
             .await;
@@ -2607,7 +2613,7 @@ where
     async fn drained_mark(&self, scope: &DrainScope<'_>) -> Result<Option<u64>, Halt> {
         op_mark(
             self.staging,
-            &op_mark_key(DRAINED_OP_MARK_PREFIX, scope.enc_secret),
+            &owner_scoped_key(DRAINED_OP_MARK_PREFIX, scope.enc_secret),
         )
         .await
         .map_err(seam)
@@ -2780,7 +2786,11 @@ pub(crate) async fn published_op_mark<St: StagingStore>(
     staging: &St,
     enc_secret: &X25519Secret,
 ) -> SeamResult<Option<u64>> {
-    op_mark(staging, &op_mark_key(PUBLISHED_OP_MARK_PREFIX, enc_secret)).await
+    op_mark(
+        staging,
+        &owner_scoped_key(PUBLISHED_OP_MARK_PREFIX, enc_secret),
+    )
+    .await
 }
 
 /// Classify a register-first refusal on the discriminator the registry stamps,

@@ -40,7 +40,7 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
-use crate::grants::{Contact, import_contact};
+use crate::grants::{Contact, ContactStore, ContactStoreError, StagingContactStore};
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -1455,14 +1455,7 @@ impl Drop for StreamSlot {
 /// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
 pub const MAX_OPEN_STREAMS: usize = 256;
 
-/// The largest contact code [`Command::ImportContact`] will decode.
-///
-/// The bundle is three fixed-width keys — a real one is under 200 bytes — and
-/// the bytes arrive as an unbounded host paste or camera scan. Decoding is
-/// linear in length, but a decoded `Value` costs far more than the byte it came
-/// from, so the cap is what stops a paste from exhausting the engine worker
-/// (the resolve path bounds its own reads the same way).
-pub const MAX_CONTACT_CODE_BYTES: usize = 1024;
+pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
 #[derive(Default)]
@@ -2351,15 +2344,27 @@ impl<T: SeamTypes> Engine<T> {
                         check: "contact-code-too-large",
                     });
                 }
-                import_contact(&contact_code)
+                let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+                StagingContactStore::new(&self.seams.staging_store, session.enc_subkey())
+                    .record(&contact_code)
+                    .await
                     .map(CommandOutcome::ContactImported)
                     .map_err(|err| match err {
-                        CodecError::Trust(_) => EngineError::TrustViolation {
-                            message: format!("contact code rejected: {}", err.check()),
-                        },
-                        CodecError::Malformed(_) => {
-                            EngineError::MalformedInput { check: err.check() }
+                        ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
+                            EngineError::MalformedInput { check: e.check() }
                         }
+                        ContactStoreError::Full => EngineError::MalformedInput {
+                            check: "contact-book-full",
+                        },
+                        ContactStoreError::Seam(e) => EngineError::Seam {
+                            message: e.message().to_owned(),
+                        },
+                        // A rejected binding, and a stored book this build
+                        // cannot read: both are fail-closed trust verdicts, not
+                        // outages a host should retry.
+                        other => EngineError::TrustViolation {
+                            message: other.to_string(),
+                        },
                     })
             }
             Command::SiweLogin { message, signature } => {

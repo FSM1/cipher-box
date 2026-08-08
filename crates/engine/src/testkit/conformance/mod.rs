@@ -21,6 +21,7 @@
 //! (host-driven events, no seam-local semantics; losing hints costs only
 //! staleness).
 
+pub mod contact_store;
 pub mod credential_store;
 pub mod floor_store;
 pub mod mailbox;
