@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these fifteen edges. Every edge
+//! Nothing in CipherBox derives a key outside these sixteen edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -38,6 +38,7 @@ const CTX_IPNS_KEYPAIR: &str = "cipherbox/v2/ipns-keypair";
 const CTX_ASCENT_KEYPAIR: &str = "cipherbox/v2/ascent-keypair";
 const CTX_ENC_SUBKEY: &str = "cipherbox/v2/enc-subkey";
 const CTX_BLINDED_TAG: &str = "cipherbox/v2/blinded-tag";
+const CTX_OWNER_PSEUDONYM_SEED: &str = "cipherbox/v2/owner-pseudonym-seed";
 const CTX_PSEUDONYM_SIGN: &str = "cipherbox/v2/pseudonym-sign";
 const CTX_OWNER_POINTER_SEED: &str = "cipherbox/v2/owner-pointer-seed";
 const CTX_SCOPE_POINTER: &str = "cipherbox/v2/scope-pointer";
@@ -55,7 +56,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The fifteen edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The sixteen edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -102,6 +103,11 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "blinded-tag",
         context: CTX_BLINDED_TAG,
         input_layout: "derive_key(ctx, ecdh[32] || scopeRootIpnsName[var])",
+    },
+    EdgeSpec {
+        name: "owner-pseudonym-seed",
+        context: CTX_OWNER_PSEUDONYM_SEED,
+        input_layout: "derive_key(ctx, loginSecret[var])",
     },
     EdgeSpec {
         name: "pseudonym-sign",
@@ -186,6 +192,10 @@ fn blinded_tag_bytes(ecdh_shared: &[u8; SECRET_LEN], scope_root_ipns_name: &[u8]
     let out = derive_key(CTX_BLINDED_TAG, &ikm);
     ikm.zeroize();
     out
+}
+
+fn owner_pseudonym_seed_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_OWNER_PSEUDONYM_SEED, login_secret)
 }
 
 fn pseudonym_sign_bytes(pairwise_material: &[u8; SECRET_LEN], scope_id: &[u8; 16]) -> SecretBytes {
@@ -289,8 +299,16 @@ pub fn blinded_tag(
     *blinded_tag_bytes(ecdh_shared, scope_root_ipns_name).as_bytes()
 }
 
+/// `owner-pseudonym-seed`: the owner's `pseudonym-sign` input, from the login
+/// secret. A dedicated edge keeps structure-signing authority off the
+/// encryption and pointer planes (FSM1/cipher-box-next ADR 0005).
+pub fn owner_pseudonym_seed(login_secret: &[u8]) -> SecretBytes {
+    owner_pseudonym_seed_bytes(login_secret)
+}
+
 /// `pseudonym-sign`: the Ed25519 writer-pseudonym keypair from the pairwise
-/// material (ECDH, or the owner's root secret) and the scope id.
+/// material (a grantee's ECDH secret, or the owner's `ownerPseudonymSeed`) and
+/// the scope id.
 pub fn pseudonym_sign(pairwise_material: &[u8; SECRET_LEN], scope_id: &[u8; 16]) -> Ed25519Signer {
     Ed25519Signer::from_seed(*pseudonym_sign_bytes(pairwise_material, scope_id).as_bytes())
 }
@@ -385,7 +403,7 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the fifteen outputs must be pairwise distinct), its property test, and the
+/// (the sixteen outputs must be pairwise distinct), its property test, and the
 /// frozen vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
@@ -432,6 +450,10 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "blinded-tag",
             output: b(blinded_tag_bytes(probe.seed, probe.ipns_name)),
+        },
+        EdgeProbeOutput {
+            name: "owner-pseudonym-seed",
+            output: b(owner_pseudonym_seed_bytes(probe.seed)),
         },
         EdgeProbeOutput {
             name: "pseudonym-sign",
@@ -517,6 +539,10 @@ mod tests {
 
         assert_eq!(read_key(&seed).as_bytes(), &by("read-key"));
         assert_eq!(node_seed(&seed, &id).as_bytes(), &by("node-seed"));
+        assert_eq!(
+            owner_pseudonym_seed(&seed).as_bytes(),
+            &by("owner-pseudonym-seed")
+        );
         // Keypair edges: the public key must match a keypair built from the
         // frozen seed bytes.
         assert_eq!(

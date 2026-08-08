@@ -62,6 +62,12 @@
       "output": "58e8260d6f6afeff70a83b907cf63010fd815f0a760f29a7417e9bd1044667e9"
     },
     {
+      "name": "owner-pseudonym-seed",
+      "context": "cipherbox/v2/owner-pseudonym-seed",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "b5fdf0ec901009831dcc1f4fcb2736142c12406e8c61c7d987342f237bf777ad"
+    },
+    {
       "name": "pseudonym-sign",
       "context": "cipherbox/v2/pseudonym-sign",
       "inputLayout": "ed25519_from_seed(derive_key(ctx, pairwiseMaterial[32] || scopeId[16]))",
