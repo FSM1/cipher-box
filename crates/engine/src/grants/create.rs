@@ -12,9 +12,8 @@
 //! # Simulation boundary
 //!
 //! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
-//! the read/floor/publish/mailbox effects are faked in tests. The publisher this
-//! composes over has a production implementation in [`crate::net::rotation`]; the
-//! sweep resolver does not.
+//! the read/floor/publish/mailbox effects are faked in tests. Every seam this
+//! composes over has a production implementation in [`crate::net::rotation`].
 //!
 //! # Not implemented here
 //!
@@ -45,11 +44,12 @@ use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
-    CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, WriteHistory,
-    derive_write_name, reseal_scope_root, sweep_pass,
+    CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds, ResealedScopeRoot,
+    ResolveFailure, ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, SweepError,
+    SweepPublisher, SweepResolver, WriteHistory, converge_subtree, derive_write_name,
+    reseal_scope_root,
 };
-use crate::seams::{FloorStore, Mailbox, SeamError};
+use crate::seams::{Mailbox, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
 
 /// The fresh grantee scope minted at the granted folder. `scope_id` is the
@@ -165,7 +165,8 @@ pub enum CreateGrantError {
     /// dropped on a lost CAS race, so the grant is refused rather than minted
     /// over a possibly-lagging subtree.
     SubtreeNotConverged {
-        /// Scope roots left unproven this pass.
+        /// The interior nodes left unproven this pass — dropped on a lost CAS
+        /// race, or unreadable at the epoch their record claims.
         unconverged: Vec<[u8; 16]>,
     },
     /// The recipient encryption key is non-contributory (degenerate ECDH).
@@ -256,10 +257,9 @@ impl std::error::Error for CreateGrantError {}
 /// 5); past that point the sequence is not atomic — see [`CreateGrantError`] for
 /// what each post-publish variant leaves committed.
 #[allow(clippy::too_many_arguments)]
-pub async fn create_read_grant<E, F, R, P, M>(
+pub async fn create_read_grant<E, R, P, M>(
     entropy: &mut E,
-    floors: &F,
-    sweep_resolver: &R,
+    resolver: &R,
     publisher: &P,
     mailbox: &M,
     grantee: &GranteeScopePlan<'_>,
@@ -269,38 +269,45 @@ pub async fn create_read_grant<E, F, R, P, M>(
 ) -> Result<CreateGrantOutcome, CreateGrantError>
 where
     E: Entropy,
-    F: FloorStore,
-    R: SweepResolver,
-    P: ScopeRootPublisher,
+    R: SweepResolver + CascadeResealResolver,
+    P: ScopeRootPublisher + SweepPublisher,
     M: Mailbox,
 {
-    // 1) Convergence gate — run the sweep over the granted subtree. A dropped
-    // lost race means convergence is unproven: refuse rather than share a
-    // possibly-lagging subtree (the grant-creation convergence requirement).
-    let swept = sweep_pass(
-        entropy,
-        floors,
-        sweep_resolver,
-        publisher,
-        grantee.scope_id,
-        grantee.subtree_child_index,
-    )
-    .await
-    .map_err(CreateGrantError::Converge)?;
-    if !swept.dropped_lost_race.is_empty() {
-        return Err(CreateGrantError::SubtreeNotConverged {
-            unconverged: swept.dropped_lost_race,
-        });
-    }
-
-    // 2) Derive the scope root's ipnsName from the folder's write material — the
+    // 1) Derive the scope root's ipnsName from the folder's write material — the
     // sole gated identity edge (blueprint/engine.md: the name binds the record
     // via the Ed25519 key it encodes). The tag and commitment below bind this
     // name, and the recipient re-derives the same name from the record it
     // resolves; deriving here (never trusting a passed name) keeps that binding
-    // fail-closed at the mint.
+    // fail-closed at the mint. A read grant cuts no write scope, so this is also
+    // the name the folder already answers at inside the parent scope.
     let ipns_name = derive_write_name(grantee.write_scope_seed, &grantee.scope_id);
     let name_bytes = ipns_name.as_str().as_bytes();
+
+    // 2) Convergence gate — converge the granted folder's own subtree inside the
+    // scope it still lives in, so no interior node the grantee will read lags
+    // that scope's epoch. A dropped lost race means convergence is unproven:
+    // refuse rather than share a possibly-lagging subtree (CONTEXT.md
+    // "Epoch-converged").
+    let swept = converge_subtree(
+        resolver,
+        publisher,
+        &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
+        &NodeRef {
+            node_id: grantee.scope_id,
+            ipns_name: name_bytes.to_vec(),
+        },
+    )
+    .await
+    .map_err(CreateGrantError::Converge)?;
+    // A node the pass could not read is as unproven as one whose convergence
+    // publish lost the race: either way the grantee could descend into a node
+    // still sealed at an epoch its fresh seed does not reach.
+    if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
+        let mut unconverged = swept.dropped_lost_race;
+        unconverged.extend(swept.unreachable);
+        unconverged.sort_unstable();
+        return Err(CreateGrantError::SubtreeNotConverged { unconverged });
+    }
 
     // 3) Build the committed set for the recipient — the same pairwise mint an
     // invite link goes through, keyed off the name derived above.
@@ -389,7 +396,7 @@ where
     // (rotation/cascade.rs). Register-first: the grantee root published above
     // already lists these descendants, so each points back at a parent that exists.
     for descendant in grantee.subtree_child_index {
-        let target = sweep_resolver.resolve(descendant).await.map_err(|reason| {
+        let target = resolver.resolve(descendant).await.map_err(|reason| {
             CreateGrantError::DescendantResolve {
                 scope_id: descendant.scope_id,
                 reason,
@@ -544,12 +551,15 @@ mod tests {
     use crate::grants::recipient_blinded_tag;
     use crate::grants::{GrantRow, PublishedGrantBlob};
     use crate::mailbox::poll_verified;
-    use crate::rotation::{PrevEpochSeed, ResolveFailure, SweepTarget};
-    use crate::testkit::fakes::{InMemoryFloorStore, InMemoryMailboxHub};
+    use crate::rotation::{
+        CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResolveFailure, SweepResolveFailure,
+        SweptChild, SweptNode, SweptScope,
+    };
+    use crate::testkit::fakes::InMemoryMailboxHub;
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
-        AadContext, AscentLink, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, open_ascent_link,
-        open_grant_blob,
+        AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
+        STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -566,6 +576,19 @@ mod tests {
     const PARENT_NAME: &[u8] = b"parent-scope-root-name";
     const DESCENDANT_SCOPE: [u8; 16] = [0xdd; 16];
     const DESCENDANT_NAME: &[u8] = b"descendant-scope-root-name";
+    /// The read epoch every `ParentScopePlan` below re-seals at — the epoch the
+    /// convergence sweep measures the parent scope's interior nodes against.
+    const PARENT_EPOCH: u64 = 3;
+    /// An interior node of the parent scope, inside the granted folder.
+    const INTERIOR_NODE: [u8; 16] = [0xa1; 16];
+
+    /// One interior node's simulated name inside the parent scope.
+    fn interior_name(node_id: [u8; 16]) -> Vec<u8> {
+        format!("interior-{:02x}", node_id[0]).into_bytes()
+    }
+
+    /// One interior node of the parent scope: its id and its published epoch.
+    type InteriorNodeState = ([u8; 16], u64);
 
     /// The grantee scope root's ipnsName, derived exactly as the primitive does
     /// (from the folder's write material) so assertions bind the real name.
@@ -594,11 +617,15 @@ mod tests {
             .verifying_key()
     }
 
-    /// A combined `SweepResolver` + `ScopeRootPublisher` fake: it records every
-    /// committed publish and can force a lost race to model an unconvergeable
-    /// subtree. `resolve` builds a valid, lagging descendant `SweepTarget` for
-    /// `DESCENDANT_SCOPE` (whose re-seal succeeds, so the convergence outcome is
-    /// decided by the publish result).
+    /// The whole net arm the primitive composes over: the convergence sweep's
+    /// two seams, the cascade re-seal resolve step 5b runs, and the scope-root
+    /// publisher. It records every committed publish and can force a lost race
+    /// to model an unconvergeable subtree.
+    ///
+    /// The parent scope sits at [`PARENT_EPOCH`] and carries whatever interior
+    /// nodes `interior` lists, so a test decides whether the granted subtree
+    /// holds a lagging node. `resolve` builds a valid descendant `CascadeTarget`
+    /// for `DESCENDANT_SCOPE`.
     ///
     /// `fail_after` fails the Nth+ `publish_scope_root` call so a test can let
     /// the grantee publish succeed and then fail the parent publish — the
@@ -610,6 +637,17 @@ mod tests {
         publish_result: Result<(), ScopeRootPublishError>,
         publish_calls: Rc<RefCell<usize>>,
         fail_after: Option<(usize, ScopeRootPublishError)>,
+        /// Interior nodes **inside** the granted folder: id → published epoch.
+        interior: Rc<RefCell<Vec<InteriorNodeState>>>,
+        /// Interior nodes of the same scope but **outside** the granted folder.
+        outside: Rc<RefCell<Vec<InteriorNodeState>>>,
+        /// What an interior-node re-seal publish returns.
+        node_publish_result: Result<(), ScopeRootPublishError>,
+        node_publishes: Rc<RefCell<Vec<[u8; 16]>>>,
+        /// A node the sweep cannot resolve at all.
+        unresolvable: Option<[u8; 16]>,
+        /// A node the scope's ratchet cannot open.
+        unreadable: Option<[u8; 16]>,
     }
 
     impl FakeNet {
@@ -619,6 +657,12 @@ mod tests {
                 publish_result,
                 publish_calls: Rc::new(RefCell::new(0)),
                 fail_after: None,
+                interior: Rc::new(RefCell::new(Vec::new())),
+                outside: Rc::new(RefCell::new(Vec::new())),
+                node_publish_result: Ok(()),
+                node_publishes: Rc::new(RefCell::new(Vec::new())),
+                unresolvable: None,
+                unreadable: None,
             }
         }
 
@@ -631,10 +675,155 @@ mod tests {
                 ..Self::new(Ok(()))
             }
         }
+
+        /// Put one interior node inside the granted folder at `epoch`.
+        fn with_interior(self, node_id: [u8; 16], epoch: u64) -> Self {
+            self.interior.borrow_mut().push((node_id, epoch));
+            self
+        }
+
+        /// Put one interior node in the same scope but outside the granted
+        /// folder, at `epoch`.
+        fn with_outside(self, node_id: [u8; 16], epoch: u64) -> Self {
+            self.outside.borrow_mut().push((node_id, epoch));
+            self
+        }
+
+        fn node_publish(mut self, result: Result<(), ScopeRootPublishError>) -> Self {
+            self.node_publish_result = result;
+            self
+        }
+
+        fn unresolvable(mut self, node_id: [u8; 16]) -> Self {
+            self.unresolvable = Some(node_id);
+            self
+        }
+
+        /// A node whose body no seed on the scope's ratchet opens.
+        fn unreadable(mut self, node_id: [u8; 16]) -> Self {
+            self.unreadable = Some(node_id);
+            self
+        }
     }
 
     impl SweepResolver for FakeNet {
-        async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure> {
+        async fn resolve_scope(
+            &self,
+            scope: &ChildScopeRef,
+        ) -> Result<SweptScope, SweepResolveFailure> {
+            if scope.scope_id != PARENT_SCOPE {
+                return Err(SweepResolveFailure::Rejected);
+            }
+            let mut children = vec![NodeRef {
+                node_id: GRANTEE_SCOPE,
+                ipns_name: grantee_name(),
+            }];
+            children.extend(self.outside.borrow().iter().map(|(node_id, _)| NodeRef {
+                node_id: *node_id,
+                ipns_name: interior_name(*node_id),
+            }));
+            Ok(SweptScope {
+                current_read_epoch: PARENT_EPOCH,
+                children,
+                direct_child_scope_index: Vec::new(),
+            })
+        }
+
+        async fn consult_pointer(
+            &self,
+            _scope_id: &[u8; 16],
+        ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
+            Ok(None)
+        }
+
+        async fn resolve_child(
+            &self,
+            _scope: &ChildScopeRef,
+            child: &NodeRef,
+        ) -> Result<SweptChild, SweepResolveFailure> {
+            if self.unresolvable == Some(child.node_id) {
+                return Err(SweepResolveFailure::Unavailable);
+            }
+            if self.unreadable == Some(child.node_id) {
+                return Err(SweepResolveFailure::Unreadable);
+            }
+            // The granted folder is itself an interior node of the parent scope
+            // until the mint publishes its scope root; its body names the nodes
+            // the convergence gate must reach.
+            let (epoch, children) = if child.node_id == GRANTEE_SCOPE {
+                (
+                    PARENT_EPOCH,
+                    self.interior
+                        .borrow()
+                        .iter()
+                        .map(|(node_id, _)| ChildRef {
+                            id: *node_id,
+                            name: "n".into(),
+                            ipns_name: interior_name(*node_id),
+                            kind: NodeKind::Folder,
+                            link_counter: 1,
+                            unknown: PreservedFields::new(),
+                        })
+                        .collect(),
+                )
+            } else {
+                let epoch = self
+                    .interior
+                    .borrow()
+                    .iter()
+                    .chain(self.outside.borrow().iter())
+                    .find(|(node_id, _)| *node_id == child.node_id)
+                    .map(|(_, epoch)| *epoch)
+                    .ok_or(SweepResolveFailure::Unavailable)?;
+                (epoch, Vec::new())
+            };
+            Ok(SweptChild::Interior(SweptNode {
+                current_read_epoch: epoch,
+                sequence: 1,
+                read_body: ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children,
+                    unknown: PreservedFields::new(),
+                },
+                carried_unknown: PreservedFields::new(),
+                carried_epoch_tag_unknown: PreservedFields::new(),
+            }))
+        }
+    }
+
+    impl SweepPublisher for FakeNet {
+        async fn publish_node(
+            &self,
+            _scope: &ChildScopeRef,
+            node: &LaggingNode<'_>,
+        ) -> Result<(), ScopeRootPublishError> {
+            self.node_publishes.borrow_mut().push(node.node_id);
+            self.node_publish_result.clone()?;
+            for (node_id, epoch) in self
+                .interior
+                .borrow_mut()
+                .iter_mut()
+                .chain(self.outside.borrow_mut().iter_mut())
+            {
+                if *node_id == node.node_id {
+                    *epoch = node.read_epoch;
+                }
+            }
+            Ok(())
+        }
+
+        async fn repair_child_scope_index(
+            &self,
+            _scope: &ChildScopeRef,
+            _index: &[ChildScopeRef],
+        ) -> Result<(), ScopeRootPublishError> {
+            Ok(())
+        }
+    }
+
+    impl CascadeResealResolver for FakeNet {
+        async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
             if scope.scope_id != DESCENDANT_SCOPE {
                 return Err(ResolveFailure::Rejected);
             }
@@ -648,11 +837,10 @@ mod tests {
             let commitment_sig = sign_grant_set(&owner_identity(), &commitment)
                 .unwrap()
                 .to_compact();
-            Ok(SweepTarget {
+            Ok(CascadeTarget {
                 v: V,
                 current_read_epoch: 1,
                 owner_enc_pub: owner_enc().public(),
-                parent_node_seed: None,
                 pseudonym_signer: pseudonym,
                 override_seed: Zeroizing::new([0x71; SECRET_LEN]),
                 write_scope_seed: Zeroizing::new([0x72; SECRET_LEN]),
@@ -733,7 +921,6 @@ mod tests {
     /// grantee folder (empty subtree, converged, publishing OK), with the
     /// grant's blinded tag alongside it.
     fn delivery_for(entropy_seed: u64, recipient_enc: &X25519Secret) -> (PostedDelivery, [u8; 32]) {
-        let floors = InMemoryFloorStore::default();
         let net = FakeNet::new(Ok(()));
         let recorder = RecordingMailbox::default();
 
@@ -807,7 +994,6 @@ mod tests {
         };
         let outcome = block_on(create_read_grant(
             &mut entropy,
-            &floors,
             &net,
             &net,
             &recorder,
@@ -830,7 +1016,6 @@ mod tests {
     fn run(
         entropy_seed: u64,
         subtree: &[ChildScopeRef],
-        floor: Option<([u8; 16], u64)>,
         net: FakeNet,
         parent_grants: &[GrantRow],
     ) -> (
@@ -838,10 +1023,6 @@ mod tests {
         Vec<ResealedScopeRoot>,
         InMemoryMailboxHub,
     ) {
-        let floors = InMemoryFloorStore::default();
-        if let Some((scope, epoch)) = floor {
-            block_on(floors.raise_epoch_floor(&scope, epoch)).unwrap();
-        }
         let hub = InMemoryMailboxHub::default();
         let mailbox = hub.mailbox_for(&recipient_identity().to_sec1());
 
@@ -925,7 +1106,6 @@ mod tests {
             };
             block_on(create_read_grant(
                 &mut entropy,
-                &floors,
                 &net,
                 &net,
                 &mailbox,
@@ -941,7 +1121,7 @@ mod tests {
 
     #[test]
     fn converged_subtree_mints_publishes_and_posts_the_share_pointer() {
-        let (outcome, published, hub) = run(7, &[], None, FakeNet::new(Ok(())), &[]);
+        let (outcome, published, hub) = run(7, &[], FakeNet::new(Ok(())), &[]);
         let outcome = outcome.expect("grant creation succeeds over a converged subtree");
 
         // Two records, grantee first (register-first / never-orphan / dest-first).
@@ -1004,25 +1184,19 @@ mod tests {
     }
 
     #[test]
-    fn non_converged_subtree_is_rejected_fail_closed() {
-        // A descendant that lags (floor 2 > epoch 1) whose convergence publish
-        // loses the CAS race: the subtree cannot be proven converged, so the
-        // grant is refused — nothing minted, nothing posted.
-        let subtree = vec![ChildScopeRef::new(
-            DESCENDANT_SCOPE,
-            DESCENDANT_NAME.to_vec(),
-        )];
-        let (outcome, published, hub) = run(
-            7,
-            &subtree,
-            Some((DESCENDANT_SCOPE, 2)),
-            FakeNet::new(Err(ScopeRootPublishError::LostRace)),
-            &[],
-        );
+    fn a_lagging_interior_node_that_cannot_converge_refuses_the_grant() {
+        // An interior node of the parent scope lags (epoch 1 < PARENT_EPOCH) and
+        // its convergence publish loses the CAS race, so the subtree cannot be
+        // proven epoch-converged: the grant is refused — nothing minted, nothing
+        // posted.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .node_publish(Err(ScopeRootPublishError::LostRace));
+        let (outcome, published, hub) = run(7, &[], net, &[]);
 
         match outcome {
             Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
-                assert_eq!(unconverged, vec![DESCENDANT_SCOPE]);
+                assert_eq!(unconverged, vec![INTERIOR_NODE]);
             }
             other => panic!("expected SubtreeNotConverged, got {other:?}"),
         }
@@ -1034,11 +1208,72 @@ mod tests {
     }
 
     #[test]
-    fn unresolvable_subtree_is_rejected_fail_closed() {
-        // A subtree scope root that will not resolve is a fail-closed convergence
-        // abort, never a silent partial share.
-        let subtree = vec![ChildScopeRef::new([0x99; 16], b"unresolvable".to_vec())];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
+    fn the_same_lagging_node_lets_the_grant_through_once_it_converges() {
+        // The passing direction of the same gate: identical subtree, and the
+        // node's convergence publish now lands, so the grant proceeds.
+        let net = FakeNet::new(Ok(())).with_interior(INTERIOR_NODE, 1);
+        let publishes = Rc::clone(&net.node_publishes);
+        let (outcome, published, _hub) = run(7, &[], net, &[]);
+
+        outcome.expect("a converged subtree grants");
+        assert_eq!(
+            *publishes.borrow(),
+            vec![INTERIOR_NODE],
+            "the lagging node was advanced before the mint"
+        );
+        assert_eq!(published.len(), 2, "grantee root and parent index");
+    }
+
+    #[test]
+    fn an_already_converged_subtree_needs_no_convergence_publish() {
+        let net = FakeNet::new(Ok(())).with_interior(INTERIOR_NODE, PARENT_EPOCH);
+        let publishes = Rc::clone(&net.node_publishes);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+        outcome.expect("grant creation succeeds");
+        assert!(publishes.borrow().is_empty(), "nothing lagged");
+    }
+
+    #[test]
+    fn a_node_lagging_outside_the_granted_folder_does_not_block_the_grant() {
+        // The gate owes the epoch-converged guarantee over the folder being
+        // shared, not over every sibling in the scope it happens to sit in.
+        const OUTSIDE_NODE: [u8; 16] = [0xb2; 16];
+        let net = FakeNet::new(Ok(())).with_outside(OUTSIDE_NODE, 1);
+        let publishes = Rc::clone(&net.node_publishes);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+
+        outcome.expect("a lagging sibling is none of this grant's business");
+        assert!(
+            publishes.borrow().is_empty(),
+            "the sibling subtree was never walked, let alone re-sealed"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_node_in_the_granted_folder_refuses_the_grant() {
+        // A node this device cannot read is as unproven as one whose publish
+        // lost the race: the grantee could descend into it.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .unreadable(INTERIOR_NODE);
+        let (outcome, published, _hub) = run(7, &[], net, &[]);
+        match outcome {
+            Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
+                assert_eq!(unconverged, vec![INTERIOR_NODE]);
+            }
+            other => panic!("expected SubtreeNotConverged, got {other:?}"),
+        }
+        assert!(published.is_empty());
+    }
+
+    #[test]
+    fn an_unresolvable_interior_node_is_rejected_fail_closed() {
+        // A node the sweep cannot resolve is a fail-closed convergence abort,
+        // never a silent partial share.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .unresolvable(INTERIOR_NODE);
+        let (outcome, published, _hub) = run(7, &[], net, &[]);
         assert_eq!(outcome.unwrap_err().check(), "converge-failed");
         assert!(published.is_empty());
     }
@@ -1053,7 +1288,6 @@ mod tests {
         let (outcome, published, hub) = run(
             7,
             &[],
-            None,
             FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
             &[],
         );
@@ -1087,7 +1321,6 @@ mod tests {
         let (outcome, published, hub) = run(
             7,
             &subtree,
-            None,
             FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
             &[],
         );
@@ -1120,8 +1353,8 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (a_outcome, a_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())), &[]);
-        let (b_outcome, b_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())), &[]);
+        let (a_outcome, a_pub, _) = run(42, &subtree, FakeNet::new(Ok(())), &[]);
+        let (b_outcome, b_pub, _) = run(42, &subtree, FakeNet::new(Ok(())), &[]);
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
     }
@@ -1174,7 +1407,7 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
+        let (outcome, published, _hub) = run(7, &subtree, FakeNet::new(Ok(())), &[]);
         outcome.expect("grant creation succeeds over a converged subtree");
 
         // The grantee opens its grant blob to recover the fresh override seed.
@@ -1256,7 +1489,7 @@ mod tests {
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
         )];
-        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())), &[]);
+        let (outcome, published, _hub) = run(7, &subtree, FakeNet::new(Ok(())), &[]);
         outcome.expect("grant creation succeeds over a converged subtree");
 
         let descendant_record = published
@@ -1297,7 +1530,7 @@ mod tests {
         .expect("a contributory recipient key");
         row.ledger_entry.recipient_enc_pk = attacker.public().to_bytes();
 
-        let (outcome, published, _hub) = run(7, &[], None, FakeNet::new(Ok(())), &[row]);
+        let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row]);
 
         assert_eq!(
             outcome.expect_err("the parent re-seal refuses the swapped key"),

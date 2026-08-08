@@ -55,7 +55,8 @@ use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window
 /// is the deepest epoch lag a backward walk can cover; a node past it is
-/// re-sealed forward by the next sweep rather than lost.
+/// readable by nobody, and the sweep reports it unreachable rather than
+/// re-sealing it forward.
 const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 
 // Under the decode bound, or a re-seal mints sections the decoder refuses; at
@@ -278,20 +279,64 @@ fn walkable_chain_start(
     let mut seed = Zeroizing::new(*head.seed);
     let mut epoch = head.epoch;
     for (i, link) in carried.iter().enumerate().rev() {
-        let key = kdf::structure_key(&seed, STRUCT_TAG_HISTORY_LINK);
-        let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
-        let Ok(payload) = open_history_link(key.as_bytes(), &ctx, &link.sealed) else {
+        let Some(prev) = ratchet_step(v, scope_id, &seed, epoch, link) else {
             return i + 1;
         };
-        // The ratchet only ever steps backward; a flat or rising epoch is a
-        // chain that cannot terminate.
-        if payload.prev_epoch >= epoch {
-            return i + 1;
-        }
-        seed = Zeroizing::new(*payload.prev_seed());
-        epoch = payload.prev_epoch;
+        (seed, epoch) = prev;
     }
     0
+}
+
+/// One backward step of the key-regression ratchet: open `link` under `seed`'s
+/// structure key at `epoch` and yield the epoch before it. `None` when the link
+/// will not open, or when its epoch does not descend — a chain that cannot
+/// terminate. The one home of the ratchet's key and AAD derivation, so the
+/// writer's retention decision ([`walkable_chain_start`]) and the reader's seed
+/// recovery ([`seed_at_epoch`]) can never disagree on it.
+fn ratchet_step(
+    v: u64,
+    scope_id: [u8; 16],
+    seed: &[u8; SECRET_LEN],
+    epoch: u64,
+    link: &SignedSealed,
+) -> Option<(Zeroizing<[u8; SECRET_LEN]>, u64)> {
+    let key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
+    let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
+    let payload = open_history_link(key.as_bytes(), &ctx, &link.sealed).ok()?;
+    if payload.prev_epoch >= epoch {
+        return None;
+    }
+    Some((Zeroizing::new(*payload.prev_seed()), payload.prev_epoch))
+}
+
+/// Walk a scope's key-regression ratchet backward from its current seed to the
+/// seed `target_epoch` was sealed under — the read a lagging interior node needs
+/// before it can be re-sealed forward (CONTEXT.md "History link").
+///
+/// `carried_history_links` are a published section's, oldest epoch first, so the
+/// newest opens under `current_seed` at `current_epoch`. Every step descends, so
+/// an epoch at or above `current_epoch` is only reachable when it *is*
+/// `current_epoch`. Returns `None` when the ratchet cannot reach
+/// `target_epoch`: a link that will not open, an epoch that does not descend, or
+/// an epoch older than the retained window — all unreadable to every reader, not
+/// just this one.
+pub fn seed_at_epoch(
+    v: u64,
+    scope_id: [u8; 16],
+    current_seed: &[u8; SECRET_LEN],
+    current_epoch: u64,
+    carried_history_links: &[SignedSealed],
+    target_epoch: u64,
+) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+    let mut seed = Zeroizing::new(*current_seed);
+    let mut epoch = current_epoch;
+    for link in carried_history_links.iter().rev() {
+        if epoch == target_epoch {
+            return Some(seed);
+        }
+        (seed, epoch) = ratchet_step(v, scope_id, &seed, epoch, link)?;
+    }
+    (epoch == target_epoch).then_some(seed)
 }
 
 /// Seal one history link — `prev`'s seed under `seed`'s structure key, bound to
@@ -1827,5 +1872,49 @@ mod tests {
                 "history-link-not-descending"
             );
         }
+    }
+
+    // --- The key-regression ratchet walked backward ---
+
+    #[test]
+    fn the_ratchet_reaches_every_epoch_its_links_span() {
+        // A published record at epoch 5 carrying the links for 2..=5: the seed
+        // for any epoch in that span is recoverable, and each one is the epoch's
+        // own.
+        let links = real_chain(5);
+        for target in 1..=5u64 {
+            let seed = seed_at_epoch(V, SCOPE, &chain_seed(5), 5, &links, target)
+                .unwrap_or_else(|| panic!("epoch {target} is inside the retained window"));
+            assert!(ct_eq(&seed, &chain_seed(target)), "epoch {target}");
+        }
+    }
+
+    #[test]
+    fn the_ratchet_never_steps_forward() {
+        assert!(seed_at_epoch(V, SCOPE, &chain_seed(5), 5, &real_chain(5), 6).is_none());
+    }
+
+    #[test]
+    fn an_epoch_older_than_the_retained_window_is_unreachable() {
+        // The links only span 4..=5, so epoch 2 is behind the ratchet's reach —
+        // unreadable to every reader, not just this one.
+        let links = real_chain(5)[3..].to_vec();
+        assert!(seed_at_epoch(V, SCOPE, &chain_seed(5), 5, &links, 2).is_none());
+    }
+
+    #[test]
+    fn a_link_from_another_scope_breaks_the_walk() {
+        let links = real_chain(5);
+        assert!(seed_at_epoch(V, [0x9e; 16], &chain_seed(5), 5, &links, 4).is_none());
+        assert!(
+            seed_at_epoch(V, SCOPE, &chain_seed(4), 5, &links, 4).is_none(),
+            "nor does a walk started from the wrong seed open the newest link",
+        );
+    }
+
+    #[test]
+    fn a_scope_at_epoch_one_resolves_its_own_seed_with_no_links() {
+        let seed = seed_at_epoch(V, SCOPE, &chain_seed(1), 1, &[], 1).expect("the current seed");
+        assert!(ct_eq(&seed, &chain_seed(1)));
     }
 }

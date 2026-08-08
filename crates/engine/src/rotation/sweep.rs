@@ -1,197 +1,301 @@
-//! The sweep — idempotent lazy-wave epoch-lag convergence (blueprint/engine.md
-//! "sweep", L269-278; #26 D2, #38 D6).
+//! The sweep — the idempotent lazy wave over a scope's **interior nodes**
+//! (blueprint/engine.md "sweep"; #26 D2, #38 D6,
+//! [ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 //!
-//! # What the sweep is (and is not)
+//! # Population
 //!
-//! The rotation architecture is an O(1) root cut plus a lazy wave (CONTEXT.md
-//! "Lazy wave", "Epoch lag"). This module is the **lazy wave**: it walks the
-//! eager set from a rotated root and, for every descendant scope root whose
-//! published record epoch lags its scope's durable epoch floor, re-seals that
-//! scope root's **metadata** up to the floor epoch — reusing the scope's
-//! **existing** override seed, `prev = None`, minting no new seed, epoch, or
-//! history link. Content bytes are never re-encrypted (#26 D6).
+//! The work-list is the epoch-lag predicate over the nodes *inside* one scope: a
+//! node whose envelope epoch is behind the scope root's current read epoch. The
+//! walk descends the scope root's own read body and **stops at scope-root
+//! boundaries** — a descendant scope root is an eager-set member the
+//! [`cascade`](super::cascade) rotates, and is never swept. Each lagging node is
+//! re-sealed at the scope's current epoch and CAS-published; a node already at
+//! the epoch is a no-op, so a re-run changes nothing and concurrent sweepers are
+//! safe under CAS.
 //!
-//! It deliberately mints **no** fresh descendant seeds, so it does not on its own
-//! complete a read revoke: that fresh-seed republish is the
-//! [`cascade`](super::cascade)'s job. The sweep completes only epoch-lag
-//! convergence and the direct-child-scope index self-heal.
+//! # A scope root below its own floor is superseded, never repaired
+//!
+//! Rotations publish before they raise the floor, so `recordEpoch < floor` on a
+//! scope root cannot mean it lags — it means the name we asked at is not the
+//! current one. It resolves to a distinct [`SweepResolveFailure::Superseded`]
+//! verdict, routed through the scope-pointer consult (#38 D4) and re-resolved at
+//! the re-pointed `currentRootName`, failing closed if the fresh record is still
+//! below the floor. Admitting such a record would republish the scope's existing
+//! override seed at the current epoch — a revocation bypass, not a repair.
 //!
 //! # Completeness is fail-closed
 //!
-//! The work-list is computed purely from **published records** (epoch-lag
-//! predicate: record epoch `<` the scope's durable floor) — no pending-rotation
-//! store, job record, or checkpoint — so a re-run reconstructs the identical
-//! work-list and the pass is idempotent.
-//!
-//! A lagging descendant that cannot be enumerated, resolved, re-sealed, or
-//! published is **never silently skipped** — mirroring the eager-set walk's
-//! hard-abort posture ([`enumerate_eager_set`]), a pass aborts with a
-//! [`SweepError`] naming the offending scope rather than a partial "converged"
-//! claim. The one spec-mandated per-node exception is a **lost CAS race**: a
-//! concurrent write won the sequence CAS, so the loser drops it and re-resolves
-//! (blueprint/engine.md L276-278). The winner may be an ordinary metadata write
-//! (bumps the sequence without advancing the read epoch), so a dropped node is
-//! **not** proven converged by the drop alone — the idle-cadence driver
-//! ([`run_sweep`]) re-runs the idempotent pass until one drops nothing (or the
-//! cap is hit), which is what confirms convergence. Availability failures
-//! (unavailable resolve, transport `NotPublished`, floor-read) abort but are
-//! **retryable**; trust failures (a rejected record, a divergent ledger, an
-//! uncommitted signer) are fatal.
-//!
-//! # Determinism
-//!
-//! Time (the idle cadence) enters only through [`Scheduler`] and entropy only
-//! through [`Entropy`]; the sole impure edges are the injected [`SweepResolver`]
-//! and [`ScopeRootPublisher`] (CAS-publish), mirroring `rotate_scope`. The
-//! publisher is wired in [`crate::net::rotation`]; the resolver has no
-//! production implementation yet and tests fake it.
+//! The work-list is computed purely from published records, so a re-run
+//! reconstructs it identically. A node that cannot be resolved, re-sealed or
+//! published is never silently skipped: the pass aborts with a [`SweepError`]
+//! naming it. The one spec-mandated per-node exception is a **lost CAS race** —
+//! the loser drops the node and re-resolves, and since the winner may be an
+//! ordinary metadata write that does not advance the epoch, a drop is not proof
+//! of convergence; [`run_sweep`] re-runs until a pass drops nothing.
 
 use core::time::Duration;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use zeroize::Zeroizing;
+use cipherbox_core::seal::{ChildScopeRef, PreservedFields, ReadBody};
 
-use cipherbox_core::seal::{ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, SignedSealed};
-use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
-use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
-use cipherbox_core::suite::x25519::X25519Public;
-
-use super::eager_set::{ChildIndexResolver, EnumerationError, ResolveFailure, enumerate_eager_set};
-use super::reseal::{
-    CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
-};
-use super::rotate::{ResealedScopeRoot, ScopeRootPublishError, ScopeRootPublisher};
-use crate::entropy::Entropy;
-use crate::gate::floor;
-use crate::grants::child_index::canonicalize;
-use crate::seams::{FloorStore, Scheduler, SeamError};
+use super::eager_set::ResolveFailure;
+use super::rotate::ScopeRootPublishError;
+use crate::grants::child_index::{canonicalize, repair_observed};
+use crate::seams::Scheduler;
 use cipherbox_core::hex::lower as hex_lower;
 
-/// One scope root's current re-seal material, as resolved from its published
-/// record: everything [`reseal_scope_root`] needs **except** a self-identifying
-/// `scope_id`/`ipns_name`, plus the record epoch the epoch-lag predicate compares
-/// against the floor. The re-seal identity and CAS-publish destination run under
-/// the **enumerated** [`ChildScopeRef`] (`scope_id`/`ipns_name`) alone — the
-/// target carries no second copy for a network hint to diverge from.
-///
-/// Owns its secrets so the sweep is their terminal owner: the seed fields are
-/// [`Zeroizing`] and the pseudonym signer zeroizes on drop, so a resolved target
-/// wipes its key material when it leaves the work-list. The seeds are handed to
-/// `reseal_scope_root` **by borrow**; that callee never zeroes caller-owned
-/// buffers (AGENTS.md rule 7).
-pub struct SweepTarget {
-    /// The envelope format+suite version.
-    pub v: u64,
-    /// The published record's current read epoch — the epoch-lag operand.
+#[cfg(test)]
+pub(crate) mod sim;
+
+/// One node inside a scope, as the gated parent body named it. A node id locates
+/// nothing on its own — only a gated parent's read body binds it to a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeRef {
+    /// The node id the parent's `ChildRef` carried.
+    pub node_id: [u8; 16],
+    /// That ref's opaque `ipnsName` bytes.
+    pub ipns_name: Vec<u8>,
+}
+
+/// The swept scope as its scope root's gated read found it. Carries no key
+/// material: re-sealing is the publisher's half of the seam, so the sweep never
+/// holds a seed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SweptScope {
+    /// The scope root's published read epoch — the epoch every interior node is
+    /// measured against and re-sealed up to.
     pub current_read_epoch: u64,
-    /// The vault owner's X25519 encryption-subkey public (owner-blob recipient).
-    pub owner_enc_pub: X25519Public,
-    /// The parent node seed the ascent link derives from; `None` at the vault
-    /// root (which carries no ascent link).
-    pub parent_node_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The owner-committed writer pseudonym signer (re-sealer identity).
-    pub pseudonym_signer: Ed25519Signer,
-    /// The scope's existing override (read scope) seed — reused verbatim; the
-    /// sweep mints no fresh seed.
-    pub override_seed: Zeroizing<[u8; SECRET_LEN]>,
-    /// The write-plane scope seed (unchanged by a read-plane sweep).
-    pub write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
-    /// The stable per-scope pointer read key carried in every grant blob.
-    pub pointer_read_key: Zeroizing<[u8; SECRET_LEN]>,
-    /// The write epoch (unchanged by a read-plane sweep).
-    pub write_epoch: u64,
-    /// The owner-signed, epoch-free commitment.
-    pub commitment: GrantSetCommitment,
-    /// The 64-byte compact ECDSA owner signature over `commitment`.
-    pub commitment_sig: [u8; ECDSA_SIG_LEN],
-    /// The authoritative grant ledger (one blob re-wrapped per entry).
-    pub grant_ledger: Vec<GrantLedgerEntry>,
-    /// The opaque write-plane history-link blob (carried through).
-    pub write_history_link: Vec<u8>,
-    /// This scope root's own direct-child-scope index — both the next-level
-    /// enumeration adjacency and the index the sweep self-heals on re-seal.
+    /// The scope root's own read-body children: the walk's level-1 frontier.
+    pub children: Vec<NodeRef>,
+    /// The committed direct-child-scope index — both the walk's scope-root
+    /// boundary set and the index the self-heal repairs (#38 D6).
     pub direct_child_scope_index: Vec<ChildScopeRef>,
-    /// The scope's existing per-epoch history links, oldest first. A sweep
-    /// appends none and prunes none — it re-signs them as they stand (see
-    /// [`reseal_scope_root`](super::reseal::reseal_scope_root)).
-    pub carried_history_links: Vec<SignedSealed>,
 }
 
-/// The impure edge that resolves a scope root's current re-seal material — the
-/// sweep's analogue of the eager-set walk's [`ChildIndexResolver`] and
-/// `rotate_scope`'s [`ScopeRootPublisher`]. Resolve + adoption-gate + unseal live
-/// behind this trait; the real network/gate wiring is not landed and tests fake
-/// it. A resolve either yields the full [`SweepTarget`] or a fail-closed
-/// [`ResolveFailure`] — a partial or gate-failing record is never a work-list
-/// entry.
+/// One interior node as the sweep's gated read found it. The body is carried
+/// forward verbatim — a sweep re-seals metadata only, and content bytes are
+/// never re-encrypted by any rotation path (#26 D6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SweptNode {
+    /// The published record's read epoch — the epoch-lag operand.
+    pub current_read_epoch: u64,
+    /// That record's sequence: the CAS basis a re-seal must publish above, since
+    /// nothing on this read path raises the name's durable sequence floor to it.
+    pub sequence: u64,
+    /// The node's unsealed read body.
+    pub read_body: ReadBody,
+    /// Top-level envelope fields a republish preserves byte-stable (#27 D10).
+    pub carried_unknown: PreservedFields,
+    /// `epochTag` fields a republish preserves byte-stable (#27 D10).
+    pub carried_epoch_tag_unknown: PreservedFields,
+}
+
+/// What the walk found at one child of a swept node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SweptChild {
+    /// An ordinary interior node: sweepable, and descended into.
+    Interior(SweptNode),
+    /// The child's record is a **scope root**, carrying the name the resolver
+    /// gated it current at. The walk stops here, and — when the scope's index
+    /// does not name it — repairs the index with this name (#38 D6).
+    ScopeRoot(ChildScopeRef),
+}
+
+/// Why a sweep read could not be authoritatively completed.
+///
+/// [`Superseded`](Self::Superseded) is the third verdict ADR 0003 adds: a scope
+/// root below its own read-epoch floor is neither a trust violation the caller
+/// must not retry nor a transport stall, but a stale name — routed through the
+/// pointer consult.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepResolveFailure {
+    /// The record failed the adoption gate — a fail-closed trust violation,
+    /// never mere staleness.
+    Rejected,
+    /// The record could not be fetched or read — host I/O or availability.
+    Unavailable,
+    /// A scope root's record sits below its own durable read-epoch floor.
+    Superseded,
+    /// The node's body could not be opened at all: no seed on this scope's
+    /// key-regression ratchet reaches the epoch its record claims — an epoch
+    /// older than the retained window, a broken chain, or one above the scope
+    /// root's own. Unreadable to every reader, so no retry can change it and it
+    /// is not a verdict on the record's trustworthiness.
+    Unreadable,
+    /// The same node id was reached through two parents carrying **different**
+    /// `ipnsName` labels — the read plane's C2 conflict
+    /// ([`ResolveFailure::ConflictingChildLabel`]). Converging the one picked
+    /// would leave the other name live at the old epoch, so the walk aborts.
+    ConflictingChildLabel,
+}
+
+impl From<ResolveFailure> for SweepResolveFailure {
+    fn from(failure: ResolveFailure) -> Self {
+        match failure {
+            ResolveFailure::Unavailable => Self::Unavailable,
+            ResolveFailure::Rejected => Self::Rejected,
+            ResolveFailure::ConflictingChildLabel => Self::ConflictingChildLabel,
+        }
+    }
+}
+
+impl core::fmt::Display for SweepResolveFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Rejected => f.write_str("record rejected by adoption gate"),
+            Self::Unavailable => f.write_str("record unavailable"),
+            Self::Superseded => f.write_str("scope root superseded: record below its own floor"),
+            Self::ConflictingChildLabel => {
+                f.write_str("node id reached with conflicting ipnsName labels")
+            }
+            Self::Unreadable => f.write_str("node epoch beyond this scope's ratchet"),
+        }
+    }
+}
+
+impl SweepResolveFailure {
+    /// Whether re-running the pass could clear this: an availability stall, or a
+    /// C2 conflict the write-rotation re-point wave repairs. A rejection is a
+    /// trust violation, and a `Superseded` that survives the consult means the
+    /// re-pointed record is below the floor too.
+    fn is_retryable(self) -> bool {
+        matches!(self, Self::Unavailable | Self::ConflictingChildLabel)
+    }
+}
+
+/// The read edge the sweep runs on: resolve + adoption-gate + unseal. The owner
+/// arm is [`crate::net::rotation::OwnerRotationNet`].
+///
+/// # Binding contract (obligation on the real resolver)
+///
+/// Every record is gated under the **caller's own label** — the `scope_id` /
+/// `node_id` the gated parent body named it by — so a record claiming another
+/// identity is a transplant it rejects. No self-identifying id is returned; the
+/// caller's ref stays the sole identity authority.
 pub trait SweepResolver {
-    /// Resolve `scope`'s current re-seal material, or a fail-closed
-    /// [`ResolveFailure`] if its record cannot be authoritatively obtained.
-    ///
-    /// One resolve returns the whole [`SweepTarget`] — enumeration/lag fields
-    /// *and* the heavy re-seal material. Splitting it into a light enumeration
-    /// edge plus a heavy re-seal edge fetched only for lagging nodes is a
-    /// designed-for optimization, not a correctness requirement.
-    ///
-    /// # Binding contract (obligation on the real resolver)
-    ///
-    /// The same edge discipline [`ChildIndexResolver`] carries applies: gate
-    /// `scope`'s record under the enumerated `scope.scope_id`/`scope.ipns_name`,
-    /// with `commitment.ipns_name` equal to `scope.ipns_name`, and return **no**
-    /// self-identifying ids (see [`SweepTarget`]).
-    async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure>;
+    /// Gate `scope`'s scope root and yield the scope's current sweep state.
+    async fn resolve_scope(&self, scope: &ChildScopeRef)
+    -> Result<SweptScope, SweepResolveFailure>;
+
+    /// The scope's `currentRootName` from its owner-signed scope pointer
+    /// (#38 D4). `None` means the scope has never been re-pointed, so there is
+    /// no fresher name to re-resolve at.
+    async fn consult_pointer(
+        &self,
+        scope_id: &[u8; 16],
+    ) -> Result<Option<Vec<u8>>, SweepResolveFailure>;
+
+    /// Resolve one child of a node inside `scope`, at whatever epoch its record
+    /// carries. `scope` is the ref [`Self::resolve_scope`] proved current, and
+    /// the only scope this child may be gated under.
+    async fn resolve_child(
+        &self,
+        scope: &ChildScopeRef,
+        child: &NodeRef,
+    ) -> Result<SweptChild, SweepResolveFailure>;
 }
 
-/// A completed sweep pass. Every reachable descendant is accounted for in exactly
-/// one bucket — the fail-closed guarantee made observable: nothing is silently
-/// dropped. (A pass that could not account for a node returns [`SweepError`]
-/// instead of an outcome.)
+/// One interior node being advanced to its scope's current epoch. The publisher
+/// re-seals the carried body under the node's current read key and CAS-publishes
+/// it; the sweep hands over no key material.
+pub struct LaggingNode<'a> {
+    /// The node id, as the gated parent body named it.
+    pub node_id: [u8; 16],
+    /// That parent ref's opaque `ipnsName` bytes — the publish destination.
+    pub ipns_name: &'a [u8],
+    /// The scope's current read epoch: what the node is re-sealed up to.
+    pub read_epoch: u64,
+    /// The sequence of the record this body came from — the CAS basis the
+    /// re-seal must land above ([`SweptNode::sequence`]).
+    pub sequence: u64,
+    /// The body carried forward verbatim.
+    pub read_body: &'a ReadBody,
+    /// Envelope fields a republish preserves byte-stable (#27 D10).
+    pub carried_unknown: &'a PreservedFields,
+    /// `epochTag` fields a republish preserves byte-stable (#27 D10).
+    pub carried_epoch_tag_unknown: &'a PreservedFields,
+}
+
+/// The write edge the sweep runs on. Both methods are register-first CAS
+/// publishes; `Ok` means the record is durably the freshest at its name.
+pub trait SweepPublisher {
+    /// Re-seal `node`'s carried body at `node.read_epoch` and CAS-publish it,
+    /// under `scope` — the ref [`SweepResolver::resolve_scope`] proved current.
+    async fn publish_node(
+        &self,
+        scope: &ChildScopeRef,
+        node: &LaggingNode<'_>,
+    ) -> Result<(), ScopeRootPublishError>;
+
+    /// Republish `scope`'s scope root carrying `index` as its
+    /// `directChildScopeIndex` — the #38 D6 self-heal. Metadata-only: the
+    /// scope's existing seed at its current epoch, minting no seed, epoch or
+    /// history link.
+    async fn repair_child_scope_index(
+        &self,
+        scope: &ChildScopeRef,
+        index: &[ChildScopeRef],
+    ) -> Result<(), ScopeRootPublishError>;
+}
+
+/// A completed sweep pass. Every node the walk reached is accounted for in
+/// exactly one bucket — the fail-closed guarantee made observable.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepOutcome {
-    /// Descendants that lagged and were re-sealed up to the floor this pass.
+    /// Interior nodes that lagged and were re-sealed to the scope's epoch.
     pub converged: Vec<[u8; 16]>,
-    /// Descendants already at or above the floor — no re-seal, a no-op.
+    /// Interior nodes already at the scope's epoch — no re-seal, a no-op.
     pub already_converged: Vec<[u8; 16]>,
-    /// Descendants dropped because a concurrent writer won the CAS race; a
-    /// fresher record for them already landed, so they re-resolve as converged.
+    /// Interior nodes dropped because a concurrent writer won the CAS race.
     pub dropped_lost_race: Vec<[u8; 16]>,
-    /// Descendants whose stored direct-child-scope index was non-canonical and
-    /// was repaired (canonicalized) on re-seal **and durably published** — the
-    /// index self-heal, surfaced to the host (#38 D6 "repaired and flagged"). A
-    /// repair that loses the CAS is not flagged (it never landed).
+    /// Descendant scope roots the walk stopped at: eager-set members the cascade
+    /// rotates, never swept.
+    pub skipped_scope_roots: Vec<[u8; 16]>,
+    /// Nodes whose body no seed on this scope's ratchet opens
+    /// ([`SweepResolveFailure::Unreadable`]). Neither swept nor descended into,
+    /// and no retry clears it — surfaced so a caller that needs the subtree
+    /// proven converged (grant creation) can refuse, rather than reading an
+    /// `Ok` outcome as complete.
+    pub unreachable: Vec<[u8; 16]>,
+    /// Scope roots the walk encountered that were missing from the scope's
+    /// direct-child-scope index, repaired into it and **durably published** —
+    /// "repaired and flagged" (#38 D6). A repair that loses the CAS is not
+    /// flagged; it never landed.
     pub flagged_indexes: Vec<[u8; 16]>,
 }
 
-/// A fail-closed sweep failure. A pass returns this rather than a partial
-/// [`SweepOutcome`] whenever it cannot prove every reachable descendant
-/// converged — the completeness guarantee. [`SweepError::is_retryable`]
-/// distinguishes an availability stall (the idle-cadence driver re-runs) from a
-/// trust violation (fatal).
+/// A fail-closed sweep failure, returned instead of a partial [`SweepOutcome`]
+/// whenever the pass cannot account for every node the walk reached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SweepError {
-    /// The eager set could not be enumerated — a reachable descendant's index
-    /// was unobtainable, so the work-list is not provably complete.
-    Enumeration(EnumerationError),
-    /// Reading the durable epoch floor failed (host I/O). Availability, retryable.
-    Floor(SeamError),
-    /// Re-sealing a lagging descendant failed a trust invariant (divergent
-    /// ledger, uncommitted signer, unusable recipient key). Fatal.
-    Reseal {
-        /// The scope that could not be legitimately re-sealed.
+    /// The scope root could not be authoritatively resolved — including a
+    /// `Superseded` verdict the pointer consult could not clear.
+    Scope {
+        /// The scope whose root could not be resolved.
         scope_id: [u8; 16],
-        /// The underlying re-seal rejection.
-        error: ResealError,
+        /// Why the resolve failed.
+        reason: SweepResolveFailure,
     },
-    /// A re-sealed record could not be published; nothing landed for that node.
-    /// Retryable only when the publish failure is (see
-    /// [`ScopeRootPublishError::is_retryable`]).
+    /// A reachable node could not be authoritatively resolved.
+    Node {
+        /// The node that could not be resolved.
+        node_id: [u8; 16],
+        /// Why the resolve failed.
+        reason: SweepResolveFailure,
+    },
+    /// A re-sealed interior node could not be published; nothing landed for it.
     Publish {
-        /// The scope whose record did not land.
-        scope_id: [u8; 16],
+        /// The node whose record did not land.
+        node_id: [u8; 16],
         /// The publish failure (never [`ScopeRootPublishError::LostRace`] — a
-        /// lost race is not an error, it drops and re-resolves).
+        /// lost race drops the node and re-resolves).
+        error: ScopeRootPublishError,
+    },
+    /// The repaired direct-child-scope index could not be published.
+    IndexRepair {
+        /// The scope whose index repair did not land.
+        scope_id: [u8; 16],
+        /// The publish failure.
         error: ScopeRootPublishError,
     },
 }
@@ -199,16 +303,24 @@ pub enum SweepError {
 impl core::fmt::Display for SweepError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            SweepError::Enumeration(e) => write!(f, "sweep enumeration incomplete: {e}"),
-            SweepError::Floor(e) => write!(f, "sweep epoch-floor read failed: {e}"),
-            SweepError::Reseal { scope_id, error } => write!(
+            SweepError::Scope { scope_id, reason } => write!(
                 f,
-                "sweep re-seal of scope [{}] rejected: {error}",
+                "sweep scope-root resolve of [{}] failed: {reason}",
                 hex_lower(scope_id)
             ),
-            SweepError::Publish { scope_id, error } => write!(
+            SweepError::Node { node_id, reason } => write!(
                 f,
-                "sweep publish of scope [{}] failed: {error}",
+                "sweep resolve of node [{}] failed: {reason}",
+                hex_lower(node_id)
+            ),
+            SweepError::Publish { node_id, error } => write!(
+                f,
+                "sweep publish of node [{}] failed: {error}",
+                hex_lower(node_id)
+            ),
+            SweepError::IndexRepair { scope_id, error } => write!(
+                f,
+                "sweep index repair of scope [{}] failed: {error}",
                 hex_lower(scope_id)
             ),
         }
@@ -221,195 +333,281 @@ impl SweepError {
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            SweepError::Enumeration(_) => "enumeration-incomplete",
-            SweepError::Floor(_) => "floor-read-failed",
-            SweepError::Reseal { .. } => "reseal-rejected",
+            SweepError::Scope { .. } => "scope-root-unresolved",
+            SweepError::Node { .. } => "node-unresolved",
             SweepError::Publish { .. } => "publish-failed",
+            SweepError::IndexRepair { .. } => "index-repair-failed",
         }
     }
 
     /// Whether re-running the idempotent pass could clear this failure — an
-    /// availability stall (unavailable resolve, floor-read I/O, transport
-    /// not-published) or a C2 label conflict that the re-point wave repairs —
-    /// versus a trust violation (a gate-rejected record, a divergent ledger /
-    /// uncommitted signer), which no retry can fix.
+    /// availability stall — versus a trust violation, which no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            SweepError::Enumeration(e) => matches!(
-                e.reason,
-                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
-            ),
-            SweepError::Floor(_) => true,
-            SweepError::Publish { error, .. } => error.is_retryable(),
-            SweepError::Reseal { .. } => false,
+            SweepError::Scope { reason, .. } | SweepError::Node { reason, .. } => {
+                reason.is_retryable()
+            }
+            SweepError::Publish { error, .. } | SweepError::IndexRepair { error, .. } => {
+                error.is_retryable()
+            }
         }
     }
 }
 
-/// Adapts a [`SweepResolver`] to the eager-set walk's [`ChildIndexResolver`] and
-/// caches each resolved [`SweepTarget`], so enumeration resolves every descendant
-/// exactly once and the convergence pass reuses those targets (no double
-/// resolve, no resolve/re-seal TOCTOU within a pass).
-struct WalkAdapter<'a, R: SweepResolver> {
-    resolver: &'a R,
-    cache: RefCell<HashMap<[u8; 16], SweepTarget>>,
+/// Sort by node id and drop repeats, so the frontier — and thus the pass's
+/// publish order — is independent of the order a parent body listed its
+/// children in.
+fn canonicalize_frontier(mut nodes: Vec<NodeRef>) -> Vec<NodeRef> {
+    nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    nodes.dedup_by_key(|node| node.node_id);
+    nodes
 }
 
-impl<'a, R: SweepResolver> WalkAdapter<'a, R> {
-    fn new(resolver: &'a R) -> Self {
-        Self {
-            resolver,
-            cache: RefCell::new(HashMap::new()),
+/// The in-scope children a gated read body names — the walk's frontier rule,
+/// stated once for both the pure pass and the production resolver.
+pub(crate) fn body_children(body: &ReadBody) -> Vec<NodeRef> {
+    match body {
+        ReadBody::Folder { children, .. } => children
+            .iter()
+            .map(|child| NodeRef {
+                node_id: child.id,
+                ipns_name: child.ipns_name.clone(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Resolve `scope`'s root, routing a [`SweepResolveFailure::Superseded`] verdict
+/// through the pointer consult and re-resolving at the re-pointed
+/// `currentRootName`. Returns the ref the scope resolved current at, which is
+/// the only name a repair may write into an index.
+async fn resolve_scope_current<R: SweepResolver>(
+    resolver: &R,
+    scope: &ChildScopeRef,
+) -> Result<(ChildScopeRef, SweptScope), SweepResolveFailure> {
+    match resolver.resolve_scope(scope).await {
+        Ok(swept) => Ok((scope.clone(), swept)),
+        Err(SweepResolveFailure::Superseded) => {
+            // One consult, one re-resolve.
+            let repointed = ChildScopeRef::new(
+                scope.scope_id,
+                repointed_name(resolver, &scope.scope_id).await?,
+            );
+            let swept = resolver.resolve_scope(&repointed).await?;
+            Ok((repointed, swept))
         }
+        Err(other) => Err(other),
     }
 }
 
-impl<R: SweepResolver> ChildIndexResolver for WalkAdapter<'_, R> {
-    async fn direct_child_index(
-        &self,
-        child: &ChildScopeRef,
-    ) -> Result<Vec<ChildScopeRef>, ResolveFailure> {
-        let target = self.resolver.resolve(child).await?;
-        let adjacency = target.direct_child_scope_index.clone();
-        // Borrow only after the await completes — never across a suspend point.
-        self.cache.borrow_mut().insert(child.scope_id, target);
-        Ok(adjacency)
+/// Resolve one child, routing the same superseded verdict through the consult.
+/// Returns the ref the child resolved current at.
+async fn resolve_child_current<R: SweepResolver>(
+    resolver: &R,
+    scope: &ChildScopeRef,
+    child: &NodeRef,
+) -> Result<(NodeRef, SweptChild), SweepResolveFailure> {
+    match resolver.resolve_child(scope, child).await {
+        Ok(found) => Ok((child.clone(), found)),
+        Err(SweepResolveFailure::Superseded) => {
+            let node = NodeRef {
+                node_id: child.node_id,
+                ipns_name: repointed_name(resolver, &child.node_id).await?,
+            };
+            let found = resolver.resolve_child(scope, &node).await?;
+            Ok((node, found))
+        }
+        Err(other) => Err(other),
     }
 }
 
-/// Run one idempotent sweep pass over the eager set rooted at `root_scope_id`
-/// (whose level-1 adjacency is the caller-held `root_child_index`, e.g. the
-/// just-cut root's write-body index).
+/// The scope's `currentRootName` from its pointer. A scope with no pointer has
+/// no fresher name, so the below-floor record is refused as it stands.
+async fn repointed_name<R: SweepResolver>(
+    resolver: &R,
+    scope_id: &[u8; 16],
+) -> Result<Vec<u8>, SweepResolveFailure> {
+    resolver
+        .consult_pointer(scope_id)
+        .await?
+        .ok_or(SweepResolveFailure::Superseded)
+}
+
+/// Run one idempotent sweep pass over `scope`'s whole interior.
 ///
-/// Enumerates the eager set fail-closed via [`enumerate_eager_set`], then for
-/// each descendant scope root whose current record epoch lags its durable epoch
-/// floor, re-seals its metadata up to the floor epoch through
-/// [`reseal_scope_root`] with the scope's **existing** seed and **`prev = None`**
-/// (no fresh seed, no epoch bump, no new history link), CAS-publishes it, and
-/// self-heals its direct-child-scope index. Returns a complete [`SweepOutcome`]
-/// or a fail-closed [`SweepError`] — never a partial convergence claim.
-pub async fn sweep_pass<E, F, R, P>(
-    entropy: &mut E,
-    floors: &F,
+/// Resolves the scope root (consulting the pointer on a superseded verdict),
+/// walks its read body stopping at every scope-root boundary, self-heals the
+/// direct-child-scope index from the walk result, and re-seals every node whose
+/// epoch lags the scope's. Returns a complete [`SweepOutcome`] or a fail-closed
+/// [`SweepError`] — never a partial convergence claim.
+pub async fn sweep_pass<R, P>(
     resolver: &R,
     publisher: &P,
-    root_scope_id: [u8; 16],
-    root_child_index: &[ChildScopeRef],
+    scope: &ChildScopeRef,
 ) -> Result<SweepOutcome, SweepError>
 where
-    E: Entropy,
-    F: FloorStore,
     R: SweepResolver,
-    P: ScopeRootPublisher,
+    P: SweepPublisher,
 {
-    let adapter = WalkAdapter::new(resolver);
-    let eager_set = enumerate_eager_set(root_scope_id, root_child_index, &adapter)
+    walk_and_converge(resolver, publisher, scope, None).await
+}
+
+/// Converge just the subtree rooted at `node` inside `scope` — grant creation's
+/// gate, which owes the epoch-converged guarantee over the folder it is sharing
+/// and not over the whole scope it happens to sit in (#26 D2).
+///
+/// `node` itself is measured against the scope's epoch too: the granted folder
+/// is an interior node until the mint publishes its new scope root over it.
+pub async fn converge_subtree<R, P>(
+    resolver: &R,
+    publisher: &P,
+    scope: &ChildScopeRef,
+    node: &NodeRef,
+) -> Result<SweepOutcome, SweepError>
+where
+    R: SweepResolver,
+    P: SweepPublisher,
+{
+    walk_and_converge(resolver, publisher, scope, Some(node)).await
+}
+
+/// The one pass both entry points run: gate the scope root, walk from `from`
+/// (or from the root's own body), self-heal the index, re-seal what lags.
+async fn walk_and_converge<R, P>(
+    resolver: &R,
+    publisher: &P,
+    scope: &ChildScopeRef,
+    from: Option<&NodeRef>,
+) -> Result<SweepOutcome, SweepError>
+where
+    R: SweepResolver,
+    P: SweepPublisher,
+{
+    let (scope_ref, swept) = resolve_scope_current(resolver, scope)
         .await
-        .map_err(SweepError::Enumeration)?;
-    let mut cache = adapter.cache.into_inner();
+        .map_err(|reason| SweepError::Scope {
+            scope_id: scope.scope_id,
+            reason,
+        })?;
+
+    let boundaries: BTreeSet<[u8; 16]> = swept
+        .direct_child_scope_index
+        .iter()
+        .map(|child| child.scope_id)
+        .collect();
 
     let mut outcome = SweepOutcome::default();
+    // Keyed by node id: the walk resolves each node once, so a diamond or a
+    // corrupt back-edge terminates rather than looping.
+    let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
+    visited.insert(scope_ref.scope_id);
+    // The single authoritative `node_id -> ipnsName` binding for this walk
+    // ([`SweepResolveFailure::ConflictingChildLabel`]).
+    let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
+    // Scope roots the walk met that the index does not name (#38 D6), at the
+    // name each resolved current at.
+    let mut omitted: Vec<ChildScopeRef> = Vec::new();
+    let mut lagging: Vec<(NodeRef, SweptNode)> = Vec::new();
 
-    for descendant in eager_set.descendants() {
-        let scope_id = descendant.scope_id;
-        // Enumeration resolves and caches every descendant before it can appear in
-        // `descendants()` (the walk aborts on the first unresolvable node), so the
-        // cache is 1:1 with the eager set — a miss is an internal invariant break,
-        // never adversarial input.
-        let target = cache
-            .remove(&scope_id)
-            .expect("every enumerated descendant was resolved into the cache");
+    let mut frontier = match from {
+        Some(node) => vec![node.clone()],
+        None => swept.children,
+    };
+    bind_labels(&mut labels, &frontier).map_err(conflict)?;
+    frontier = canonicalize_frontier(frontier);
 
-        // Epoch-lag predicate, computed purely from published state: a node lags
-        // when its record epoch is below its scope's durable floor. No floor (or
-        // a record at/above it) means nothing to converge.
-        let durable = floor::read_epoch_floor(floors, &scope_id)
-            .await
-            .map_err(SweepError::Floor)?;
-        let Some(floor_epoch) = durable else {
-            outcome.already_converged.push(scope_id);
-            continue;
-        };
-        if target.current_read_epoch >= floor_epoch {
-            outcome.already_converged.push(scope_id);
-            continue;
-        }
-
-        // Index self-heal: re-publish the direct-child-scope index in canonical,
-        // deduplicated form; flag the node when the stored index needed repair
-        // (#38 D6 "repaired and flagged"). The heal rides the re-seal, so it
-        // reaches only nodes being re-sealed this pass — a converged node's index
-        // heals on its next ordinary write ("ordinary writes advance it for free").
-        let canonical_index = canonicalize(&target.direct_child_scope_index);
-        // Flagged only after the canonical index durably publishes below — a
-        // repair that loses the CAS never landed, so it must not be reported
-        // (fail-closed, symmetric with `converged`).
-        let index_repaired = canonical_index != target.direct_child_scope_index;
-
-        let identity = ScopeRootIdentity {
-            v: target.v,
-            scope_id,
-            // The enumerated ChildScopeRef is the sole identity authority
-            // (see SweepTarget).
-            ipns_name: &descendant.ipns_name,
-            owner_enc_pub: &target.owner_enc_pub,
-            // A sweep runs for a write-grantee as readily as for the owner, and a
-            // resolved target carries the owner's public half only.
-            owner_enc_secret: None,
-            parent_node_seed: target.parent_node_seed.as_deref(),
-            pseudonym_signer: &target.pseudonym_signer,
-        };
-        let seeds = ResealSeeds {
-            override_seed: &target.override_seed,
-            read_epoch: floor_epoch,
-            // The catch-up mints no new epoch, so no fresh history link.
-            prev: None,
-            write_scope_seed: &target.write_scope_seed,
-            write_epoch: target.write_epoch,
-            write_history: WriteHistory::Carried(&target.write_history_link),
-            pointer_read_key: &target.pointer_read_key,
-        };
-        let committed = CommittedSet {
-            commitment: &target.commitment,
-            commitment_sig: &target.commitment_sig,
-            grant_ledger: &target.grant_ledger,
-            direct_child_scope_index: &canonical_index,
-        };
-
-        let section = reseal_scope_root(
-            entropy,
-            &identity,
-            &seeds,
-            &committed,
-            &target.carried_history_links,
-        )
-        .map_err(|error| SweepError::Reseal { scope_id, error })?;
-
-        let record = ResealedScopeRoot {
-            scope_id,
-            ipns_name: descendant.ipns_name.clone(),
-            read_epoch: floor_epoch,
-            write_epoch: target.write_epoch,
-            section,
-        };
-
-        match publisher.publish_scope_root(&record).await {
-            Ok(()) => {
-                outcome.converged.push(scope_id);
-                if index_repaired {
-                    outcome.flagged_indexes.push(scope_id);
+    while !frontier.is_empty() {
+        let mut next: Vec<NodeRef> = Vec::new();
+        for child in &frontier {
+            if !visited.insert(child.node_id) {
+                continue;
+            }
+            if boundaries.contains(&child.node_id) {
+                outcome.skipped_scope_roots.push(child.node_id);
+                continue;
+            }
+            let (resolved, found) = match resolve_child_current(resolver, &scope_ref, child).await {
+                Ok(pair) => pair,
+                // Nothing to re-seal from and no body to descend into, and a
+                // committed writer can plant one — so it is isolated to this
+                // node rather than aborting the scope's whole pass.
+                Err(SweepResolveFailure::Unreadable) => {
+                    outcome.unreachable.push(child.node_id);
+                    continue;
+                }
+                Err(reason) => {
+                    return Err(SweepError::Node {
+                        node_id: child.node_id,
+                        reason,
+                    });
+                }
+            };
+            match found {
+                SweptChild::ScopeRoot(scope_root) => {
+                    outcome.skipped_scope_roots.push(child.node_id);
+                    omitted.push(scope_root);
+                }
+                SweptChild::Interior(node) => {
+                    let grandchildren = body_children(&node.read_body);
+                    bind_labels(&mut labels, &grandchildren).map_err(conflict)?;
+                    next.extend(grandchildren);
+                    if node.current_read_epoch >= swept.current_read_epoch {
+                        outcome.already_converged.push(child.node_id);
+                    } else {
+                        lagging.push((resolved, node));
+                    }
                 }
             }
-            // A concurrent write won the sequence CAS: no clobber, and this pass
-            // does not advance the node. The single spec-mandated non-abort
-            // per-node path — but the winner may be a non-advancing ordinary
-            // write, so the node is not proven converged; `run_sweep` re-resolves
-            // it until a pass drops nothing.
-            Err(ScopeRootPublishError::LostRace) => outcome.dropped_lost_race.push(scope_id),
-            // Nothing landed: fail-closed rather than mark the node converged.
-            // Whether the idle-cadence driver re-runs is `is_retryable`'s call.
+        }
+        frontier = canonicalize_frontier(next);
+    }
+
+    // The self-heal runs on the walk result, before any epoch comparison is
+    // acted on, so it lands whether or not this pass re-seals a node (#38 D6,
+    // ADR 0003 D3). It repairs the whole invariant: the index the scope commits
+    // to is canonical and names every scope root the walk observed.
+    let mut index = canonicalize(&swept.direct_child_scope_index);
+    for scope_root in &omitted {
+        index = repair_observed(&index, scope_root.clone());
+    }
+    if index != swept.direct_child_scope_index {
+        match publisher.repair_child_scope_index(&scope_ref, &index).await {
+            Ok(()) => outcome
+                .flagged_indexes
+                .extend(omitted.iter().map(|root| root.scope_id)),
+            // Never landed, so never flagged; the next pass re-derives it.
+            Err(ScopeRootPublishError::LostRace) => {}
             Err(error) => {
-                return Err(SweepError::Publish { scope_id, error });
+                return Err(SweepError::IndexRepair {
+                    scope_id: scope_ref.scope_id,
+                    error,
+                });
+            }
+        }
+    }
+
+    for (node, swept_node) in &lagging {
+        let lagging_node = LaggingNode {
+            node_id: node.node_id,
+            ipns_name: &node.ipns_name,
+            read_epoch: swept.current_read_epoch,
+            sequence: swept_node.sequence,
+            read_body: &swept_node.read_body,
+            carried_unknown: &swept_node.carried_unknown,
+            carried_epoch_tag_unknown: &swept_node.carried_epoch_tag_unknown,
+        };
+        match publisher.publish_node(&scope_ref, &lagging_node).await {
+            Ok(()) => outcome.converged.push(node.node_id),
+            // The one spec-mandated non-abort per-node path. The winner may be a
+            // non-advancing ordinary write, so the node is not proven converged;
+            // `run_sweep` re-resolves it until a pass drops nothing.
+            Err(ScopeRootPublishError::LostRace) => outcome.dropped_lost_race.push(node.node_id),
+            Err(error) => {
+                return Err(SweepError::Publish {
+                    node_id: node.node_id,
+                    error,
+                });
             }
         }
     }
@@ -417,70 +615,64 @@ where
     Ok(outcome)
 }
 
-/// Drive the sweep as an idle-cadence job: run [`sweep_pass`] and re-run it,
-/// one `cadence` sleep apart via the [`Scheduler`] seam, until a pass both
-/// succeeds **and** drops nothing to a lost race — the point convergence is
-/// actually confirmed — or the `max_passes` cap is hit. A **retryable**
-/// availability stall re-runs; a **lost CAS race** re-runs (the winner may be a
-/// non-advancing write, so a drop is not proof of convergence); a **trust
-/// failure** returns immediately.
+/// Bind each ref's `node_id -> ipnsName` into `labels`, aborting on the C2
+/// conflict: an id already bound to a **different** name. Returns the
+/// conflicting id.
+fn bind_labels(labels: &mut BTreeMap<[u8; 16], Vec<u8>>, refs: &[NodeRef]) -> Result<(), [u8; 16]> {
+    for node in refs {
+        match labels.get(&node.node_id) {
+            Some(name) if name != &node.ipns_name => return Err(node.node_id),
+            Some(_) => {}
+            None => {
+                labels.insert(node.node_id, node.ipns_name.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn conflict(node_id: [u8; 16]) -> SweepError {
+    SweepError::Node {
+        node_id,
+        reason: SweepResolveFailure::ConflictingChildLabel,
+    }
+}
+
+/// Drive the sweep as an idle-cadence job: run [`sweep_pass`] and re-run it, one
+/// `cadence` sleep apart via the [`Scheduler`] seam, until a pass both succeeds
+/// **and** drops nothing to a lost race — the point convergence is actually
+/// confirmed — or the `max_passes` cap is hit. A retryable availability stall
+/// re-runs; a trust failure returns immediately.
 ///
-/// Returns `Ok` on the first fully-converged pass. On cap exhaustion it returns
-/// the last availability `Err`, or — if the final pass merely still had lost-race
-/// drops — `Ok` with those scopes surfaced in
+/// On cap exhaustion it returns the last availability `Err`, or — if the final
+/// pass merely still had lost-race drops — `Ok` with those nodes surfaced in
 /// [`SweepOutcome::dropped_lost_race`], so a host racing a persistently hot
 /// writer sees the residual rather than a false "complete".
 ///
 /// # Caller contract
 ///
 /// An `Ok` outcome is convergence-complete **only when
-/// [`SweepOutcome::dropped_lost_race`] is empty** — a caller that retires the
-/// sweep job must inspect that bucket, not just `is_ok()`, and re-enqueue on a
-/// non-empty residual. The returned outcome reflects the **final** pass;
-/// `converged`/`flagged_indexes` from earlier passes are durable on the network
-/// but are not aggregated into it.
-///
-/// Scheduling is engineering judgment (blueprint/engine.md L275-278): the cadence
-/// and attempt cap are the host's, injected here; time enters only through the
-/// scheduler seam so the harness runs multi-tick timelines in virtual time.
-// The determinism law keeps entropy, time, and the two network edges as separate
-// injected seams.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_sweep<E, F, S, R, P>(
-    entropy: &mut E,
-    floors: &F,
+/// [`SweepOutcome::dropped_lost_race`] is empty**. The returned outcome reflects
+/// the **final** pass; earlier passes' work is durable on the network but is not
+/// aggregated into it.
+pub async fn run_sweep<S, R, P>(
     scheduler: &S,
     resolver: &R,
     publisher: &P,
-    root_scope_id: [u8; 16],
-    root_child_index: &[ChildScopeRef],
+    scope: &ChildScopeRef,
     cadence: Duration,
     max_passes: u32,
 ) -> Result<SweepOutcome, SweepError>
 where
-    E: Entropy,
-    F: FloorStore,
     S: Scheduler,
     R: SweepResolver,
-    P: ScopeRootPublisher,
+    P: SweepPublisher,
 {
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        match sweep_pass(
-            entropy,
-            floors,
-            resolver,
-            publisher,
-            root_scope_id,
-            root_child_index,
-        )
-        .await
-        {
-            // Fully converged: the pass succeeded and lost no race.
+        match sweep_pass(resolver, publisher, scope).await {
             Ok(outcome) if outcome.dropped_lost_race.is_empty() => return Ok(outcome),
-            // A lost race leaves those nodes unproven-converged; re-resolve on the
-            // next cadence. On cap exhaustion, surface the residual drops.
             Ok(outcome) => {
                 if attempts >= max_passes {
                     return Ok(outcome);
@@ -497,861 +689,568 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::sim::{FakeNet, id, name, node_ref, scope_ref};
     use super::*;
     use crate::seams::UnixMillis;
-    use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, block_on};
-    use cipherbox_core::seal::{
-        AadContext, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
-        STRUCT_TAG_OWNER_BLOB, open_owner_blob, sign_grant_set,
-    };
-    use cipherbox_core::suite::ecdsa::EcdsaSigner;
-    use cipherbox_core::suite::secret::ct_eq;
-    use cipherbox_core::suite::x25519::X25519Secret;
-    use std::rc::Rc;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::VirtualScheduler;
 
-    const V: u64 = 2;
-
-    fn sid(byte: u8) -> [u8; 16] {
-        [byte; 16]
+    fn run(net: &FakeNet, root: u8) -> Result<SweepOutcome, SweepError> {
+        block_on(sweep_pass(net, net, &scope_ref(root)))
     }
 
-    fn childref(byte: u8) -> ChildScopeRef {
-        ChildScopeRef::new(sid(byte), format!("ipns-{byte:02x}").into_bytes())
-    }
+    // --- The epoch-lag predicate over interior nodes ---
 
-    /// The one vault owner/pseudonym identity every scope in a scenario commits
-    /// to (so `reseal_scope_root`'s signer + committed-ledger guards pass).
-    struct Owner {
-        enc: X25519Secret,
-        pseudonym: Ed25519Signer,
-        ecdsa: EcdsaSigner,
-        grantee: X25519Secret,
-    }
+    #[test]
+    fn an_interior_node_behind_the_scope_epoch_is_resealed_to_it() {
+        // scope root (epoch 5) -> A(01)@1 -> B(02)@1. Both interior nodes lag.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[0x02])
+            .node(0x02, 1, &[]);
 
-    impl Owner {
-        fn new() -> Self {
-            Self {
-                enc: X25519Secret::from_scalar([0x11; 32]),
-                pseudonym: Ed25519Signer::from_seed([0x22; 32]),
-                ecdsa: EcdsaSigner::from_scalar(&[0x33; 32]).unwrap(),
-                grantee: X25519Secret::from_scalar([0x77; 32]),
-            }
-        }
-    }
-
-    /// The immutable per-scope material a scope root resolves to, plus the
-    /// mutable current epoch and any injected CAS fault. Shared across the
-    /// resolver and publisher so a publish advances what a re-resolve observes —
-    /// the "network".
-    struct NetScope {
-        override_seed: [u8; 32],
-        write_scope_seed: [u8; 32],
-        pointer_read_key: [u8; 32],
-        parent_node_seed: Option<[u8; 32]>,
-        commitment: GrantSetCommitment,
-        commitment_sig: [u8; ECDSA_SIG_LEN],
-        grant_ledger: Vec<GrantLedgerEntry>,
-        children: Vec<ChildScopeRef>,
-        current_epoch: u64,
-        fault: Option<ScopeRootPublishError>,
-        /// A countdown of self-healing `NotPublished` failures — the next `n`
-        /// publishes fail, then the node heals (drives the retry driver).
-        fail_next: u32,
-        /// A countdown of `LostRace` losses that do **not** advance the epoch —
-        /// models a non-advancing ordinary writer winning the sequence CAS, so a
-        /// drop does not converge the node until the sweep finally wins.
-        lost_race_next: u32,
-        publishes: u32,
-    }
-
-    /// A fake resolver + publisher over one shared scope map — the sweep's fake
-    /// "network". A publish updates `current_epoch` so a re-resolve converges;
-    /// an injected `fault` scripts a lost race or a not-published stall.
-    #[derive(Clone)]
-    struct FakeNet {
-        owner: Rc<Owner>,
-        scopes: Rc<RefCell<HashMap<[u8; 16], NetScope>>>,
-        /// Scopes the resolver should fail (forged/unavailable subtree).
-        resolve_faults: Rc<RefCell<HashMap<[u8; 16], ResolveFailure>>>,
-    }
-
-    impl FakeNet {
-        fn new() -> Self {
-            Self {
-                owner: Rc::new(Owner::new()),
-                scopes: Rc::new(RefCell::new(HashMap::new())),
-                resolve_faults: Rc::new(RefCell::new(HashMap::new())),
-            }
-        }
-
-        /// Register a scope root: one read grant to the shared grantee, `children`
-        /// as its direct-child index, published at `current_epoch`.
-        fn scope(self, byte: u8, current_epoch: u64, children: &[u8]) -> Self {
-            self.scope_with_index(byte, current_epoch, children, false)
-        }
-
-        /// As [`Self::scope`] but optionally seeds a *non-canonical* stored index
-        /// (a duplicate child) to exercise the self-heal.
-        fn scope_with_index(
-            self,
-            byte: u8,
-            current_epoch: u64,
-            children: &[u8],
-            non_canonical: bool,
-        ) -> Self {
-            let tag = [byte.wrapping_add(0xa0); 32];
-            let commitment = GrantSetCommitment {
-                ipns_name: format!("ipns-{byte:02x}").into_bytes(),
-                owner_pseudonym_pk: self.owner.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
-                unknown: PreservedFields::new(),
-            };
-            let commitment_sig = sign_grant_set(&self.owner.ecdsa, &commitment)
-                .unwrap()
-                .to_compact();
-            let grant_ledger = vec![GrantLedgerEntry::new(
-                [0x02; 33],
-                self.owner.grantee.public().to_bytes(),
-                Permission::Read,
-                tag,
-            )];
-            let mut index: Vec<ChildScopeRef> = children.iter().map(|b| childref(*b)).collect();
-            if non_canonical {
-                // A duplicate scope_id: canonicalize() drops it → flagged.
-                if let Some(first) = children.first() {
-                    index.push(ChildScopeRef::new(sid(*first), b"dup".to_vec()));
-                }
-            }
-            self.scopes.borrow_mut().insert(
-                sid(byte),
-                NetScope {
-                    override_seed: [byte; 32],
-                    write_scope_seed: [byte.wrapping_add(1); 32],
-                    pointer_read_key: [byte.wrapping_add(2); 32],
-                    parent_node_seed: Some([byte.wrapping_add(3); 32]),
-                    commitment,
-                    commitment_sig,
-                    grant_ledger,
-                    children: index,
-                    current_epoch,
-                    fault: None,
-                    fail_next: 0,
-                    lost_race_next: 0,
-                    publishes: 0,
-                },
-            );
-            self
-        }
-
-        /// The next `n` publishes of `byte` lose the CAS without advancing the
-        /// epoch (a non-advancing writer wins), then the sweep wins and converges.
-        fn lost_race_next(self, byte: u8, n: u32) -> Self {
-            self.scopes
-                .borrow_mut()
-                .get_mut(&sid(byte))
-                .expect("scope")
-                .lost_race_next = n;
-            self
-        }
-
-        /// The next `n` publishes of `byte` fail `NotPublished`, then heal.
-        fn fail_next(self, byte: u8, n: u32) -> Self {
-            self.scopes
-                .borrow_mut()
-                .get_mut(&sid(byte))
-                .expect("scope")
-                .fail_next = n;
-            self
-        }
-
-        fn fault(self, byte: u8, fault: ScopeRootPublishError) -> Self {
-            self.scopes
-                .borrow_mut()
-                .get_mut(&sid(byte))
-                .expect("scope")
-                .fault = Some(fault);
-            self
-        }
-
-        fn resolve_fault(self, byte: u8, reason: ResolveFailure) -> Self {
-            self.resolve_faults.borrow_mut().insert(sid(byte), reason);
-            self
-        }
-
-        fn clear_fault(&self, byte: u8) {
-            self.scopes
-                .borrow_mut()
-                .get_mut(&sid(byte))
-                .expect("scope")
-                .fault = None;
-        }
-
-        fn current_epoch(&self, byte: u8) -> u64 {
-            self.scopes
-                .borrow()
-                .get(&sid(byte))
-                .expect("scope")
-                .current_epoch
-        }
-
-        fn publishes(&self, byte: u8) -> u32 {
-            self.scopes
-                .borrow()
-                .get(&sid(byte))
-                .expect("scope")
-                .publishes
-        }
-    }
-
-    impl SweepResolver for FakeNet {
-        async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure> {
-            if let Some(reason) = self.resolve_faults.borrow().get(&scope.scope_id) {
-                return Err(*reason);
-            }
-            let scopes = self.scopes.borrow();
-            let s = scopes
-                .get(&scope.scope_id)
-                .ok_or(ResolveFailure::Unavailable)?;
-            Ok(SweepTarget {
-                v: V,
-                current_read_epoch: s.current_epoch,
-                owner_enc_pub: self.owner.enc.public(),
-                parent_node_seed: s.parent_node_seed.map(Zeroizing::new),
-                pseudonym_signer: self.owner.pseudonym.clone(),
-                override_seed: Zeroizing::new(s.override_seed),
-                write_scope_seed: Zeroizing::new(s.write_scope_seed),
-                pointer_read_key: Zeroizing::new(s.pointer_read_key),
-                write_epoch: 1,
-                commitment: s.commitment.clone(),
-                commitment_sig: s.commitment_sig,
-                grant_ledger: s.grant_ledger.clone(),
-                write_history_link: Vec::new(),
-                direct_child_scope_index: s.children.clone(),
-                carried_history_links: Vec::new(),
-            })
-        }
-    }
-
-    impl ScopeRootPublisher for FakeNet {
-        async fn publish_scope_root(
-            &self,
-            record: &ResealedScopeRoot,
-        ) -> Result<(), ScopeRootPublishError> {
-            let mut scopes = self.scopes.borrow_mut();
-            let s = scopes.get_mut(&record.scope_id).expect("scope");
-            s.publishes += 1;
-            if s.fail_next > 0 {
-                s.fail_next -= 1;
-                return Err(ScopeRootPublishError::NotPublished);
-            }
-            if s.lost_race_next > 0 {
-                // A non-advancing writer won the sequence CAS: the epoch does NOT
-                // move, so a single drop does not converge the node.
-                s.lost_race_next -= 1;
-                return Err(ScopeRootPublishError::LostRace);
-            }
-            match &s.fault {
-                None => {
-                    s.current_epoch = s.current_epoch.max(record.read_epoch);
-                    Ok(())
-                }
-                // A persistent lost race modelling a concurrent *sweeper* winner:
-                // the winner's record is at (at least) our epoch, so the node
-                // re-resolves as converged on the next pass.
-                Some(ScopeRootPublishError::LostRace) => {
-                    s.current_epoch = s.current_epoch.max(record.read_epoch);
-                    Err(ScopeRootPublishError::LostRace)
-                }
-                // Nothing landed, epoch unchanged.
-                Some(error) => Err(error.clone()),
-            }
-        }
-    }
-
-    /// Raise the epoch floor for each scope byte to `epoch`.
-    fn raise_floors(floors: &InMemoryFloorStore, scopes: &[u8], epoch: u64) {
-        for b in scopes {
-            block_on(floors.raise_epoch_floor(&sid(*b), epoch)).unwrap();
-        }
-    }
-
-    fn run(
-        net: &FakeNet,
-        floors: &InMemoryFloorStore,
-        seed: u64,
-        root: u8,
-        root_children: &[u8],
-    ) -> Result<SweepOutcome, SweepError> {
-        let index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
-        block_on(async {
-            let mut entropy = SeededEntropy::new(seed);
-            sweep_pass(&mut entropy, floors, net, net, sid(root), &index).await
-        })
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.converged, vec![id(0x01), id(0x02)]);
+        assert_eq!(net.epoch(0x01), 5);
+        assert_eq!(net.epoch(0x02), 5, "the walk reached the deeper level");
     }
 
     #[test]
-    fn completeness_every_reachable_descendant_converges_to_floor() {
-        // root(00) -> A(01) -> B(02) -> C(03); all descendants lag at epoch 1,
-        // floor raised to 5. One pass must converge every reachable descendant.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[0x02])
-            .scope(0x02, 1, &[0x03])
-            .scope(0x03, 1, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02, 0x03], 5);
-
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
-        let mut converged = outcome.converged.clone();
-        converged.sort();
-        assert_eq!(
-            converged,
-            vec![sid(0x01), sid(0x02), sid(0x03)],
-            "every reachable descendant converged"
-        );
-        // And the network now holds each descendant at the floor epoch: no node
-        // left lagging.
-        for b in [0x01, 0x02, 0x03] {
-            assert_eq!(net.current_epoch(b), 5, "descendant re-keyed up to floor");
-        }
-    }
-
-    #[test]
-    fn rerun_is_idempotent_noop() {
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[0x02])
-            .scope(0x02, 1, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
-
-        let first = run(&net, &floors, 1, 0x00, &[0x01]).expect("first");
-        assert_eq!(first.converged.len(), 2);
-
-        let second = run(&net, &floors, 1, 0x00, &[0x01]).expect("second");
-        assert!(second.converged.is_empty(), "nothing left to converge");
-        let mut already = second.already_converged.clone();
-        already.sort();
-        assert_eq!(already, vec![sid(0x01), sid(0x02)], "all already converged");
-    }
-
-    #[test]
-    fn already_converged_nodes_are_not_resealed() {
-        // A(01) already at the floor; the sweep must not re-publish it.
-        let net = FakeNet::new().scope(0x00, 5, &[0x01]).scope(0x01, 5, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
-        assert_eq!(outcome.already_converged, vec![sid(0x01)]);
+    fn a_node_already_at_the_scope_epoch_is_never_republished() {
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 5, &[]);
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.already_converged, vec![id(0x01)]);
         assert!(outcome.converged.is_empty());
-        assert_eq!(net.publishes(0x01), 0, "converged node never re-published");
-    }
-
-    #[test]
-    fn no_floor_means_not_lagging() {
-        // No floor was ever raised for A → nothing to converge to.
-        let net = FakeNet::new().scope(0x00, 5, &[0x01]).scope(0x01, 1, &[]);
-        let floors = InMemoryFloorStore::default();
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
-        assert_eq!(outcome.already_converged, vec![sid(0x01)]);
         assert_eq!(net.publishes(0x01), 0);
     }
 
     #[test]
-    fn metadata_only_reuses_seed_no_epoch_bump_no_history_link() {
-        // The crypto property: a swept descendant's owner blob still decrypts to
-        // its EXISTING override seed, at exactly the floor epoch (not floor+1),
-        // with no history link appended.
-        let net = FakeNet::new().scope(0x00, 4, &[0x01]).scope(0x01, 2, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 4);
-
-        // Capture the published record via a recording publisher wrapper.
-        let published = Rc::new(RefCell::new(Vec::<ResealedScopeRoot>::new()));
-        struct Recorder {
-            net: FakeNet,
-            log: Rc<RefCell<Vec<ResealedScopeRoot>>>,
-        }
-        impl SweepResolver for Recorder {
-            async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure> {
-                self.net.resolve(scope).await
-            }
-        }
-        impl ScopeRootPublisher for Recorder {
-            async fn publish_scope_root(
-                &self,
-                record: &ResealedScopeRoot,
-            ) -> Result<(), ScopeRootPublishError> {
-                self.log.borrow_mut().push(record.clone());
-                self.net.publish_scope_root(record).await
-            }
-        }
-        let rec = Recorder {
-            net: net.clone(),
-            log: Rc::clone(&published),
-        };
-        let index = vec![childref(0x01)];
-        block_on(async {
-            let mut entropy = SeededEntropy::new(1);
-            sweep_pass(&mut entropy, &floors, &rec, &rec, sid(0x00), &index).await
-        })
-        .expect("sweep");
-
-        let log = published.borrow();
-        assert_eq!(log.len(), 1);
-        let record = &log[0];
-        assert_eq!(
-            record.read_epoch, 4,
-            "re-sealed at the floor, no epoch bump"
-        );
-        assert_eq!(record.write_epoch, 1, "write epoch unchanged");
-        assert!(
-            record.section.history_links.is_empty(),
-            "prev=None: no history link minted"
-        );
-        let ctx = AadContext {
-            v: V,
-            id: sid(0x01),
-            scope: sid(0x01),
-            epoch: 4,
-            struct_tag: STRUCT_TAG_OWNER_BLOB,
-        };
-        let payload = open_owner_blob(
-            &net.owner.enc,
-            &record.section.owner_blob.enc,
-            &ctx,
-            &record.section.owner_blob.ciphertext,
-        )
-        .unwrap();
-        assert!(
-            ct_eq(payload.override_seed(), &[0x01; 32]),
-            "sweep reused the existing seed, minted none"
-        );
+    fn a_node_ahead_of_the_scope_epoch_is_never_republished() {
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 9, &[]);
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.already_converged, vec![id(0x01)]);
+        assert_eq!(net.publishes(0x01), 0);
     }
 
     #[test]
-    fn lost_cas_race_drops_node_and_continues() {
-        // A(01) lost the CAS; B(02) still converges. The loser drops and
-        // re-resolves converged — never a clobber or a hard abort.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01, 0x02])
-            .scope(0x01, 1, &[])
-            .scope(0x02, 1, &[])
-            .fault(0x01, ScopeRootPublishError::LostRace);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
+    fn rerunning_the_pass_is_an_idempotent_noop() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[0x02])
+            .node(0x02, 1, &[]);
+        let first = run(&net, 0x00).expect("first");
+        assert_eq!(first.converged.len(), 2);
 
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01, 0x02]).expect("sweep");
-        assert_eq!(outcome.dropped_lost_race, vec![sid(0x01)]);
-        assert_eq!(outcome.converged, vec![sid(0x02)]);
-        // Re-resolve: the lost-race node reads converged (the winner advanced it).
-        let second = run(&net, &floors, 1, 0x00, &[0x01, 0x02]).expect("second");
+        let second = run(&net, 0x00).expect("second");
+        assert!(second.converged.is_empty(), "nothing left to converge");
+        assert_eq!(second.already_converged, vec![id(0x01), id(0x02)]);
+        assert_eq!((net.publishes(0x01), net.publishes(0x02)), (1, 1));
+    }
+
+    #[test]
+    fn a_second_concurrent_sweeper_republishes_nothing() {
+        let net = FakeNet::new(7, &[0x01])
+            .node(0x01, 3, &[0x02])
+            .node(0x02, 3, &[]);
+        run(&net, 0x00).expect("sweeper 1");
+        let counts = (net.publishes(0x01), net.publishes(0x02));
+
+        let second = run(&net, 0x00).expect("sweeper 2");
         assert!(second.converged.is_empty());
-        assert!(second.dropped_lost_race.is_empty());
-        let mut already = second.already_converged.clone();
-        already.sort();
-        assert_eq!(already, vec![sid(0x01), sid(0x02)]);
+        assert_eq!((net.publishes(0x01), net.publishes(0x02)), counts);
     }
 
     #[test]
-    fn not_published_hard_aborts_fail_closed_never_silent_skip() {
-        // A(01) cannot be published. The pass aborts naming A rather than marking
-        // it converged — under-convergence must never be silently swallowed.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
-            .fault(0x01, ScopeRootPublishError::NotPublished);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-
-        let err = run(&net, &floors, 1, 0x00, &[0x01]).expect_err("fails closed");
-        assert_eq!(err.check(), "publish-failed");
-        assert!(err.is_retryable(), "availability stall is retryable");
-        match err {
-            SweepError::Publish { scope_id, .. } => assert_eq!(scope_id, sid(0x01)),
-            other => panic!("unexpected: {other}"),
-        }
+    fn the_publish_order_is_independent_of_the_bodys_child_order() {
+        let converged = |order: &[u8]| {
+            let net = FakeNet::new(5, order)
+                .node(0x01, 1, &[])
+                .node(0x02, 1, &[])
+                .node(0x03, 1, &[]);
+            run(&net, 0x00).expect("sweep").converged
+        };
+        assert_eq!(
+            converged(&[0x03, 0x01, 0x02]),
+            converged(&[0x01, 0x02, 0x03]),
+        );
+        assert_eq!(
+            converged(&[0x03, 0x01, 0x02]),
+            vec![id(0x01), id(0x02), id(0x03)],
+        );
     }
 
     #[test]
-    fn enumeration_rejected_descendant_fails_closed_fatal() {
-        // B(02) is a forged/rejected subtree. The pass aborts fail-closed and the
-        // trust rejection is NOT retryable.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[0x02])
-            .scope(0x02, 1, &[])
-            .resolve_fault(0x02, ResolveFailure::Rejected);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
+    fn a_cyclic_child_edge_terminates() {
+        // A names B, B names A: a corrupt back-edge the walk must not follow.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[0x02])
+            .node(0x02, 1, &[0x01]);
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.converged, vec![id(0x01), id(0x02)]);
+    }
 
-        let err = run(&net, &floors, 1, 0x00, &[0x01]).expect_err("fails closed");
-        assert_eq!(err.check(), "enumeration-incomplete");
-        assert!(!err.is_retryable(), "a trust rejection is fatal");
+    // --- The scope-root boundary ---
+
+    #[test]
+    fn the_walk_stops_at_a_descendant_scope_root_and_never_sweeps_it() {
+        // The scope root names an interior node A(01) and a descendant scope
+        // root S(0a) whose own subtree holds a lagging node D(0d). Neither S nor
+        // anything below it is swept — that is the cascade's population.
+        let net = FakeNet::new(5, &[0x01, 0x0a])
+            .node(0x01, 1, &[])
+            .scope_root(0x0a, true)
+            .node(0x0d, 1, &[]);
+
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.converged, vec![id(0x01)], "only the interior node");
+        assert_eq!(outcome.skipped_scope_roots, vec![id(0x0a)]);
+        assert_eq!(net.publishes(0x0a), 0, "a scope root is never swept");
+        assert_eq!(net.publishes(0x0d), 0, "nor is anything below it");
+        assert_eq!(net.epoch(0x0d), 1, "the descendant scope kept its epoch");
     }
 
     #[test]
-    fn enumeration_unavailable_descendant_is_retryable() {
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
-            .resolve_fault(0x01, ResolveFailure::Unavailable);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-        let err = run(&net, &floors, 1, 0x00, &[0x01]).expect_err("unavailable");
-        assert_eq!(err.check(), "enumeration-incomplete");
+    fn an_indexed_scope_root_is_not_resolved_as_an_interior_node() {
+        // The index names S(0a), so the walk stops without a child resolve —
+        // even though S's record would otherwise resolve as a scope root.
+        let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, true);
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.skipped_scope_roots, vec![id(0x0a)]);
+        assert!(
+            outcome.flagged_indexes.is_empty(),
+            "the index already names it"
+        );
+        assert_eq!(net.index_repairs.get(), 0);
+    }
+
+    // --- The direct-child-scope index self-heal (#38 D6) ---
+
+    #[test]
+    fn an_omitted_scope_root_is_repaired_and_flagged_with_no_node_resealed() {
+        // S(0a) is a scope root the walk meets, absent from the index. Every
+        // interior node is already at the scope epoch, so the repair lands with
+        // nothing re-sealed — the self-heal no longer rides the epoch comparison.
+        let net = FakeNet::new(5, &[0x01, 0x0a])
+            .node(0x01, 5, &[])
+            .scope_root(0x0a, false);
+
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+        assert!(
+            outcome.converged.is_empty(),
+            "no node was re-sealed in the repairing pass"
+        );
+        assert_eq!(net.index_repairs.get(), 1);
+        let repaired = net.state.borrow().repaired_index.clone().expect("repaired");
+        assert_eq!(repaired, vec![scope_ref(0x0a)]);
+    }
+
+    #[test]
+    fn a_non_canonical_index_is_republished_canonical_with_nothing_omitted() {
+        // The other half of the #38 D6 invariant: crash residue in the stored
+        // index is repaired on the walk result too, with no scope root missing.
+        let net = FakeNet::new(5, &[0x0a])
+            .scope_root(0x0a, true)
+            .duplicate_index_entry(0x0a);
+
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert!(
+            outcome.flagged_indexes.is_empty(),
+            "no scope root was missing, so none is flagged"
+        );
+        assert_eq!(net.index_repairs.get(), 1);
+        assert_eq!(
+            net.state.borrow().repaired_index.clone().expect("repaired"),
+            vec![scope_ref(0x0a)],
+            "the duplicate is dropped"
+        );
+    }
+
+    #[test]
+    fn a_repaired_index_is_not_flagged_again_on_the_next_pass() {
+        let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
+        assert_eq!(run(&net, 0x00).expect("first").flagged_indexes.len(), 1);
+        let again = run(&net, 0x00).expect("second");
+        assert!(again.flagged_indexes.is_empty());
+        assert_eq!(net.index_repairs.get(), 1, "no redundant republish");
+    }
+
+    #[test]
+    fn an_index_repair_that_lost_the_cas_is_not_flagged() {
+        let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
+        net.state.borrow_mut().index_repair_fault = Some(ScopeRootPublishError::LostRace);
+
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert!(
+            outcome.flagged_indexes.is_empty(),
+            "a repair that never landed must not be reported"
+        );
+        assert_eq!(outcome.skipped_scope_roots, vec![id(0x0a)]);
+    }
+
+    #[test]
+    fn an_index_repair_that_did_not_land_fails_closed() {
+        let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
+        net.state.borrow_mut().index_repair_fault = Some(ScopeRootPublishError::NotPublished);
+
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert_eq!(err.check(), "index-repair-failed");
         assert!(err.is_retryable());
     }
 
     #[test]
-    fn reseal_trust_failure_is_fatal() {
-        // Corrupt A(01)'s ledger so it diverges from the committed set: the
-        // re-seal rejects it fail-closed and it is not retryable.
-        let net = FakeNet::new().scope(0x00, 5, &[0x01]).scope(0x01, 1, &[]);
-        net.scopes
-            .borrow_mut()
-            .get_mut(&sid(0x01))
-            .unwrap()
-            .grant_ledger
-            .push(GrantLedgerEntry::new(
-                [0x09; 33],
-                X25519Secret::from_scalar([0x0f; 32]).public().to_bytes(),
-                Permission::Write,
-                [0xff; 32], // uncommitted tag
-            ));
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
+    fn the_index_repair_lands_before_a_node_publish_can_abort_the_pass() {
+        // A(01) lags and can never publish; the repair still landed, because the
+        // self-heal runs on the walk result rather than behind a re-seal.
+        let net = FakeNet::new(5, &[0x01, 0x0a])
+            .node(0x01, 1, &[])
+            .scope_root(0x0a, false)
+            .fault(0x01, ScopeRootPublishError::NotPublished);
 
-        let err = run(&net, &floors, 1, 0x00, &[0x01]).expect_err("diverging ledger");
-        assert_eq!(err.check(), "reseal-rejected");
-        assert!(!err.is_retryable(), "a trust violation is fatal");
-        match err {
-            SweepError::Reseal { scope_id, error } => {
-                assert_eq!(scope_id, sid(0x01));
-                assert_eq!(error.check(), "ledger-diverges-from-commitment");
-            }
-            other => panic!("unexpected: {other}"),
-        }
-    }
-
-    #[test]
-    fn self_heal_canonicalizes_index_and_flags() {
-        // A(01)'s stored index carries a duplicate child scope_id (crash residue).
-        // The sweep re-publishes it canonical and flags A.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope_with_index(0x01, 1, &[0x02], true)
-            .scope(0x02, 1, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
-
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
-        assert_eq!(
-            outcome.flagged_indexes,
-            vec![sid(0x01)],
-            "repaired index flagged"
-        );
-        // A converged canonical index is not re-flagged on a subsequent sweep.
-        let again = run(&net, &floors, 1, 0x00, &[0x01]).expect("second");
-        assert!(again.flagged_indexes.is_empty());
-    }
-
-    #[test]
-    fn lost_race_does_not_flag_an_unpublished_index_repair() {
-        // A(01)'s stored index is non-canonical, but its publish loses the CAS:
-        // the canonical index never landed, so A must surface only in
-        // `dropped_lost_race`, never in `flagged_indexes` (fail-closed).
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope_with_index(0x01, 1, &[0x02], true)
-            .scope(0x02, 1, &[])
-            .fault(0x01, ScopeRootPublishError::LostRace);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
-
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
-        assert_eq!(outcome.dropped_lost_race, vec![sid(0x01)]);
-        assert!(
-            outcome.flagged_indexes.is_empty(),
-            "an index repair that lost the CAS was never published, so must not be flagged"
-        );
-    }
-
-    #[test]
-    fn partial_sweep_then_resume_converges_all() {
-        // A(01) publishes; B(02) is not-published this pass (abort after A). Heal,
-        // re-run: A is already converged, B now converges. No node is stranded.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01, 0x02])
-            .scope(0x01, 1, &[])
-            .scope(0x02, 1, &[])
-            .fault(0x02, ScopeRootPublishError::NotPublished);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 5);
-
-        // First pass aborts on B, but A durably converged in the network.
-        let err = run(&net, &floors, 1, 0x00, &[0x01, 0x02]).expect_err("partial");
+        let err = run(&net, 0x00).expect_err("the node publish aborts");
         assert_eq!(err.check(), "publish-failed");
-        assert_eq!(net.current_epoch(0x01), 5, "A converged before the abort");
-        assert_eq!(net.current_epoch(0x02), 1, "B did not land");
+        assert_eq!(net.index_repairs.get(), 1);
+        assert!(net.state.borrow().repaired_index.is_some());
+    }
+
+    // --- The superseded verdict and the pointer consult (ADR 0003 D2) ---
+
+    #[test]
+    fn a_below_floor_scope_root_converges_after_the_pointer_consult() {
+        // The scope root is asked at a name a write rotation has moved off: its
+        // record is below the floor. The pointer re-points to the fresh name,
+        // where the scope resolves and its lagging node converges.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .superseded(0x00)
+            .pointer_to(0x09);
+
+        let outcome = run(&net, 0x00).expect("the consult converges the scope");
+        assert_eq!(net.consults.get(), 1);
+        assert_eq!(outcome.converged, vec![id(0x01)]);
+    }
+
+    #[test]
+    fn a_below_floor_scope_root_whose_fresh_record_still_lags_is_refused() {
+        // The re-pointed record is below the floor too: fail closed, and never
+        // consult a second time.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .superseded(0x00)
+            .superseded(0x09)
+            .pointer_to(0x09);
+
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert_eq!(err.check(), "scope-root-unresolved");
+        assert!(!err.is_retryable(), "a surviving supersede is fatal");
+        assert_eq!(net.consults.get(), 1, "one consult, one re-resolve");
+        assert_eq!(net.publishes(0x01), 0);
+    }
+
+    #[test]
+    fn a_below_floor_scope_root_with_no_pointer_is_refused() {
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]).superseded(0x00);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert!(matches!(
+            err,
+            SweepError::Scope {
+                reason: SweepResolveFailure::Superseded,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_forged_scope_root_is_refused_without_any_consult() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .forged(0x00)
+            .pointer_to(0x09);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert_eq!(err.check(), "scope-root-unresolved");
+        assert!(!err.is_retryable());
+        assert_eq!(net.consults.get(), 0, "a trust rejection never consults");
+    }
+
+    #[test]
+    fn a_consult_that_re_points_at_a_forged_record_is_refused() {
+        // The consult cannot launder a forgery: the re-pointed record still
+        // faces the gate.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .superseded(0x00)
+            .forged(0x09)
+            .pointer_to(0x09);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert!(matches!(
+            err,
+            SweepError::Scope {
+                reason: SweepResolveFailure::Rejected,
+                ..
+            }
+        ));
+        assert_eq!(net.publishes(0x01), 0);
+    }
+
+    #[test]
+    fn an_encountered_scope_root_below_its_floor_is_repaired_at_the_repointed_name() {
+        // S(0a) is missing from the index and its indexed-at name is stale. Only
+        // the name the walk resolved current may be written into the index.
+        let net = FakeNet::new(5, &[0x0a])
+            .scope_root(0x0a, false)
+            .superseded(0x0a)
+            .pointer_to(0x0b);
+
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+        let repaired = net.state.borrow().repaired_index.clone().expect("repaired");
+        assert_eq!(
+            repaired,
+            vec![ChildScopeRef::new(id(0x0a), name(0x0b))],
+            "the repair persists the re-pointed name, never the superseded one"
+        );
+    }
+
+    // --- Nodes no seed of this scope's ratchet opens ---
+
+    #[test]
+    fn an_unreadable_node_is_isolated_and_the_rest_still_converges() {
+        // One node's record claims an epoch this scope's ratchet cannot reach.
+        // Nothing can re-seal it and no retry clears it, so it is surfaced and
+        // stepped past rather than aborting every other node's convergence.
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .node_fault(0x01, SweepResolveFailure::Unreadable);
+
+        let outcome = run(&net, 0x00).expect("the pass completes");
+        assert_eq!(outcome.unreachable, vec![id(0x01)]);
+        assert_eq!(outcome.converged, vec![id(0x02)]);
+        assert_eq!(net.publishes(0x01), 0, "nothing to re-seal it from");
+    }
+
+    #[test]
+    fn an_unreadable_nodes_subtree_is_not_walked() {
+        // Its body is what named its children, so an unreadable node hides them.
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[0x02])
+            .node(0x02, 1, &[])
+            .node_fault(0x01, SweepResolveFailure::Unreadable);
+
+        let outcome = run(&net, 0x00).expect("the pass completes");
+        assert_eq!(outcome.unreachable, vec![id(0x01)]);
+        assert!(outcome.converged.is_empty());
+        assert!(outcome.already_converged.is_empty());
+    }
+
+    // --- One node id, one name ---
+
+    #[test]
+    fn two_parents_naming_one_node_differently_abort_fail_closed() {
+        // C2: converging the name we picked would leave the other live at the
+        // old epoch — a hole no outcome bucket could describe.
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 5, &[0x05])
+            .node(0x02, 5, &[0x05])
+            .node(0x05, 1, &[])
+            .names_child(0x02, 0x05, "via-b");
+
+        let err = run(&net, 0x00).expect_err("the conflict aborts");
+        assert!(matches!(
+            err,
+            SweepError::Node {
+                node_id,
+                reason: SweepResolveFailure::ConflictingChildLabel,
+            } if node_id == id(0x05)
+        ));
+        assert!(err.is_retryable(), "the re-point wave repairs both parents");
+        assert_eq!(net.publishes(0x05), 0);
+    }
+
+    #[test]
+    fn two_parents_naming_one_node_identically_is_no_conflict() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 5, &[0x05])
+            .node(0x02, 5, &[0x05])
+            .node(0x05, 1, &[]);
+        let outcome = run(&net, 0x00).expect("a legitimate diamond converges");
+        assert_eq!(outcome.converged, vec![id(0x05)]);
+        assert_eq!(net.publishes(0x05), 1, "the shared node published once");
+    }
+
+    // --- Converging one subtree rather than the whole scope ---
+
+    #[test]
+    fn converge_subtree_walks_only_the_named_node_and_below() {
+        // A(01) holds the subtree; B(02) lags elsewhere in the same scope and
+        // must be left alone.
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 5, &[0x03])
+            .node(0x02, 1, &[])
+            .node(0x03, 1, &[]);
+
+        let outcome = block_on(converge_subtree(
+            &net,
+            &net,
+            &scope_ref(0x00),
+            &node_ref(0x01),
+        ))
+        .expect("the subtree converges");
+        assert_eq!(outcome.converged, vec![id(0x03)]);
+        assert_eq!(outcome.already_converged, vec![id(0x01)]);
+        assert_eq!(net.publishes(0x02), 0, "a sibling subtree is untouched");
+        assert_eq!(net.epoch(0x02), 1);
+    }
+
+    #[test]
+    fn converge_subtree_measures_the_named_node_itself() {
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]);
+        let outcome = block_on(converge_subtree(
+            &net,
+            &net,
+            &scope_ref(0x00),
+            &node_ref(0x01),
+        ))
+        .expect("converges");
+        assert_eq!(outcome.converged, vec![id(0x01)]);
+    }
+
+    // --- Fail-closed completeness ---
+
+    #[test]
+    fn a_rejected_node_aborts_the_pass_fatally() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .node_fault(0x02, SweepResolveFailure::Rejected);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert_eq!(err.check(), "node-unresolved");
+        assert!(!err.is_retryable());
+        assert_eq!(net.publishes(0x01), 0, "nothing is published on an abort");
+    }
+
+    #[test]
+    fn an_unavailable_node_aborts_retryably() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .node_fault(0x01, SweepResolveFailure::Unavailable);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn a_node_that_did_not_publish_aborts_rather_than_claiming_convergence() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .fault(0x01, ScopeRootPublishError::NotPublished);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert!(matches!(err, SweepError::Publish { node_id, .. } if node_id == id(0x01)));
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn a_publish_the_publisher_refused_is_never_retried() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .fault(0x01, ScopeRootPublishError::Rejected);
+        let err = run(&net, 0x00).expect_err("fails closed");
+        assert!(!err.is_retryable(), "a trust rejection is fatal");
+    }
+
+    #[test]
+    fn a_partial_pass_resumes_without_stranding_a_node() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .fault(0x02, ScopeRootPublishError::NotPublished);
+        run(&net, 0x00).expect_err("aborts on B");
+        assert_eq!(net.epoch(0x01), 5, "A converged before the abort");
+        assert_eq!(net.epoch(0x02), 1);
 
         net.clear_fault(0x02);
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01, 0x02]).expect("resume");
-        assert_eq!(
-            outcome.converged,
-            vec![sid(0x02)],
-            "only B still needed work"
-        );
-        assert_eq!(outcome.already_converged, vec![sid(0x01)]);
-        assert_eq!(net.current_epoch(0x02), 5, "B converged on resume");
+        let outcome = run(&net, 0x00).expect("resume");
+        assert_eq!(outcome.converged, vec![id(0x02)]);
+        assert_eq!(outcome.already_converged, vec![id(0x01)]);
     }
 
     #[test]
-    fn run_sweep_retries_availability_until_converged() {
-        // The idle-cadence driver: A(01)'s first publish is NotPublished (the pass
-        // aborts), the node self-heals, and the driver's next pass — after one
-        // cadence sleep on the virtual clock — converges it.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
-            .fail_next(0x01, 1);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
+    fn a_lost_cas_race_drops_the_node_and_the_rest_still_converges() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .fault(0x01, ScopeRootPublishError::LostRace);
+        let outcome = run(&net, 0x00).expect("sweep");
+        assert_eq!(outcome.dropped_lost_race, vec![id(0x01)]);
+        assert_eq!(outcome.converged, vec![id(0x02)]);
+    }
 
+    // --- The idle-cadence driver ---
+
+    /// Drive the pass on a virtual clock, asserting that every re-run cost one
+    /// cadence sleep — time enters only through the scheduler seam.
+    fn drive(
+        net: &FakeNet,
+        max_passes: u32,
+        expected_sleeps: u32,
+    ) -> Result<SweepOutcome, SweepError> {
         let scheduler = VirtualScheduler::new().with_auto_advance();
-        let index = vec![childref(0x01)];
-        let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(1);
-            run_sweep(
-                &mut entropy,
-                &floors,
-                &scheduler,
-                &net,
-                &net,
-                sid(0x00),
-                &index,
-                Duration::from_secs(30),
-                4,
-            )
-            .await
-        })
-        .expect("driver converges after retry");
-        assert_eq!(outcome.converged, vec![sid(0x01)]);
+        let result = block_on(run_sweep(
+            &scheduler,
+            net,
+            net,
+            &scope_ref(0x00),
+            Duration::from_secs(30),
+            max_passes,
+        ));
         assert_eq!(
-            net.publishes(0x01),
-            2,
-            "one failed pass, one succeeding retry"
+            scheduler.now(),
+            UnixMillis(u64::from(expected_sleeps) * 30_000),
+            "one cadence sleep per re-run",
         );
-        assert!(
-            scheduler.now() >= UnixMillis(30_000),
-            "the driver slept one cadence before the retry"
-        );
+        result
     }
 
     #[test]
-    fn run_sweep_gives_up_after_max_passes_on_persistent_stall() {
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
-            .fault(0x01, ScopeRootPublishError::NotPublished);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-        let scheduler = VirtualScheduler::new().with_auto_advance();
-        let index = vec![childref(0x01)];
-        let err = block_on(async {
-            let mut entropy = SeededEntropy::new(1);
-            run_sweep(
-                &mut entropy,
-                &floors,
-                &scheduler,
-                &net,
-                &net,
-                sid(0x00),
-                &index,
-                Duration::from_secs(30),
-                3,
-            )
-            .await
-        })
-        .expect_err("persistent stall surfaces");
-        assert_eq!(err.check(), "publish-failed");
-        // Three attempts were made (one per allowed pass).
-        assert_eq!(net.publishes(0x01), 3);
-    }
-
-    #[test]
-    fn run_sweep_loops_past_non_advancing_lost_race_until_it_wins() {
-        // The Finding-1 scenario: a non-advancing writer wins the sequence CAS
-        // twice (the epoch never moves, so a single drop does NOT converge the
-        // node). run_sweep must keep re-resolving — not return Ok on the drop —
-        // until the sweep finally wins the CAS and the node truly converges.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
+    fn the_driver_loops_past_a_non_advancing_lost_race_until_it_wins() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
             .lost_race_next(0x01, 2);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-
-        let scheduler = VirtualScheduler::new().with_auto_advance();
-        let index = vec![childref(0x01)];
-        let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(1);
-            run_sweep(
-                &mut entropy,
-                &floors,
-                &scheduler,
-                &net,
-                &net,
-                sid(0x00),
-                &index,
-                Duration::from_secs(30),
-                5,
-            )
-            .await
-        })
-        .expect("driver converges after two lost races");
-        assert_eq!(outcome.converged, vec![sid(0x01)], "the sweep finally won");
-        assert!(
-            outcome.dropped_lost_race.is_empty(),
-            "no residual drop once converged"
-        );
-        assert_eq!(net.current_epoch(0x01), 5, "node truly at the floor");
+        let outcome = drive(&net, 5, 2).expect("converges after two lost races");
+        assert_eq!(outcome.converged, vec![id(0x01)]);
+        assert!(outcome.dropped_lost_race.is_empty());
         assert_eq!(
             net.publishes(0x01),
             3,
             "two lost races, one winning publish"
         );
+        assert_eq!(net.epoch(0x01), 5);
     }
 
     #[test]
-    fn run_sweep_surfaces_residual_drop_on_cap_exhaustion() {
-        // A persistently hot non-advancing writer: run_sweep exhausts its passes
-        // and returns Ok, but surfaces the still-dropped node rather than a false
-        // "complete".
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01])
-            .scope(0x01, 1, &[])
+    fn the_driver_surfaces_a_residual_drop_on_cap_exhaustion() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
             .lost_race_next(0x01, 10);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01], 5);
-        let scheduler = VirtualScheduler::new().with_auto_advance();
-        let index = vec![childref(0x01)];
-        let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(1);
-            run_sweep(
-                &mut entropy,
-                &floors,
-                &scheduler,
-                &net,
-                &net,
-                sid(0x00),
-                &index,
-                Duration::from_secs(30),
-                3,
-            )
-            .await
-        })
-        .expect("returns Ok with residual surfaced");
-        assert_eq!(
-            outcome.dropped_lost_race,
-            vec![sid(0x01)],
-            "residual lost-race node surfaced, not silently complete"
-        );
+        let outcome = drive(&net, 3, 2).expect("returns Ok with the residual surfaced");
+        assert_eq!(outcome.dropped_lost_race, vec![id(0x01)]);
         assert!(outcome.converged.is_empty());
+        assert_eq!(net.publishes(0x01), 3);
+    }
+
+    #[test]
+    fn the_driver_gives_up_on_a_persistent_availability_stall() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .fault(0x01, ScopeRootPublishError::NotPublished);
+        let err = drive(&net, 3, 2).expect_err("the stall surfaces");
+        assert_eq!(err.check(), "publish-failed");
         assert_eq!(net.publishes(0x01), 3, "one attempt per allowed pass");
     }
 
     #[test]
-    fn concurrent_sweepers_converge_without_double_advance() {
-        // Two sweepers over the same shared network. The first converges the
-        // subtree; the second sees every node already converged — no re-publish,
-        // no clobber, no floor double-advance.
-        let net = FakeNet::new()
-            .scope(0x00, 7, &[0x01])
-            .scope(0x01, 3, &[0x02])
-            .scope(0x02, 3, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02], 7);
-
-        let first = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweeper 1");
-        assert_eq!(first.converged.len(), 2);
-        let p1 = (net.publishes(0x01), net.publishes(0x02));
-
-        let second = run(&net, &floors, 2, 0x00, &[0x01]).expect("sweeper 2");
-        assert!(second.converged.is_empty(), "second sweeper is a no-op");
-        assert_eq!(second.already_converged.len(), 2);
-        assert_eq!(
-            (net.publishes(0x01), net.publishes(0x02)),
-            p1,
-            "no redundant re-publish by the second sweeper"
-        );
-    }
-
-    #[test]
-    fn diamond_shared_descendant_converged_once() {
-        // root -> A(01), B(02); both -> D(04). D converges exactly once.
-        let net = FakeNet::new()
-            .scope(0x00, 5, &[0x01, 0x02])
-            .scope(0x01, 1, &[0x04])
-            .scope(0x02, 1, &[0x04])
-            .scope(0x04, 1, &[]);
-        let floors = InMemoryFloorStore::default();
-        raise_floors(&floors, &[0x01, 0x02, 0x04], 5);
-
-        let outcome = run(&net, &floors, 1, 0x00, &[0x01, 0x02]).expect("sweep");
-        let mut converged = outcome.converged.clone();
-        converged.sort();
-        assert_eq!(converged, vec![sid(0x01), sid(0x02), sid(0x04)]);
-        assert_eq!(net.publishes(0x04), 1, "shared descendant published once");
-    }
-
-    #[test]
-    fn determinism_same_entropy_same_published_bytes() {
-        let build = || {
-            let net = FakeNet::new()
-                .scope(0x00, 5, &[0x01])
-                .scope(0x01, 1, &[0x02])
-                .scope(0x02, 1, &[]);
-            let floors = InMemoryFloorStore::default();
-            raise_floors(&floors, &[0x01, 0x02], 5);
-            let log = Rc::new(RefCell::new(Vec::<ResealedScopeRoot>::new()));
-            struct Rec {
-                net: FakeNet,
-                log: Rc<RefCell<Vec<ResealedScopeRoot>>>,
-            }
-            impl SweepResolver for Rec {
-                async fn resolve(
-                    &self,
-                    scope: &ChildScopeRef,
-                ) -> Result<SweepTarget, ResolveFailure> {
-                    self.net.resolve(scope).await
-                }
-            }
-            impl ScopeRootPublisher for Rec {
-                async fn publish_scope_root(
-                    &self,
-                    record: &ResealedScopeRoot,
-                ) -> Result<(), ScopeRootPublishError> {
-                    self.log.borrow_mut().push(record.clone());
-                    self.net.publish_scope_root(record).await
-                }
-            }
-            let rec = Rec {
-                net: net.clone(),
-                log: Rc::clone(&log),
-            };
-            let index = vec![childref(0x01)];
-            block_on(async {
-                let mut entropy = SeededEntropy::new(42);
-                sweep_pass(&mut entropy, &floors, &rec, &rec, sid(0x00), &index).await
-            })
-            .expect("sweep");
-            let mut records = log.borrow().clone();
-            records.sort_by(|a, b| a.scope_id.cmp(&b.scope_id));
-            records
-        };
-        assert_eq!(build(), build(), "same entropy → byte-identical publishes");
+    fn the_driver_returns_a_trust_failure_immediately() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .node_fault(0x01, SweepResolveFailure::Rejected);
+        let err = drive(&net, 5, 0).expect_err("fatal");
+        assert!(!err.is_retryable());
     }
 }

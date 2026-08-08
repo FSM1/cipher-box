@@ -158,6 +158,37 @@ pub enum Strictness {
     /// last-known-good): only exact equality is admitted — lower is a
     /// fail-closed replay, higher is a record that never passed an adopt.
     AtFloor,
+    /// The replay bar alone: the floor or anything above it. The one read that
+    /// takes it ([`crate::rotation::sweep`]'s interior nodes) must reach records
+    /// the **epoch** stage refuses, so it runs [`check_sequence`] rather than
+    /// [`check`] — and its bar is named here, beside the rest of the floor law,
+    /// rather than hand-rolled at the call site.
+    AtOrAboveFloor,
+}
+
+/// The per-name sequence floor alone — gate stage 4, per `strictness`.
+pub async fn check_sequence<F: FloorStore>(
+    floors: &F,
+    ipns_name: &[u8],
+    sequence: u64,
+    strictness: Strictness,
+) -> Result<(), GateError> {
+    let floor = sequence_floor(floors, ipns_name)
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    let replayed = match strictness {
+        Strictness::StrictlyNewer => sequence <= floor,
+        Strictness::AtFloor => sequence != floor,
+        Strictness::AtOrAboveFloor => sequence < floor,
+    };
+    if replayed {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::Sequence,
+            reason: RejectionReason::SequenceNotNewer { floor, sequence },
+        }));
+    }
+    Ok(())
 }
 
 /// The durable floor checks — gate stages 4/5: the per-name sequence floor
@@ -171,20 +202,7 @@ pub async fn check<F: FloorStore>(
     epoch: u64,
     strictness: Strictness,
 ) -> Result<(), GateError> {
-    let floor = sequence_floor(floors, ipns_name)
-        .await
-        .map_err(GateError::Seam)?
-        .unwrap_or(0);
-    let replayed = match strictness {
-        Strictness::StrictlyNewer => sequence <= floor,
-        Strictness::AtFloor => sequence != floor,
-    };
-    if replayed {
-        return Err(GateError::Rejected(GateRejection {
-            stage: GateStage::Sequence,
-            reason: RejectionReason::SequenceNotNewer { floor, sequence },
-        }));
-    }
+    check_sequence(floors, ipns_name, sequence, strictness).await?;
     let epoch_floor = read_epoch_floor(floors, scope_id)
         .await
         .map_err(GateError::Seam)?

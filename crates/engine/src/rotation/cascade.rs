@@ -81,9 +81,7 @@ use cipherbox_core::hex::lower as hex_lower;
 ///
 /// Both omissions are load-bearing. No `parent_node_seed`: the ascent link
 /// re-seals under the parent's **freshly-minted** derivation, threaded top-down,
-/// never the descendant's own stale published one (contrast
-/// [`SweepTarget`](super::sweep::SweepTarget), which *does* carry it because the
-/// sweep reuses the published derivation). No self-identifying `scope_id` /
+/// never the descendant's own stale published one. No self-identifying `scope_id` /
 /// `ipns_name`: re-seal, publish, parent-seed derivation, and floor-raise all run
 /// under the **enumerated** [`ChildScopeRef`] alone, so there is no second copy
 /// for a network hint to diverge from.
