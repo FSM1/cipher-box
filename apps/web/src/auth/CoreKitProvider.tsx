@@ -10,11 +10,18 @@ const RESTORE_DEADLINE_MS = 10_000;
 
 const UNREACHABLE = 'the login provider is not responding — check your connection and reload';
 
+/**
+ * Deliberately says nothing about the cause: the throw that gets here is
+ * usually the SDK parsing its own store, and that message quotes the bytes it
+ * choked on, which are bearer key material.
+ */
+const RESTORE_FAILED = 'the saved sign-in could not be restored — please sign in again';
+
 export interface CoreKitContextValue {
   /** `null` until the session is built and its restore attempt has settled. */
   session: CoreKitSession | null;
   status: CoreKitStatus;
-  /** Why Core Kit is unusable at all — a bad build config, or silence. */
+  /** Why this tab has no session — a bad build config, silence, or a failed restore. */
   error: string | null;
 }
 
@@ -58,18 +65,18 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
       if (live) setValue({ session: null, status: 'unavailable', error: UNREACHABLE });
     }, RESTORE_DEADLINE_MS);
 
-    const settled: CoreKitContextValue = {
-      session: session.current,
-      status: 'ready',
-      error: null,
-    };
-    // A failed restore just means there is no session to resume; the methods
-    // below still work, and a real breakage surfaces when one is used.
-    const settle = () => {
+    const restored = session.current;
+    const settle = (error: string | null) => {
       clearTimeout(deadline);
-      if (live) setValue(settled);
+      if (live) setValue({ session: restored, status: 'ready', error });
     };
-    restore.current.then(settle, settle);
+    // A rejected restore resumes nothing, so the tab still lands at the front
+    // door — but it lands there carrying the failure, not as a clean sign-out.
+    // The session stays in hand because logging in again is the way out of it.
+    restore.current.then(
+      () => settle(null),
+      () => settle(RESTORE_FAILED)
+    );
 
     return () => {
       live = false;
