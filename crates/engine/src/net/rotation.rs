@@ -19,9 +19,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, Envelope, GrantLedgerEntry, GrantSection, GrantSetEntry,
-    PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, WriteBody,
-    decode_write_body, open_owner_blob, sign_grant_set, unseal,
+    AadContext, ChildScopeRef, Envelope, GrantLedgerEntry, GrantSection, GrantSetCommitment,
+    GrantSetEntry, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY,
+    WriteBody, decode_write_body, open_owner_blob, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -748,6 +748,16 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The two per-scope derivations the root's re-seal needs, and no wider
     /// capability (the same narrowing [`OwnerRotationKeys`] makes).
     pub scope_keys: &'a dyn OwnerScopeKeys,
+    /// The owner-signed committed set the rotation was authorized over
+    /// (`RotateScopeWritePlan::commitment`) — what the root's re-seal binds to,
+    /// never the set carried by the record the wave re-reads.
+    ///
+    /// A grant-set commitment is epoch-free, so an older owner-signed one still
+    /// verifies: a write grantee inside the forgery window can republish the root
+    /// carrying the **pre-revoke** set, and that record passes every gate stage.
+    /// Minting the moved root's section from it would wrap the freshly minted
+    /// `writeScopeSeed` to the revokee — a permanent write-revocation bypass.
+    pub authorized_commitment: &'a GrantSetCommitment,
     /// Derives the scope pointer's name and its record signer (owner-only).
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
     /// The root name the wave is moving off. It lingers serving the tombstone, so
@@ -1211,18 +1221,21 @@ where
         node: &RepublishedNode,
         plane: &RootPlane,
     ) -> Result<RemintedGrants, WritePublishError> {
+        // Release-active (security rule 8). The gate owner-verifies the record's
+        // own committed set and binds it to the name it was read at
+        // (`gate/adoption.rs` stage 2), so equality with the authorized set is
+        // what proves the mint runs off the owner's own attestation
+        // ([`WriteWaveNet::authorized_commitment`]).
+        if plane.section.commitment != *self.authorized_commitment {
+            return Err(WritePublishError::Rejected);
+        }
+        let commitment = self.authorized_commitment;
         let ledger = &plane.write_body.grant_ledger;
-        enforce_committed_ledger(&plane.section.commitment, ledger)
-            .map_err(|_| WritePublishError::Rejected)?;
-        let old_name = plane.section.commitment.ipns_name.as_slice();
+        enforce_committed_ledger(commitment, ledger).map_err(|_| WritePublishError::Rejected)?;
+        let old_name = commitment.ipns_name.as_slice();
         let new_name = node.new_name.as_str().as_bytes();
-        let carried: BTreeMap<[u8; 32], &GrantSetEntry> = plane
-            .section
-            .commitment
-            .entries
-            .iter()
-            .map(|e| (e.tag, e))
-            .collect();
+        let carried: BTreeMap<[u8; 32], &GrantSetEntry> =
+            commitment.entries.iter().map(|e| (e.tag, e)).collect();
 
         let mut reminted = RemintedGrants {
             entries: Vec::with_capacity(ledger.len()),
@@ -1291,7 +1304,7 @@ where
         read_epoch: u64,
     ) -> Result<GrantSection, WritePublishError> {
         let remint = self.remint_grants(node, plane)?;
-        let mut commitment = plane.section.commitment.clone();
+        let mut commitment = self.authorized_commitment.clone();
         commitment.ipns_name = node.new_name.as_str().as_bytes().to_vec();
         commitment.entries = remint.entries;
         let commitment_sig = sign_grant_set(self.owner, &commitment)
@@ -1376,10 +1389,7 @@ where
                     .write_scope_seed
                     .as_ref()
                     .ok_or(WritePublishError::Rejected)?;
-                // The write floor is monotonic and the re-point raises it to
-                // `node.write_epoch`; sealing the section at or below the floor
-                // publishes a root whose write plane can never be reopened.
-                if node.write_epoch <= plane.write_epoch || node.node_id != self.scope_id {
+                if node.node_id != self.scope_id || node.write_epoch <= plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
                 // Every re-minted tag binds `new_name`, and a write grantee
@@ -1387,6 +1397,20 @@ where
                 // name the published seed does not derive mints a set no grantee
                 // can ever self-locate.
                 if node.new_name != derive_write_name(fresh.as_bytes(), &node.node_id) {
+                    return Err(WritePublishError::Rejected);
+                }
+                // `plane.write_epoch` is the floor as the enumeration saw it, and
+                // the whole interior wave has run since. The floor is monotonic
+                // and rises on any pointer consult, so a floor above that
+                // snapshot means another device's re-point superseded the record
+                // this wave is carrying forward — and sealing against the
+                // snapshot would publish a section at or below the live floor,
+                // a write plane `open_write_body` could never reopen.
+                let write_floor = floor::write_epoch_floor(self.floors, &self.scope_id)
+                    .await
+                    .map_err(|_| WritePublishError::NotLanded)?
+                    .ok_or(WritePublishError::NotLanded)?;
+                if write_floor > plane.write_epoch {
                     return Err(WritePublishError::Rejected);
                 }
                 let section = self.reseal_root(node, &plane, fresh.as_bytes(), read_epoch)?;
@@ -3140,10 +3164,23 @@ mod tests {
         SeededEntropy,
     >;
 
+    /// A stand-in authorized set for a wave whose test republishes no root: only
+    /// the root re-seal reads it, and it matches no record, so a test that grows
+    /// a root publish fails loudly rather than passing on a fabricated plan.
+    fn no_root_plan() -> GrantSetCommitment {
+        GrantSetCommitment {
+            ipns_name: Vec::new(),
+            owner_pseudonym_pk: [0u8; 32],
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        }
+    }
+
     fn wave<'a, T: RecordTransport + Clone>(
         harness: &'a Harness<T>,
         owner: &'a EcdsaSigner,
         current_root: &'a IpnsName,
+        plan: &'a GrantSetCommitment,
     ) -> Wave<'a, T> {
         WriteWaveNet {
             transport: &harness.transport,
@@ -3160,6 +3197,7 @@ mod tests {
             owner,
             owner_enc_secret: &harness.enc_secret,
             scope_keys: &WaveSeeds,
+            authorized_commitment: plan,
             gated_root: GatedWaveRoot::default(),
             subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
@@ -3297,7 +3335,8 @@ mod tests {
 
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
 
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         block_on(net.republish(&leaf)).expect("the leaf republishes");
@@ -3346,7 +3385,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
 
         // Child-first, root last — exactly the wave's own order.
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
@@ -3397,7 +3436,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         block_on(net.republish(&leaf)).expect("leaf");
         let moved = order(SCOPE, &root.name, one_child(leaf_id, &leaf.new_name), true);
@@ -3557,7 +3596,7 @@ mod tests {
         );
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -3594,7 +3633,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         block_on(net.republish(&leaf)).expect("leaf");
         let mid = order(mid_id, &mid_old, one_child(leaf_id, &leaf.new_name), false);
@@ -3632,7 +3671,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -3696,7 +3735,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -3750,7 +3789,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -3785,7 +3824,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -3807,7 +3846,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -3849,7 +3888,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         // The name and its record signer still agree; only the seed the section
         // hands out no longer derives them.
@@ -3875,7 +3914,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -3897,11 +3936,104 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
             Err(WritePublishError::Rejected)
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn the_wave_refuses_a_root_whose_committed_set_diverges_from_the_owner_plan_release_active() {
+        // The staged record carries the PRE-REVOKE set, which the owner's plan
+        // dropped the write grant from — the replay
+        // [`WriteWaveNet::authorized_commitment`] exists to refuse. Release-active.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let revokee = recipient_blinded_tag(
+            &write_grantee(),
+            &owner_enc().public(),
+            root.name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let mut plan = root.grant_section.commitment.clone();
+        plan.entries.retain(|e| e.tag != revokee);
+        assert_ne!(
+            plan.entries.len(),
+            root.grant_section.commitment.entries.len(),
+            "the record still carries the write grant this rotation is cutting",
+        );
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &plan);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(
+            !published_at(&harness, &moved.new_name),
+            "nothing is published, so the revokee never receives a re-minted blob",
+        );
+    }
+
+    #[test]
+    fn a_write_floor_rise_before_the_root_republish_refuses_the_seal() {
+        // The enumeration reads the root first and parks it, so the whole
+        // child-first wave runs before the root republishes — and a concurrent
+        // focus-window tick observing another device's re-point raises the
+        // monotonic write floor in between. Both sides of that rise are refused:
+        // the one the wave's own epoch still clears, where the parked record has
+        // silently been superseded, and the one that would seal the section at or
+        // below the live floor, where `open_write_body` could never reopen it.
+        let harness = Harness::plain();
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            grants: Vec::new(),
+        });
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
+
+        let mut ahead = order(SCOPE, &root.name, BTreeMap::new(), true);
+        ahead.write_epoch = OWNER_ROOT_EPOCH + 2;
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            OWNER_ROOT_EPOCH + 1,
+        ))
+        .expect("the floor rise lands");
+        assert_eq!(
+            block_on(net.republish(&ahead)),
+            Err(WritePublishError::Rejected),
+            "a floor above the parked snapshot refuses even at an epoch it clears",
+        );
+        assert!(!published_at(&harness, &ahead.new_name));
+
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            moved.write_epoch,
+        ))
+        .expect("the floor rise lands");
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+            "the seal is refused against the live floor, not the parked snapshot",
         );
         assert!(!published_at(&harness, &moved.new_name));
     }
@@ -3927,7 +4059,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
 
         // A root order the publisher refuses *after* the gated read: no fresh
         // write scope seed means the section cannot be re-minted.
@@ -3960,7 +4092,8 @@ mod tests {
         let current = stage_node(&harness, node_id, &folder(Vec::new()));
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
 
         let stray = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &[0x1b; 16]);
         let bogus = order(node_id, &current, one_child([0x1b; 16], &stray), false);
@@ -3983,7 +4116,8 @@ mod tests {
 
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
         block_on(net.republish(&order(node_id, &current, BTreeMap::new(), false)))
             .expect("republish");
 
@@ -4001,7 +4135,8 @@ mod tests {
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
         let interior = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &[0x3a; 16]);
 
         assert_eq!(
@@ -4016,7 +4151,8 @@ mod tests {
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
         let block = b"a-sealed-repoint-object".to_vec();
 
         block_on(net.publish_repoint(RepointChannel::ScopePointer, &block))
@@ -4057,7 +4193,8 @@ mod tests {
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
         for channel in [RepointChannel::Mailbox, RepointChannel::Tombstone] {
             assert_eq!(
                 block_on(net.publish_repoint(channel, b"block")),
@@ -4073,7 +4210,8 @@ mod tests {
         let current = stage_node(&harness, node_id, &folder(Vec::new()));
         let owner = owner_identity();
         let current_root = old_root_name();
-        let net = wave(&harness, &owner, &current_root);
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
         let node = order(node_id, &current, BTreeMap::new(), false);
 
         assert!(!block_on(net.is_republished(&node.new_name)).expect("query"));
@@ -4207,7 +4345,12 @@ mod tests {
         let harness = Harness::plain();
         let staged = staged_scope(&harness);
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &staged.root.name);
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
 
         let resolved = block_on(net.resolve_node(&SCOPE)).expect("the root resolves");
         assert_eq!(
@@ -4249,7 +4392,12 @@ mod tests {
             ]
         });
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &staged.root.name);
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
 
         assert_eq!(
             block_on(net.resolve_node(&SCOPE)),
@@ -4264,7 +4412,12 @@ mod tests {
         let harness = Harness::plain();
         let staged = staged_scope(&harness);
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &staged.root.name);
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
 
         assert_eq!(
             block_on(net.resolve_node(&[0xee; 16])),
@@ -4284,7 +4437,7 @@ mod tests {
             Vec::new(),
         );
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
 
         block_on(net.resolve_node(&SCOPE)).expect("the root resolves");
         assert_eq!(
@@ -4301,7 +4454,7 @@ mod tests {
         // transplant the child gate refuses.
         let root = staged_root(&harness, vec![ref_to(MID, &served)], Vec::new());
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
 
         let error = block_on(rotate_scope_write(
@@ -4335,7 +4488,7 @@ mod tests {
         let unserved = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF);
         let root = staged_root(&harness, vec![ref_to(LEAF, &unserved)], Vec::new());
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name);
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
 
         let error = block_on(rotate_scope_write(
@@ -4364,7 +4517,12 @@ mod tests {
         let harness = Harness::plain();
         let staged = staged_scope(&harness);
         let owner = owner_identity();
-        let net = wave(&harness, &owner, &staged.root.name);
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
         let mut entropy = SeededEntropy::new(13);
 
         let outcome = block_on(rotate_scope_write(
@@ -4445,14 +4603,24 @@ mod tests {
         let staged = staged_scope(&harness);
         let owner = owner_identity();
 
-        let first = wave(&harness, &owner, &staged.root.name);
+        let first = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
         let before: Vec<WriteScopeNode> = [SCOPE, MID, LEAF]
             .into_iter()
             .map(|id| block_on(first.resolve_node(&id)).expect("the first pass enumerates"))
             .collect();
         drop(first);
 
-        let resumed = wave(&harness, &owner, &staged.root.name);
+        let resumed = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
         let after: Vec<WriteScopeNode> = [SCOPE, MID, LEAF]
             .into_iter()
             .map(|id| block_on(resumed.resolve_node(&id)).expect("the resumed pass enumerates"))
