@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
+import { EngineRequestError } from '../correlatedTransport.js';
 import { FakePort } from '../sw/testDoubles.js';
 import type { MediaReader } from './broker.js';
-import { MEDIA_PORT_OFFER, MEDIA_PORT_REQUEST, type MediaResponse } from './protocol.js';
+import {
+  MEDIA_PORT_OFFER,
+  MEDIA_PORT_REQUEST,
+  STREAM_PATH_PREFIX,
+  type MediaResponse,
+} from './protocol.js';
 import {
   MediaService,
+  type MediaStreamFailure,
   type ServiceWorkerContainerLike,
   type ServiceWorkerLike,
   type ServiceWorkerRegistrationLike,
@@ -187,6 +194,22 @@ describe('MediaService', () => {
     expect(service.revokeStreamUrl(`${ORIGIN}${url}`)).toBe(false);
   });
 
+  it('has nothing to wait for on a url naming no live ticket', async () => {
+    const { container, worker, service } = setup();
+    container.controller = worker;
+    await service.start();
+    const url = service.createStreamUrl({
+      node: new Uint8Array([9]),
+      size: 8,
+      mimeType: 'audio/o',
+    });
+    service.revokeStreamUrl(url);
+
+    // A deadline long enough that only an immediate resolve can finish the test.
+    expect(await service.whenStreamIdle(url, 60_000)).toBe(false);
+    expect(await service.whenStreamIdle('https://elsewhere.example/stream/x', 60_000)).toBe(false);
+  });
+
   it('re-brokers a fresh channel and closes the old one when the worker asks for a port', async () => {
     const { container, worker, service, channels } = setup();
     container.controller = worker;
@@ -241,6 +264,49 @@ describe('MediaService', () => {
 
     expect(closed).toEqual([7n]);
     expect(channels).toHaveLength(2);
+  });
+
+  it('classifies a refused read for the holder of the url it refused on', async () => {
+    const refusals = [
+      new EngineRequestError('too many read streams are already open', 'tooManyStreams'),
+      new EngineRequestError('the adoption gate refused the record', 'trustViolation'),
+    ];
+    const { container, worker, service, channels } = setup({
+      ...reader,
+      openContentStream: () => Promise.reject(refusals.shift() ?? new Error('spent')),
+    });
+    container.controller = worker;
+    await service.start();
+
+    const seen: MediaStreamFailure[] = [];
+    const stop = service.onStreamError((failure) => seen.push(failure));
+    const read = async (requestId: number): Promise<string> => {
+      const url = service.createStreamUrl({
+        node: new Uint8Array([9]),
+        size: 8,
+        mimeType: 'audio/o',
+      });
+      const port = channels[0].port2;
+      port.postMessage({
+        type: 'cb:media:open',
+        requestId,
+        ticket: url.slice(STREAM_PATH_PREFIX.length),
+        range: null,
+      });
+      port.postMessage({ type: 'cb:media:pull', requestId });
+      await settled();
+      return url;
+    };
+
+    const ceiling = await read(1);
+    const verdict = await read(2);
+    stop();
+    await read(3);
+
+    expect(seen).toEqual([
+      { url: ceiling, message: 'too many read streams are already open', recoverable: true },
+      { url: verdict, message: 'the adoption gate refused the record', recoverable: false },
+    ]);
   });
 
   it('ignores an unrelated message from the worker', async () => {

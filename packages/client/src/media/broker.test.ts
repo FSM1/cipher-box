@@ -560,3 +560,74 @@ describe('MediaBroker', () => {
     next.port2.close();
   });
 });
+
+describe('MediaBroker.whenIdle', () => {
+  /** Records the settlement without awaiting it, so pending can be asserted. */
+  function watch(promise: Promise<boolean>): () => boolean | null {
+    let outcome: boolean | null = null;
+    void promise.then((read) => {
+      outcome = read;
+    });
+    return () => outcome;
+  }
+
+  const startRead = async (h: Harness): Promise<void> => {
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'chunk');
+  };
+
+  it('never expires a ticket a body has claimed, however long it goes unread', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    // A deadline far shorter than the gap the reader then leaves.
+    const idle = watch(h.broker.whenIdle(h.ticket, 5));
+    await startRead(h);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(idle()).toBeNull();
+  });
+
+  it('resolves once the last body ends, without waiting out the pin linger', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+    await startRead(h);
+    expect(idle()).toBeNull();
+
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await waitFor(() => idle() !== null, 'the ticket to go idle');
+    expect(idle()).toBe(true);
+  });
+
+  it('reports a ticket no body ever claims as unread', async () => {
+    const h = harness(20);
+    expect(await h.broker.whenIdle(h.ticket, 1)).toBe(false);
+  });
+
+  it('settles a waiter when the ticket is revoked out from under the read', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+    await startRead(h);
+    h.broker.revoke(h.ticket);
+
+    await waitFor(() => idle() !== null, 'the revoked ticket to settle');
+    expect(idle()).toBe(true);
+  });
+
+  it('re-arms rather than settling when the port is replaced mid-save', async () => {
+    // A killed worker re-brokers and re-opens; retiring the ticket here would
+    // 404 the retry the pipe is about to make.
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 40));
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const next = new MessageChannel();
+    h.broker.serve(next.port1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(idle()).toBeNull();
+    next.port1.close();
+    next.port2.close();
+  });
+});

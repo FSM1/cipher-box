@@ -19,10 +19,21 @@ const OPAQUE = 'application/octet-stream';
  */
 const REVOKE_AFTER_MS = 1_000;
 
+/** How long a minted ticket waits for the browser to open the save it triggered. */
+const STREAM_START_MS = 30_000;
+
+const NEVER_FETCHED = 'the browser did not start the download';
+
 export interface FileDownload {
   error: string | null;
-  /** @param size the engine's byte count; `null` forces the buffered read. */
-  save(node: Uint8Array, name: string, size: bigint | null): Promise<void>;
+  /**
+   * Resolves once the file's bytes have stopped moving, with whether it reached
+   * the browser at all — false is a refusal, and a caller working through a
+   * selection should stop rather than repeat it per file.
+   *
+   * @param size the engine's byte count; `null` forces the buffered read.
+   */
+  save(node: Uint8Array, name: string, size: bigint | null): Promise<boolean>;
   /** Drops a failure the user has moved on from. */
   clearError(): void;
 }
@@ -31,30 +42,40 @@ export function useFileDownload(): FileDownload {
   const client = useEngine();
   const media = useMediaService();
   const [error, setError] = useState<string | null>(null);
-  const tickets = useRef<string[]>([]);
+  const tickets = useRef(new Set<string>());
 
-  // A streamed save reads for as long as the transfer lasts, so its ticket
-  // cannot be dropped on a timer the way a fully materialized blob URL can.
+  // Unmount cuts a transfer that is still running, and its ticket has no timer
+  // of its own to fall back on.
   useEffect(() => {
     const held = tickets.current;
     return () => {
-      for (const url of held.splice(0)) media?.revokeStreamUrl(url);
+      for (const url of held) media?.revokeStreamUrl(url);
+      held.clear();
     };
   }, [media]);
 
   const save = useCallback(
-    async (node: Uint8Array, name: string, size: bigint | null): Promise<void> => {
+    async (node: Uint8Array, name: string, size: bigint | null): Promise<boolean> => {
       if (client === null) {
         setError('the engine is not ready yet');
-        return;
+        return false;
       }
       setError(null);
 
-      const ticket = streamTicket(media, node, size, OPAQUE);
-      if (ticket !== null) {
-        tickets.current.push(ticket);
-        saveToDisk(ticket, name);
-        return;
+      if (media !== null) {
+        const ticket = streamTicket(media, node, size, OPAQUE);
+        if (ticket !== null) {
+          tickets.current.add(ticket);
+          saveToDisk(ticket, name);
+          try {
+            const read = await media.whenStreamIdle(ticket, STREAM_START_MS);
+            if (!read) setError(NEVER_FETCHED);
+            return read;
+          } finally {
+            tickets.current.delete(ticket);
+            media.revokeStreamUrl(ticket);
+          }
+        }
       }
 
       try {
@@ -62,8 +83,10 @@ export function useFileDownload(): FileDownload {
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveToDisk(url, name);
         setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
+        return true;
       } catch (failure: unknown) {
         setError(errorMessage(failure));
+        return false;
       }
     },
     [client, media]

@@ -36,6 +36,7 @@ export type { PortCourier, MessagePortLike } from './portRelay.js';
 
 // The tab side of the Service Worker byte pipe.
 export { MediaService } from './media/service.js';
+export type { MediaStreamFailure } from './media/service.js';
 export type { MediaReader } from './media/broker.js';
 
 // The one hex codec in TypeScript, for hosts that receive hex-encoded bytes

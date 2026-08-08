@@ -3,6 +3,7 @@ import {
   type EngineClient,
   type EventDescriptor,
   type MediaService,
+  type MediaStreamFailure,
   type SnapshotDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -742,11 +743,45 @@ describe('the vault browser read path over the streaming pipe', () => {
   const revoked: string[] = [];
   const clicked: { href: string | null; download: string }[] = [];
   const originalClick = HTMLAnchorElement.prototype.click;
+  /** Whether the browser opens the save the ticket was minted for. */
+  let fetched = true;
+  /** Set by a test that drives the transfers itself, keyed by ticket url. */
+  let transfers: Map<string, (read: boolean) => void> | null = null;
+  const streamListeners = new Set<(failure: MediaStreamFailure) => void>();
+
+  /** The browser finished reading this ticket. */
+  const endTransfer = async (url: string): Promise<void> => {
+    await act(async () => {
+      transfers?.get(url)?.(fetched);
+      await Promise.resolve();
+    });
+  };
+
+  /** Stands in for the broker giving up on a read. */
+  const reportStreamError = (failure: MediaStreamFailure): void => {
+    act(() => {
+      for (const listener of streamListeners) listener(failure);
+    });
+  };
+
+  /** Opens the preview of one audio file and waits for the player. */
+  async function playAudio(): Promise<void> {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'song.mp3')] }));
+
+    openRowMenu('song.mp3');
+    chooseMenuItem('preview');
+    await screen.findByTestId('media-player-audio');
+  }
 
   beforeEach(() => {
     minted.length = 0;
     revoked.length = 0;
     clicked.length = 0;
+    fetched = true;
+    transfers = null;
+    streamListeners.clear();
     mediaControl.create = () =>
       ({
         streaming: true,
@@ -755,6 +790,15 @@ describe('the vault browser read path over the streaming pipe', () => {
         createStreamUrl: (source: { node: Uint8Array; size: number; mimeType: string }) => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
+        },
+        whenStreamIdle: (url: string) => {
+          const held = transfers;
+          if (held === null) return Promise.resolve(fetched);
+          return new Promise<boolean>((resolve) => held.set(url, resolve));
+        },
+        onStreamError: (listener: (failure: MediaStreamFailure) => void) => {
+          streamListeners.add(listener);
+          return () => streamListeners.delete(listener);
         },
         revokeStreamUrl: (url: string) => {
           revoked.push(url);
@@ -785,6 +829,52 @@ describe('the vault browser read path over the streaming pipe', () => {
     expect(engine.facade.download).not.toHaveBeenCalled();
     expect(minted).toEqual([{ node: NOTE, size: 12, mimeType: 'application/octet-stream' }]);
     expect(clicked).toEqual([{ href: '/stream/ticket-1', download: 'notes.txt' }]);
+    // The ticket serves plaintext to anything same-origin that can name it, so
+    // it dies with the transfer rather than with the view.
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));
+  });
+
+  const twoFiles = () =>
+    folderView({ children: [file(NOTE, 'notes.txt'), file(PICTURE, 'shot.png')] });
+
+  it('saves a selection one ticket at a time', async () => {
+    const engine = fakeEngine();
+    transfers = new Map();
+    renderBrowser(engine);
+    await landSnapshot(engine, twoFiles());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+
+    await waitFor(() => expect(minted).toHaveLength(1));
+    expect(revoked).toEqual([]);
+
+    await endTransfer('/stream/ticket-1');
+
+    await waitFor(() => expect(minted).toHaveLength(2));
+    expect(revoked).toEqual(['/stream/ticket-1']);
+
+    await endTransfer('/stream/ticket-2');
+
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1', '/stream/ticket-2']));
+  });
+
+  it('stops a batch at the first save the browser refuses', async () => {
+    const engine = fakeEngine();
+    fetched = false;
+    renderBrowser(engine);
+    await landSnapshot(engine, twoFiles());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('vault-action-error').textContent).toBe(
+        'the browser did not start the download'
+      )
+    );
+    // Grinding through the rest would burn the start deadline once per file.
+    expect(minted).toHaveLength(1);
   });
 
   it('buffers a save whose size the engine has not projected', async () => {
@@ -830,6 +920,89 @@ describe('the vault browser read path over the streaming pipe', () => {
 
     await waitFor(() => expect(screen.getByTestId('preview-image')).toBeDefined());
     expect(engine.facade.download).not.toHaveBeenCalled();
+  });
+
+  it('plays a video off a ticket and never buffers it', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(PICTURE, 'clip.mp4', { size: 64n * 1024n * 1024n })] })
+    );
+
+    openRowMenu('clip.mp4');
+    chooseMenuItem('preview');
+
+    const player = await screen.findByTestId('media-player-video');
+    expect(player.getAttribute('src')).toBe('/stream/ticket-1');
+    expect(minted[0].mimeType).toBe('video/mp4');
+    expect(engine.facade.download).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText('close'));
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));
+  });
+
+  it('offers a retry for a ceiling refusal and a bare failure for a fault', async () => {
+    await playAudio();
+
+    reportStreamError({
+      url: '/stream/ticket-1',
+      message: 'too many read streams are already open',
+      recoverable: true,
+    });
+    expect(screen.getByTestId('media-player-error').textContent).toContain(
+      'too many streams are open right now'
+    );
+
+    fireEvent.click(screen.getByTestId('media-player-retry'));
+    expect(screen.queryByTestId('media-player-error')).toBeNull();
+    // The pipe refused a read; it did not withdraw the capability.
+    expect(revoked).toEqual([]);
+    expect(screen.getByTestId('media-player-audio').getAttribute('src')).toBe('/stream/ticket-1');
+
+    reportStreamError({
+      url: '/stream/ticket-1',
+      message: 'the adoption gate refused the record',
+      recoverable: false,
+    });
+    expect(screen.getByTestId('media-player-error').textContent).toBe(
+      'the adoption gate refused the record'
+    );
+    expect(screen.queryByTestId('media-player-retry')).toBeNull();
+  });
+
+  it('ignores a refusal reported for another stream', async () => {
+    await playAudio();
+
+    reportStreamError({ url: '/stream/ticket-9', message: 'not mine', recoverable: true });
+
+    expect(screen.queryByTestId('media-player-error')).toBeNull();
+  });
+
+  it('reports a playback failure the pipe never named', async () => {
+    await playAudio();
+
+    fireEvent.error(screen.getByTestId('media-player-audio'));
+
+    expect(screen.getByTestId('media-player-error').textContent).toBe('playback failed');
+    expect(screen.queryByTestId('media-player-retry')).toBeNull();
+  });
+
+  it('keeps the retry when the element reports the refusal it was already told about', async () => {
+    await playAudio();
+
+    reportStreamError({
+      url: '/stream/ticket-1',
+      message: 'too many read streams are already open',
+      recoverable: true,
+    });
+    // Ending the body is what the element sees, and it cannot classify it.
+    fireEvent.error(screen.getByTestId('media-player-audio'));
+
+    expect(screen.getByTestId('media-player-error').textContent).toContain(
+      'too many streams are open right now'
+    );
+    expect(screen.getByTestId('media-player-retry')).toBeDefined();
   });
 
   it('buffers a pdf, which the pipe would serve under an opaque type', async () => {

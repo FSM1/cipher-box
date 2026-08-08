@@ -88,8 +88,11 @@ export function FileBrowserActions({
   const downloadSelection = async (): Promise<void> => {
     setDownloading(true);
     try {
+      // One save at a time, and none after a refusal: a browser that blocks the
+      // second download blocks every one after it.
       for (const row of selection.rows) {
-        if (row.kind === 'file') await downloads.save(row.id, row.name, row.bytes);
+        if (row.kind !== 'file') continue;
+        if (!(await downloads.save(row.id, row.name, row.bytes))) break;
       }
     } finally {
       setDownloading(false);

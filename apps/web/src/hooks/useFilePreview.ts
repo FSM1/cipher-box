@@ -1,8 +1,8 @@
 /**
- * One file's plaintext, held only while its preview is on screen. An image is
- * pulled range by range through the Service Worker byte pipe, so nothing of it
- * is held in the tab; the shapes that must be decoded whole read through the
- * facade under a byte budget, and every URL is dropped on close.
+ * One file's plaintext, held only while its preview is on screen. Playback and
+ * images are pulled range by range through the Service Worker byte pipe, so
+ * nothing of them is held in the tab; the shapes that must be decoded whole read
+ * through the facade under a byte budget, and every URL is dropped on close.
  */
 
 import { useEffect, useState } from 'react';
@@ -10,19 +10,23 @@ import { fromHex } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
-import { previewKind, previewMime, type PreviewKind } from '../vault/previewKind';
+import { previewKind, previewMime } from '../vault/previewKind';
 
 /** What a preview may pull into the tab: a memory ceiling, and a decode budget. */
 const MAX_BUFFERED_BYTES = 32n * 1024n * 1024n;
 
 const TOO_LARGE = 'too large to preview - download it instead';
 
+const NEEDS_PIPE = 'playback needs the streaming pipe - download it instead';
+
 export type FilePreview =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'image'; url: string }
   | { status: 'pdf'; url: string }
-  | { status: 'text'; text: string };
+  | { status: 'text'; text: string }
+  | { status: 'audio'; url: string }
+  | { status: 'video'; url: string };
 
 /**
  * @param key the file's node id as lowercase hex, so the read keys on a value
@@ -52,15 +56,21 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     }
 
     const node = fromHex(key);
-    // The pipe declares media types only, and an image is the one preview shape
-    // that is one (packages/client/src/media/range.ts `safeMimeType`).
-    if (kind === 'image') {
+    // The pipe declares media types only, so these are the shapes it can serve
+    // (packages/client/src/media/range.ts `safeMimeType`).
+    if (kind === 'image' || kind === 'audio' || kind === 'video') {
       const ticket = streamTicket(media, node, size, previewMime(name));
       if (ticket !== null) {
-        setPreview({ status: 'image', url: ticket });
+        setPreview({ status: kind, url: ticket });
         return () => {
           media?.revokeStreamUrl(ticket);
         };
+      }
+      // Playback is a seek-driven ranged read; only an image is small enough to
+      // fall back to a buffered one.
+      if (kind !== 'image') {
+        setPreview({ status: 'error', message: NEEDS_PIPE });
+        return;
       }
     }
 
@@ -99,7 +109,7 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
   return preview;
 }
 
-function render(kind: Exclude<PreviewKind, 'none'>, bytes: ArrayBuffer, name: string): FilePreview {
+function render(kind: 'image' | 'pdf' | 'text', bytes: ArrayBuffer, name: string): FilePreview {
   if (kind === 'text') {
     try {
       return { status: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };

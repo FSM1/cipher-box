@@ -21,11 +21,21 @@ export interface MediaReader {
  */
 const DEFAULT_PIN_LINGER_MS = 5000;
 
+/** A read this broker gave up on, classified by the engine's code. */
+export interface MediaFailure {
+  readonly ticket: string;
+  readonly message: string;
+  /** See {@link isRecoverableEngineError}. */
+  readonly recoverable: boolean;
+}
+
 export interface MediaBrokerOptions {
   /** The plaintext window read per pull. */
   windowBytes?: number;
   /** How long a ticket's engine stream outlives its last cursor. */
   lingerMs?: number;
+  /** Told about every read this broker ends with an error. */
+  onFailure?: (failure: MediaFailure) => void;
 }
 
 /**
@@ -38,6 +48,15 @@ interface Pin {
   stream: Promise<StreamHandle> | null;
   cursors: number;
   linger: ReturnType<typeof setTimeout> | null;
+}
+
+/** A holder waiting for a ticket to stop being read. */
+interface IdleWaiter {
+  readonly resolve: (read: boolean) => void;
+  readonly startWithinMs: number;
+  /** Set once a body claims the ticket, which is what the deadline waits for. */
+  read: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 /** An open engine stream and the memo it came from, so a failure can drop it. */
@@ -67,8 +86,10 @@ interface Cursor {
 export class MediaBroker {
   private readonly cursors = new Map<number, Cursor>();
   private readonly pins = new Map<string, Pin>();
+  private readonly idleWaiters = new Map<string, Set<IdleWaiter>>();
   private readonly windowBytes: number;
   private readonly lingerMs: number;
+  private readonly onFailure: ((failure: MediaFailure) => void) | null;
   private port: MessagePortLike | null = null;
   private listener: ((event: MessageEvent) => void) | null = null;
 
@@ -79,6 +100,7 @@ export class MediaBroker {
   ) {
     this.windowBytes = options.windowBytes ?? MEDIA_WINDOW_BYTES;
     this.lingerMs = options.lingerMs ?? DEFAULT_PIN_LINGER_MS;
+    this.onFailure = options.onFailure ?? null;
   }
 
   /** The pipe carries one port; a fresh offer supersedes the port it replaces. */
@@ -102,6 +124,60 @@ export class MediaBroker {
     this.cursors.clear();
     for (const pin of this.pins.values()) void this.discard(pin);
     this.pins.clear();
+    // A replaced port is how a killed worker recovers: its bodies re-open on the
+    // port that replaces this one, so waiters get a fresh deadline, not an end.
+    for (const [ticket, waiters] of this.idleWaiters) {
+      for (const waiter of waiters) this.arm(ticket, waiter);
+    }
+  }
+
+  /**
+   * Resolves once no response body is reading `ticket`, with whether one ever
+   * did. A ticket is a bearer capability to plaintext, so its holder needs this
+   * to know when dropping it can no longer cut a transfer short.
+   *
+   * @param startWithinMs how long to wait for a body to claim the ticket. A
+   * claimed ticket has no deadline — a reader between windows is still reading.
+   */
+  whenIdle(ticket: string, startWithinMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const waiter: IdleWaiter = {
+        resolve,
+        startWithinMs,
+        read: (this.pins.get(ticket)?.cursors ?? 0) > 0,
+        timer: null,
+      };
+      this.arm(ticket, waiter);
+      const waiters = this.idleWaiters.get(ticket);
+      if (waiters === undefined) this.idleWaiters.set(ticket, new Set([waiter]));
+      else waiters.add(waiter);
+    });
+  }
+
+  private arm(ticket: string, waiter: IdleWaiter): void {
+    if (waiter.timer !== null) clearTimeout(waiter.timer);
+    waiter.timer = setTimeout(() => this.expire(ticket, waiter), waiter.startWithinMs);
+  }
+
+  private expire(ticket: string, waiter: IdleWaiter): void {
+    if ((this.pins.get(ticket)?.cursors ?? 0) > 0) {
+      this.arm(ticket, waiter);
+      return;
+    }
+    const waiters = this.idleWaiters.get(ticket);
+    waiters?.delete(waiter);
+    if (waiters?.size === 0) this.idleWaiters.delete(ticket);
+    waiter.resolve(waiter.read);
+  }
+
+  private settleIdle(ticket: string): void {
+    const waiters = this.idleWaiters.get(ticket);
+    if (waiters === undefined) return;
+    this.idleWaiters.delete(ticket);
+    for (const waiter of waiters) {
+      if (waiter.timer !== null) clearTimeout(waiter.timer);
+      waiter.resolve(waiter.read);
+    }
   }
 
   /**
@@ -117,6 +193,7 @@ export class MediaBroker {
         post(this.port, { type: 'cb:media:error', requestId, message: 'the stream was revoked' });
       }
     }
+    this.settleIdle(ticket);
     const pin = this.pins.get(ticket);
     if (pin === undefined) return;
     this.pins.delete(ticket);
@@ -130,10 +207,12 @@ export class MediaBroker {
     this.cursors.delete(requestId);
     cursor.pin.cursors -= 1;
     if (cursor.pin.cursors > 0) return;
+    this.settleIdle(cursor.ticket);
     cursor.pin.linger = setTimeout(() => this.evict(cursor.ticket), this.lingerMs);
   }
 
   private acquire(ticket: string): Pin {
+    for (const waiter of this.idleWaiters.get(ticket) ?? []) waiter.read = true;
     const held = this.pins.get(ticket);
     if (held === undefined) {
       const pin: Pin = { stream: null, cursors: 1, linger: null };
@@ -358,7 +437,13 @@ export class MediaBroker {
   private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {
     if (!this.isCurrent(requestId, cursor)) return;
     this.drop(requestId);
-    post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
+    const message = errorMessage(error);
+    post(port, { type: 'cb:media:error', requestId, message });
+    this.onFailure?.({
+      ticket: cursor.ticket,
+      message,
+      recoverable: isRecoverableEngineError(engineErrorCode(error)),
+    });
   }
 }
 

@@ -4,7 +4,8 @@
  * ticket URLs the UI hands to a media element.
  */
 
-import { MediaBroker, type MediaReader } from './broker.js';
+import { fanOut } from '../correlatedTransport.js';
+import { MediaBroker, type MediaFailure, type MediaReader } from './broker.js';
 import {
   MEDIA_PORT_OFFER,
   MEDIA_PORT_REQUEST,
@@ -12,6 +13,14 @@ import {
   type MediaPortOffer,
 } from './protocol.js';
 import { StreamRegistry, type MediaSource } from './registry.js';
+
+const noop = (): void => undefined;
+
+/** A stream that stopped, told to whoever holds the URL it stopped on. */
+export interface MediaStreamFailure extends Omit<MediaFailure, 'ticket'> {
+  /** The URL `createStreamUrl` returned, so a holder can match its own. */
+  readonly url: string;
+}
 
 /** The `ServiceWorker` surface the offer needs. */
 export interface ServiceWorkerLike {
@@ -55,6 +64,7 @@ export class MediaService {
   private readonly broker: MediaBroker;
   private readonly origin: string;
   private readonly createChannel: () => MessageChannel;
+  private readonly failureListeners = new Set<(failure: MediaStreamFailure) => void>();
   private registration: ServiceWorkerRegistrationLike | null = null;
   private channel: MessageChannel | null = null;
   private startup: Promise<void> | null = null;
@@ -63,8 +73,27 @@ export class MediaService {
   constructor(private readonly config: MediaServiceConfig) {
     this.origin = config.origin ?? globalThis.location.origin;
     this.registry = new StreamRegistry(this.origin);
-    this.broker = new MediaBroker(this.registry, config.reader);
+    this.broker = new MediaBroker(this.registry, config.reader, {
+      onFailure: (failure) => this.report(failure),
+    });
     this.createChannel = config.createChannel ?? ((): MessageChannel => new MessageChannel());
+  }
+
+  /**
+   * Subscribes to the streams that stop mid-read. Returns the unsubscribe.
+   *
+   * A response body that errors reaches a media element as an untyped network
+   * failure, so a player that wants to tell a ceiling refusal from a fault has
+   * to hear it here.
+   */
+  onStreamError(listener: (failure: MediaStreamFailure) => void): () => void {
+    if (this.disposed) return noop;
+    this.failureListeners.add(listener);
+    return () => this.failureListeners.delete(listener);
+  }
+
+  private report({ ticket, ...failure }: MediaFailure): void {
+    fanOut(this.failureListeners, { ...failure, url: this.registry.urlFor(ticket) });
   }
 
   /**
@@ -91,6 +120,14 @@ export class MediaService {
     return this.registry.register(source);
   }
 
+  /** {@link MediaBroker.whenIdle} for a ticket named by its URL. */
+  whenStreamIdle(url: string, startWithinMs: number): Promise<boolean> {
+    const ticket = ticketFromUrl(url, this.origin);
+    if (ticket === null || this.registry.lookup(ticket) === undefined)
+      return Promise.resolve(false);
+    return this.broker.whenIdle(ticket, startWithinMs);
+  }
+
   /** False when the URL named no live ticket of this tab's. */
   revokeStreamUrl(url: string): boolean {
     const ticket = ticketFromUrl(url, this.origin);
@@ -106,6 +143,7 @@ export class MediaService {
     const container = this.config.container;
     container.removeEventListener('controllerchange', this.onControllerChange);
     container.removeEventListener('message', this.onMessage);
+    this.failureListeners.clear();
     this.registry.clear();
     this.broker.close();
     this.brokerTo(null);
