@@ -39,6 +39,13 @@ pub trait StagingStore {
 
     /// Stores staged bytes under an opaque staging key, replacing any
     /// previous bytes at that key.
+    ///
+    /// The replacement is failure-atomic: an `Err` leaves the previous bytes
+    /// readable and byte-identical, and leaves a key that held none absent —
+    /// never a truncated or half-written value. Callers store whole-set
+    /// records here (the retire ledger's owed reclaims, the drain's op-id
+    /// high-water marks), so a lost replacement is destroyed durable state,
+    /// not a retryable hiccup.
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()>;
 
     /// The staged bytes at a key, verbatim; `None` if absent.

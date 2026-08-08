@@ -15,6 +15,8 @@ const kitSeams = [
   'floorStore',
   'snapshotCache',
   'stagingStore',
+  'stagingStoreFailedPut',
+  'stagingStoreFailedFirstPut',
   'credentialStore',
   'scheduler',
   'recordTransport',
@@ -50,6 +52,12 @@ test.describe('browser seam conformance', () => {
       expect(outcome.ok).toBe(true);
     });
   }
+
+  test('staging store hides and reclaims in-flight write debris', async ({ page }) => {
+    const outcome = await runSeam(page, 'stagingStoreDebris');
+    expect(outcome.error ?? '', 'staging debris behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
 
   test('http seam moves bytes and surfaces non-2xx as a response', async ({ page }) => {
     const outcome = await runSeam(page, 'http');
