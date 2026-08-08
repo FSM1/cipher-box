@@ -21,17 +21,27 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 
 Nothing on the write path — no folder create/rename/move/delete, no upload, no
 download. `blueprint/testing.md` scopes this tier at login-and-CRUD; two
-independent blockers, neither of them this suite's, hold the CRUD half:
+blockers, neither of them this suite's, hold the CRUD half. They are not
+independent: the first stops a write before it can reach the second.
 
-- **No affordance to drive.** `apps/web` ships no create, rename, move, delete,
-  or download control; the drop zone is the only write surface that exists.
-  Specs bind to `data-testid`s that ship, so those slices land with their
-  components rather than ahead of them.
+- **A first-run vault is never provisioned.** No production code publishes a
+  vault pointer — `seal_repoint` (`crates/engine/src/sync/pointer.rs`) has
+  callers only in tests, and both `deposit_write_seed` call sites in
+  `crates/engine/src/facade.rs` are fed from a pointer that already resolved.
+  So a cold start on a fresh account carries no write scope seed and no root
+  name; `spawn_resolve_tick_loop` returns without spawning, and the drain that
+  loop owns is the only thing that publishes. A queued op renders as pending
+  indefinitely, having reached no endpoint at all — which is what a folder
+  create in this suite does today.
 - **No pin store under the job.** The API pins hosted uploads through Kubo and
   this workflow starts none, so `POST /content/upload` answers 503. The engine
   reads that verdict as unclassified, charges no attempt, and retries instead of
-  dead-lettering — so an upload spec would hang rather than fail. A write-path
-  slice needs a Kubo service here first, as the contract suite already runs one.
+  dead-lettering — so once ops do drain, an upload spec would hang rather than
+  fail. A write-path slice needs a Kubo service here, as the contract suite
+  already runs one.
+
+Both are engine and workflow work, not suite work: specs that drive the shipped
+`data-testid`s can only follow them.
 
 ## How the suite logs in
 
