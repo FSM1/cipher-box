@@ -76,8 +76,6 @@ where
         "a persisted bookmark reads back with its pointer read key intact"
     );
 
-    // Reopen: the whole point of the store. An accepted share whose mailbox item
-    // is already acked is unrecoverable if a restart loses it.
     assert_eq!(
         held(&open().await).await,
         vec![(one.to_vec(), [0x8A; 32], Permission::Read)],
@@ -102,7 +100,6 @@ where
         "persist replaces the whole list rather than merging into it"
     );
 
-    // A dropped bookmark is genuinely gone, not resurrected by a stale copy.
     store
         .persist(&list(&[(two, 0x7D, Permission::Read)]))
         .await
@@ -113,8 +110,6 @@ where
         "a bookmark absent from the persisted list does not survive"
     );
 
-    // An empty list is a state the store must be able to hold, not a no-op that
-    // silently keeps the previous one.
     store.persist(&ReceivedSharesList::new()).await.unwrap();
     assert!(
         open().await.load().await.unwrap().is_empty(),

@@ -4838,9 +4838,8 @@ fn received_shares_accept_vectors_seal_reproduce_and_open() {
         );
 
         let blob = unhex(&v.name, &v.blob);
-        // The blob carries every bookmarked scope's pointerReadKey, so the
-        // owner's enc-subkey public half must stay AAD-bound and unserialized
-        // rather than sit in host storage naming whose keys these are.
+        // The owner tag stays AAD-bound and unserialized, so a blob naming a key
+        // that cannot open it is unrepresentable.
         let decoded = decode(&blob)
             .unwrap_or_else(|e| panic!("received-shares accept {}: decode ({e})", v.name));
         let keys: Vec<&str> = decoded

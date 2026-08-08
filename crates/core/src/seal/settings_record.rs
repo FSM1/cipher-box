@@ -51,10 +51,10 @@ pub struct SettingsRecordHeader {
 }
 
 /// The AAD of a settings record: its own clear header under the `cipherbox/v2`
-/// domain separator and the `settings-record` structure tag. A four-element
-/// array, structurally non-unifiable with the op record's five and the grant
-/// family's six. Public — the frozen layout, so the KAT generator pins it
-/// directly.
+/// domain separator and the `settings-record` structure tag. The tag is the
+/// separator — `received-shares` shares this four-element shape and is held
+/// apart by it and by its own HPKE `info`. Public — the frozen layout, so the
+/// KAT generator pins it directly.
 pub fn settings_record_aad(header: &SettingsRecordHeader) -> Vec<u8> {
     encode_fixed_depth(&Value::Array(vec![
         Value::Text(AAD_DOMAIN.to_string()),

@@ -3,6 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use zeroize::Zeroizing;
+
+use crate::grants::accept::StoredList;
 use crate::grants::{ReceivedShareStore, ReceivedSharesList};
 use crate::seams::{SeamError, SeamResult};
 
@@ -15,8 +18,9 @@ struct Inner {
     /// happened (or did not) around a self-healing re-accept.
     persists: u32,
     /// The persisted list as encoded bytes, so a reopen goes through the same
-    /// codec a real backing does.
-    stored: Option<Vec<u8>>,
+    /// codec a real backing does. Revision-free: a fake has one slot and no
+    /// torn-write window to arbitrate.
+    stored: Option<Zeroizing<Vec<u8>>>,
 }
 
 /// In-memory durable store for the recipient's received-shares list. Clones
@@ -40,8 +44,7 @@ impl InMemoryReceivedShareStore {
 
 impl ReceivedShareStore for InMemoryReceivedShareStore {
     async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
-        let encoded = shares
-            .encode()
+        let encoded = StoredList::encode(shares, 1)
             .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
         let mut inner = self.inner.lock().expect("lock");
         if inner.failing {
@@ -56,7 +59,8 @@ impl ReceivedShareStore for InMemoryReceivedShareStore {
         let stored = self.inner.lock().expect("lock").stored.clone();
         match stored {
             None => Ok(ReceivedSharesList::new()),
-            Some(bytes) => ReceivedSharesList::decode(&bytes)
+            Some(bytes) => StoredList::decode(&bytes)
+                .map(|stored| stored.shares)
                 .map_err(|e| SeamError::new(format!("received-shares decode failed: {e}"))),
         }
     }

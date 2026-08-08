@@ -3,10 +3,7 @@
 //!
 //! Local durable state like the op record and the content-key blob, not a
 //! published body — so it binds its own clear header rather than an
-//! [`AadContext`](super::AadContext). Each bookmark carries the scope's stable
-//! `pointerReadKey`, which nothing re-derives once the mailbox item that
-//! delivered it is acked, so this is the durable carrier of secret material and
-//! never a cache.
+//! [`AadContext`](super::AadContext).
 //!
 //! HPKE **auth mode to self** under the enc subkey closes the blob across
 //! accounts; its own structure tag and `info` string keep it distinct from every
@@ -203,9 +200,9 @@ mod tests {
         );
     }
 
-    /// The blob holds `pointerReadKey` material for every bookmarked scope, so
-    /// the owner's enc-subkey public half must not sit beside it in host storage
-    /// naming whose keys they are.
+    /// The owner tag is rebuilt from the opening key rather than read off the
+    /// wire, so a blob another identity's key would open is unrepresentable
+    /// rather than compared away.
     #[test]
     fn the_stored_blob_names_no_key() {
         let owner = secret(20);
@@ -295,6 +292,34 @@ mod tests {
             open_received_shares(&owner, &framed(enc, ciphertext))
                 .unwrap_err()
                 .check(),
+            "hpke-open-failed",
+        );
+    }
+
+    /// The reverse of the transplant above: neither direction unifies.
+    #[test]
+    fn a_reframed_received_shares_blob_fails_the_settings_key_schedule() {
+        let owner = secret(45);
+        let blob = seal_received_shares(&owner, &[46; 32], b"shares").unwrap();
+        let decoded = decode(&blob).unwrap();
+        let map = decoded.as_map().unwrap();
+        let enc = map.get("enc").unwrap().as_bytes().unwrap().to_vec();
+        let ciphertext = map.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+
+        let mut m = Map::new();
+        m.insert("ciphertext", Value::Bytes(ciphertext));
+        m.insert("enc", Value::Bytes(enc));
+        m.insert(
+            "v",
+            Value::Unsigned(super::super::settings_record::SETTINGS_RECORD_V),
+        );
+        assert_eq!(
+            super::super::settings_record::open_settings_record(
+                &owner,
+                &encode(&Value::Map(m)).unwrap()
+            )
+            .unwrap_err()
+            .check(),
             "hpke-open-failed",
         );
     }

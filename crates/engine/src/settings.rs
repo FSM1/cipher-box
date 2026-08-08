@@ -37,7 +37,7 @@ use zeroize::Zeroizing;
 use crate::api::ApiClient;
 use crate::content::validate_byo_config;
 use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy};
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::gate::floor;
 use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
@@ -493,18 +493,7 @@ where
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let revision = next_revision(floors, &name).await?;
     let body = encode_settings_body(settings, revision).map_err(SettingsPublishError::Codec)?;
-    let mut ephemeral = Zeroizing::new([0u8; 32]);
-    entropy
-        .fill(ephemeral.as_mut_slice())
-        .map_err(SettingsPublishError::Entropy)?;
-    // A seam that reports success having written nothing would reuse one
-    // ephemeral across every version of a published record — a confidentiality
-    // break, so it fails closed here rather than reaching the network.
-    if ephemeral.iter().all(|byte| *byte == 0) {
-        return Err(SettingsPublishError::Entropy(EntropyError::new(
-            "entropy seam produced an all-zero HPKE ephemeral",
-        )));
-    }
+    let ephemeral = fresh_ephemeral(entropy).map_err(SettingsPublishError::Entropy)?;
     let enc_secret = kdf::enc_subkey(login_secret);
     let block = seal_settings_record(&enc_secret, &ephemeral, &body)
         .map_err(SettingsPublishError::Codec)?;

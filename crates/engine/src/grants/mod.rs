@@ -22,7 +22,7 @@ pub mod revocation;
 
 pub use accept::{
     AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
-    SentShare, SharePointer, SharesCodecError, accept_share,
+    SentShare, SharePointer, accept_share,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
