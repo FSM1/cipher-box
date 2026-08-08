@@ -474,6 +474,7 @@ fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
         // owner-write-blob and the owner recovers its scope write seed — the
         // seed the drain derives every new node's name and signer from.
         owner_write_blob_epoch: Some(EPOCH),
+        write_history_link: Vec::new(),
         grants: Vec::new(),
     });
     blocks.put(fixture.head_block.clone());
@@ -5831,6 +5832,7 @@ fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: Ch
         child_scope_index: Vec::new(),
         parent_node_seed: None,
         owner_write_blob_epoch: Some(EPOCH),
+        write_history_link: Vec::new(),
         grants: Vec::new(),
     });
     blocks.put(fixture.head_block.clone());

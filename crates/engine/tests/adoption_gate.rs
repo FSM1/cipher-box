@@ -37,7 +37,7 @@ use cipherbox_engine::gate::{
 };
 use cipherbox_engine::net::MAX_RECORD_BYTES;
 use cipherbox_engine::rotation::{
-    CommittedSet, PrevEpochSeed, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+    CommittedSet, PrevEpochSeed, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
 };
 use cipherbox_engine::seams::{FloorStore, RecordTransport, Scheduler};
 use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
@@ -1600,7 +1600,6 @@ impl ResealedFixture {
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],
-            write_history_link: b"",
             direct_child_scope_index: &[],
         };
         let reseal = |read_epoch: u64,
@@ -1616,6 +1615,7 @@ impl ResealedFixture {
                     prev: Some(prev),
                     write_scope_seed: &RESEAL_WRITE_SCOPE_SEED,
                     write_epoch: RESEAL_WRITE_EPOCH,
+                    write_history: WriteHistory::Carried(&[]),
                     pointer_read_key: &pointer_read_key,
                 },
                 &committed,

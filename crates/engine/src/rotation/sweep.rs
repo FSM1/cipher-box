@@ -59,7 +59,9 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Public;
 
 use super::eager_set::{ChildIndexResolver, EnumerationError, ResolveFailure, enumerate_eager_set};
-use super::reseal::{CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root};
+use super::reseal::{
+    CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
+};
 use super::rotate::{ResealedScopeRoot, ScopeRootPublishError, ScopeRootPublisher};
 use crate::entropy::Entropy;
 use crate::gate::floor;
@@ -364,13 +366,13 @@ where
             prev: None,
             write_scope_seed: &target.write_scope_seed,
             write_epoch: target.write_epoch,
+            write_history: WriteHistory::Carried(&target.write_history_link),
             pointer_read_key: &target.pointer_read_key,
         };
         let committed = CommittedSet {
             commitment: &target.commitment,
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
-            write_history_link: &target.write_history_link,
             direct_child_scope_index: &canonical_index,
         };
 

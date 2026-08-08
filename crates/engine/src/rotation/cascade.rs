@@ -64,7 +64,8 @@ use cipherbox_core::suite::x25519::X25519Public;
 
 use super::eager_set::{ResolveFailure, bind_child_labels};
 use super::reseal::{
-    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
+    reseal_scope_root,
 };
 use super::rotate::{
     ResealedScopeRoot, RotateScopePlan, ScopeRootPublishError, ScopeRootPublisher,
@@ -361,6 +362,7 @@ where
         }),
         write_scope_seed: plan.write_scope_seed,
         write_epoch: plan.write_epoch,
+        write_history: WriteHistory::Carried(plan.write_history_link),
         pointer_read_key: plan.pointer_read_key,
     };
 
@@ -534,13 +536,13 @@ where
                     commitment: &target.commitment,
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
-                    write_history_link: &target.write_history_link,
                     direct_child_scope_index: &target.direct_child_scope_index,
                 },
                 current_override_seed: &target.override_seed,
                 current_read_epoch: target.current_read_epoch,
                 write_scope_seed: &target.write_scope_seed,
                 write_epoch: target.write_epoch,
+                write_history_link: &target.write_history_link,
                 pointer_read_key: &target.pointer_read_key,
                 carried_history_links: &target.carried_history_links,
             };
@@ -935,13 +937,13 @@ mod tests {
                     commitment: &self.commitment,
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,
-                    write_history_link: b"",
                     direct_child_scope_index: root_children,
                 },
                 current_override_seed: &self.current_seed,
                 current_read_epoch: 4,
                 write_scope_seed: &self.write_scope_seed,
                 write_epoch: 3,
+                write_history_link: b"",
                 pointer_read_key: &self.pointer_read_key,
                 carried_history_links: &[],
             }

@@ -37,7 +37,7 @@ use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
 use cipherbox_engine::rotation::{
     PrevEpochSeed, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, SweepResolver, SweepTarget,
+    ScopeRootPublishError, ScopeRootPublisher, SweepResolver, SweepTarget, WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
@@ -1257,12 +1257,12 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
                 prev: None::<PrevEpochSeed<'_>>,
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
+                write_history: WriteHistory::Carried(&[]),
                 pointer_read_key: &parent_pointer_read_key,
             },
             commitment: &parent_commitment,
             commitment_sig: &parent_commitment_sig,
             grant_ledger: &[],
-            write_history_link: &[],
             current_child_index: &[],
             carried_history_links: &[],
         },

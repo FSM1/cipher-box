@@ -50,16 +50,17 @@ pub use eager_set::{
     ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
 };
 pub use reseal::{
-    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
+    reseal_scope_root,
 };
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, ScopeRootPublishError,
     ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{
-    RepointChannel, RepublishedNode, RotateScopeWritePlan, WritePublishError, WriteRotateError,
-    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    build_repoint_object, derive_write_name, rotate_scope_write,
+    RepointChannel, RepublishedNode, ResumedWriteWave, RotateScopeWritePlan, WritePublishError,
+    WriteRotateError, WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver,
+    WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub use sweep::{SweepError, SweepOutcome, SweepResolver, SweepTarget, run_sweep, sweep_pass};
 pub use trigger::{

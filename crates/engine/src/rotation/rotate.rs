@@ -39,7 +39,8 @@ use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
 
 use super::reseal::{
-    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
+    reseal_scope_root,
 };
 use crate::entropy::Entropy;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
@@ -140,6 +141,9 @@ pub struct RotateScopePlan<'a> {
     pub write_scope_seed: &'a [u8; SECRET_LEN],
     /// The write epoch (unchanged by a read rotation).
     pub write_epoch: u64,
+    /// The root's existing write-plane history link. A read rotation cuts no
+    /// write plane, so it is carried verbatim ([`WriteHistory::Carried`]).
+    pub write_history_link: &'a [u8],
     /// The stable per-scope pointer read key carried in every grant blob.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
     /// The scope's existing per-epoch history links, oldest first. Re-signed and
@@ -251,6 +255,7 @@ where
         }),
         write_scope_seed: plan.write_scope_seed,
         write_epoch: plan.write_epoch,
+        write_history: WriteHistory::Carried(plan.write_history_link),
         pointer_read_key: plan.pointer_read_key,
     };
 
@@ -439,13 +444,13 @@ mod tests {
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
-                    write_history_link: b"",
                     direct_child_scope_index: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
+                write_history_link: b"",
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -548,13 +553,13 @@ mod tests {
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
-                    write_history_link: b"",
                     direct_child_scope_index: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 1,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 1,
+                write_history_link: b"",
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -616,13 +621,13 @@ mod tests {
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
-                    write_history_link: b"",
                     direct_child_scope_index: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
+                write_history_link: b"",
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -679,13 +684,13 @@ mod tests {
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
-                    write_history_link: b"",
                     direct_child_scope_index: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: u64::MAX,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
+                write_history_link: b"",
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };

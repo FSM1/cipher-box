@@ -25,16 +25,17 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
-use super::adopter::RootAdopter;
+use super::adopter::{RootAdopter, open_write_scope_seed_at};
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_with_section,
 };
 use super::child::ChildAdopter;
+use super::pointer_fetch::RecordPointerFetch;
 use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_inline};
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -49,14 +50,15 @@ use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, RepointChannel,
-    RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
-    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WritePublishError,
-    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name, reseal_scope_root,
+    CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, PrevEpochSeed,
+    RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
+    ResumedWriteWave, ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WriteHistory,
+    WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, derive_write_name,
+    reseal_scope_root,
 };
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
-use crate::sync::pointer::{scope_pointer_name, scope_pointer_signer};
+use crate::sync::pointer::{PointerFetch, open_repoint, scope_pointer_name, scope_pointer_signer};
 
 /// The owner key material the rotation edges run under. The owner is the
 /// terminal owner of its own key material, so nothing here is zeroized.
@@ -760,6 +762,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub authorized_commitment: &'a GrantSetCommitment,
     /// Derives the scope pointer's name and its record signer (owner-only).
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
+    /// The pointer-payload envelope version the scope pointer is read under
+    /// (`RotateScopeWritePlan::payload_version`).
+    pub payload_version: u64,
     /// The root name the wave is moving off. It lingers serving the tombstone, so
     /// [`WriteWaveNet::retire`] refuses a batch naming it.
     pub current_root_name: &'a IpnsName,
@@ -882,6 +887,9 @@ struct RootPlane {
     section: GrantSection,
     read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     write_body: WriteBody,
+    /// The write scope seed the root's own owner-write blob yielded — the one the
+    /// wave retires, sealed into the moved root's fresh write-plane history link.
+    write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     /// The write epoch the section was sealed at — the floor the wave advances
     /// past.
     write_epoch: u64,
@@ -969,6 +977,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::AscentLinkMismatch
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
+        | ResealError::HistoryLinkNotDescending
         | ResealError::Encode(_) => WritePublishError::Rejected,
     }
 }
@@ -1052,18 +1061,7 @@ where
         record_bytes: &[u8],
     ) -> Result<WaveSource, WritePublishError> {
         let identity = self.owner.verifying_key();
-        let mut adopter = RootAdopter::new(
-            self.gateway,
-            self.http,
-            self.floors,
-            self.owner_enc_secret,
-            &identity,
-            self.scope_id,
-        );
-        if let Some(seed) = self.parent_node_seed {
-            adopter = adopter.under_parent_node_seed(Zeroizing::new(*seed));
-        }
-        let gated = gated_scope_root(&adopter, name, record_bytes)
+        let gated = gated_scope_root(&self.root_adopter(&identity), name, record_bytes)
             .await
             .map_err(wave_read_verdict)?;
         let envelope = gated.envelope;
@@ -1097,6 +1095,7 @@ where
                 section: gated.section,
                 read_scope_seed,
                 write_body,
+                write_scope_seed,
                 write_epoch,
             }),
         })
@@ -1146,6 +1145,23 @@ where
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
+    }
+
+    /// The adopter every root read of this scope runs through, under the
+    /// rotating root's own ancestor seed when it has one.
+    fn root_adopter<'i>(&'i self, identity: &'i EcdsaVerifier) -> RootAdopter<'i, H, F> {
+        let adopter = RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.owner_enc_secret,
+            identity,
+            self.scope_id,
+        );
+        match self.parent_node_seed {
+            Some(seed) => adopter.under_parent_node_seed(Zeroizing::new(*seed)),
+            None => adopter,
+        }
     }
 }
 
@@ -1330,13 +1346,16 @@ where
                 prev: None,
                 write_scope_seed: fresh_write_scope_seed,
                 write_epoch: node.write_epoch,
+                write_history: WriteHistory::Cut(PrevEpochSeed {
+                    seed: &plane.write_scope_seed,
+                    epoch: plane.write_epoch,
+                }),
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
-                write_history_link: &plane.write_body.write_history_link,
                 direct_child_scope_index: &plane.write_body.direct_child_scope_index,
             },
             &plane.section.history_links,
@@ -1552,6 +1571,75 @@ where
             child_node_ids,
         })
     }
+
+    /// Recover an in-flight wave from the canonical scope pointer.
+    ///
+    /// The moved root's name derives from the very seed a resume needs, so the
+    /// owner-signed pointer is the one published anchor that breaks that circle;
+    /// the seed itself still comes from the moved root's own blob through the
+    /// gate, never from the pointer.
+    async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+        let pointer = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
+        let block = match RecordPointerFetch::new(self.transport)
+            .fetch(&pointer)
+            .await
+        {
+            Ok(Some(block)) => block,
+            // No pointer record: this scope has never been re-pointed, so there is
+            // no wave to pick up. A seam failure is not that answer — reporting it
+            // as one mints a second seed for a wave already in flight and orphans
+            // every name the first one registered.
+            Ok(None) => return Ok(None),
+            Err(_) => return Err(ResolveFailure::Unavailable),
+        };
+        let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
+        let repoint = open_repoint(
+            &pointer_read_key,
+            self.payload_version,
+            &self.scope_id,
+            &self.owner.verifying_key(),
+            &block,
+        )
+        .map_err(|_| ResolveFailure::Rejected)?;
+        if repoint.prev_root.as_ref() != Some(self.current_root_name) {
+            return Ok(None);
+        }
+        let Some((_, record_bytes)) =
+            fanout_get_verify(self.transport, &repoint.current_root).await
+        else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let identity = self.owner.verifying_key();
+        let gated = gated_scope_root(
+            &self.root_adopter(&identity),
+            &repoint.current_root,
+            &record_bytes,
+        )
+        .await?;
+        if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
+            return Err(ResolveFailure::Rejected);
+        }
+        // The re-point object is the owner's own signed statement of the write
+        // epoch, so the blob is opened there rather than at the durable floor —
+        // which a resume must leave where the pre-wave root can still be read.
+        let owb = gated
+            .section
+            .owner_write_blob
+            .as_ref()
+            .ok_or(ResolveFailure::Rejected)?;
+        let seed = open_write_scope_seed_at(
+            self.owner_enc_secret,
+            &gated.envelope,
+            owb,
+            repoint.write_epoch,
+        )
+        .ok_or(ResolveFailure::Rejected)?;
+        Ok(Some(ResumedWriteWave {
+            write_scope_seed: SecretBytes::new(*seed),
+            root_name: repoint.current_root,
+            write_epoch: repoint.write_epoch,
+        }))
+    }
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWavePublisher
@@ -1645,10 +1733,11 @@ mod tests {
     use cipherbox_core::ipns::{IpnsRecord, VerifiedRecord};
     use cipherbox_core::seal::{
         AscentLink, ChildRef, GrantBlobPayload, GrantSetCommitment, NodeKind, Permission,
-        STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-        decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
-        grant_section_bytes, open_ascent_link, open_grant_blob, open_owner_write_blob,
-        open_read_body, seal_read_body, set_grant_section, sign_grant_set, verify_grant_set,
+        STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+        STRUCT_TAG_OWNER_WRITE_BLOB, decode_envelope, decode_grant_section, encode_envelope,
+        encode_grant_section, grant_section_bytes, open_ascent_link, open_grant_blob,
+        open_history_link, open_owner_write_blob, open_read_body, seal_read_body,
+        set_grant_section, sign_grant_set, verify_grant_set,
     };
     use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -1739,6 +1828,7 @@ mod tests {
             child_scope_index,
             parent_node_seed,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         })
     }
@@ -2151,13 +2241,13 @@ mod tests {
                 }),
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
+                write_history: WriteHistory::Carried(&[]),
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
                 commitment: &fixture.grant_section.commitment,
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
-                write_history_link: &[],
                 direct_child_scope_index: &[],
             },
             &[],
@@ -2442,13 +2532,13 @@ mod tests {
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
-                    write_history_link: &[],
                     direct_child_scope_index: &[],
                 },
                 current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                 current_read_epoch: OWNER_ROOT_EPOCH,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
+                write_history_link: &[],
                 pointer_read_key: &POINTER_READ_KEY,
                 carried_history_links: &[],
             },
@@ -2537,13 +2627,13 @@ mod tests {
                 prev: None,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
+                write_history: WriteHistory::Carried(&[]),
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
-                write_history_link: &[],
                 direct_child_scope_index: children,
             },
             &[],
@@ -2884,13 +2974,13 @@ mod tests {
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
-                    write_history_link: &[],
                     direct_child_scope_index: index,
                 },
                 current_override_seed: override_seed,
                 current_read_epoch: read_epoch,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
+                write_history_link: &[],
                 pointer_read_key: &pointer_read_key,
                 carried_history_links: &[],
             },
@@ -3138,6 +3228,9 @@ mod tests {
     // --- The write-plane name wave ([`WriteWaveNet`]) ---
 
     /// The write scope seed the wave moves TO — every new name derives from it.
+    /// Used where a test hands the publisher its own orders; a test that runs
+    /// `rotate_scope_write` takes the seed the wave mints
+    /// ([`SeededEntropy::first_draw`]).
     const FRESH_WRITE_SCOPE_SEED: [u8; 32] = [0xa5; 32];
 
     /// The wave's owner arm. `writer_pseudonym` must be the signer the fixture's
@@ -3201,6 +3294,7 @@ mod tests {
             gated_root: GatedWaveRoot::default(),
             subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
+            payload_version: 1,
             current_root_name: current_root,
         }
     }
@@ -3380,6 +3474,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -3431,6 +3526,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -3545,6 +3641,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants,
         })
     }
@@ -4000,6 +4097,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -4054,6 +4152,7 @@ mod tests {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -4224,29 +4323,43 @@ mod tests {
 
     #[test]
     fn a_reseal_seam_failure_stays_retryable_and_a_trust_failure_does_not() {
-        assert_eq!(
-            reseal_verdict(ResealError::Entropy(EntropyError::new("seam down"))),
-            WritePublishError::NotLanded,
-            "the entropy seam being down is availability, not a verdict on the section"
-        );
-
-        for terminal in [
+        // One sample per `ResealError` variant. The `match` below is the
+        // enforcement: a variant added without a classification here stops this
+        // test compiling, so none can be silently omitted from the axis.
+        for sample in [
+            ResealError::Entropy(EntropyError::new("seam down")),
             ResealError::LedgerDivergesFromCommitment,
             ResealError::SignerNotCommitted,
             ResealError::UnusableRecipientKey,
+            ResealError::TagNotBoundToRecipient,
             ResealError::AscentLinkMismatch,
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
+            ResealError::HistoryLinkNotDescending,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
         ] {
-            let check = terminal.check();
-            assert_eq!(
-                reseal_verdict(terminal),
-                WritePublishError::Rejected,
-                "{check} is deterministic on inputs the wave already gated; retrying never converges"
-            );
+            let (expected, why) = match &sample {
+                ResealError::Entropy(_) => (
+                    WritePublishError::NotLanded,
+                    "the entropy seam being down is availability, not a verdict on the section",
+                ),
+                ResealError::LedgerDivergesFromCommitment
+                | ResealError::SignerNotCommitted
+                | ResealError::UnusableRecipientKey
+                | ResealError::TagNotBoundToRecipient
+                | ResealError::AscentLinkMismatch
+                | ResealError::TooManyHistoryLinks
+                | ResealError::TooManyCommittedGrants
+                | ResealError::HistoryLinkNotDescending
+                | ResealError::Encode(_) => (
+                    WritePublishError::Rejected,
+                    "deterministic on inputs the wave already gated; retrying never converges",
+                ),
+            };
+            let check = sample.check();
+            assert_eq!(reseal_verdict(sample), expected, "{check}: {why}");
         }
     }
 
@@ -4267,6 +4380,16 @@ mod tests {
         harness: &Harness<InMemoryRecordStore>,
         index: impl FnOnce(&OwnerRootFixture, &IpnsName) -> Vec<ChildScopeRef>,
     ) -> StagedScope {
+        staged_scope_with(harness, index, Vec::new())
+    }
+
+    /// The same staging, with `write_history_link` planted in the root's write
+    /// body — bytes any committed writer can author.
+    fn staged_scope_with(
+        harness: &Harness<InMemoryRecordStore>,
+        index: impl FnOnce(&OwnerRootFixture, &IpnsName) -> Vec<ChildScopeRef>,
+        write_history_link: Vec<u8>,
+    ) -> StagedScope {
         let leaf_old = stage_node(harness, LEAF, &folder(Vec::new()));
         let mid_name = stage_node(harness, MID, &folder(vec![ref_to(LEAF, &leaf_old)]));
         let descendant = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
@@ -4278,6 +4401,7 @@ mod tests {
                 ref_to(CHILD_SCOPE, &descendant.name),
             ],
             index(&descendant, &mid_name),
+            write_history_link,
         );
         StagedScope {
             root,
@@ -4292,12 +4416,13 @@ mod tests {
         })
     }
 
-    /// A staged, gate-passing scope root naming `children` and committing
-    /// `child_scope_index`.
+    /// A staged, gate-passing scope root naming `children`, committing
+    /// `child_scope_index`, and publishing `write_history_link` in its write body.
     fn staged_root(
         harness: &Harness<InMemoryRecordStore>,
         children: Vec<ChildRef>,
         child_scope_index: Vec<ChildScopeRef>,
+        write_history_link: Vec<u8>,
     ) -> OwnerRootFixture {
         let root = owner_root_fixture(OwnerRootSpec {
             owner_identity: &owner_identity(),
@@ -4308,6 +4433,7 @@ mod tests {
             child_scope_index,
             parent_node_seed: None,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link,
             grants: Vec::new(),
         });
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
@@ -4329,7 +4455,6 @@ mod tests {
             current_write_epoch: OWNER_ROOT_EPOCH,
             min_read_epoch: OWNER_ROOT_EPOCH,
             current_root_name: &root.name,
-            resume_write_scope_seed: Some(&FRESH_WRITE_SCOPE_SEED),
         }
     }
 
@@ -4435,6 +4560,7 @@ mod tests {
             &harness,
             vec![ref_to(MID, &mid_old), ref_to(LEAF, &leaf_old)],
             Vec::new(),
+            Vec::new(),
         );
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
@@ -4452,7 +4578,7 @@ mod tests {
         let served = stage_node(&harness, LEAF, &folder(Vec::new()));
         // The root names a node id at a record that claims a different id — the
         // transplant the child gate refuses.
-        let root = staged_root(&harness, vec![ref_to(MID, &served)], Vec::new());
+        let root = staged_root(&harness, vec![ref_to(MID, &served)], Vec::new(), Vec::new());
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
@@ -4486,7 +4612,12 @@ mod tests {
     fn an_unresolvable_node_aborts_the_wave_rather_than_truncating_the_subtree() {
         let harness = Harness::plain();
         let unserved = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF);
-        let root = staged_root(&harness, vec![ref_to(LEAF, &unserved)], Vec::new());
+        let root = staged_root(
+            &harness,
+            vec![ref_to(LEAF, &unserved)],
+            Vec::new(),
+            Vec::new(),
+        );
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
         let mut entropy = SeededEntropy::new(13);
@@ -4533,11 +4664,9 @@ mod tests {
         ))
         .expect("the wave completes over the production seams");
 
+        let fresh = SeededEntropy::first_draw(13);
         assert_eq!(outcome.new_write_epoch, OWNER_ROOT_EPOCH + 1);
-        assert_eq!(
-            outcome.new_root_name,
-            derive_write_name(&FRESH_WRITE_SCOPE_SEED, &SCOPE)
-        );
+        assert_eq!(outcome.new_root_name, derive_write_name(&fresh, &SCOPE));
         assert_eq!(
             outcome.interior_node_count, 2,
             "MID and LEAF, and not the descendant scope root"
@@ -4575,9 +4704,7 @@ mod tests {
             let next = refs
                 .iter()
                 .map(|bytes| core::str::from_utf8(bytes).expect("a utf8 name"))
-                .find(|text| {
-                    *text == derive_write_name(&FRESH_WRITE_SCOPE_SEED, &expected).as_str()
-                })
+                .find(|text| *text == derive_write_name(&fresh, &expected).as_str())
                 .expect("the parent names the child at the name the wave moved it to");
             name = IpnsName::parse(next).expect("a canonical name");
             node_id = expected;
@@ -4591,6 +4718,152 @@ mod tests {
             child_names_of(&read_only_open(&harness, SCOPE, &outcome.new_root_name))
                 .contains(&staged.descendant.name.as_str().as_bytes().to_vec()),
             "the descendant scope root keeps the name its own wave will move"
+        );
+    }
+
+    #[test]
+    fn a_planted_write_history_link_is_never_re_signed_into_the_moved_root() {
+        // No owner signature covers `writeHistoryLink`, and the resume reads a
+        // seed from exactly there (`WriteHistory`). The cut mints its own.
+        const PLANTED: &[u8] = b"planted-by-a-write-grantee";
+        let harness = Harness::plain();
+        let staged = staged_scope_with(
+            &harness,
+            |descendant, _| vec![child_ref(CHILD_SCOPE, descendant)],
+            PLANTED.to_vec(),
+        );
+        let owner = owner_identity();
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        let mut entropy = SeededEntropy::new(61);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&staged.root, &owner),
+        ))
+        .expect("the wave completes");
+
+        let fresh = SeededEntropy::first_draw(61);
+        let new_epoch = OWNER_ROOT_EPOCH + 1;
+        let (_, envelope) = published_head(&harness, &outcome.new_root_name);
+        let section = published_section(&harness, &outcome.new_root_name);
+        let body = open_write_body(&envelope, &section, &SCOPE, &fresh, new_epoch)
+            .expect("the moved root's write body opens under the fresh write scope seed");
+
+        assert_ne!(
+            body.write_history_link.as_slice(),
+            PLANTED,
+            "the planted bytes are not what the owner re-signed"
+        );
+        let key = kdf::structure_key(&fresh, STRUCT_TAG_HISTORY_LINK);
+        let link_ctx = AadContext {
+            v: ENVELOPE_V,
+            id: SCOPE,
+            scope: SCOPE,
+            epoch: new_epoch,
+            struct_tag: STRUCT_TAG_HISTORY_LINK,
+        };
+        let payload = open_history_link(key.as_bytes(), &link_ctx, &body.write_history_link)
+            .expect("the wave's own link opens under the seed it published");
+        assert!(ct_eq(payload.prev_seed(), &OWNER_ROOT_WRITE_SCOPE_SEED));
+        assert_eq!(payload.prev_epoch, OWNER_ROOT_EPOCH);
+    }
+
+    #[test]
+    fn the_recovery_seam_reads_the_fresh_seed_off_the_published_root() {
+        // #26 D8: no checkpoints. A wave that flipped the pointer leaves its fresh
+        // write scope seed reachable from published records alone — the pointer
+        // names the moved root, the moved root's owner-write blob carries the seed
+        // — so a brand-new orchestrator resumes on it.
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let outcome = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(62);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes")
+        };
+
+        // A fresh net: no gated root parked, no subtree index, nothing carried.
+        let resumed = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        let recovered = block_on(resumed.recover_wave())
+            .expect("the recovery reads published state")
+            .expect("a flipped pointer names an in-flight wave");
+        assert_eq!(recovered.root_name, outcome.new_root_name);
+        assert!(
+            ct_eq(
+                recovered.write_scope_seed.as_bytes(),
+                &SeededEntropy::first_draw(62)
+            ),
+            "the seed comes back off the published root, not from memory"
+        );
+        assert_eq!(
+            derive_write_name(recovered.write_scope_seed.as_bytes(), &SCOPE),
+            recovered.root_name,
+            "the recovered pair satisfies the check rotate_scope_write imposes"
+        );
+    }
+
+    #[test]
+    fn a_scope_pointer_naming_another_predecessor_is_not_this_waves_recovery() {
+        // The pointer is scope-wide and outlives any one rotation: only a re-point
+        // whose `prevRoot` is the root THIS wave is moving off describes this
+        // wave. Anything else is an earlier rotation's, and resuming on its seed
+        // would move the subtree to names the current root never had.
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(63);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes");
+        }
+
+        let elsewhere = derive_write_name(&[0x3c; 32], &SCOPE);
+        let other = wave(
+            &harness,
+            &owner,
+            &elsewhere,
+            &staged.root.grant_section.commitment,
+        );
+        assert!(
+            block_on(other.recover_wave())
+                .expect("the recovery reads published state")
+                .is_none(),
+            "a re-point off another predecessor is not this wave's to resume"
         );
     }
 

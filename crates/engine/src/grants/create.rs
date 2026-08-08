@@ -46,8 +46,8 @@ use crate::grants::mint_grant_row;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
     CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, derive_write_name,
-    reseal_scope_root, sweep_pass,
+    ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, WriteHistory,
+    derive_write_name, reseal_scope_root, sweep_pass,
 };
 use crate::seams::{FloorStore, Mailbox, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
@@ -133,8 +133,6 @@ pub struct ParentScopePlan<'a> {
     pub commitment_sig: &'a [u8; ECDSA_SIG_LEN],
     /// The parent's grant ledger (unchanged by this op).
     pub grant_ledger: &'a [GrantLedgerEntry],
-    /// The parent's write-plane history link (unchanged by this op).
-    pub write_history_link: &'a [u8],
     /// The parent's current direct-child-scope index (before this grant).
     pub current_child_index: &'a [ChildScopeRef],
     /// The parent's carried read-plane history links.
@@ -351,6 +349,7 @@ where
             prev: None,
             write_scope_seed: grantee.write_scope_seed,
             write_epoch: grantee.write_epoch,
+            write_history: WriteHistory::Carried(&[]),
             pointer_read_key: grantee.pointer_read_key,
         };
         // Mint-canonical: the adopted index carries the same canonicalization the
@@ -361,7 +360,6 @@ where
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
-            write_history_link: &[],
             direct_child_scope_index: &grantee_child_index,
         };
         reseal_scope_root(entropy, &identity, &seeds, &committed, &[])
@@ -414,6 +412,7 @@ where
             prev: None,
             write_scope_seed: &target.write_scope_seed,
             write_epoch: target.write_epoch,
+            write_history: WriteHistory::Carried(&target.write_history_link),
             pointer_read_key: &target.pointer_read_key,
         };
         let canonical_index = canonicalize(&target.direct_child_scope_index);
@@ -421,7 +420,6 @@ where
             commitment: &target.commitment,
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
-            write_history_link: &target.write_history_link,
             direct_child_scope_index: &canonical_index,
         };
         let section = reseal_scope_root(
@@ -466,7 +464,6 @@ where
             commitment: parent.commitment,
             commitment_sig: parent.commitment_sig,
             grant_ledger: parent.grant_ledger,
-            write_history_link: parent.write_history_link,
             direct_child_scope_index: &parent_index,
         };
         // The owner runs this leg, so the tag binding is not the caller's to
@@ -797,6 +794,7 @@ mod tests {
                 override_seed: &parent_override_seed,
                 read_epoch: 3,
                 prev: None::<PrevEpochSeed<'_>>,
+                write_history: WriteHistory::Carried(&[]),
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
                 pointer_read_key: &parent_pointer_read_key,
@@ -804,7 +802,6 @@ mod tests {
             commitment: &parent_commitment,
             commitment_sig: &parent_commitment_sig,
             grant_ledger: &[],
-            write_history_link: &[],
             current_child_index: &[],
             carried_history_links: &[],
         };
@@ -915,6 +912,7 @@ mod tests {
                     override_seed: &parent_override_seed,
                     read_epoch: 3,
                     prev: None::<PrevEpochSeed<'_>>,
+                    write_history: WriteHistory::Carried(&[]),
                     write_scope_seed: &parent_write_scope_seed,
                     write_epoch: 2,
                     pointer_read_key: &parent_pointer_read_key,
@@ -922,7 +920,6 @@ mod tests {
                 commitment: &parent_commitment,
                 commitment_sig: &parent_commitment_sig,
                 grant_ledger: &parent_ledger,
-                write_history_link: &[],
                 current_child_index: &[],
                 carried_history_links: &[],
             };
