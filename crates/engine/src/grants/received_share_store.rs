@@ -12,7 +12,7 @@ use core::cell::RefCell;
 use crate::entropy::{Entropy, fresh_ephemeral};
 use crate::seams::{SeamError, SeamResult, StagingStore};
 use crate::sync::owner_scoped_key;
-use cipherbox_core::seal::{open_received_shares, seal_received_shares};
+use cipherbox_core::seal::{OwnerLocalKind, open_owner_local, seal_owner_local};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::accept::{
@@ -67,8 +67,13 @@ impl<St: StagingStore, E: Entropy> ReceivedShareStore for StagingReceivedShareSt
             .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
         let ephemeral = fresh_ephemeral(&mut *self.entropy.borrow_mut())
             .map_err(|e| SeamError::new(e.message().to_string()))?;
-        let blob = seal_received_shares(self.enc_secret, &ephemeral, &body)
-            .map_err(|e| SeamError::new(format!("received-shares seal failed: {e}")))?;
+        let blob = seal_owner_local(
+            self.enc_secret,
+            OwnerLocalKind::ReceivedShares,
+            &ephemeral,
+            &body,
+        )
+        .map_err(|e| SeamError::new(format!("received-shares seal failed: {e}")))?;
         self.staging
             .put_staged_bytes(self.staging_key(), &blob)
             .await
@@ -81,7 +86,7 @@ impl<St: StagingStore, E: Entropy> ReceivedShareStore for StagingReceivedShareSt
         // Stored bytes this session cannot read are never reported as an empty
         // list: the next persist would overwrite bookmarks it never saw, and the
         // mailbox items that delivered them are acked and gone.
-        let body = open_received_shares(self.enc_secret, &blob)
+        let body = open_owner_local(self.enc_secret, OwnerLocalKind::ReceivedShares, &blob)
             .map_err(|_| SeamError::new("received-shares: the stored list did not open"))?;
         decode_stored_list(&body).map_err(|e| {
             SeamError::new(format!(
@@ -202,12 +207,38 @@ mod tests {
         block_on(store.persist(&one_share())).expect("persist");
 
         let ephemeral = fresh_ephemeral(&mut SeededEntropy::new(41)).expect("ephemeral");
-        let sealed = seal_received_shares(&secret, &ephemeral, b"opens, but is not a stored list")
-            .expect("seal");
+        let sealed = seal_owner_local(
+            &secret,
+            OwnerLocalKind::ReceivedShares,
+            &ephemeral,
+            b"opens, but is not a stored list",
+        )
+        .expect("seal");
         block_on(staging.put_staged_bytes(store.staging_key(), &sealed)).expect("clobber");
         assert!(
             block_on(store.load()).is_err(),
             "a body this build cannot decode is an error, never an empty list"
+        );
+    }
+
+    /// The store names its owner-local kind, so a sibling store's blob is
+    /// unreadable state even when its body is a list this build decodes
+    /// perfectly — separation is the kind, not the body grammar.
+    #[test]
+    fn a_blob_from_another_owner_local_store_fails_closed() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x33);
+        let entropy = RefCell::new(SeededEntropy::new(43));
+        let store = StagingReceivedShareStore::new(&staging, &secret, &entropy);
+
+        let ephemeral = fresh_ephemeral(&mut SeededEntropy::new(47)).expect("ephemeral");
+        let body = encode_stored_list(&one_share()).expect("encode");
+        let sealed = seal_owner_local(&secret, OwnerLocalKind::ContactBook, &ephemeral, &body)
+            .expect("seal");
+        block_on(staging.put_staged_bytes(store.staging_key(), &sealed)).expect("stage");
+        assert!(
+            block_on(store.load()).is_err(),
+            "another store's blob is an error, never a list to adopt"
         );
     }
 

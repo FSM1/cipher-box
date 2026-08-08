@@ -67,10 +67,12 @@ pub const STRUCT_TAG_SETTINGS_RECORD: u8 = 0x0b;
 /// Local durable state like `op-record`, and bound to its own epoch rather than
 /// an [`AadContext`].
 pub const STRUCT_TAG_CONTENT_KEY: u8 = 0x0c;
-/// `received-shares` — the recipient's share bookmarks HPKE-sealed to their own
-/// enc subkey ([`super::received_shares`]). Local durable state like
-/// `op-record`, so it binds its own clear header instead of an [`AadContext`].
-pub const STRUCT_TAG_RECEIVED_SHARES: u8 = 0x0d;
+/// `owner-local` — any durable store the owner alone authors and reads,
+/// HPKE-sealed to their own enc subkey ([`super::owner_local`]). Local durable
+/// state like `op-record`, so it binds its own clear header instead of an
+/// [`AadContext`]; the store kind separates the family from within
+/// (FSM1/cipher-box-next ADR 0006).
+pub const STRUCT_TAG_OWNER_LOCAL: u8 = 0x0d;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -133,8 +135,8 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
         tag: STRUCT_TAG_CONTENT_KEY,
     },
     StructTagSpec {
-        name: "received-shares",
-        tag: STRUCT_TAG_RECEIVED_SHARES,
+        name: "owner-local",
+        tag: STRUCT_TAG_OWNER_LOCAL,
     },
 ];
 
