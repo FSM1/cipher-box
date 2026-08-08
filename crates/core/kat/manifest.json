@@ -56,6 +56,7 @@
     "owner-write-blob": 9,
     "pointer-payload": 7,
     "read-body": 1,
+    "received-shares": 13,
     "settings-record": 11,
     "write-body": 2
   },
@@ -502,6 +503,28 @@
         "hpke-non-contributory",
         "content-cid-mismatch",
         "truncated",
+        "missing-field",
+        "invalid-field-length",
+        "unknown-record-field",
+        "unsupported-record-version"
+      ]
+    }
+  },
+  "receivedShares": {
+    "structTag": 13,
+    "v": 1,
+    "hpkeMode": 2,
+    "hpkeInfo": "cipherbox/v2/received-shares",
+    "accept": {
+      "file": "vectors/received_shares/received_shares_accept.json",
+      "count": 2
+    },
+    "reject": {
+      "file": "vectors/received_shares/received_shares_reject.json",
+      "count": 10,
+      "checks": [
+        "hpke-open-failed",
+        "hpke-non-contributory",
         "missing-field",
         "invalid-field-length",
         "unknown-record-field",

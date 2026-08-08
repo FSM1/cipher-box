@@ -4,8 +4,8 @@
 
 use cipherbox_engine::seams::EndpointId;
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailboxHub, InMemoryRecordStore,
-    InMemorySnapshotCache, InMemoryStagingStore, VirtualScheduler,
+    InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailboxHub, InMemoryReceivedShareStore,
+    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore, VirtualScheduler,
 };
 use cipherbox_engine::testkit::{block_on, conformance};
 
@@ -25,6 +25,14 @@ fn in_memory_staging_store_passes_the_staging_store_kit() {
 fn in_memory_snapshot_cache_passes_the_snapshot_cache_kit() {
     let cache = InMemorySnapshotCache::default();
     block_on(conformance::snapshot_cache::check(async || cache.clone()));
+}
+
+#[test]
+fn in_memory_received_share_store_passes_the_received_share_store_kit() {
+    let store = InMemoryReceivedShareStore::default();
+    block_on(conformance::received_share_store::check(async || {
+        store.clone()
+    }));
 }
 
 #[test]

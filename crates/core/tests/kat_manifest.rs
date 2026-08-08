@@ -28,9 +28,10 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, RECEIVED_SHARES_HPKE_INFO, RECEIVED_SHARES_V,
+    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_RECEIVED_SHARES,
     STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
     decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
     decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
@@ -38,8 +39,9 @@ use cipherbox_core::seal::{
     decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
     encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
     open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
-    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
-    seal_settings_record, structure_sig_preimage, verify_grant_set, verify_structure,
+    open_owner_write_blob, open_read_body, open_received_shares, open_settings_record,
+    seal_content_key, seal_op_record, seal_received_shares, seal_settings_record,
+    structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -267,6 +269,14 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/content_key/content_key_reject.json",
         include_str!("../kat/vectors/content_key/content_key_reject.json"),
     ),
+    (
+        "vectors/received_shares/received_shares_accept.json",
+        include_str!("../kat/vectors/received_shares/received_shares_accept.json"),
+    ),
+    (
+        "vectors/received_shares/received_shares_reject.json",
+        include_str!("../kat/vectors/received_shares/received_shares_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -291,6 +301,39 @@ struct Manifest {
     op_record: OpRecordManifest,
     settings_record: SettingsRecordManifest,
     content_key: ContentKeyManifest,
+    received_shares: ReceivedSharesManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReceivedSharesManifest {
+    struct_tag: u8,
+    v: u64,
+    hpke_mode: u8,
+    hpke_info: String,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReceivedSharesAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    body: String,
+    blob: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReceivedSharesRejectVector {
+    name: String,
+    owner_secret: String,
+    blob: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1183,6 +1226,16 @@ fn content_key_reject_vectors(m: &Manifest) -> Vec<ContentKeyRejectVector> {
     serde_json::from_str(fixture(&m.content_key.reject.file)).expect("content_key_reject shape")
 }
 
+fn received_shares_accept_vectors(m: &Manifest) -> Vec<ReceivedSharesAcceptVector> {
+    serde_json::from_str(fixture(&m.received_shares.accept.file))
+        .expect("received_shares_accept shape")
+}
+
+fn received_shares_reject_vectors(m: &Manifest) -> Vec<ReceivedSharesRejectVector> {
+    serde_json::from_str(fixture(&m.received_shares.reject.file))
+        .expect("received_shares_reject shape")
+}
+
 fn owner_write_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.owner_write_blob_accept.file))
         .expect("owner_write_blob_accept shape")
@@ -1339,6 +1392,8 @@ fn fixture_table_matches_manifest_files() {
         m.settings_record.reject.file.as_str(),
         m.content_key.accept.file.as_str(),
         m.content_key.reject.file.as_str(),
+        m.received_shares.accept.file.as_str(),
+        m.received_shares.reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1539,6 +1594,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(content_key_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        received_shares_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1751,6 +1811,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("op-record", 10),
     ("settings-record", 11),
     ("content-key", 12),
+    ("received-shares", 13),
 ];
 
 #[test]
@@ -4722,6 +4783,160 @@ fn content_cid_str_reject_vectors_fail_closed() {
             err.class(),
             v.class,
             "content cid-str-reject {}: class",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn received_shares_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    assert_eq!(m.received_shares.struct_tag, STRUCT_TAG_RECEIVED_SHARES);
+    assert_eq!(m.received_shares.v, RECEIVED_SHARES_V);
+    assert_eq!(m.received_shares.hpke_mode, MODE_AUTH);
+    assert_eq!(
+        m.received_shares.hpke_info.as_bytes(),
+        RECEIVED_SHARES_HPKE_INFO
+    );
+
+    let vectors = received_shares_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.received_shares.accept.count,
+        "received-shares accept count drift"
+    );
+    assert!(
+        vectors.iter().any(|v| v.body.is_empty()) && vectors.iter().any(|v| !v.body.is_empty()),
+        "received-shares accept must cover both an empty and a populated body"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate received-shares accept {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let owner_public = unhex32(&v.name, &v.owner_public);
+        assert_eq!(
+            owner.public().to_bytes(),
+            owner_public,
+            "received-shares accept {}: owner keypair",
+            v.name
+        );
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let body = unhex(&v.name, &v.body);
+
+        let sealed = seal_received_shares(&owner, &eph, &body)
+            .unwrap_or_else(|e| panic!("received-shares accept {}: seal ({e})", v.name));
+        assert_eq!(
+            hex::encode(&sealed),
+            v.blob,
+            "received-shares accept {}: blob drift",
+            v.name
+        );
+
+        let blob = unhex(&v.name, &v.blob);
+        // The owner tag stays AAD-bound and unserialized, so a blob naming a key
+        // that cannot open it is unrepresentable.
+        let decoded = decode(&blob)
+            .unwrap_or_else(|e| panic!("received-shares accept {}: decode ({e})", v.name));
+        let keys: Vec<&str> = decoded
+            .as_map()
+            .unwrap_or_else(|e| panic!("received-shares accept {}: map ({e})", v.name))
+            .entries()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["v", "enc", "ciphertext"],
+            "received-shares accept {}: clear header must not carry the owner tag",
+            v.name
+        );
+
+        let plaintext = open_received_shares(&owner, &blob)
+            .unwrap_or_else(|e| panic!("received-shares accept {}: open ({e})", v.name));
+        assert_eq!(
+            &plaintext[..],
+            &body[..],
+            "received-shares accept {}: body",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn received_shares_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = received_shares_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.received_shares.reject.count,
+        "received-shares reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .received_shares
+        .reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs received-shares reject.json"
+    );
+    for required in [
+        "hpke-open-failed",
+        "hpke-non-contributory",
+        "invalid-field-length",
+        "missing-field",
+        "unsupported-record-version",
+        "unknown-record-field",
+    ] {
+        assert!(
+            listed.contains(required),
+            "received-shares reject must cover the {required} check"
+        );
+    }
+
+    assert!(
+        vectors.iter().any(|v| v.name == "base-mode-forgery"),
+        "received-shares reject must pin a base-mode forgery under the owner's own tag"
+    );
+    // Key-schedule separation, not framing: the settings record shares this
+    // frame and version byte, so only the struct tag and the distinct info
+    // string can refuse it.
+    assert!(
+        vectors.iter().any(|v| v.name == "cross-family-transplant"),
+        "received-shares reject must pin a cross-family transplant from the settings record"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate received-shares reject {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let blob = unhex(&v.name, &v.blob);
+        let err = match open_received_shares(&owner, &blob) {
+            Err(e) => e,
+            Ok(_) => panic!("received-shares reject {}: open accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "received-shares reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "received-shares reject {}: class ({err})",
             v.name
         );
     }

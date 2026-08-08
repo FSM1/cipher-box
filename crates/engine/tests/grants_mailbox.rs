@@ -9,6 +9,8 @@
 //! assert core's named checks or the engine's own fail-closed classifications,
 //! never a reinvented crypto code.
 
+use core::cell::RefCell;
+
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -31,15 +33,15 @@ use cipherbox_engine::gate::Candidate;
 use cipherbox_engine::grants::owner_entry::{OwnerEntry, cross_check};
 use cipherbox_engine::grants::revocation::{ResolutionClass, ResolutionFacts, classify};
 use cipherbox_engine::grants::{
-    AcceptError, PublishedGrantBlob, ReceivedSharesList, SentIndex, SentShare, SharePointer,
-    accept_share, import_contact, self_locate,
+    AcceptError, PublishedGrantBlob, ReceivedShareStore, ReceivedSharesList, SentIndex, SentShare,
+    SharePointer, StagingReceivedShareStore, accept_share, import_contact, self_locate,
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::net::MAX_RECORD_BYTES;
 use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
+use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 
 const V: u64 = 1;
 const TTL_NANOS: u64 = 2_000_000_000;
@@ -1497,4 +1499,190 @@ fn mailbox_lifecycle_through_the_api_client() {
 
     assert_eq!(requests[2].url, "http://api.test/mailbox/messages/m1");
     assert_eq!(requests[2].method, HttpMethod::Delete);
+}
+
+// ---------------------------------------------------------------------------
+// Durability: the engine-shipped store over a host's staging seam.
+// ---------------------------------------------------------------------------
+
+/// The accept flow's whole point once the item is acked: the bookmark and its
+/// `pointerReadKey` are gone from memory, and only the durable store can hand
+/// them back. A redelivery whose record is not newer then re-accepts against
+/// that reloaded list — the anti-replay reject short-circuits to a re-ack
+/// because the persisted bookmark is proof of prior adoption.
+#[test]
+fn an_accepted_share_survives_a_restart_and_redelivery_reaccepts_against_the_persisted_list() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+
+    let entropy = RefCell::new(SeededEntropy::new(17));
+    let store =
+        StagingReceivedShareStore::new(&recipient.staging_store, &fx.recipient_enc, &entropy);
+    let mut received = block_on(store.load()).expect("cold load");
+    assert!(received.is_empty(), "a cold device holds no bookmarks");
+
+    let outcome = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("accept");
+    assert!(outcome.newly_added);
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        0,
+        "acked after the durable write"
+    );
+
+    // Restart: the accepted list and the store handle go out of scope, so the
+    // bookmark can only come back from the durable staging store.
+    drop(received);
+    let restarted_entropy = RefCell::new(SeededEntropy::new(23));
+    let restarted = StagingReceivedShareStore::new(
+        &recipient.staging_store,
+        &fx.recipient_enc,
+        &restarted_entropy,
+    );
+    let mut received = block_on(restarted.load()).expect("load after restart");
+    assert_eq!(received.len(), 1, "the accepted share survived the restart");
+    let restored = received.iter().next().unwrap();
+    assert_eq!(restored.scope_root_name, fx.name.as_str().as_bytes());
+    assert_eq!(restored.permission, Permission::Read);
+    assert!(
+        ct_eq(restored.pointer_read_key(), &POINTER_READ_KEY),
+        "pointer read key mismatch"
+    );
+
+    // Redelivery of the same pointer against the same record: not newer, so the
+    // gate rejects — and the reloaded bookmark is what turns that into an
+    // idempotent re-ack instead of a stranded item.
+    block_on(post_sealed(
+        &poster.mailbox,
+        &fx.recipient_enc.public(),
+        &fx.recipient_identity,
+        &EPH_MAILBOX,
+        V,
+        &fx.owner_identity,
+        &fx.share_pointer().encode(),
+        "share-redelivered",
+    ))
+    .expect("post");
+    let redelivered = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .expect("poll")
+        .remove(0);
+    let again = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &restarted,
+        &redelivered,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("redelivery re-accepts against the persisted list");
+    assert!(!again.newly_added);
+    assert_eq!(received.len(), 1, "no duplicate bookmark");
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        0,
+        "the redelivered item is acked, not left to redeliver forever"
+    );
+    assert_eq!(
+        block_on(restarted.load()).expect("load").len(),
+        1,
+        "the durable list still holds exactly one bookmark"
+    );
+}
+
+/// A redelivery after a persist failure must self-heal the *durable* list, not
+/// just the in-memory one: the floor never advanced, so the recovered store is
+/// the only thing that can make the share reachable after the next restart.
+#[test]
+fn a_recovered_persist_lands_in_the_durable_list() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+
+    let entropy = RefCell::new(SeededEntropy::new(29));
+    let store =
+        StagingReceivedShareStore::new(&recipient.staging_store, &fx.recipient_enc, &entropy);
+    // The host loses exactly the durable write the accept flow must land before
+    // it acks: nothing is acked and no floor moves.
+    recipient
+        .staging_store
+        .interrupt_staged_write_after(&store.slot_keys()[0], 0);
+    let mut received = block_on(store.load()).expect("cold load");
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Persist(_)), "got {err}");
+    assert!(received.is_empty(), "the in-memory bookmark rolled back");
+    assert_eq!(
+        block_on(
+            recipient
+                .floor_store
+                .sequence_floor(fx.name.as_str().as_bytes())
+        )
+        .unwrap(),
+        None,
+        "the floor never advanced past a share that did not durably persist"
+    );
+
+    // Redelivery once the store recovers: the durable list now holds it.
+    let redelivered = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .expect("poll")
+        .remove(0);
+    block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &store,
+        &redelivered,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("redelivery re-adopts once the store recovers");
+    assert_eq!(
+        block_on(store.load()).expect("load").len(),
+        1,
+        "the recovered accept is durable, not only in memory"
+    );
 }

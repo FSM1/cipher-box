@@ -22,6 +22,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
+use crate::grants::RECEIVED_SHARES_PREFIX;
 use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{
@@ -32,13 +33,15 @@ use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid}
 
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
-/// ([`op_mark_key`](crate::sync::drain::op_mark_key)) or a retire-ledger entry.
-/// Both are per-owner, so their whole prefixes are referenced — an entry this
-/// session cannot read belongs to the identity that still needs it.
+/// ([`op_mark_key`](crate::sync::drain::op_mark_key)), a retire-ledger entry, or
+/// a received-shares list. All are per-owner, so their whole prefixes are
+/// referenced — an entry this session cannot read belongs to the identity that
+/// still needs it.
 fn is_bookkeeping(key: &[u8]) -> bool {
     key.starts_with(DRAINED_OP_MARK_PREFIX)
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
         || key.starts_with(RETIRE_LEDGER_PREFIX)
+        || key.starts_with(RECEIVED_SHARES_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -538,9 +541,11 @@ mod tests {
     /// ops that already published, so it is never orphan residue.
     ///
     /// The same holds for a retire-ledger entry, whose collection would drop a
-    /// pending reclaim debt and leak the pinned bytes it names.
+    /// pending reclaim debt and leak the pinned bytes it names, and for a
+    /// received-shares list, whose collection would lose every accepted share
+    /// whose mailbox item is already acked.
     ///
-    /// Both prefixes are per-identity, so this holds for an entry **this**
+    /// Every prefix is per-identity, so this holds for an entry **this**
     /// session cannot read too: its owner is the identity that still needs it,
     /// and collecting it would discard their record.
     #[test]
@@ -556,6 +561,7 @@ mod tests {
                 DRAINED_OP_MARK_PREFIX,
                 PUBLISHED_OP_MARK_PREFIX,
                 RETIRE_LEDGER_PREFIX,
+                RECEIVED_SHARES_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
