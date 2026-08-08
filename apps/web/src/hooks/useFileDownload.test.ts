@@ -203,7 +203,7 @@ describe('the buffered fallback', () => {
     const revoked: string[] = [];
     URL.createObjectURL = vi.fn(() => `blob:fake/${++minted}`);
     URL.revokeObjectURL = vi.fn((url: string) => revoked.push(url));
-    const { result } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
+    const { result, unmount } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
 
     vi.useFakeTimers();
     try {
@@ -215,7 +215,15 @@ describe('the buffered fallback', () => {
       expect(revoked).toEqual([]);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(999);
+      });
+      expect(revoked).toEqual([]);
+
+      unmount();
+      expect(revoked).toEqual([]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
       });
       expect(revoked).toEqual(['blob:fake/1', 'blob:fake/2']);
     } finally {

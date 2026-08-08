@@ -745,7 +745,17 @@ describe('the vault browser read path over the streaming pipe', () => {
   const originalClick = HTMLAnchorElement.prototype.click;
   /** Whether the browser opens the save the ticket was minted for. */
   let fetched = true;
+  /** Set by a test that drives the transfers itself, keyed by ticket url. */
+  let transfers: Map<string, (read: boolean) => void> | null = null;
   const streamListeners = new Set<(failure: MediaStreamFailure) => void>();
+
+  /** The browser finished reading this ticket. */
+  const endTransfer = async (url: string): Promise<void> => {
+    await act(async () => {
+      transfers?.get(url)?.(fetched);
+      await Promise.resolve();
+    });
+  };
 
   /** Stands in for the broker giving up on a read. */
   const reportStreamError = (failure: MediaStreamFailure): void => {
@@ -770,6 +780,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     revoked.length = 0;
     clicked.length = 0;
     fetched = true;
+    transfers = null;
     streamListeners.clear();
     mediaControl.create = () =>
       ({
@@ -780,7 +791,11 @@ describe('the vault browser read path over the streaming pipe', () => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
-        whenStreamIdle: () => Promise.resolve(fetched),
+        whenStreamIdle: (url: string) => {
+          const held = transfers;
+          if (held === null) return Promise.resolve(fetched);
+          return new Promise<boolean>((resolve) => held.set(url, resolve));
+        },
         onStreamError: (listener: (failure: MediaStreamFailure) => void) => {
           streamListeners.add(listener);
           return () => streamListeners.delete(listener);
@@ -824,14 +839,24 @@ describe('the vault browser read path over the streaming pipe', () => {
 
   it('saves a selection one ticket at a time', async () => {
     const engine = fakeEngine();
+    transfers = new Map();
     renderBrowser(engine);
     await landSnapshot(engine, twoFiles());
 
     fireEvent.click(screen.getByTestId('select-all'));
     fireEvent.click(screen.getByTestId('selection-download'));
 
+    await waitFor(() => expect(minted).toHaveLength(1));
+    expect(revoked).toEqual([]);
+
+    await endTransfer('/stream/ticket-1');
+
     await waitFor(() => expect(minted).toHaveLength(2));
-    expect(revoked).toEqual(['/stream/ticket-1', '/stream/ticket-2']);
+    expect(revoked).toEqual(['/stream/ticket-1']);
+
+    await endTransfer('/stream/ticket-2');
+
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1', '/stream/ticket-2']));
   });
 
   it('stops a batch at the first save the browser refuses', async () => {
@@ -961,6 +986,23 @@ describe('the vault browser read path over the streaming pipe', () => {
 
     expect(screen.getByTestId('media-player-error').textContent).toBe('playback failed');
     expect(screen.queryByTestId('media-player-retry')).toBeNull();
+  });
+
+  it('keeps the retry when the element reports the refusal it was already told about', async () => {
+    await playAudio();
+
+    reportStreamError({
+      url: '/stream/ticket-1',
+      message: 'too many read streams are already open',
+      recoverable: true,
+    });
+    // Ending the body is what the element sees, and it cannot classify it.
+    fireEvent.error(screen.getByTestId('media-player-audio'));
+
+    expect(screen.getByTestId('media-player-error').textContent).toContain(
+      'too many streams are open right now'
+    );
+    expect(screen.getByTestId('media-player-retry')).toBeDefined();
   });
 
   it('buffers a pdf, which the pipe would serve under an opaque type', async () => {

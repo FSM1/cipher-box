@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { MediaStreamFailure } from '@cipherbox/client';
 import { useMediaService } from '../../providers/EngineProvider';
 
@@ -21,7 +21,9 @@ export function MediaPlayer({ url, kind, name }: MediaPlayerProps) {
   // The browser will not re-read a src it has given up on; only a remount will.
   const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
+  // Subscribed in the commit that mounts the element: the pipe replays nothing,
+  // so a refusal reported before this runs is lost.
+  useLayoutEffect(() => {
     if (media === null) return;
     return media.onStreamError((failure: MediaStreamFailure) => {
       if (failure.url !== url) return;
