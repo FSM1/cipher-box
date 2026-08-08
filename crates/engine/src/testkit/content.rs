@@ -12,7 +12,8 @@ use cipherbox_core::suite::aead::KEY_LEN;
 use super::SeededEntropy;
 use super::fakes::ScriptedHttp;
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewaySource, SealedChunk, SealedContent,
+    ContentKey, ContentProfile, ContentVersion, ContentWriter, Gateway, GatewaySource, SealedChunk,
+    SealedContent,
 };
 use crate::seams::{HttpResponse, SeamError};
 
@@ -54,6 +55,25 @@ pub fn frame_version_with(
         blocks.push(tail);
     }
     (blocks, finished.root_block, finished.content)
+}
+
+/// One sealed version as a prune sees it: the doomed [`ContentVersion`], the
+/// root block a retire expands it from, and its leaf CIDs as the registry spells
+/// them.
+pub fn doomed_version(plaintext: &[u8]) -> (ContentVersion, Vec<u8>, Vec<String>) {
+    let (_, root_block, content) = frame_version(plaintext, [9u8; KEY_LEN], 11);
+    let doomed = ContentVersion::from_plaintext_size(
+        encode_content_cid_str(content.content_cid()),
+        plaintext.len() as u64,
+        &ContentProfile::CI,
+    )
+    .expect("under the ceiling");
+    let leaf_cids = content
+        .leaf_cids()
+        .iter()
+        .map(|cid| encode_content_cid_str(cid))
+        .collect();
+    (doomed, root_block, leaf_cids)
 }
 
 /// A gateway with no accelerator: every block is fetched from one public

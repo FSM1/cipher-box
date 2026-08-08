@@ -26,8 +26,8 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 
 /// Apply one op to the working view optimistically (intent, not rebase).
 ///
-/// Every op but a delete authors its target's next record, so each stamps
-/// [`Op::stamp_authored`].
+/// An op that authors a *change* to its target stamps [`Op::stamp_authored`];
+/// the ops that only remove state — a delete, a prune — have nothing to stamp.
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create { parent, name, node } => {
@@ -66,6 +66,13 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
                 op.stamp_authored(node);
+            }
+        }
+        OpKind::Prune { keep_latest } => {
+            if let Some(node) = view.node_mut(op.target) {
+                node.content_version = node
+                    .content_version
+                    .map(|count| count.min(keep_latest.get()));
             }
         }
     }
@@ -276,6 +283,41 @@ mod tests {
             view.node(id(1)).unwrap().content_version,
             None,
             "one more than unknown is still unknown"
+        );
+    }
+
+    #[test]
+    fn overlay_prune_caps_a_projected_content_version() {
+        let mut base = base();
+        let mut meta = NodeMeta::new(id(1), "f.txt", NodeKind::File);
+        meta.content_version = Some(5);
+        base.upsert_node(meta);
+        base.link(id(0), id(1), 1);
+        let keep = core::num::NonZeroU64::new(2).expect("nonzero");
+        let view = apply_overlay(&base, &[Op::prune(id(1), keep, 1, AT)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            Some(2),
+            "the shortened history is rendered"
+        );
+        assert_eq!(
+            base.node(id(1)).unwrap().content_version,
+            Some(5),
+            "base untouched"
+        );
+    }
+
+    #[test]
+    fn overlay_prune_leaves_an_unprojected_count_unknown() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        let keep = core::num::NonZeroU64::new(2).expect("nonzero");
+        let view = apply_overlay(&base, &[Op::prune(id(1), keep, 1, AT)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            None,
+            "capping an unknown count still says nothing about it"
         );
     }
 

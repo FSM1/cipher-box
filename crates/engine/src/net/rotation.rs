@@ -1582,6 +1582,7 @@ where
             .collect();
         retire(self.api, &targets)
             .await
+            .map(drop)
             .map_err(|_| WritePublishError::NotLanded)
     }
 
@@ -1764,6 +1765,13 @@ mod tests {
                         status: 200,
                         headers: Vec::new(),
                         body: format!(r#"{{"cid":"{cid}","size":{size}}}"#).into_bytes(),
+                    });
+                }
+                if request.url.ends_with("/registry/retire") {
+                    return Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body: br#"{"retired":1,"unpinned":0}"#.to_vec(),
                     });
                 }
                 if request.url.contains("/registry/") {

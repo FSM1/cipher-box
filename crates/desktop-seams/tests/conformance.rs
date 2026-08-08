@@ -15,6 +15,7 @@ use cipherbox_desktop_seams::{
     FileCredentialStore, FileFloorStore, FileSnapshotCache, FileStagingStore, ReqwestHttp,
     ReqwestRecordTransport, TokioScheduler,
 };
+use cipherbox_engine::StagingRetireLedger;
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, StagingStore,
 };
@@ -43,6 +44,18 @@ fn file_staging_store_passes_the_staging_store_kit() {
     let path = dir.path().join("staging");
     block_on(conformance::staging_store::check(async || {
         FileStagingStore::open(&path).unwrap()
+    }));
+}
+
+/// The retire ledger rides the durable staging store, so the desktop's
+/// owed-retirement contract is the file store's. Each reopened handle is leaked
+/// for the kit's borrow; the test process is its owner.
+#[test]
+fn the_file_staging_store_passes_the_retire_ledger_kit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retire-ledger");
+    block_on(conformance::retire_ledger::check(async || {
+        StagingRetireLedger::new(Box::leak(Box::new(FileStagingStore::open(&path).unwrap())))
     }));
 }
 

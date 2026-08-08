@@ -25,6 +25,7 @@ pub mod credential_store;
 pub mod floor_store;
 pub mod mailbox;
 pub mod record_transport;
+pub mod retire_ledger;
 pub mod scheduler;
 pub mod snapshot_cache;
 pub mod staging_store;

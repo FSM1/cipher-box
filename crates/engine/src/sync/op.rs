@@ -12,6 +12,8 @@
 //! ([`StagedContent`]), while the sealed blocks sit in the staging store behind
 //! the storage policy's budget ([`crate::sync::staging`]).
 
+use core::num::NonZeroU64;
+
 use serde::{Deserialize, Serialize};
 
 use crate::facade::{NodeId, NodeKind, PendingClass};
@@ -118,7 +120,7 @@ pub enum ScopeCrossing {
     ExitsGrantedSource,
 }
 
-/// The six intent-op mutations (#33 D6).
+/// The intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
     /// Create a node under a parent.
@@ -186,6 +188,20 @@ pub enum OpKind {
         /// writer advance a count identically, and a retention prune moves it
         /// backwards.
         base_version_cid: Option<Vec<u8>>,
+    },
+    /// Drop a file's older versions, keeping the newest `keep_latest`.
+    ///
+    /// A write-plane mutation like any other — it re-seals and publishes a
+    /// shortened history — and it **ends at publish**. Reclaiming the dropped
+    /// versions' bytes is journaled to the retire ledger
+    /// ([`RetireLedger`](crate::seams::RetireLedger)) and drained off this
+    /// queue, so garbage collection never holds the FIFO head behind user work.
+    Prune {
+        /// How many of the newest versions survive. [`NonZeroU64`] because
+        /// keeping zero would retire the live version along with its history —
+        /// unrepresentable rather than guarded, matching
+        /// [`RetentionPolicy::KeepLatest`](crate::content::RetentionPolicy).
+        keep_latest: NonZeroU64,
     },
 }
 
@@ -306,6 +322,21 @@ impl Op {
                 content,
                 base_version_cid,
             },
+        }
+    }
+
+    /// A `prune` op keeping the newest `keep_latest` versions of a file.
+    pub fn prune(
+        target: NodeId,
+        keep_latest: NonZeroU64,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::Prune { keep_latest },
         }
     }
 

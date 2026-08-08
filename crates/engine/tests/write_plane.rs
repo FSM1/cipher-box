@@ -5,6 +5,7 @@
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
+use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,7 +16,8 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
+    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, Version as CoreVersion,
+    decode_envelope, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -207,6 +209,9 @@ struct Blocks {
     quota_down: Arc<AtomicBool>,
     /// The same for `PATCH /account/byo`.
     byo_down: Arc<AtomicBool>,
+    /// Whether `POST /registry/retire` refuses — the outage a retire ledger's
+    /// never-discard contract exists for.
+    retire_down: Arc<AtomicBool>,
 }
 
 impl Blocks {
@@ -261,6 +266,12 @@ impl Blocks {
     /// Retirement keeps answering, so a pass can still clear what it orphaned.
     fn refuse_register(&self, body: Vec<u8>) {
         *self.register_refusal.lock().expect("lock") = Some(body);
+    }
+
+    /// Whether every retire is refused with a 503 — the self-clearing outage a
+    /// never-discard ledger backs off on.
+    fn refuse_retire(&self, refuse: bool) {
+        self.retire_down.store(refuse, Ordering::SeqCst);
     }
 
     /// Let every registration through again.
@@ -396,6 +407,26 @@ impl Blocks {
                 });
             }
             return register_reply(request.body.as_deref());
+        }
+        if url.ends_with("/registry/retire") {
+            if self.retire_down.load(Ordering::SeqCst) {
+                return Ok(HttpResponse {
+                    status: 503,
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                });
+            }
+            // The registry answers a retire with what it deleted; the count is
+            // the engine's done-signal, so a malformed body must fail the test
+            // rather than ack a zero that reads as done.
+            let body = request
+                .body
+                .as_deref()
+                .expect("a retire call carries a body");
+            let retired = serde_json::from_slice::<Vec<String>>(body)
+                .expect("a retire body is a name array")
+                .len();
+            return ok(format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes());
         }
         if url.contains("/registry/") {
             return ok(Vec::new());
@@ -6901,4 +6932,268 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
         before,
         "and no content byte went to the hosted store"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Prune: a shortened history at publish, the bytes back on the ledger's pass.
+// ---------------------------------------------------------------------------
+
+/// The versions a file's published record carries, newest first.
+fn published_versions(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    file: NodeId,
+) -> Vec<CoreVersion> {
+    let (_, head_cid) = published(records, file);
+    let envelope = decode_envelope(&blocks.get(&head_cid).expect("the head block")).unwrap();
+    match open_read_body(&envelope, &read_key_of(file)).expect("opens under the read-seed key") {
+        ReadBody::File { versions, .. } => versions,
+        ReadBody::Folder { .. } => panic!("expected a file body"),
+    }
+}
+
+/// A file under the root carrying `bodies.len()` versions, newest last.
+fn file_with_history(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    bodies: &[Vec<u8>],
+) -> NodeId {
+    let (first, rest) = bodies.split_first().expect("at least one version");
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        first,
+    )
+    .expect("the create commits");
+    tick(world, engine, tasks);
+    let node = child_id(engine, ROOT, "clip.bin");
+    for body in rest {
+        write_file(engine, WriteTarget::Version { node }, body).expect("the update commits");
+        tick(world, engine, tasks);
+    }
+    node
+}
+
+/// Queue a prune of `file` against its currently published sequence.
+fn stage_prune(device: &FakeDevice, world: &FakeWorld, file: NodeId, keep_latest: u64) {
+    let (sequence, _) = published(&world.record_store, file);
+    stage(
+        device,
+        &Op::prune(
+            file,
+            NonZeroU64::new(keep_latest).expect("nonzero"),
+            sequence,
+            UnixMillis(9_000),
+        ),
+        None,
+    );
+}
+
+#[test]
+fn a_prune_publishes_a_shortened_history_and_reclaims_every_dropped_block() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..3u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(history.len(), 3, "three writes, three versions");
+    let doomed: Vec<Vec<u8>> = history[1..]
+        .iter()
+        .map(|version| version.content_cid.clone())
+        .collect();
+    let head_cid = history[0].content_cid.clone();
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+
+    let kept = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(kept.len(), 1, "the record keeps exactly the newest version");
+    assert_eq!(kept[0].content_cid, head_cid, "and it is the head");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the head still reads"),
+        bodies[2],
+        "the surviving version's bytes are still retrievable"
+    );
+
+    // The registry saw every dropped block, each version's leaves ahead of the
+    // root that names them.
+    let mut every_target = retire_targets(&alice);
+    let retired = every_target.split_off(retired_before);
+    for root in &doomed {
+        let root_str = encode_content_cid_str(root);
+        let root_at = retired
+            .iter()
+            .position(|target| *target == root_str)
+            .expect("the doomed root retires");
+        let manifest = decode_root(&blocks.get(&root_str).expect("the root block")).unwrap();
+        for leaf in &manifest.leaf_cids {
+            let leaf_str = encode_content_cid_str(leaf);
+            let leaf_at = retired
+                .iter()
+                .position(|target| *target == leaf_str)
+                .expect("every leaf retires");
+            assert!(
+                leaf_at < root_at,
+                "the expansion key must outlive everything it names"
+            );
+        }
+    }
+    assert!(
+        !retired.contains(&encode_content_cid_str(&head_cid)),
+        "the surviving version is never retired"
+    );
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        0,
+        "the ledger drained, so the vault owes nothing"
+    );
+}
+
+/// The ledger is the only record of what a published prune owes, so an offline
+/// registry must leave the debt whole and the figure visible.
+#[test]
+fn a_prune_whose_retire_is_refused_keeps_the_debt_until_a_later_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let doomed = published_versions(&world.record_store, &blocks, file)[1]
+        .content_cid
+        .clone();
+
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        1,
+        "the publish is not held behind the reclaim"
+    );
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the vault still owes the dropped version"
+    );
+
+    // A later pass, with the registry back, re-expands from the still-pinned
+    // root and clears the debt.
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retire_targets(&alice).contains(&encode_content_cid_str(&doomed)),
+        "the resumed pass names the doomed root"
+    );
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        0,
+        "the debt clears on the registry's own answer"
+    );
+}
+
+/// A prune that drops nothing publishes nothing: keeping at least as many
+/// versions as exist must not spend a record sequence or a retire call.
+#[test]
+fn a_prune_that_keeps_the_whole_history_publishes_and_retires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies = vec![(0..60u8).collect::<Vec<u8>>()];
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let (sequence, _) = published(&world.record_store, file);
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 5);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published(&world.record_store, file).0,
+        sequence,
+        "an empty plan authors no record"
+    );
+    assert_eq!(retire_targets(&alice).len(), retired_before);
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "a no-op prune is not a failure"
+    );
+}
+
+/// Nothing on the wire forbids a version list naming one `contentCid` twice, so
+/// a doomed version can share its bytes with a survivor. Retiring those bytes
+/// would unpin the live file, so the whole prune is refused.
+#[test]
+fn a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies = vec![(0..60u8).collect::<Vec<u8>>()];
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![head.clone(), head],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+    let (sequence, _) = published(&world.record_store, file);
+    let retired_before = retire_targets(&alice).len();
+
+    stage_prune(&alice, &world, file, 1);
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert_eq!(passes, 1, "a repeated history is refused on sight");
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::PayloadRefused]
+    );
+    assert_eq!(
+        published(&world.record_store, file).0,
+        sequence,
+        "the history the refusal read is the history that stands"
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "and no retire names the CID a survivor still holds"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
 }

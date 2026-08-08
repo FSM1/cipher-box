@@ -20,7 +20,7 @@ use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
     ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest, MailboxItem,
-    MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
+    MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest, RetireResult,
     SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest,
     TestLoginResponse, TokenResponse, UploadResult,
 };
@@ -303,12 +303,14 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         ok_or_err(response).map(drop)
     }
 
-    /// Batch retire names or CIDs (`[ipnsName | cid]`).
-    pub async fn retire(&self, targets: &[String]) -> Result<(), ApiError> {
+    /// Batch retire names or CIDs (`[ipnsName | cid]`), reporting what the
+    /// registry deleted for this account.
+    pub async fn retire(&self, targets: &[String]) -> Result<RetireResult, ApiError> {
         let response = self
             .json_authed(HttpMethod::Post, "/registry/retire", targets)
             .await?;
-        ok_or_err(response).map(drop)
+        let response = ok_or_err(response)?;
+        decode(&response)
     }
 
     /// The per-account quota (advisory for BYO accounts).

@@ -21,10 +21,11 @@
 //! [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport) all the
 //! same, off the same [`replay`] this pass runs.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
+use core::num::NonZeroU64;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::content::{encode_content_cid_str, verify_cid};
+use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid, verify_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -36,7 +37,10 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
-use crate::content::{Gateway, ProviderError, SealedContent, place_block, pre_flight_quota_check};
+use crate::content::{
+    ContentProfile, ContentVersion, Gateway, ProviderError, SealedContent, place_block, plan_prune,
+    pre_flight_quota_check,
+};
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
@@ -49,7 +53,9 @@ use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
-use crate::net::retire::{OrphanHeads, orphaned_head, retire};
+use crate::net::retire::{
+    OrphanHeads, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+};
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
     assemble_head_envelope, fanout_get_verify, resolve,
@@ -57,8 +63,8 @@ use crate::net::{
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SeamResult, SnapshotCache,
-    StagingStore,
+    CredentialStore, FloorStore, Http, OpId, OwedRetire, RecordTransport, RetireLedger, Scheduler,
+    SeamResult, SnapshotCache, StagingStore,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision};
@@ -105,8 +111,17 @@ pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 #[must_use]
 pub fn op_mark_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
     let mut key = prefix.to_vec();
-    key.extend_from_slice(&RecordReader::new(enc_secret).owner_tag());
+    key.extend_from_slice(&owner_tag(enc_secret));
     key
+}
+
+/// The tag every per-identity durable record this device keeps is scoped by —
+/// the op-id marks and the retire ledger alike. One store is shared across
+/// accounts, so an unscoped record would let one identity's progress reach
+/// another's state.
+#[must_use]
+pub fn owner_tag(enc_secret: &X25519Secret) -> [u8; 32] {
+    RecordReader::new(enc_secret).owner_tag()
 }
 
 /// What one drain pass did.
@@ -357,6 +372,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
+    /// The framing profile a version's pinned size is derived under — the same
+    /// one the upload framed it at.
+    pub(crate) content_profile: &'a ContentProfile,
     /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     /// The gate-passing base snapshot, repainted in place on each publish.
@@ -366,6 +384,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// Pinned bytes the retire ledger still owes, shared with the facade's read
+    /// surface. Rewritten at the end of every pass from the ledger itself.
+    pub(crate) pending_reclaim: &'a Cell<u64>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The upload-cancel interlock, shared with the facade's cancel command.
@@ -545,6 +566,21 @@ where
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
         self.orphan_heads.retire_pending(self.api).await;
+        // Outside the queue loop, so the FIFO head never waits on cleanup. A
+        // ledger the store would not read leaves the last figure standing: "no
+        // debt" is a claim this pass cannot make.
+        if let Some(owed) = drain_owed_retires(
+            &StagingRetireLedger::new(self.staging),
+            &owner_tag(scope.enc_secret),
+            self.api,
+            self.gateway,
+            self.http,
+            self.content_profile,
+        )
+        .await
+        {
+            self.pending_reclaim.set(owed);
+        }
         report
     }
 
@@ -1087,6 +1123,9 @@ where
                 )
                 .await
             }
+            OpKind::Prune { keep_latest } => {
+                self.publish_prune(scope, pass, applied, *keep_latest).await
+            }
             // A cross-scope relocation re-seals the moved subtree at the
             // destination epoch — a plan this driver does not author. Publishing
             // it as a plain ref move would carry the subtree into the
@@ -1561,22 +1600,173 @@ where
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
-        // The head this publish established: the next edit of this file anchors
-        // on it, and without it this device would read its own publish as a
-        // concurrent writer.
-        project_child_version(
-            &mut self.base.borrow_mut(),
+        self.project_published_file(
             target,
             staged.plaintext_size,
             modified_at,
             version_count,
-            Some(&staged.root_cid),
+            &staged.root_cid,
+            published,
+        );
+        Ok(())
+    }
+
+    /// Repaint the base with the head this publish established, and hold the
+    /// record. Without it this device would read its own publish as a concurrent
+    /// writer, and the next edit of the file would have nothing to anchor on.
+    fn project_published_file(
+        &self,
+        target: NodeId,
+        plaintext_size: u64,
+        modified_at: u64,
+        version_count: u64,
+        head_cid: &[u8],
+        published: Published,
+    ) {
+        project_child_version(
+            &mut self.base.borrow_mut(),
+            target,
+            plaintext_size,
+            modified_at,
+            version_count,
+            Some(head_cid),
         );
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
         }
         self.hold(target.0, published.held);
+    }
+
+    /// `prune`: republish the file's record with its history shortened to the
+    /// newest `keep_latest` versions, then journal what that dropped to the
+    /// retire ledger.
+    ///
+    /// The journal happens **after** the publish: until the shortened history is
+    /// live, a resolvable record still names the dropped roots, and retiring
+    /// them would unpin content a reader can reach.
+    async fn publish_prune(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        keep_latest: NonZeroU64,
+    ) -> Result<(), Halt> {
+        let target = applied.op.target;
+        // This plan authors the target's own record and nothing else, so a
+        // resolution that also needs a parent-side write has no plan here.
+        if applied.effective_name.is_some() {
+            return Err(Halt::Unclassified);
+        }
+        self.ensure_folder(scope, pass, self.published_parent(target)?)
+            .await?;
+        let loaded = self.load_child_node(scope, pass.epoch, target).await?;
+        let ReadBody::File {
+            created_at,
+            modified_at,
+            mut versions,
+            unknown,
+        } = loaded.body
+        else {
+            return Err(Halt::Unclassified);
+        };
+        let history = self.pinned_history(&versions)?;
+        let plan = plan_prune(&history, keep_latest);
+        if plan.retire_targets.is_empty() {
+            return Ok(());
+        }
+        let head = versions.first().ok_or(Halt::Unclassified)?;
+        let (head_size, head_cid) = (head.size, head.content_cid.clone());
+        // The plan named a suffix of the history, so the survivors are its
+        // prefix — one count, never a second clamp that could disagree.
+        let survivors = &history[..history.len() - plan.retire_targets.len()];
+        // A version list is authored by anyone holding the scope's write seed,
+        // and nothing on the wire forbids one `contentCid` appearing twice in
+        // it. Retiring a CID a surviving version still names would unpin the
+        // live file, so a repeated history is refused rather than pruned.
+        let kept: BTreeSet<&str> = survivors
+            .iter()
+            .map(|version| version.content_cid.as_str())
+            .collect();
+        if plan
+            .retire_targets
+            .iter()
+            .any(|doomed| kept.contains(doomed.content_cid.as_str()))
+        {
+            return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
+        }
+        versions.truncate(survivors.len());
+        let content_cids = survivors
+            .iter()
+            .map(|version| version.content_cid.clone())
+            .collect();
+        let version_count = versions.len() as u64;
+        // A prune removes history; it does not modify the file, so the record's
+        // `modified_at` stays the head version's.
+        let body = ReadBody::File {
+            created_at,
+            modified_at,
+            versions,
+            unknown,
+        };
+        let published = self
+            .publish_node(
+                scope,
+                pass.epoch,
+                target,
+                &loaded.name,
+                false,
+                &body,
+                content_cids,
+                loaded.envelope_unknown,
+                loaded.epoch_tag_unknown,
+                Some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        self.owe_retires(scope, &plan.retire_targets).await?;
+        self.project_published_file(
+            target,
+            head_size,
+            modified_at,
+            version_count,
+            &head_cid,
+            published,
+        );
         Ok(())
+    }
+
+    /// A published history as [`ContentVersion`]s, newest first.
+    fn pinned_history(&self, versions: &[Version]) -> Result<Vec<ContentVersion>, Halt> {
+        versions
+            .iter()
+            .map(|version| {
+                let content_cid =
+                    encode_content_cid_str(checked_content_cid(&version.content_cid)?);
+                ContentVersion::from_plaintext_size(content_cid, version.size, self.content_profile)
+                    // A framed size with no readable root is a version this
+                    // engine could not have published, and no retry reframes it.
+                    .map_err(|_| Halt::Permanent(DeadLetterReason::PayloadRefused))
+            })
+            .collect()
+    }
+
+    /// Journal the dropped roots as owed, under this identity's ledger scope.
+    async fn owe_retires(
+        &self,
+        scope: &DrainScope<'_>,
+        doomed: &[ContentVersion],
+    ) -> Result<(), Halt> {
+        let entries: Vec<OwedRetire> = doomed
+            .iter()
+            .map(|version| OwedRetire {
+                target: version.content_cid.clone(),
+                owed_bytes: version.pinned_bytes,
+            })
+            .collect();
+        StagingRetireLedger::new(self.staging)
+            .owe(&owner_tag(scope.enc_secret), &entries)
+            .await
+            .map_err(seam)
     }
 
     // -----------------------------------------------------------------------
@@ -2644,11 +2834,25 @@ fn provider_failure(error: &ProviderError) -> &'static str {
     }
 }
 
+/// A `contentCid` a resolved record carried, held to the frozen framing.
+///
+/// Core decodes the field as opaque bytes, so nothing upstream has rejected a
+/// malformed one — and [`encode_content_cid_str`]'s own guard is a release-active
+/// panic, which on the wasm leg takes the worker down.
+fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
+    is_wellformed_content_cid(cid)
+        .then_some(cid)
+        .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
+}
+
 /// One version as the registry names it: the root first, then every leaf in
-/// file order. Registration and retirement both go through here, so a retire
-/// batch names exactly what a register batch claimed — and every block is its
-/// own accountable pin row (blueprint/api.md "Pin/name registry"), so leaving
-/// a leaf out of a retirement spends account quota forever.
+/// file order, read from the blocks this device staged.
+///
+/// Every block is its own accountable pin row (blueprint/api.md "Pin/name
+/// registry"), so a retirement naming fewer CIDs than the registration claimed
+/// spends account quota forever. The prune drain names the same set from the
+/// fetched root block instead ([`expand_retire_targets`]), because by then
+/// staging has released the leaves.
 fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
     core::iter::once(root_cid)
         .chain(leaf_cids.iter().map(Vec::as_slice))

@@ -1,10 +1,16 @@
-//! Host seams — the nine constructor trait contracts (blueprint/engine.md
+//! Host seams — the trait contracts a host implements (blueprint/engine.md
 //! "Host seams").
 //!
-//! Every capability the engine needs from a host enters through one of these
-//! traits, injected as a constructor argument via [`SeamSet`]. Traits move
-//! opaque bytes and events — no seam holds logic, no domain type leaks into a
-//! seam; the engine owns all interpretation.
+//! The nine [`SeamTypes`] name the capabilities a host must supply, injected as
+//! a constructor argument via [`SeamSet`]. [`RetireLedger`] is the exception
+//! that proves the shape: the same trait contract, with a conformance kit of its
+//! own, but the engine ships the implementation
+//! ([`StagingRetireLedger`](crate::net::StagingRetireLedger)) over a seam every
+//! host already provides, so a host swaps it in only if it has a better store to
+//! back it with.
+//!
+//! Traits move opaque bytes and events — no seam holds logic, no domain type
+//! leaks into a seam; the engine owns all interpretation.
 //!
 //! Determinism is injected: wall clock and timers come only from
 //! [`Scheduler`], entropy only from [`crate::entropy::Entropy`]. Engine logic
@@ -16,6 +22,7 @@ mod http;
 mod mailbox;
 mod record_transport;
 mod refresh_hint;
+mod retire_ledger;
 mod scheduler;
 mod snapshot_cache;
 mod staging_store;
@@ -32,6 +39,7 @@ pub(crate) use http::AUTHORIZATION;
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
 pub use refresh_hint::{RefreshHint, RefreshHintSource};
+pub use retire_ledger::{OwedRetire, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
 pub use staging_store::{OpId, StagingStore};

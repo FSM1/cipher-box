@@ -22,6 +22,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
+use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
@@ -29,10 +30,15 @@ use crate::sync::drain::{
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
-/// Whether `key` is one of the per-identity op-id high-water marks
-/// ([`op_mark_key`](crate::sync::drain::op_mark_key)).
-fn is_op_mark(key: &[u8]) -> bool {
-    key.starts_with(DRAINED_OP_MARK_PREFIX) || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+/// Whether `key` is engine bookkeeping rather than upload residue: a
+/// per-identity op-id high-water mark
+/// ([`op_mark_key`](crate::sync::drain::op_mark_key)) or a retire-ledger entry.
+/// Both are per-owner, so their whole prefixes are referenced — an entry this
+/// session cannot read belongs to the identity that still needs it.
+fn is_bookkeeping(key: &[u8]) -> bool {
+    key.starts_with(DRAINED_OP_MARK_PREFIX)
+        || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+        || key.starts_with(RETIRE_LEDGER_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -310,14 +316,12 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     referenced.extend(live.iter().cloned());
     // Enumerated first, so an idle store answers without reading the queue at
     // all, and a version journaled mid-pass is decided by a queue read that
-    // already covers it. The op-id marks are per-identity, so their whole
-    // prefixes are referenced — a mark this session cannot read belongs to the
-    // identity that still needs it.
+    // already covers it.
     let candidates: Vec<Vec<u8>> = store
         .staged_keys()
         .await?
         .into_iter()
-        .filter(|key| !referenced.contains(key) && !is_op_mark(key))
+        .filter(|key| !referenced.contains(key) && !is_bookkeeping(key))
         .collect();
     if candidates.is_empty() {
         return Ok(candidates);
@@ -533,9 +537,12 @@ mod tests {
     /// Collecting the drain's completion mark would let a restored queue replay
     /// ops that already published, so it is never orphan residue.
     ///
-    /// The op-id marks are per-identity, so this holds for a mark **this**
+    /// The same holds for a retire-ledger entry, whose collection would drop a
+    /// pending reclaim debt and leak the pinned bytes it names.
+    ///
+    /// Both prefixes are per-identity, so this holds for an entry **this**
     /// session cannot read too: its owner is the identity that still needs it,
-    /// and collecting it would discard their completion record.
+    /// and collecting it would discard their record.
     #[test]
     fn the_drains_own_bookkeeping_is_never_classed_an_orphan() {
         let store = InMemoryStagingStore::default();
@@ -545,7 +552,11 @@ mod tests {
                 key.extend_from_slice(&[7u8; 32]);
                 key
             };
-            for prefix in [DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX] {
+            for prefix in [
+                DRAINED_OP_MARK_PREFIX,
+                PUBLISHED_OP_MARK_PREFIX,
+                RETIRE_LEDGER_PREFIX,
+            ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
                     .await
@@ -560,7 +571,7 @@ mod tests {
             assert_eq!(
                 orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
-                "only the residue is collected, never anyone's mark"
+                "only the residue is collected, never anyone's bookkeeping"
             );
         });
     }
