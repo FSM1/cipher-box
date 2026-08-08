@@ -1,33 +1,23 @@
 //! The focus-window tick — the one sync model driven by two trigger sources
 //! (blueprint/engine.md "Sync core"; CONTEXT.md "Focus window"; #33 D2).
 //!
-//! One model, two triggers: web drives it from navigation and the poll timer,
-//! desktop from FUSE-op TTL checks — the loop is identical. A tick refreshes
+//! One model, two triggers: the poll timer and a host `ManualRefresh`, which
+//! brings the next pass forward through [`ManualRefresh`]. A tick refreshes
 //! the **focus window**: the vault pointer, the open folder, its full ancestor
 //! chain to root, the scope pointers of open shared scopes, and the mailbox
 //! poll — everything else refreshes on access past the staleness threshold, so
-//! there is no background churn over the whole tree. Immediate ticks fire on a
-//! [`RefreshHintSource`] event; the poll cadence is jittered from injected
-//! entropy (the engine never sleeps a raw library default and never reads an
-//! RNG directly).
+//! there is no background churn over the whole tree.
 
-use core::future::Future;
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
 use std::collections::BTreeMap;
 
-use crate::entropy::Entropy;
 use crate::facade::NodeId;
 use crate::profile::SyncTimingProfile;
-use crate::seams::{RefreshHintSource, Scheduler, UnixMillis};
+use crate::seams::{Scheduler, UnixMillis};
 use crate::sync::model::Snapshot;
-
-/// The maximum jitter added to the poll cadence, as a fraction denominator: the
-/// tick sleeps `[cadence, cadence + cadence/JITTER_DIVISOR)` so concurrent
-/// clients spread their polls (thundering-herd avoidance) without ever
-/// polling *faster* than the cadence.
-const JITTER_DIVISOR: u32 = 2;
+use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
 /// The open focus of the UI: the folder in view and any open shared scopes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -55,10 +45,8 @@ pub enum FocusTarget {
 /// What woke a tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickCause {
-    /// The jittered poll timer elapsed.
+    /// The poll timer elapsed.
     Poll,
-    /// A [`RefreshHintSource`] event forced an immediate tick.
-    Hint,
     /// A host `ManualRefresh` — resolves with nocache semantics everywhere.
     Manual,
 }
@@ -77,7 +65,7 @@ pub enum ResolveMode {
 pub fn resolve_mode(cause: TickCause) -> ResolveMode {
     match cause {
         TickCause::Manual => ResolveMode::NoCache,
-        TickCause::Poll | TickCause::Hint => ResolveMode::CacheFirst,
+        TickCause::Poll => ResolveMode::CacheFirst,
     }
 }
 
@@ -145,25 +133,6 @@ pub fn on_access_refresh_due(
     now.0.saturating_sub(last_refreshed.0) >= crate::sync::duration_millis(profile.stale_after)
 }
 
-/// The poll cadence with jitter drawn from injected entropy:
-/// `[cadence, cadence + cadence/JITTER_DIVISOR)`. Deterministic for a given
-/// entropy stream (the determinism law); a zero cadence stays zero.
-pub fn jittered_cadence(cadence: Duration, entropy: &mut dyn Entropy) -> Duration {
-    let span = cadence / JITTER_DIVISOR;
-    if span.is_zero() {
-        return cadence;
-    }
-    let mut bytes = [0u8; 8];
-    // Jitter is best-effort scheduling: a fill error degrades to the un-jittered
-    // cadence rather than propagating — it costs herd spread, never correctness.
-    if entropy.fill(&mut bytes).is_err() {
-        return cadence;
-    }
-    let span_nanos = span.as_nanos().max(1);
-    let offset = (u128::from(u64::from_le_bytes(bytes)) % span_nanos) as u64;
-    cadence + Duration::from_nanos(offset)
-}
-
 /// A tick loop's control signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickControl {
@@ -173,65 +142,55 @@ pub enum TickControl {
     Stop,
 }
 
-/// What woke the tick-loop wait.
-enum TickWake {
-    /// The jittered timer elapsed.
-    Timer,
-    /// A hint arrived (`None` = the source closed for good).
-    Hint(bool),
-}
-
-/// Wait for the next tick: whichever of the jittered timer or the next refresh
-/// hint fires first. The hint is polled first, so an already-queued hint yields
-/// an immediate tick without waiting on the timer.
-async fn wait_for_tick<Sch, H>(scheduler: &Sch, hints: &mut H, delay: Duration) -> TickWake
+/// Wait for the next tick: whichever of the poll timer or a filed manual
+/// refresh comes first. The request is polled first, so one already waiting
+/// ticks immediately instead of sitting out the cadence.
+async fn wait_for_tick<Sch>(scheduler: &Sch, manual: &ManualRefresh, cadence: Duration) -> TickCause
 where
     Sch: Scheduler,
-    H: RefreshHintSource,
 {
-    let mut sleep = pin!(scheduler.sleep(delay));
-    let mut hint = pin!(hints.next_hint());
+    let mut sleep = pin!(scheduler.sleep(cadence));
     core::future::poll_fn(|cx| {
-        if let Poll::Ready(h) = hint.as_mut().poll(cx) {
-            return Poll::Ready(TickWake::Hint(h.is_some()));
+        if manual.poll_requested(cx).is_ready() {
+            return Poll::Ready(TickCause::Manual);
         }
         if sleep.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(TickWake::Timer);
+            return Poll::Ready(TickCause::Poll);
         }
         Poll::Pending
     })
     .await
 }
 
-/// Run the focus-window tick loop until `on_tick` returns [`TickControl::Stop`]
-/// or the hint source closes. Each iteration sleeps a freshly-jittered cadence
-/// but wakes immediately on a refresh hint; `on_tick` performs the actual focus
-/// resolve (the net/pointer wiring the caller composes) and decides whether to
-/// continue.
-pub async fn run_tick_loop<Sch, H, F, Fut>(
+/// Run the focus-window tick loop until `on_tick` returns [`TickControl::Stop`].
+/// Each iteration sleeps the poll cadence but wakes early on a manual refresh;
+/// `on_tick` performs the actual focus resolve (the net/pointer wiring the
+/// caller composes) and decides whether to continue.
+///
+/// The loop is the only pass executor, so passes never overlap. It settles the
+/// manual requests the pass took after `on_tick` returns, which answers a pass
+/// that stopped before settling them itself; the settled-already case is a
+/// no-op.
+pub async fn run_tick_loop<Sch>(
     scheduler: &Sch,
-    hints: &mut H,
-    entropy: &mut dyn Entropy,
-    profile: &SyncTimingProfile,
-    mut on_tick: F,
+    manual: &ManualRefresh,
+    cadence: Duration,
+    mut on_tick: impl AsyncFnMut(TickCause) -> TickControl,
 ) where
     Sch: Scheduler,
-    H: RefreshHintSource,
-    F: FnMut(TickCause) -> Fut,
-    Fut: Future<Output = TickControl>,
 {
     loop {
-        let delay = jittered_cadence(profile.poll_cadence, entropy);
-        let cause = match wait_for_tick(scheduler, hints, delay).await {
-            TickWake::Timer => TickCause::Poll,
-            TickWake::Hint(true) => TickCause::Hint,
-            // The source closed for good: stop listening (host shutdown).
-            TickWake::Hint(false) => break,
-        };
-        if on_tick(cause).await == TickControl::Stop {
+        let cause = wait_for_tick(scheduler, manual, cadence).await;
+        if cause == TickCause::Manual {
+            manual.begin();
+        }
+        let control = on_tick(cause).await;
+        manual.settle(RefreshVerdict::Unreconciled);
+        if control == TickControl::Stop {
             break;
         }
     }
+    manual.close();
 }
 
 #[cfg(test)]
@@ -241,8 +200,8 @@ mod tests {
 
     use crate::facade::NodeKind;
     use crate::sync::model::NodeMeta;
-    use crate::testkit::fakes::{ManualHintSource, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::VirtualScheduler;
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
@@ -343,10 +302,9 @@ mod tests {
     }
 
     #[test]
-    fn manual_refresh_is_nocache_others_cache_first() {
+    fn manual_refresh_is_nocache_and_a_poll_is_cache_first() {
         assert_eq!(resolve_mode(TickCause::Manual), ResolveMode::NoCache);
         assert_eq!(resolve_mode(TickCause::Poll), ResolveMode::CacheFirst);
-        assert_eq!(resolve_mode(TickCause::Hint), ResolveMode::CacheFirst);
     }
 
     #[test]
@@ -361,82 +319,98 @@ mod tests {
     }
 
     #[test]
-    fn jitter_is_deterministic_and_bounded() {
-        let cadence = Duration::from_secs(30);
-        let a = jittered_cadence(cadence, &mut SeededEntropy::new(42));
-        let b = jittered_cadence(cadence, &mut SeededEntropy::new(42));
-        assert_eq!(a, b, "same entropy stream, same jitter");
-        assert!(a >= cadence, "jitter never polls faster than the cadence");
-        assert!(a < cadence + cadence / JITTER_DIVISOR, "jitter is bounded");
-    }
-
-    #[test]
-    fn jitter_zero_cadence_stays_zero() {
-        assert_eq!(
-            jittered_cadence(Duration::ZERO, &mut SeededEntropy::new(1)),
-            Duration::ZERO
-        );
-    }
-
-    #[test]
-    fn a_queued_hint_forces_an_immediate_tick_without_advancing_time() {
+    fn a_filed_manual_refresh_ticks_immediately_without_advancing_time() {
         let scheduler = VirtualScheduler::new(); // manual clock, never advanced here
-        let source = ManualHintSource::default();
-        let mut listener = source.clone();
-        let mut entropy = SeededEntropy::new(1);
+        let manual = ManualRefresh::default();
+        manual.arm();
         let causes = RefCell::new(Vec::new());
 
-        source.push_hint();
-        source.push_hint();
-        source.close();
+        let first = manual.request().expect("armed");
+        let second = manual.request().expect("armed");
 
         block_on(run_tick_loop(
             &scheduler,
-            &mut listener,
-            &mut entropy,
-            &SyncTimingProfile::PRODUCTION,
-            |cause| {
+            &manual,
+            SyncTimingProfile::PRODUCTION.poll_cadence,
+            async |cause| {
                 causes.borrow_mut().push(cause);
-                async { TickControl::Continue }
+                manual.settle(RefreshVerdict::Reconciled);
+                TickControl::Stop
             },
         ));
 
         assert_eq!(
             causes.into_inner(),
-            vec![TickCause::Hint, TickCause::Hint],
-            "both hints ticked immediately; the close stopped the loop"
+            vec![TickCause::Manual],
+            "two requests before the pass started cost exactly one pass"
         );
         assert_eq!(scheduler.now(), UnixMillis(0), "no timer ever elapsed");
+        assert_eq!(block_on(first), Ok(RefreshVerdict::Reconciled));
+        assert_eq!(block_on(second), Ok(RefreshVerdict::Reconciled));
     }
 
     #[test]
-    fn the_poll_timer_ticks_on_the_jittered_cadence() {
+    fn a_pass_that_stops_without_settling_still_answers_its_requests() {
+        let scheduler = VirtualScheduler::new();
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let waiter = manual.request().expect("armed");
+
+        block_on(run_tick_loop(
+            &scheduler,
+            &manual,
+            SyncTimingProfile::PRODUCTION.poll_cadence,
+            async |_| TickControl::Stop,
+        ));
+
+        assert_eq!(block_on(waiter), Ok(RefreshVerdict::Unreconciled));
+    }
+
+    #[test]
+    fn a_stopped_loop_disarms_the_trigger() {
         let scheduler = VirtualScheduler::new().with_auto_advance();
-        let source = ManualHintSource::default(); // no hints
-        let mut listener = source.clone();
-        let mut entropy = SeededEntropy::new(7);
+        let manual = ManualRefresh::default();
+        manual.arm();
+
+        block_on(run_tick_loop(
+            &scheduler,
+            &manual,
+            SyncTimingProfile::CI.poll_cadence,
+            async |_| TickControl::Stop,
+        ));
+
+        assert!(
+            manual.request().is_none(),
+            "no loop remains to answer a request"
+        );
+    }
+
+    #[test]
+    fn the_poll_timer_ticks_on_the_cadence() {
+        let scheduler = VirtualScheduler::new().with_auto_advance();
+        let manual = ManualRefresh::default();
         let ticks = RefCell::new(0u32);
 
         block_on(run_tick_loop(
             &scheduler,
-            &mut listener,
-            &mut entropy,
-            &SyncTimingProfile::CI,
-            |cause| {
+            &manual,
+            SyncTimingProfile::CI.poll_cadence,
+            async |cause| {
                 assert_eq!(cause, TickCause::Poll);
                 *ticks.borrow_mut() += 1;
-                let stop = *ticks.borrow() == 3;
-                async move {
-                    if stop {
-                        TickControl::Stop
-                    } else {
-                        TickControl::Continue
-                    }
+                if *ticks.borrow() == 3 {
+                    TickControl::Stop
+                } else {
+                    TickControl::Continue
                 }
             },
         ));
 
         assert_eq!(ticks.into_inner(), 3, "the timer drove three poll ticks");
-        assert!(scheduler.now() > UnixMillis(0), "virtual time advanced");
+        assert_eq!(
+            scheduler.now(),
+            UnixMillis(3 * crate::sync::duration_millis(SyncTimingProfile::CI.poll_cadence)),
+            "each tick slept exactly the cadence"
+        );
     }
 }

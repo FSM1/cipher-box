@@ -30,12 +30,13 @@ export interface SnapshotState {
 }
 
 /**
- * Whether a later pull clears this on its own: `tooManyStreams` is a ceiling,
- * not a verdict. Named codes only, so a codeless transport fault and every code
- * this does not name — trust verdicts among them — stay fatal.
+ * Whether a later pull clears this on its own: `tooManyStreams` is a ceiling
+ * and `refreshFailed` is an unreachable record plane, neither a verdict about
+ * what is rendered. Named codes only, so a codeless transport fault and every
+ * code this does not name — trust verdicts among them — stay fatal.
  */
 export function isRecoverable(error: SnapshotError): boolean {
-  return error.code === 'tooManyStreams';
+  return error.code === 'tooManyStreams' || error.code === 'refreshFailed';
 }
 
 export interface SnapshotStore {
@@ -49,7 +50,7 @@ export interface SnapshotStore {
   setFocus(node: Uint8Array | null): void;
   /** Re-asserts the cached focus after a consumer drove `facade.setFocus` itself. */
   refocus(): void;
-  /** Re-pulls the focused folder, behind a best-effort nocache resolve. */
+  /** Forces a nocache pass, then re-pulls the focused folder. */
   refresh(): void;
   /** Releases the event subscription. */
   dispose(): void;
@@ -189,11 +190,16 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     refresh() {
       if (disposed) return;
       const id = generation;
-      const again = (): void => {
-        if (id === generation) pull();
-      };
-      // The nocache hint is best-effort: only the pull it precedes sets `error`.
-      void client.facade.manualRefresh().then(again, again);
+      void client.facade.manualRefresh().then(
+        () => {
+          if (id === generation) pull();
+        },
+        // A refused pass leaves the rendered view exactly where it was, so it
+        // is reported rather than repainted over as though it had landed.
+        (error: unknown) => {
+          if (id === generation) commit({ error: describe(error) });
+        }
+      );
     },
     dispose() {
       disposed = true;

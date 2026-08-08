@@ -148,13 +148,3 @@ export interface MailboxSeam {
   poll(): Promise<MailboxItemData[]>;
   ack(itemId: string): Promise<void>;
 }
-
-/**
- * Host events that force an immediate sync tick (UI navigation, tab-visibility
- * regain, `online` reconnect). `nextHint` resolves to `true` for a hint, or
- * `null` once the source is closed for good. A hint carries no payload — losing
- * one costs staleness, never correctness.
- */
-export interface RefreshHintSourceSeam {
-  nextHint(): Promise<true | null>;
-}

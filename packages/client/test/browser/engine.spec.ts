@@ -61,9 +61,11 @@ test.describe('engine worker host', () => {
     // start(secret) resolves: the secret transferred in and the engine came up.
     expect(result.startOk).toBe(true);
     expect(result.secretDetached).toBe(true);
-    // Post-start the engine answers (its command pipeline is unimplemented, but
-    // it is started) — proving a correlated round-trip to the real engine.
-    expect(result.afterStart).toContain('not implemented');
+    // Post-start the engine answers the command on its own terms — a forced
+    // pass landed or refused — proving a correlated round-trip to the real
+    // engine rather than a lifecycle rejection.
+    expect(result.afterStart).not.toBe('');
+    expect(result.afterStart).not.toContain('not started');
     // After logout the transport is torn down and rejects further work.
     expect(result.afterLogout).toContain('closed');
   });

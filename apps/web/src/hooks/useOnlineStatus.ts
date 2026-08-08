@@ -10,9 +10,9 @@ function subscribe(onChange: () => void): () => void {
 }
 
 /**
- * Whether the browser has a network path. A refresh hint only
- * (blueprint/web-client.md `RefreshHintSource`): `navigator.onLine` reports the
- * link, not whether anything answers over it, so nothing renders from it.
+ * Whether the browser has a network path. A refresh trigger only:
+ * `navigator.onLine` reports the link, not whether anything answers over it,
+ * so nothing renders from it.
  */
 export function useOnlineStatus(): boolean {
   return useSyncExternalStore(

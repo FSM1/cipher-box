@@ -1,7 +1,7 @@
 //! Host seams — the trait contracts a host implements (blueprint/engine.md
 //! "Host seams").
 //!
-//! The nine [`SeamTypes`] name the capabilities a host must supply, injected as
+//! The eight [`SeamTypes`] name the capabilities a host must supply, injected as
 //! a constructor argument via [`SeamSet`]. [`RetireLedger`] is the exception
 //! that proves the shape: the same trait contract, with a conformance kit of its
 //! own, but the engine ships the implementation
@@ -21,7 +21,6 @@ mod floor_store;
 mod http;
 mod mailbox;
 mod record_transport;
-mod refresh_hint;
 mod retire_ledger;
 mod scheduler;
 mod snapshot_cache;
@@ -38,7 +37,6 @@ pub use http::{
 pub(crate) use http::AUTHORIZATION;
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
-pub use refresh_hint::{RefreshHint, RefreshHintSource};
 pub use retire_ledger::{OwedRetire, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
@@ -82,10 +80,10 @@ impl std::error::Error for SeamError {}
 /// Result alias used by every seam method.
 pub type SeamResult<T> = Result<T, SeamError>;
 
-/// The type family binding one host's nine concrete seam implementations.
+/// The type family binding one host's eight concrete seam implementations.
 ///
 /// A host (web worker realm, desktop process, the test kit) implements this
-/// trait once, naming its concrete type for every seam. Collapsing the nine
+/// trait once, naming its concrete type for every seam. Collapsing the eight
 /// generics into one type parameter keeps [`SeamSet`] and
 /// [`crate::facade::Engine`] signatures readable while preserving full
 /// static dispatch — no boxing, no `Send` assumptions, so the same engine
@@ -99,8 +97,6 @@ pub trait SeamTypes {
     type Http: Http;
     /// Sealed-blob mailbox transport ([`Mailbox`]).
     type Mailbox: Mailbox;
-    /// Host refresh-hint event stream ([`RefreshHintSource`]).
-    type RefreshHintSource: RefreshHintSource;
     /// Timers, background tasks, wall clock ([`Scheduler`]).
     type Scheduler: Scheduler;
     /// Durable op queue and staged bytes ([`StagingStore`]).
@@ -126,9 +122,7 @@ pub struct SeamSet<T: SeamTypes> {
     pub http: T::Http,
     /// Post/poll/ack of sealed blobs to/from a recipient public key.
     pub mailbox: T::Mailbox,
-    /// Host events that force an immediate sync tick.
-    pub refresh_hints: T::RefreshHintSource,
-    /// Jittered timers, background task execution, wall clock.
+    /// Timers, background task execution, wall clock.
     pub scheduler: T::Scheduler,
     /// Durable op queue plus staged upload bytes.
     pub staging_store: T::StagingStore,

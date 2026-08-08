@@ -1,5 +1,5 @@
 /**
- * Constructs the nine browser seams for one engine instance, inside the worker
+ * Constructs the eight browser seams for one engine instance, inside the worker
  * realm (blueprint/web-client.md "Browser seams"). The seam bag's property names
  * are the constructor contract the WASM `EngineHandle` reads.
  */
@@ -12,7 +12,6 @@ import {
   IdbSnapshotCache,
   NoopCredentialStore,
   OpfsStagingStore,
-  QueueRefreshHintSource,
   WorkerScheduler,
 } from '../seams/index.js';
 
@@ -25,13 +24,12 @@ export interface BrowserSeamsConfig {
   dbPrefix?: string;
 }
 
-/** The seam bag plus the live refresh-hint source the host feeds from UI events. */
+/** The seam bag the WASM `EngineHandle` constructor reads. */
 export interface BrowserSeams {
   floorStore: IdbFloorStore;
   recordTransport: FetchRecordTransport;
   http: FetchHttp;
   mailbox: ApiMailbox;
-  refreshHints: QueueRefreshHintSource;
   scheduler: WorkerScheduler;
   stagingStore: OpfsStagingStore;
   snapshotCache: IdbSnapshotCache;
@@ -46,7 +44,6 @@ export function makeBrowserSeams(config: BrowserSeamsConfig): BrowserSeams {
     recordTransport: new FetchRecordTransport(config.recordEndpoints),
     http,
     mailbox: new ApiMailbox(http, config.apiBaseUrl),
-    refreshHints: new QueueRefreshHintSource(),
     scheduler: new WorkerScheduler(),
     stagingStore: new OpfsStagingStore(`${prefix}-staging`),
     snapshotCache: new IdbSnapshotCache(`${prefix}-snapshot-cache`),

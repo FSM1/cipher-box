@@ -66,7 +66,8 @@ impl From<EngineError> for VfsError {
                 VfsError::TrustViolation { message }
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
-            EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
+            EngineError::ContentUnavailable { message }
+            | EngineError::RefreshFailed { message } => VfsError::Unavailable { message },
             // Retryable once the vault settings resolve or are saved again, and
             // not a storage verdict: the device has room, the engine simply does
             // not know where the member wants the bytes.

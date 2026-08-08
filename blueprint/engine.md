@@ -70,17 +70,16 @@ The constructor takes the seam set whole; the six load-bearing seams are fixed
 by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mandatory-seam rule
 (FSM1/cipher-box-next#26 D8). Traits move opaque bytes and events — no seam holds logic.
 
-| Seam                  | Contract                                                                                                  | Web (`packages/client`)                      | Desktop                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------- |
-| **FloorStore**        | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal                 |
-| **RecordTransport**   | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`                     |
-| **Http**              | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`                     |
-| **Mailbox**           | Post/poll/ack of sealed blobs to/from a recipient pubkey                                                  | API mailbox via the engine's own API client  | Same                          |
-| **RefreshHintSource** | Host-event stream that forces an immediate tick                                                           | Navigation, tab-visibility regain, reconnect | FUSE-op TTL checks, reconnect |
-| **Scheduler**         | Jittered timers, background task execution, wall clock                                                    | Worker timers                                | Tokio                         |
-| **StagingStore**      | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal                 |
-| **SnapshotCache**     | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store                   |
-| **CredentialStore**   | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain                   |
+| Seam                | Contract                                                                                                  | Web (`packages/client`)                      | Desktop       |
+| ------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------- |
+| **FloorStore**      | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal |
+| **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`     |
+| **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`     |
+| **Mailbox**         | Post/poll/ack of sealed blobs to/from a recipient pubkey                                                  | API mailbox via the engine's own API client  | Same          |
+| **Scheduler**       | Timers, background task execution, wall clock                                                             | Worker timers                                | Tokio         |
+| **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal |
+| **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store   |
+| **CredentialStore** | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain   |
 
 Notes:
 
@@ -342,10 +341,11 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   overlay stamps `mtime = authored_at` — overwriting the projected time, not
   filling it — and a content op also stamps its version's plaintext size,
   through the one function the drain's publish plan shares.
-- **Focus-window tick**, 30 s with jitter: refresh the vault pointer, the open
+- **Focus-window tick**, 30 s: refresh the vault pointer, the open
   folder, and its full ancestor chain to root; the scope-pointer resolves for
   open shared scopes (FSM1/cipher-box-next#38 D4) and the mailbox poll (FSM1/cipher-box-next#34 D5) ride the same
-  tick. Immediate ticks on `RefreshHintSource` events. Any other cached folder
+  tick. `Command::ManualRefresh` brings the next pass forward immediately and
+  resolves it nocache, and reports back what that pass reconciled. Any other cached folder
   refreshes on access past the staleness threshold — no background churn over
   the whole tree; cached shared scopes consult their scope pointer on access.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
@@ -810,7 +810,8 @@ already happened below the facade — hosts render, they never decide.
   the testing-strategy blueprint's e2e work.
 - **Sweep cadence** — the idle-cadence value joins the sync timing profile.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
-  WebSocket hints or desktop PubSub) behind `RefreshHintSource` (FSM1/cipher-box-next#33 D1);
+  WebSocket hints or desktop PubSub), whose handler forces a pass through
+  `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1);
   desktop embedded DHT behind `RecordTransport` (FSM1/cipher-box-next#23 D2); decentralized inbox
   behind `Mailbox` (FSM1/cipher-box-next#25 D2); the re-signer wrapped-key enrollment channel
   (FSM1/cipher-box-next#24 D4); scheduled hygiene rotation (FSM1/cipher-box-next#26 D7).

@@ -20,6 +20,7 @@ use crate::gate::{GateError, RejectionReason};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::project_folder;
+use crate::sync::tick::ResolveMode;
 
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
@@ -38,6 +39,10 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// granted-subscope focus is a later slice.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
+    /// How this pass resolves each folder's record: a manual refresh forces
+    /// [`ResolveMode::NoCache`], so an unreachable record is reported as
+    /// staleness rather than re-projected from cached bytes.
+    pub(crate) mode: ResolveMode,
 }
 
 impl<T, S, H, F> FolderRefresh<'_, T, S, H, F>
@@ -69,8 +74,14 @@ where
                 self.scope_read_seed.clone(),
                 folder.0,
             );
-            let adopted = match resolve_child(self.transport, self.snapshot_cache, &adopter, &name)
-                .await
+            let adopted = match resolve_child(
+                self.transport,
+                self.snapshot_cache,
+                &adopter,
+                &name,
+                self.mode,
+            )
+            .await
             {
                 Ok(adopted) => adopted,
                 // Availability: the base keeps rendering last-known-good.

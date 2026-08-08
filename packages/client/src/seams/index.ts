@@ -14,7 +14,6 @@ export { WorkerScheduler } from './scheduler.js';
 export { FetchRecordTransport } from './recordTransport.js';
 export { FetchHttp } from './http.js';
 export { ApiMailbox } from './mailbox.js';
-export { QueueRefreshHintSource } from './refreshHint.js';
 export type {
   FloorStoreSeam,
   SnapshotCacheSeam,
@@ -30,5 +29,4 @@ export type {
   CappedHttpResult,
   MailboxSeam,
   MailboxItemData,
-  RefreshHintSourceSeam,
 } from './types.js';

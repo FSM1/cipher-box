@@ -10,6 +10,15 @@ use crate::seams::{SeamResult, SnapshotCache};
 #[derive(Clone, Default)]
 pub struct InMemorySnapshotCache {
     inner: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
+    reads: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl InMemorySnapshotCache {
+    /// Every cache key `get` was called with, in call order — how a test tells
+    /// a cache-first resolve from a nocache one.
+    pub fn reads(&self) -> Vec<Vec<u8>> {
+        self.reads.lock().expect("lock").clone()
+    }
 }
 
 impl SnapshotCache for InMemorySnapshotCache {
@@ -22,6 +31,7 @@ impl SnapshotCache for InMemorySnapshotCache {
     }
 
     async fn get(&self, cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        self.reads.lock().expect("lock").push(cache_key.to_vec());
         Ok(self.inner.lock().expect("lock").get(cache_key).cloned())
     }
 

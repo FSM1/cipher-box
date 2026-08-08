@@ -7,7 +7,7 @@
  *   result back, all over that follower's private `PortCourier` port;
  * - every engine event → fanned out over those same ports, in emission order;
  * - each tab's open folder → the leader's **focus-window union**, so freshness
- *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
+ *   follows whichever tab is focused, cross-tab.
  *
  * Nothing that names or measures vault content touches the `BroadcastChannel`
  * in either direction: it carries election and the port rendezvous only. One
@@ -180,7 +180,7 @@ export class LeaderRelay {
   /** Folds the leader tab's own open folder into the focus-window union. */
   reportLocalFocus(clientId: string, node: Uint8Array | null): void {
     if (this.closed) return;
-    if (this.focus.set(clientId, node)) this.refreshHint();
+    if (this.focus.set(clientId, node)) this.forceRefresh();
   }
 
   close(): void {
@@ -232,7 +232,7 @@ export class LeaderRelay {
    */
   private reclaim(clientId: string): void {
     this.retirePresence(clientId);
-    if (this.focus.remove(clientId)) this.refreshHint();
+    if (this.focus.remove(clientId)) this.forceRefresh();
     this.releaseHandles(clientId);
     this.detachPortOf(clientId);
   }
@@ -330,7 +330,7 @@ export class LeaderRelay {
       const { node } = message as Extract<PortRequest, { type: 'cb:portFocus' }>;
       // Uncorrelated, so nothing to refuse; the registry keys on the bytes.
       if (node !== null && !(node instanceof Uint8Array)) return false;
-      if (this.focus.set(clientId, node)) this.refreshHint();
+      if (this.focus.set(clientId, node)) this.forceRefresh();
       return true;
     }
     const requestId = (message as { requestId?: unknown }).requestId;
@@ -581,11 +581,11 @@ export class LeaderRelay {
   }
 
   /**
-   * A tab's focus changed the union: forward a manual-refresh hint to the
-   * engine. This is the RefreshHintSource seam (a best-effort accelerator), not
-   * a new command semantic — a dropped hint costs staleness, never correctness.
+   * A tab's focus changed the union: force a pass over the new window. The
+   * relay is an accelerator, so a refusal costs staleness, never correctness —
+   * the tab that asked for it reports its own refresh failures.
    */
-  private refreshHint(): void {
+  private forceRefresh(): void {
     void this.transport.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
   }
 

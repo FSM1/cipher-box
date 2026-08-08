@@ -97,11 +97,16 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
   result.startOk = true;
   result.secretDetached = secret.byteLength === 0;
 
-  // Post-start, the same command reaches a started engine (its pipeline is not
-  // yet wired, so it answers "not implemented" — not "not started").
-  await facade.manualRefresh().catch((error: unknown) => {
-    result.afterStart = message(error);
-  });
+  // Post-start, the same command reaches a started engine and answers on its
+  // own terms — a forced pass landed or refused, never "not started".
+  await facade.manualRefresh().then(
+    () => {
+      result.afterStart = 'refreshed';
+    },
+    (error: unknown) => {
+      result.afterStart = message(error);
+    }
+  );
 
   await facade.logout();
 

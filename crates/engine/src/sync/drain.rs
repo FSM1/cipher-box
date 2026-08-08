@@ -79,6 +79,7 @@ use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
+use crate::sync::tick::ResolveMode;
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue.
@@ -918,6 +919,7 @@ where
             self.snapshot_cache,
             &adopter,
             scope.root_name,
+            ResolveMode::CacheFirst,
         )
         .await
         .map_err(seam)?;
@@ -948,9 +950,15 @@ where
             scope.read_scope_seed.clone(),
             node.0,
         );
-        let resolved = resolve(self.transport, self.snapshot_cache, &adopter, &name)
-            .await
-            .map_err(seam)?;
+        let resolved = resolve(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            &name,
+            ResolveMode::CacheFirst,
+        )
+        .await
+        .map_err(seam)?;
         let record_bytes = match resolved.outcome {
             // An adopt caches its own gate-passing bytes; the other two arms
             // carry theirs.

@@ -25,6 +25,7 @@ use super::resolve::{AdoptOutcome, Adopter, ResolveOutcome, resolve};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, floor};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
+use crate::sync::tick::ResolveMode;
 
 /// The child-record [`Adopter`] for one non-root node of an owned scope.
 /// Borrows the content seams from the live session; terminally owns a
@@ -210,6 +211,7 @@ pub(crate) async fn resolve_child<T, S, H, F>(
     snapshot_cache: &S,
     adopter: &ChildAdopter<'_, H, F>,
     name: &IpnsName,
+    mode: ResolveMode,
 ) -> Result<Adopted, ChildResolveError>
 where
     T: RecordTransport,
@@ -217,7 +219,7 @@ where
     H: Http,
     F: FloorStore,
 {
-    let resolved = resolve(transport, snapshot_cache, adopter, name)
+    let resolved = resolve(transport, snapshot_cache, adopter, name, mode)
         .await
         .map_err(|e| ChildResolveError::Unavailable(e.message().to_owned()))?;
     let record_bytes = match resolved.outcome {

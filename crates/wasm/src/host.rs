@@ -30,10 +30,9 @@ use zeroize::Zeroizing;
 
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
-    JsFloorStoreSeam, JsHttpSeam, JsMailboxSeam, JsRecordTransportSeam, JsRefreshHintSourceSeam,
-    JsSchedulerSeam, JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter,
-    RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
-    StagingStoreAdapter,
+    JsFloorStoreSeam, JsHttpSeam, JsMailboxSeam, JsRecordTransportSeam, JsSchedulerSeam,
+    JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter, RecordTransportAdapter,
+    SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
 };
 use crate::{Command, CommandOutcome, Event, NodeId, SnapshotView};
 
@@ -46,7 +45,6 @@ impl SeamTypes for WebSeamTypes {
     type RecordTransport = RecordTransportAdapter;
     type Http = HttpAdapter;
     type Mailbox = MailboxAdapter;
-    type RefreshHintSource = RefreshHintSourceAdapter;
     type Scheduler = SchedulerAdapter;
     type StagingStore = StagingStoreAdapter;
     type SnapshotCache = SnapshotCacheAdapter;
@@ -86,7 +84,7 @@ pub struct EngineHandle {
 impl EngineHandle {
     /// Builds the engine over the browser seams. `seams` is a plain object with
     /// one property per engine seam (`floorStore`, `recordTransport`, `http`,
-    /// `mailbox`, `refreshHints`, `scheduler`, `stagingStore`, `snapshotCache`,
+    /// `mailbox`, `scheduler`, `stagingStore`, `snapshotCache`,
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
@@ -122,9 +120,6 @@ impl EngineHandle {
             },
             mailbox: MailboxAdapter {
                 js: take_seam::<JsMailboxSeam>(&seams, "mailbox")?,
-            },
-            refresh_hints: RefreshHintSourceAdapter {
-                js: take_seam::<JsRefreshHintSourceSeam>(&seams, "refreshHints")?,
             },
             scheduler: SchedulerAdapter {
                 js: take_seam::<JsSchedulerSeam>(&seams, "scheduler")?,
@@ -479,6 +474,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::NotAnUpload { .. } => "notAnUpload",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",
         EngineError::ContentKeySealFailed { .. } => "contentKeySealFailed",
+        EngineError::RefreshFailed { .. } => "refreshFailed",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",

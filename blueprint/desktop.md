@@ -77,17 +77,16 @@ The engine is constructed in-process at login with the desktop seam set
 `<data_local_dir>/cipherbox/<accountId>/`, ciphertext-only at rest — same law
 as web's IndexedDB stores; a stolen disk yields sealed bytes only.
 
-| Seam                  | Desktop implementation                                                                                                                                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **FloorStore**        | Fsync-barriered files in the engine data dir (the v1 high-water store discipline: write, `sync_all`, parent-dir fsync). Durable across logout by design                                                                           |
-| **RecordTransport**   | `reqwest` against the configured `/routing/v1` endpoint set                                                                                                                                                                       |
-| **Http**              | `reqwest`; the rotating refresh token is injected from CredentialStore                                                                                                                                                            |
-| **Mailbox**           | The engine's own API client over the Http seam — nothing desktop-specific                                                                                                                                                         |
-| **RefreshHintSource** | FUSE-op TTL checks (below), network reconnect, tray "Sync Now", wake-from-sleep                                                                                                                                                   |
-| **Scheduler**         | Tokio — timers, background tasks, wall clock                                                                                                                                                                                      |
-| **StagingStore**      | The v1 write journal generalized: one durable record per op (JSON or CBOR row + fsync barrier), sidecar files for staged ciphertext, `.json`-before-`.bin` removal ordering, orphan-sidecar GC. Covers **all** mutations, not two |
-| **SnapshotCache**     | Sealed record/metadata cache files in the data dir; unsealed in the engine on read                                                                                                                                                |
-| **CredentialStore**   | OS keychain (`keyring`), one service name; stores the refresh token and last-account id only — never key material                                                                                                                 |
+| Seam                | Desktop implementation                                                                                                                                                                                                            |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **FloorStore**      | Fsync-barriered files in the engine data dir (the v1 high-water store discipline: write, `sync_all`, parent-dir fsync). Durable across logout by design                                                                           |
+| **RecordTransport** | `reqwest` against the configured `/routing/v1` endpoint set                                                                                                                                                                       |
+| **Http**            | `reqwest`; the rotating refresh token is injected from CredentialStore                                                                                                                                                            |
+| **Mailbox**         | The engine's own API client over the Http seam — nothing desktop-specific                                                                                                                                                         |
+| **Scheduler**       | Tokio — timers, background tasks, wall clock                                                                                                                                                                                      |
+| **StagingStore**    | The v1 write journal generalized: one durable record per op (JSON or CBOR row + fsync barrier), sidecar files for staged ciphertext, `.json`-before-`.bin` removal ordering, orphan-sidecar GC. Covers **all** mutations, not two |
+| **SnapshotCache**   | Sealed record/metadata cache files in the data dir; unsealed in the engine on read                                                                                                                                                |
+| **CredentialStore** | OS keychain (`keyring`), one service name; stores the refresh token and last-account id only — never key material                                                                                                                 |
 
 The facade is called directly (in-process async Rust) — no RPC layer, no
 worker, no tab leadership; the single-writer invariant is free on desktop
@@ -218,9 +217,10 @@ Desktop drives the **same sync core** as web, from FUSE traffic instead of
 navigation (FSM1/cipher-box-next#33 D2):
 
 - Every lookup/readdir/getattr checks the target's snapshot age against the
-  sync timing profile's staleness threshold; a stale hit fires a refresh hint
-  for that node — this is the **FUSE-op TTL check**, the desktop analog of
-  route navigation.
+  sync timing profile's staleness threshold; a stale hit forces a pass for that
+  node — this is the **FUSE-op TTL check**, the desktop analog of route
+  navigation. Network reconnect, tray "Sync Now", and wake-from-sleep force one
+  the same way, through `Command::ManualRefresh`.
 - The **focus window** is derived from the op stream: folders with FUSE
   traffic inside the profile's focus horizon count as "open", and the 30 s
   tick refreshes them plus their ancestor chains and the vault pointer —
@@ -309,5 +309,5 @@ the headless harness entry.
   cross-client measurements
   ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Designed-for, deliberately unbuilt**: FSKit adapter (above); desktop
-  embedded DHT behind RecordTransport (FSM1/cipher-box-next#23 D2); desktop PubSub push behind
-  RefreshHintSource (FSM1/cipher-box-next#33 D1).
+  embedded DHT behind RecordTransport (FSM1/cipher-box-next#23 D2); desktop PubSub push, whose
+  handler forces a pass through `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1).
