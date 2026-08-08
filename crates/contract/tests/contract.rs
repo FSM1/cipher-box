@@ -36,15 +36,16 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
 use cipherbox_engine::rotation::{
-    PrevEpochSeed, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, SweepResolver, SweepTarget, WriteHistory,
+    CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
+    ResealedScopeRoot, ResolveFailure, ScopeRootIdentity, ScopeRootPublishError,
+    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptScope,
+    WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
     MailboxItem as SealedMailboxItem, SeamError, SeamResult,
 };
 use cipherbox_engine::testkit::SeededEntropy;
-use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
 
@@ -1149,12 +1150,51 @@ impl Mailbox for ApiMailbox {
     }
 }
 
-/// A `SweepResolver` + `ScopeRootPublisher` that keeps the grant's network side
-/// local: this leg asserts the *delivery* the grant path emits, not IPNS.
+/// The grant's whole net arm, kept local: this leg asserts the *delivery* the
+/// grant path emits, not IPNS. The swept parent scope is empty, so the
+/// convergence gate passes with nothing to advance.
 struct LocalNet;
 
 impl SweepResolver for LocalNet {
-    async fn resolve(&self, _scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure> {
+    async fn resolve_scope(
+        &self,
+        _scope: &ChildScopeRef,
+    ) -> Result<SweptScope, SweepResolveFailure> {
+        Ok(SweptScope {
+            current_read_epoch: 3,
+            children: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+        })
+    }
+
+    async fn consult_pointer(
+        &self,
+        _scope_id: &[u8; 16],
+    ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
+        Ok(None)
+    }
+
+    async fn resolve_child(&self, _child: &NodeRef) -> Result<SweptChild, SweepResolveFailure> {
+        Err(SweepResolveFailure::Rejected)
+    }
+}
+
+impl SweepPublisher for LocalNet {
+    async fn publish_node(&self, _node: &LaggingNode<'_>) -> Result<(), ScopeRootPublishError> {
+        Ok(())
+    }
+
+    async fn repair_child_scope_index(
+        &self,
+        _scope: &ChildScopeRef,
+        _index: &[ChildScopeRef],
+    ) -> Result<(), ScopeRootPublishError> {
+        Ok(())
+    }
+}
+
+impl CascadeResealResolver for LocalNet {
+    async fn resolve(&self, _scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
         Err(ResolveFailure::Rejected)
     }
 }
@@ -1209,7 +1249,6 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         .to_compact();
 
     let mut entropy = SeededEntropy::new(954);
-    let floors = InMemoryFloorStore::default();
     let net = LocalNet;
     let mailbox = ApiMailbox {
         client: owner_client,
@@ -1217,7 +1256,6 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
 
     create_read_grant(
         &mut entropy,
-        &floors,
         &net,
         &net,
         &mailbox,

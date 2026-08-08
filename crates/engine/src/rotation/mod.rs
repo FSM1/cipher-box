@@ -13,10 +13,10 @@
 //! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface, and
 //!   the driver that turns a replay's queued scope-exit triggers into one flat
 //!   `rotateScope` per source scope root.
-//! - [`sweep`] — the lazy-wave epoch-lag convergence pass (metadata-only,
-//!   existing seed, `prev = None`) plus its idle-cadence driver and the
-//!   direct-child-scope index self-heal. It does **not** mint fresh descendant
-//!   seeds — that fresh-seed eager-set republish is the [`cascade`]'s job.
+//! - [`sweep`] — the lazy wave over a scope's **interior nodes**: re-seal every
+//!   node whose epoch lags its scope's, plus the idle-cadence driver and the
+//!   direct-child-scope index self-heal. Descendant scope roots are eager-set
+//!   members it stops at — their re-key is the [`cascade`]'s job.
 //! - [`cascade`] — the owner-revocation eager cascade (`rotateScope` on a read
 //!   revoke): re-key the root **and every transitively-reachable descendant scope
 //!   root** with a **fresh** override seed (`prev = Some`), threaded top-down.
@@ -29,10 +29,10 @@
 //!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`.
 //!
 //! [`ChildIndexResolver`], [`CascadeResealResolver`], [`ScopeRootPublisher`],
-//! [`WriteSubtreeResolver`] and [`WriteWavePublisher`] have production
-//! implementations over the real transport in [`crate::net::rotation`].
-//! [`SweepResolver`] and [`ScopeExitRotator`] have no production implementation
-//! yet; tests fake them.
+//! [`SweepResolver`], [`SweepPublisher`], [`WriteSubtreeResolver`] and
+//! [`WriteWavePublisher`] have production implementations over the real
+//! transport in [`crate::net::rotation`]. [`ScopeExitRotator`] has no production
+//! implementation yet; tests fake it.
 
 pub mod cascade;
 pub mod eager_set;
@@ -51,7 +51,7 @@ pub use eager_set::{
 };
 pub use reseal::{
     CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
-    reseal_scope_root,
+    reseal_scope_root, seed_at_epoch,
 };
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, ScopeRootPublishError,
@@ -62,7 +62,10 @@ pub use rotate_write::{
     WriteRotateError, WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver,
     WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
 };
-pub use sweep::{SweepError, SweepOutcome, SweepResolver, SweepTarget, run_sweep, sweep_pass};
+pub use sweep::{
+    LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweptChild, SweptNode, SweptScope, run_sweep, sweep_pass,
+};
 pub use trigger::{
     RevokeError, RevokedCommittedSet, RotationTrigger, ScopeExitReport, ScopeExitRotator,
     consume_scope_exit_triggers, revoke_read_grant,
