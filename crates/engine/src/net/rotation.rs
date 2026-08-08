@@ -1642,6 +1642,14 @@ where
     /// owner-signed commitment names a scope root's own `ipnsName`, so the root
     /// gate is the proof, over the seed the root's own owner blob yielded
     /// (`OwnerRotationNet::gated_write_plane` gates the same index).
+    ///
+    /// Two bindings make that proof, exactly as in
+    /// [`OwnerRotationNet::gated_child_scope_root`]: the commitment binds the
+    /// name, and the **ascent link** — required here, release-active — binds the
+    /// record to `nodeSeed(this scope's read seed, child)`. The gate verifies an
+    /// ascent link only when the record carries one, and the vault root carries
+    /// none, so without this an index entry naming the owner's own vault root
+    /// would gate cleanly and be recorded as this scope's boundary.
     async fn record_scope_boundary(
         &self,
         index: &[ChildScopeRef],
@@ -1665,13 +1673,10 @@ where
             .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
             // The gate binds `envelope.scope` to the label above; a scope root's
             // node id is its scope id, and only this binds it.
-            if gated_scope_root(&adopter, &name, &record_bytes)
+            let gated = gated_scope_root(&adopter, &name, &record_bytes)
                 .await
-                .map_err(ResolveFailure::from)?
-                .envelope
-                .id
-                != child.scope_id
-            {
+                .map_err(ResolveFailure::from)?;
+            if gated.envelope.id != child.scope_id || gated.section.ascent_link.is_none() {
                 return Err(ResolveFailure::Rejected);
             }
             self.subtree.record_child_scope(child.scope_id);
@@ -5080,6 +5085,41 @@ mod tests {
         );
     }
 
+    /// The owner's own vault root, named by the committed child-scope index as if
+    /// it were a descendant scope root. Every gate stage passes on it — it is a
+    /// real owner-signed record whose node id is its scope id — so only the
+    /// ascent-link requirement stops the wave recording it as this scope's
+    /// boundary and stopping the enumeration there.
+    #[test]
+    fn the_vault_root_named_by_the_child_scope_index_is_refused() {
+        let harness = Harness::plain();
+        let vault_scope = [0x77; 16];
+        let planted = vault_root(vault_scope, Vec::new());
+        assert!(
+            planted.grant_section.ascent_link.is_none(),
+            "a vault root is exactly the record with nothing binding it to us",
+        );
+        harness.stage(vault_scope, &planted, Some(OWNER_ROOT_EPOCH));
+        let staged = staged_scope_with_index(&harness, |descendant, _| {
+            vec![
+                child_ref(CHILD_SCOPE, descendant),
+                child_ref(vault_scope, &planted),
+            ]
+        });
+        let owner = owner_identity();
+        let net = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+
+        assert_eq!(
+            block_on(net.resolve_node(&SCOPE)),
+            Err(ResolveFailure::Rejected)
+        );
+    }
+
     #[test]
     fn a_node_no_gated_record_named_has_no_name_to_read_at() {
         let harness = Harness::plain();
@@ -5827,11 +5867,13 @@ mod tests {
             Err(SweepResolveFailure::Rejected),
         );
 
-        // And the whole pass fails closed rather than repairing it in.
+        // The pass isolates it instead of aborting, and it is still never
+        // repaired into the index: it never became a proven scope root.
         let net = harness.net(&[]);
-        let err = block_on(sweep_pass(&net, &net, &scope)).expect_err("fails closed");
-        assert_eq!(err.check(), "node-unresolved");
-        assert!(!err.is_retryable());
+        let outcome = block_on(sweep_pass(&net, &net, &scope)).expect("the pass completes");
+        assert_eq!(outcome.unreachable, vec![vault_scope]);
+        assert!(outcome.flagged_indexes.is_empty());
+        assert!(outcome.skipped_scope_roots.is_empty());
     }
 
     #[test]

@@ -1252,30 +1252,25 @@ mod tests {
     #[test]
     fn an_unreachable_node_in_the_granted_folder_refuses_the_grant() {
         // A node this device cannot read is as unproven as one whose publish
-        // lost the race: the grantee could descend into it.
-        let net = FakeNet::new(Ok(()))
-            .with_interior(INTERIOR_NODE, 1)
-            .unreadable(INTERIOR_NODE);
-        let (outcome, published, _hub) = run(7, &[], net, &[]);
-        match outcome {
-            Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
-                assert_eq!(unconverged, vec![INTERIOR_NODE]);
+        // lost the race: the grantee could descend into it. The pass isolates
+        // both rather than aborting, so this refusal is the fail-closed answer.
+        for net in [
+            FakeNet::new(Ok(()))
+                .with_interior(INTERIOR_NODE, 1)
+                .unreadable(INTERIOR_NODE),
+            FakeNet::new(Ok(()))
+                .with_interior(INTERIOR_NODE, 1)
+                .unresolvable(INTERIOR_NODE),
+        ] {
+            let (outcome, published, _hub) = run(7, &[], net, &[]);
+            match outcome {
+                Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
+                    assert_eq!(unconverged, vec![INTERIOR_NODE]);
+                }
+                other => panic!("expected SubtreeNotConverged, got {other:?}"),
             }
-            other => panic!("expected SubtreeNotConverged, got {other:?}"),
+            assert!(published.is_empty());
         }
-        assert!(published.is_empty());
-    }
-
-    #[test]
-    fn an_unresolvable_interior_node_is_rejected_fail_closed() {
-        // A node the sweep cannot resolve is a fail-closed convergence abort,
-        // never a silent partial share.
-        let net = FakeNet::new(Ok(()))
-            .with_interior(INTERIOR_NODE, 1)
-            .unresolvable(INTERIOR_NODE);
-        let (outcome, published, _hub) = run(7, &[], net, &[]);
-        assert_eq!(outcome.unwrap_err().check(), "converge-failed");
-        assert!(published.is_empty());
     }
 
     #[test]

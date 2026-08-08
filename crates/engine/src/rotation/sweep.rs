@@ -251,11 +251,13 @@ pub struct SweepOutcome {
     /// Descendant scope roots the walk stopped at: eager-set members the cascade
     /// rotates, never swept.
     pub skipped_scope_roots: Vec<[u8; 16]>,
-    /// Nodes whose body no seed on this scope's ratchet opens
-    /// ([`SweepResolveFailure::Unreadable`]). Neither swept nor descended into,
-    /// and no retry clears it — surfaced so a caller that needs the subtree
-    /// proven converged (grant creation) can refuse, rather than reading an
-    /// `Ok` outcome as complete.
+    /// Every node this pass could not read: no seed on this scope's ratchet
+    /// opens it, its record failed the adoption gate, or it could not be
+    /// fetched. Neither swept nor descended into — the unit of progress is one
+    /// interior node, so one unreadable node isolates rather than costing every
+    /// other node in the scope its convergence. Surfaced so a caller that needs
+    /// the subtree proven converged (grant creation) refuses, rather than
+    /// reading an `Ok` outcome as complete.
     pub unreachable: Vec<[u8; 16]>,
     /// Scope roots the walk encountered that were missing from the scope's
     /// direct-child-scope index, repaired into it and **durably published** —
@@ -531,8 +533,14 @@ where
                 Ok(pair) => pair,
                 // Nothing to re-seal from and no body to descend into, and a
                 // committed writer can plant one — so it is isolated to this
-                // node rather than aborting the scope's whole pass.
-                Err(SweepResolveFailure::Unreadable) => {
+                // node rather than aborting the scope's whole pass. A rejected
+                // node is still never repaired into the committed index: it
+                // never became a proven [`SweptChild::ScopeRoot`].
+                Err(
+                    SweepResolveFailure::Unreadable
+                    | SweepResolveFailure::Rejected
+                    | SweepResolveFailure::Unavailable,
+                ) => {
                     outcome.unreachable.push(child.node_id);
                     continue;
                 }
@@ -1116,24 +1124,23 @@ mod tests {
     // --- Fail-closed completeness ---
 
     #[test]
-    fn a_rejected_node_aborts_the_pass_fatally() {
-        let net = FakeNet::new(5, &[0x01, 0x02])
-            .node(0x01, 1, &[])
-            .node(0x02, 1, &[])
-            .node_fault(0x02, SweepResolveFailure::Rejected);
-        let err = run(&net, 0x00).expect_err("fails closed");
-        assert_eq!(err.check(), "node-unresolved");
-        assert!(!err.is_retryable());
-        assert_eq!(net.publishes(0x01), 0, "nothing is published on an abort");
-    }
-
-    #[test]
-    fn an_unavailable_node_aborts_retryably() {
-        let net = FakeNet::new(5, &[0x01])
-            .node(0x01, 1, &[])
-            .node_fault(0x01, SweepResolveFailure::Unavailable);
-        let err = run(&net, 0x00).expect_err("fails closed");
-        assert!(err.is_retryable());
+    fn a_rejected_or_unavailable_node_is_isolated_and_the_rest_still_converges() {
+        // A node a revoked writer still holds the write key for would otherwise
+        // block the lazy wave for the whole scope. The unit of progress is one
+        // interior node, so the pass steps past it and surfaces it instead.
+        for reason in [
+            SweepResolveFailure::Rejected,
+            SweepResolveFailure::Unavailable,
+        ] {
+            let net = FakeNet::new(5, &[0x01, 0x02])
+                .node(0x01, 1, &[])
+                .node(0x02, 1, &[])
+                .node_fault(0x02, reason);
+            let outcome = run(&net, 0x00).expect("the pass completes");
+            assert_eq!(outcome.unreachable, vec![id(0x02)], "{reason}");
+            assert_eq!(outcome.converged, vec![id(0x01)], "{reason}");
+            assert_eq!(net.publishes(0x02), 0, "nothing to re-seal it from");
+        }
     }
 
     #[test]
@@ -1247,9 +1254,7 @@ mod tests {
 
     #[test]
     fn the_driver_returns_a_trust_failure_immediately() {
-        let net = FakeNet::new(5, &[0x01])
-            .node(0x01, 1, &[])
-            .node_fault(0x01, SweepResolveFailure::Rejected);
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]).forged(0x00);
         let err = drive(&net, 5, 0).expect_err("fatal");
         assert!(!err.is_retryable());
     }

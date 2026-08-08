@@ -137,6 +137,16 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
     })
 }
 
+/// The 503 `POST /content/upload` answers when its pin store is unreachable — a
+/// standing refusal a retry alone never clears.
+fn unavailable_upload() -> SeamResult<HttpResponse> {
+    Ok(HttpResponse {
+        status: 503,
+        headers: Vec::new(),
+        body: br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec(),
+    })
+}
+
 /// A 413 from an intermediary that never reached the API: an HTML body, so no
 /// error envelope parses out of it at all.
 fn proxy_413() -> SeamResult<HttpResponse> {
@@ -2538,6 +2548,53 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
             reason: DeadLetterReason::PayloadRefused,
         }),
         "and the dead letter says it will never publish"
+    );
+}
+
+/// A pin store answering 503 every pass has answered about *these* bytes, so the
+/// attempt budget escalates it to a terminal failure. Uncharged it would hold the
+/// strict-FIFO head forever: a row that never settles and never errors.
+#[test]
+fn a_standing_server_refusal_dead_letters_instead_of_cycling_forever() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(unavailable_upload())));
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert!(
+        passes > 1,
+        "an unavailable pin store is a charged attempt, not a verdict on sight"
+    );
+    let settled = DeadLetter {
+        op_id,
+        reason: DeadLetterReason::AttemptsExhausted,
+    };
+    assert_eq!(dead_letters, vec![settled]);
+    assert!(
+        events_so_far(&mut events).contains(&Event::DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted,
+        }),
+        "the host is told the op will never publish"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "and it has left the queue rather than parking its head"
     );
 }
 
