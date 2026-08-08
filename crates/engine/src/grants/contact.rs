@@ -41,6 +41,15 @@ impl Contact {
     }
 }
 
+/// The largest contact code [`import_contact`] will decode.
+///
+/// The bundle is three fixed-width keys — a real one is under 200 bytes — and
+/// the bytes arrive as an unbounded host paste or camera scan. Decoding is
+/// linear in length, but a decoded `Value` costs far more than the byte it came
+/// from, so the cap is what stops a paste from exhausting the engine worker
+/// (the resolve path bounds its own reads the same way).
+pub const MAX_CONTACT_CODE_BYTES: usize = 1024;
+
 /// Import a contact code, verifying the subkey binding mandatorily and
 /// fail-closed. A structural defect surfaces as [`CodecError`] of class
 /// `malformed`; a well-formed code whose binding does not verify surfaces as

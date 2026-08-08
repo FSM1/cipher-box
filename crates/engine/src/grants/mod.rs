@@ -13,6 +13,7 @@
 pub mod accept;
 pub mod child_index;
 pub mod contact;
+pub mod contact_store;
 pub mod create;
 pub mod invite;
 pub mod ledger;
@@ -22,13 +23,17 @@ pub mod revocation;
 
 pub use accept::{
     AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
-    SentShare, SharePointer, accept_share,
+    SentShare, SharePointer, TooLong, accept_share,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
     repair_observed, undo_dest_add_versioned,
 };
-pub use contact::{Contact, import_contact};
+pub use contact::{Contact, MAX_CONTACT_CODE_BYTES, import_contact};
+pub use contact_store::{
+    BookCodecError, CONTACTS_PREFIX, ContactStore, ContactStoreError, MAX_CONTACTS,
+    StagingContactStore, resolve_recipient,
+};
 pub use create::{
     CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
     ParentScopePlan, create_read_grant,

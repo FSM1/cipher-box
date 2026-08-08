@@ -4,6 +4,7 @@
 use cipherbox_core::kdf;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_engine::grants::{ContactStore, StagingContactStore, resolve_recipient};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
@@ -191,6 +192,66 @@ fn importing_a_contact_returns_the_bound_public_keys() {
     let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
     assert_eq!(contact.identity_pk(), identity.verifying_key());
     assert_eq!(contact.enc_subkey(), kdf::enc_subkey(&scalar).public());
+}
+
+/// An import that only lived in the command's return value would leave a later
+/// grant with an identity key and no subkey to seal to, so the contact must come
+/// back from the durable book on the next session.
+#[test]
+fn an_imported_contact_survives_a_session_restart() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let scalar = [3u8; 32];
+    block_on(engine.command(Command::ImportContact {
+        contact_code: contact_code(scalar),
+    }))
+    .expect("the code imports");
+    drop(engine);
+
+    let enc_subkey = kdf::enc_subkey(&[7u8; 32]);
+    let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    let resolved = block_on(resolve_recipient(
+        &book,
+        &identity.verifying_key().to_sec1(),
+    ))
+    .expect("the recorded contact resolves by identity key");
+    assert_eq!(
+        resolved.enc_subkey(),
+        kdf::enc_subkey(&scalar).public(),
+        "the subkey a later grant seals to is the one the import verified"
+    );
+}
+
+/// A durable book that cannot take the write must fail the command: a host told
+/// the contact imported would offer it as a grant recipient the next session
+/// cannot resolve.
+#[test]
+fn an_import_the_book_cannot_take_is_not_reported_as_imported() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    let enc_subkey = kdf::enc_subkey(&[7u8; 32]);
+    let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
+    device
+        .staging_store
+        .interrupt_staged_write_after(book.staging_key(), 0);
+
+    let result = block_on(engine.command(Command::ImportContact {
+        contact_code: contact_code([3u8; 32]),
+    }));
+    assert!(
+        matches!(result, Err(EngineError::Seam { .. })),
+        "a lost durable write fails the import: {result:?}"
+    );
+    assert!(
+        block_on(book.contacts()).expect("load").is_empty(),
+        "nothing was recorded"
+    );
 }
 
 /// The binding signature is the only thing tying the encryption subkey to the
