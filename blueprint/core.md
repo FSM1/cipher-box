@@ -77,7 +77,7 @@ Functional decomposition, not final file layout:
 | Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                              |
 | Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                                       |
 | Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, ascent links, mailbox payloads; auth mode: the op record |
-| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, pseudonym derivation                                                           |
+| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, grantee pseudonym derivation                                                   |
 | Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature              |
 | Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                                           |
 
@@ -87,7 +87,8 @@ Functional decomposition, not final file layout:
   codec (`{identityPk, encSubkey, bindingSig}`, ~130 bytes, QR/URL-encodable,
   binding verify mandatory and fail-closed at import) are core exports.
 - Writer pseudonyms sign with **Ed25519** (deterministic derivation from the
-  pairwise secret; secp256k1 stays confined to identity signing per #27 D3).
+  pairwise secret, or from `ownerPseudonymSeed` for the owner; secp256k1 stays
+  confined to identity signing per #27 D3).
 - HPKE envelopes are spec-defined with a full-envelope KAT under a fixed
   ephemeral key — the eciesjs lesson (a library major bump must never be able
   to silently orphan stored ciphertexts).
@@ -264,23 +265,24 @@ are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
 in the KAT manifest.
 
-| Edge                  | Inputs                                                   | Output                                    |
-| --------------------- | -------------------------------------------------------- | ----------------------------------------- |
-| node-seed             | scopeSeed, node id                                       | nodeSeed (flat within scope)              |
-| read-key              | nodeSeed                                                 | readKey                                   |
-| structure-key         | nodeSeed or scope seed, structTag                        | per-structure sealing keys                |
-| write-seed            | writeScopeSeed, node id                                  | writeSeed (flat)                          |
-| write-key             | writeSeed                                                | writeKey                                  |
-| ipns-keypair          | writeSeed                                                | Ed25519 keypair → ipnsName                |
-| ascent-keypair        | parent nodeSeed                                          | X25519 keypair for the ascent link        |
-| enc-subkey            | login secret                                             | X25519 encryption subkey                  |
-| blinded-tag           | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName         | grant-blob tag                            |
-| pseudonym-sign        | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: root secret) | Ed25519 pseudonym keypair                 |
-| owner-pointer-seed    | login secret                                             | ownerPointerSeed                          |
-| scope-pointer         | ownerPointerSeed, scope id                               | per-scope pointer Ed25519 keypair         |
-| pointer-read-key      | ownerPointerSeed, scope id                               | pointerReadKey                            |
-| vault-pointer-index   | login secret, index i (0 default)                        | pointer Ed25519 keypair chain             |
-| settings-ipns-keypair | login secret                                             | vault settings Ed25519 keypair → ipnsName |
+| Edge                  | Inputs                                                          | Output                                    |
+| --------------------- | --------------------------------------------------------------- | ----------------------------------------- |
+| node-seed             | scopeSeed, node id                                              | nodeSeed (flat within scope)              |
+| read-key              | nodeSeed                                                        | readKey                                   |
+| structure-key         | nodeSeed or scope seed, structTag                               | per-structure sealing keys                |
+| write-seed            | writeScopeSeed, node id                                         | writeSeed (flat)                          |
+| write-key             | writeSeed                                                       | writeKey                                  |
+| ipns-keypair          | writeSeed                                                       | Ed25519 keypair → ipnsName                |
+| ascent-keypair        | parent nodeSeed                                                 | X25519 keypair for the ascent link        |
+| enc-subkey            | login secret                                                    | X25519 encryption subkey                  |
+| blinded-tag           | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName                | grant-blob tag                            |
+| owner-pseudonym-seed  | login secret                                                    | ownerPseudonymSeed                        |
+| pseudonym-sign        | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: ownerPseudonymSeed) | Ed25519 pseudonym keypair                 |
+| owner-pointer-seed    | login secret                                                    | ownerPointerSeed                          |
+| scope-pointer         | ownerPointerSeed, scope id                                      | per-scope pointer Ed25519 keypair         |
+| pointer-read-key      | ownerPointerSeed, scope id                                      | pointerReadKey                            |
+| vault-pointer-index   | login secret, index i (0 default)                               | pointer Ed25519 keypair chain             |
+| settings-ipns-keypair | login secret                                                    | vault settings Ed25519 keypair → ipnsName |
 
 Non-edges, stated to stay non-edges: content keys (random per version), scope
 override seeds (random at rotation), scope seeds at grant cuts (random).
