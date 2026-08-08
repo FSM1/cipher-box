@@ -5475,9 +5475,7 @@ mod tests {
         epoch: u64,
         children: Vec<ChildRef>,
     ) -> (IpnsName, Vec<u8>) {
-        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &node_id);
-        let name =
-            IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key());
+        let name = interior_name(node_id);
         let read_key = read_key_for(&seed_at(epoch), &node_id);
         let body = ReadBody::Folder {
             created_at: 0,
@@ -5499,6 +5497,13 @@ mod tests {
             name,
             encode_envelope(&envelope).expect("encode the envelope"),
         )
+    }
+
+    /// The write name an interior node's own write seed derives. A pure function
+    /// of the node id, so a parent body can cite a child staged after it.
+    fn interior_name(node_id: [u8; 16]) -> IpnsName {
+        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &node_id);
+        IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key())
     }
 
     /// The parent ref a folder body carries for `node_id` at `name`.
@@ -5990,11 +5995,9 @@ mod tests {
     ) -> ChildScopeRef {
         let mut names: BTreeMap<[u8; 16], IpnsName> = BTreeMap::new();
         let mut index: Vec<ChildScopeRef> = Vec::new();
-        for (byte, epoch) in scenario.nodes {
+        for (byte, _, _) in scenario.nodes {
             let node_id = sim::id(*byte);
-            let (name, block) = interior_record(node_id, *epoch, Vec::new());
-            harness.stage_node(node_id, &name, &block);
-            names.insert(node_id, name);
+            names.insert(node_id, interior_name(node_id));
         }
         for (byte, indexed) in scenario.scope_roots {
             let scope_id = sim::id(*byte);
@@ -6011,6 +6014,20 @@ mod tests {
                 index.push(child_ref(scope_id, &descendant));
             }
             names.insert(scope_id, descendant.name.clone());
+        }
+        // Every name is bound above, so a node's body can cite a child whose
+        // own record is staged later in this loop.
+        for (byte, epoch, children) in scenario.nodes {
+            let node_id = sim::id(*byte);
+            let body: Vec<ChildRef> = children
+                .iter()
+                .map(|child| {
+                    let child_id = sim::id(*child);
+                    body_ref(child_id, names.get(&child_id).expect("a staged child"))
+                })
+                .collect();
+            let (name, block) = interior_record(node_id, *epoch, body);
+            harness.stage_node(node_id, &name, &block);
         }
         let body: Vec<ChildRef> = scenario
             .children
@@ -6046,6 +6063,30 @@ mod tests {
                 .unwrap_or_else(|e| panic!("real {:?}: {e}", scenario.label));
 
             assert_eq!(simulated, real, "scenario {:?} diverged", scenario.label);
+
+            // Both sides must have walked the whole subtree the scenario
+            // describes, not just the root's own body: a scenario set that
+            // flattened back to one level would otherwise agree trivially.
+            let mut reached: Vec<[u8; 16]> = simulated
+                .converged
+                .iter()
+                .chain(&simulated.already_converged)
+                .chain(&simulated.skipped_scope_roots)
+                .copied()
+                .collect();
+            reached.sort_unstable();
+            let mut described: Vec<[u8; 16]> = scenario
+                .nodes
+                .iter()
+                .map(|(byte, _, _)| sim::id(*byte))
+                .chain(scenario.scope_roots.iter().map(|(byte, _)| sim::id(*byte)))
+                .collect();
+            described.sort_unstable();
+            assert_eq!(
+                reached, described,
+                "scenario {:?} left part of its subtree unwalked",
+                scenario.label
+            );
         }
     }
 }

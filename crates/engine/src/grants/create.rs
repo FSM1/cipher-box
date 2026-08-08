@@ -1209,7 +1209,7 @@ mod tests {
 
     #[test]
     fn the_same_lagging_node_lets_the_grant_through_once_it_converges() {
-        // The negative direction of the same gate: identical subtree, and the
+        // The passing direction of the same gate: identical subtree, and the
         // node's convergence publish now lands, so the grant proceeds.
         let net = FakeNet::new(Ok(())).with_interior(INTERIOR_NODE, 1);
         let publishes = Rc::clone(&net.node_publishes);

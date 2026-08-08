@@ -61,26 +61,6 @@ pub(crate) fn folder_named(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn folder(children: &[u8]) -> ReadBody {
-    ReadBody::Folder {
-        created_at: 1,
-        modified_at: 2,
-        children: children
-            .iter()
-            .map(|b| ChildRef {
-                id: id(*b),
-                name: format!("n{b:02x}"),
-                ipns_name: name(*b),
-                kind: NodeKind::Folder,
-                link_counter: 1,
-                unknown: PreservedFields::new(),
-            })
-            .collect(),
-        unknown: PreservedFields::new(),
-    }
-}
-
 /// One interior node on the fake network.
 pub(crate) struct FakeNode {
     epoch: u64,
@@ -391,8 +371,10 @@ pub(crate) struct Scenario {
     pub(crate) scope_epoch: u64,
     /// The scope root's read-body children, in body order.
     pub(crate) children: &'static [u8],
-    /// Interior nodes: `(byte, published read epoch)`.
-    pub(crate) nodes: &'static [(u8, u64)],
+    /// Interior nodes: `(byte, published read epoch, the children its read body
+    /// names)`. A child named here is reached one level deeper than the scope
+    /// root's own body, so the scenario drives the frontier expansion.
+    pub(crate) nodes: &'static [(u8, u64, &'static [u8])],
     /// Descendant scope roots: `(byte, named in the direct-child-scope index)`.
     pub(crate) scope_roots: &'static [(u8, bool)],
 }
@@ -401,8 +383,8 @@ impl Scenario {
     /// The simulation network this scenario describes.
     pub(crate) fn fake(&self) -> FakeNet {
         let mut net = FakeNet::new(self.scope_epoch, self.children);
-        for (byte, epoch) in self.nodes {
-            net = net.node(*byte, *epoch, &[]);
+        for (byte, epoch, children) in self.nodes {
+            net = net.node(*byte, *epoch, children);
         }
         for (byte, indexed) in self.scope_roots {
             net = net.scope_root(*byte, *indexed);
@@ -417,21 +399,21 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
         label: "a lagging interior node converges",
         scope_epoch: 2,
         children: &[0x01],
-        nodes: &[(0x01, 1)],
+        nodes: &[(0x01, 1, &[])],
         scope_roots: &[],
     },
     Scenario {
         label: "a node already at the scope epoch is a no-op",
         scope_epoch: 2,
         children: &[0x01],
-        nodes: &[(0x01, 2)],
+        nodes: &[(0x01, 2, &[])],
         scope_roots: &[],
     },
     Scenario {
         label: "the walk stops at an indexed scope root",
         scope_epoch: 2,
         children: &[0x01, 0x0a],
-        nodes: &[(0x01, 1)],
+        nodes: &[(0x01, 1, &[])],
         scope_roots: &[(0x0a, true)],
     },
     Scenario {
@@ -439,6 +421,39 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
         scope_epoch: 2,
         children: &[0x0a],
         nodes: &[],
+        scope_roots: &[(0x0a, false)],
+    },
+    Scenario {
+        label: "a nested subtree converges at every level",
+        scope_epoch: 2,
+        children: &[0x01],
+        nodes: &[(0x01, 1, &[0x02]), (0x02, 1, &[0x03]), (0x03, 1, &[])],
+        scope_roots: &[],
+    },
+    Scenario {
+        label: "two parents naming one child sweep it once",
+        scope_epoch: 2,
+        children: &[0x01, 0x02],
+        nodes: &[(0x01, 1, &[0x03]), (0x02, 1, &[0x03]), (0x03, 1, &[])],
+        scope_roots: &[],
+    },
+    Scenario {
+        label: "a mixed-epoch level walks past its converged nodes",
+        scope_epoch: 2,
+        children: &[0x02, 0x01],
+        nodes: &[
+            (0x01, 2, &[0x03]),
+            (0x02, 1, &[0x04]),
+            (0x03, 1, &[]),
+            (0x04, 2, &[]),
+        ],
+        scope_roots: &[],
+    },
+    Scenario {
+        label: "the walk stops at a scope root nested below the root",
+        scope_epoch: 2,
+        children: &[0x01],
+        nodes: &[(0x01, 1, &[0x0a])],
         scope_roots: &[(0x0a, false)],
     },
 ];
