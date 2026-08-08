@@ -2,15 +2,15 @@
 
 # Configuration Reference
 
+> **v1 document — partially superseded.** This catalogue was written against the v1 stack as of the freeze (`v1-freeze`, branch `v1`) and still names variables the v2 code no longer reads. The code is authoritative for which names are live; entries here are a starting point, not a contract. For the local stack itself, see the "Getting started" section of the root [`README.md`](../README.md).
+
 Environment variables and configuration files for all CipherBox monorepo applications.
-For local development setup instructions, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Table of Contents
 
 - [API (`apps/api`)](#api-appsapi)
 - [Web (`apps/web`)](#web-appsweb)
 - [Desktop (`apps/desktop`)](#desktop-appsdesktop)
-- [TEE Worker (`apps/tee-worker`)](#tee-worker-appstee-worker)
 - [Docker Compose (local dev)](#docker-compose-local-dev)
 - [Docker Compose (staging)](#docker-compose-staging)
 - [Observability (staging)](#observability-staging)
@@ -20,7 +20,8 @@ For local development setup instructions, see [DEVELOPMENT.md](DEVELOPMENT.md).
 ## API (`apps/api`)
 
 NestJS server. Configuration is loaded via `@nestjs/config` (`ConfigModule.forRoot`) and read
-from `.env` at startup. Copy `apps/api/.env.example` to `apps/api/.env` before first run.
+from `.env` at startup. The repo ships no `.env.example` files — the root `README.md` "Getting
+started" section carries the inline export block the local stack expects.
 
 ### Database
 
@@ -31,17 +32,6 @@ from `.env` at startup. Copy `apps/api/.env.example` to `apps/api/.env` before f
 | `DB_USERNAME` | No       | `postgres`  | PostgreSQL user          |
 | `DB_PASSWORD` | No       | `postgres`  | PostgreSQL password      |
 | `DB_DATABASE` | No       | `cipherbox` | PostgreSQL database name |
-
-### Redis
-
-| Variable         | Required | Default     | Description                                         |
-| :--------------- | :------- | :---------- | :-------------------------------------------------- |
-| `REDIS_HOST`     | No       | `localhost` | Redis host                                          |
-| `REDIS_PORT`     | No       | `6379`      | Redis port                                          |
-| `REDIS_PASSWORD` | No       | —           | Redis password (omit for password-less connections) |
-
-The local dev `docker/docker-compose.yml` maps the Redis container port to `6380` on the host,
-so set `REDIS_PORT=6380` when using the local stack.
 
 ### Auth
 
@@ -58,24 +48,15 @@ so set `REDIS_PORT=6380` when using the local stack.
 
 ### IPFS
 
-| Variable                 | Required | Default                 | Description                                                                 |
-| :----------------------- | :------- | :---------------------- | :-------------------------------------------------------------------------- |
-| `IPFS_LOCAL_API_URL`     | No       | `http://localhost:5001` | Kubo RPC API endpoint. The API relays all IPFS operations through this URL. |
-| `IPFS_LOCAL_GATEWAY_URL` | No       | `http://localhost:8080` | IPFS HTTP gateway for content retrieval.                                    |
+| Variable       | Required | Default | Description                                                                             |
+| :------------- | :------- | :------ | :-------------------------------------------------------------------------------------- |
+| `KUBO_API_URL` | No       | —       | Kubo RPC endpoint for the hosted pin store. Unset, hosted uploads are refused with 503. |
 
 ### IPNS / Delegated Routing
 
-| Variable                         | Required | Default                      | Description                                                      |
-| :------------------------------- | :------- | :--------------------------- | :--------------------------------------------------------------- |
-| `DELEGATED_ROUTING_URL`          | No       | `https://delegated-ipfs.dev` | Primary HTTP delegated routing backend for IPNS publish/resolve. |
-| `DELEGATED_ROUTING_FALLBACK_URL` | No       | —                            | Optional secondary backend. Used if the primary request fails.   |
-
-### TEE Integration
-
-| Variable            | Required | Default                 | Description                                                                |
-| :------------------ | :------- | :---------------------- | :------------------------------------------------------------------------- |
-| `TEE_WORKER_URL`    | No       | `http://localhost:3001` | URL of the TEE worker service. The API forwards IPNS republish jobs here.  |
-| `TEE_WORKER_SECRET` | No       | `""` (empty)            | Shared secret sent as `Authorization: Bearer` when calling the TEE worker. |
+| Variable         | Required | Default | Description                                                                                              |
+| :--------------- | :------- | :------ | :------------------------------------------------------------------------------------------------------- |
+| `ROUTING_V1_URL` | No       | —       | `/routing/v1` endpoint the republisher resolves and re-PUTs through. Unset, the republisher walk no-ops. |
 
 ### Rate Limiting
 
@@ -96,7 +77,7 @@ so set `REDIS_PORT=6380` when using the local stack.
 ## Web (`apps/web`)
 
 Vite + React SPA. All configuration is injected as `VITE_*` environment variables at build time.
-Copy `apps/web/.env.example` to `apps/web/.env` before first run.
+There is no `.env.example` to copy — set the variables below in `apps/web/.env` or the shell.
 
 | Variable                  | Required | Default                       | Description                                                                                                                    |
 | :------------------------ | :------- | :---------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
@@ -112,7 +93,7 @@ Copy `apps/web/.env.example` to `apps/web/.env` before first run.
 ## Desktop (`apps/desktop`)
 
 Tauri + Vite + React application. Uses the same `VITE_*` convention as the web app.
-Copy `apps/desktop/.env.example` to `apps/desktop/.env` before first run.
+There is no `.env.example` to copy — set the variables below in `apps/desktop/.env` or the shell.
 
 ### Build-time (Vite) variables
 
@@ -155,40 +136,11 @@ artifacts — it is safe to commit and is not a secret.
 
 ---
 
-## TEE Worker (`apps/tee-worker`)
-
-Standalone Express server. Runs inside a Phala Cloud CVM in production and in a local
-Docker container (simulator mode) in development and staging.
-
-Copy `apps/tee-worker/.env.example` to `apps/tee-worker/.env` for local development.
-
-| Variable                | Required | Default           | Description                                                                                                                                                                 |
-| :---------------------- | :------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                  | No       | `3001`            | HTTP listen port.                                                                                                                                                           |
-| `NODE_ENV`              | No       | —                 | Runtime environment. Setting `production` while `TEE_MODE=simulator` is blocked at startup.                                                                                 |
-| `TEE_MODE`              | No       | `simulator`       | Key derivation mode. `simulator` uses HKDF from a fixed seed (development/testing). `cvm` uses Phala dstack SDK for hardware-backed key derivation (production).            |
-| `CIPHERBOX_ENVIRONMENT` | No       | —                 | Explicit environment label (`staging`, `production`). Used alongside `NODE_ENV` to enforce that `TEE_MODE=simulator` is never used in production.                           |
-| `TEE_WORKER_SECRET`     | **Yes**  | —                 | Shared secret for Bearer token authentication on all protected routes. Must match the `TEE_WORKER_SECRET` set in the API.                                                   |
-| `TEE_CURRENT_EPOCH`     | No       | `1`               | The current `keyEpoch` number. The TEE worker exposes the `teePublicKey` for this epoch on `GET /public-key`. Used by the migration route to identify the active key epoch. |
-| `IPFS_GATEWAY_URL`      | No       | `https://ipfs.io` | IPFS gateway URL used when fetching CIDs during CID migration operations.                                                                                                   |
-
-### TEE mode semantics
-
-The `TEE_MODE` variable determines how epoch keypairs are derived:
-
-- **`simulator`** — HKDF-SHA256 derivation from a fixed seed. Deterministic across restarts.
-  Used for local development and staging. Never allowed when `NODE_ENV=production` or
-  `CIPHERBOX_ENVIRONMENT=production`.
-- **`cvm`** — Phala dstack `DstackClient.getKey()` call. Hardware-backed, non-extractable.
-  Required for production Phala Cloud CVM deployments.
-
----
-
 ## Docker Compose (local dev)
 
 File: `docker/docker-compose.yml`
 
-Starts PostgreSQL, IPFS (Kubo), Redis, Someguy (delegated routing), and a mock IPNS routing
+Starts PostgreSQL, IPFS (Kubo), Someguy (delegated routing), and a mock IPNS routing
 server for local development. Environment variables can be overridden with a `.env` file in the
 `docker/` directory or by setting them in the shell before running `docker compose up`.
 
@@ -198,7 +150,6 @@ server for local development. Environment variables can be overridden with a `.e
 | `DB_PASSWORD` | `postgres`  | PostgreSQL superuser password.                            |
 | `DB_DATABASE` | `cipherbox` | Database name to create.                                  |
 | `DB_PORT`     | `5432`      | Host port mapped to PostgreSQL 5432 inside the container. |
-| `REDIS_PORT`  | `6380`      | Host port mapped to Redis 6379 inside the container.      |
 
 Service ports exposed to the host:
 
@@ -207,7 +158,6 @@ Service ports exposed to the host:
 | PostgreSQL                  | `5432` (configurable)          |                                |
 | IPFS API                    | `5001`                         | Bound to all interfaces in dev |
 | IPFS Gateway                | `8080`                         | Bound to all interfaces in dev |
-| Redis                       | `6380` (configurable)          |                                |
 | Someguy (delegated routing) | `8190` (HTTP), `4004` (libp2p) |                                |
 | Mock IPNS routing           | `3001` (localhost only)        |                                |
 
@@ -217,8 +167,8 @@ Service ports exposed to the host:
 
 File: `docker/docker-compose.staging.yml`
 
-Deploys the full stack including the API, IPFS, Redis, PostgreSQL, TEE worker, Someguy, Caddy
-reverse proxy, and Grafana Alloy for log/metrics forwarding.
+Deploys the full stack including the API, IPFS, PostgreSQL, Someguy, Caddy reverse proxy, and
+Grafana Alloy for log/metrics forwarding.
 
 The API service reads its environment from `.env.staging` (passed via `env_file`). <!-- VERIFY: create .env.staging on the staging host with all required API variables -->
 
@@ -227,33 +177,15 @@ The API service reads its environment from `.env.staging` (passed via `env_file`
 These variables must be set in `.env.staging` (API) or directly in the Docker Compose
 environment block (infrastructure services):
 
-| Variable                 | Service          | Notes                                                          |
-| :----------------------- | :--------------- | :------------------------------------------------------------- |
-| `DB_USERNAME`            | postgres         | Defaults to `cipherbox`                                        |
-| `DB_PASSWORD`            | postgres         | **Required** — no default in staging                           |
-| `DB_DATABASE`            | postgres         | Defaults to `cipherbox_staging`                                |
-| `JWT_SECRET`             | api              | **Required** — any strong random string                        |
-| `REDIS_PASSWORD`         | redis / api      | **Required** — staging Redis runs with `requirepass`           |
-| `TEE_WORKER_SECRET`      | tee-worker / api | Must match between both services                               |
-| `CORS_ALLOWED_ORIGINS`   | api              | Set to the deployed web app origin(s)                          |
-| `IPFS_LOCAL_API_URL`     | api              | Typically `http://ipfs:5001` inside compose network            |
-| `IPFS_LOCAL_GATEWAY_URL` | api              | Typically `http://ipfs:8080` inside compose network            |
-| `DELEGATED_ROUTING_URL`  | api              | Set to `http://someguy:8190` to use the local Someguy instance |
-| `TEE_WORKER_URL`         | api              | Typically `http://tee-worker:3001` inside compose network      |
-
-### Phala Cloud CVM (production TEE worker)
-
-File: `apps/tee-worker/docker-compose.phala.yml`
-
-Used for production TEE deployments on Phala Cloud. Key constraint: always **update** the
-existing CVM using the same `--name` value — never delete and recreate. Recreating changes the
-`app_id`, which invalidates all epoch-derived keys.
-
-| Variable                  | Source           | Notes                                     |
-| :------------------------ | :--------------- | :---------------------------------------- |
-| `TEE_WORKER_SECRET`       | host environment | Injected at deploy time                   |
-| `GITHUB_REPOSITORY_OWNER` | host environment | Used to resolve the container image path  |
-| `TAG`                     | host environment | Image tag to deploy; defaults to `latest` |
+| Variable               | Service  | Notes                                                   |
+| :--------------------- | :------- | :------------------------------------------------------ |
+| `DB_USERNAME`          | postgres | Defaults to `cipherbox`                                 |
+| `DB_PASSWORD`          | postgres | **Required** — no default in staging                    |
+| `DB_DATABASE`          | postgres | Defaults to `cipherbox_staging`                         |
+| `JWT_SECRET`           | api      | **Required** — any strong random string                 |
+| `CORS_ALLOWED_ORIGINS` | api      | Set to the deployed web app origin(s)                   |
+| `KUBO_API_URL`         | api      | Typically `http://ipfs:5001` inside compose network     |
+| `ROUTING_V1_URL`       | api      | `http://someguy:8190` to use the local Someguy instance |
 
 ---
 

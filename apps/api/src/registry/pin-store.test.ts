@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeConfig } from '../testing/fakes';
 import { KuboPinStore, PinCidMismatchError } from './pin-store';
@@ -84,5 +84,36 @@ describe('KuboPinStore.pin', () => {
       ServiceUnavailableException
     );
     expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * A misconfiguration that refuses every hosted write must surface at boot, not
+ * only as a 503 under load.
+ */
+describe('KuboPinStore configuration report', () => {
+  let errors: string[];
+
+  beforeEach(() => {
+    errors = [];
+    vi.spyOn(Logger.prototype, 'error').mockImplementation((message: unknown) => {
+      errors.push(String(message));
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the unset variable and its consequence at construction', () => {
+    store('');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('KUBO_API_URL');
+    expect(errors[0]).toContain('503');
+  });
+
+  it('stays silent when Kubo is configured', () => {
+    store();
+    expect(errors).toEqual([]);
   });
 });

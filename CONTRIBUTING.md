@@ -2,8 +2,8 @@
 
 # Contributing to CipherBox
 
-See [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) for prerequisites and first-run instructions,
-and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for local development setup.
+See the "Getting started" section of the root [README.md](README.md) for prerequisites, the local
+stack, and first-run instructions.
 
 ## Branch Conventions
 

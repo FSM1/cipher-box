@@ -109,27 +109,92 @@ cipher-box/
 Prerequisites: Node.js 22+, pnpm 10+, Docker, and the Rust toolchain (pinned by
 `rust-toolchain.toml`).
 
+There are no `.env` files to copy. Every variable the stack needs is exported inline
+below, so the recipe is read in the same breath as the commands that consume it.
+
+### 1. Start the infrastructure
+
 ```bash
-# 1. Start infrastructure services
 docker compose -f docker/docker-compose.yml up -d
-
-# 2. Install dependencies
 pnpm install
-
-# 3. Copy environment files
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-
-# 4. Start API and web app
-pnpm dev
 ```
 
-- API: <http://localhost:3000>
+That brings up Postgres (5432), Kubo (5001 RPC, 8080 gateway), someguy (8190), and the
+mock record store (3001). Wait for them to report healthy:
+
+```bash
+docker compose -f docker/docker-compose.yml ps
+```
+
+### 2. Configure and start the API
+
+```bash
+export DB_HOST=localhost DB_PORT=5432 DB_USERNAME=postgres \
+  DB_PASSWORD=postgres DB_DATABASE=cipherbox \
+  NODE_ENV=development JWT_SECRET=local-dev-jwt-secret \
+  TEST_LOGIN_SECRET=local-dev-test-secret \
+  KUBO_API_URL=http://localhost:5001 \
+  ROUTING_V1_URL=http://localhost:3001 \
+  CORS_ALLOWED_ORIGINS=http://localhost:5173
+
+pnpm --filter @cipherbox/api migration:run
+pnpm --filter @cipherbox/api dev
+```
+
+`KUBO_API_URL` is the one the hosted pin store reads. Without it every write answers
+503 — uploads and folder creates alike, since a record's head block is uploaded through
+the same endpoint. The API logs an error at boot when it is unset.
+
+### 3. Build and serve the web app
+
+In a second shell, with the same `docker compose` stack up:
+
+```bash
+export VITE_API_URL=http://localhost:3000 \
+  VITE_ENVIRONMENT=local \
+  VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
+  VITE_READ_ACCELERATOR_URL=http://localhost:8080
+
+pnpm --filter @cipherbox/web dev
+```
+
+- API: <http://localhost:3000> (OpenAPI at `/api-docs`)
 - Web: <http://localhost:5173>
 
-Note that during the rewrite this boots the v2 skeleton (a stub API and web shell); the
-legacy [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) still describes the v1 setup and is being
-rewritten during the build.
+`VITE_ROUTING_ENDPOINTS` must be set: unset it defaults to the public
+`https://delegated-ipfs.dev`, which will not see records this stack publishes.
+`VITE_READ_ACCELERATOR_URL` is optional — left unset the content gateway stays dormant,
+which is its fail-closed state, and reads fall back to the endpoints the engine already
+has.
+
+### Which record store the local stack uses
+
+Compose starts two `/routing/v1` backends, and a local stack should use
+**`mock-ipns-routing` on port 3001** — the setting above for both `ROUTING_V1_URL` (API
+republisher) and `VITE_ROUTING_ENDPOINTS` (web client). It is hermetic and in-memory, so
+a record published locally resolves immediately and deterministically, and no test
+vault's IPNS names reach the public network. CI and the web-e2e suite make the same
+choice.
+
+`someguy` on 8190 participates in the real accelerated DHT. It is there for staging
+parity and for deliberately testing public-network propagation; point the two variables
+above at `http://localhost:8190` only when that is what you are testing. Both must name
+the same backend, or the republisher re-PUTs into a store the client never reads.
+
+### What this stack can demonstrate today
+
+The API's write path is live end to end: authenticate and `POST /content/upload`
+returns 201 with bytes pinned in the local Kubo.
+
+Interactive login through the web UI needs `VITE_WEB3AUTH_CLIENT_ID` and
+`VITE_WEB3AUTH_VERIFIER`, which a clean checkout does not carry — the UI boots and
+renders without them, but a Core Kit session cannot be created. The suites that need an
+authenticated session use the build-time introspection hook instead; see
+[`tests/web-e2e/README.md`](tests/web-e2e/README.md).
+
+A first folder create does not yet publish, because nothing provisions a fresh account's
+first vault pointer, so its writes are accepted, rendered pending, and reach no endpoint.
+That is the remaining gap between this stack and a full demo.
 
 ## Security model
 
