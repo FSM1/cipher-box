@@ -26,6 +26,8 @@ export interface EngineHostLike {
   command(command: CommandDescriptor): Promise<void>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
+  /** Takes ownership of `chunk`: the host is its terminal owner, so it scrubs the
+   * plaintext to bound the lifetime of a copy no caller can reach. */
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
@@ -80,15 +82,25 @@ export class EngineHost implements EngineHostLike {
     );
   }
 
-  async start(secret: ArrayBuffer): Promise<void> {
-    // The engine copies the secret into its `Zeroizing` store; scrub the
-    // worker's transferred copy immediately after so no plaintext lingers.
-    const view = new Uint8Array(secret);
+  /**
+   * Runs `use` over `buffer`, scrubbing it once the call settles — including
+   * when it rejects. Buffers reaching the host arrive by transfer, making the
+   * worker their terminal owner, and the engine below copies what it keeps.
+   */
+  private async scrubbing(
+    buffer: ArrayBuffer,
+    use: (view: Uint8Array) => Promise<unknown>
+  ): Promise<void> {
+    const view = new Uint8Array(buffer);
     try {
-      await this.handle.start(view);
+      await use(view);
     } finally {
       view.fill(0);
     }
+  }
+
+  start(secret: ArrayBuffer): Promise<void> {
+    return this.scrubbing(secret, (view) => this.handle.start(view));
   }
 
   async command(command: CommandDescriptor): Promise<void> {
@@ -112,10 +124,8 @@ export class EngineHost implements EngineHostLike {
     );
   }
 
-  async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    // The handle copies into WASM memory synchronously; a view over the
-    // transferred buffer is safe here.
-    await this.handle.pushChunk(handle, new Uint8Array(chunk));
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.scrubbing(chunk, (view) => this.handle.pushChunk(handle, view));
   }
 
   commitWrite(handle: WriteHandle): Promise<bigint> {
