@@ -91,7 +91,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
             target/release
             target/wasm32-unknown-unknown
           key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}

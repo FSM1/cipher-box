@@ -17,22 +17,39 @@ runs:
       # Word splitting is the point: `targets` carries a space-separated list.
       run: rustup target add ${TARGETS}
 
-    # The CLI and the locked wasm-bindgen crate share a glue schema, so a
-    # version skew fails the run; derive the version from Cargo.lock. The
-    # binary is cached in ~/.cargo/bin, where a bare `cargo install` errors
-    # "already exists": skip on an exact match, --force to overwrite a stale
-    # one. An unreadable version aborts rather than installing whatever floats.
-    - name: Install wasm-bindgen-cli matching Cargo.lock
+    # The CLI and the locked wasm-bindgen crate share a glue schema, so a version
+    # skew fails the run.
+    - name: Read the wasm-bindgen version Cargo.lock pins
+      id: locked
       shell: bash
       run: |
-        WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
-        if [ -z "${WB_VERSION}" ]; then
-          echo "::error::no wasm-bindgen version found in Cargo.lock"
+        VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        # install-action splits its tool input on whitespace and commas, so a
+        # version carrying either would install a second, unpinned crate.
+        if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::unusable wasm-bindgen version in Cargo.lock: ${VERSION}"
           exit 1
         fi
-        echo "wasm-bindgen ${WB_VERSION}"
-        if [ "$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" = "${WB_VERSION}" ]; then
-          echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-        else
-          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+        echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+    # No fallback: the default `cargo-binstall` would both want `github.token`
+    # and, on a version the pinned manifest lacks, silently trade the archive's
+    # sha256 for an unverified source build — the from-source cost this replaced.
+    # A bump ahead of the pin should fail loudly and be fixed by bumping the pin.
+    - name: Install wasm-bindgen-cli
+      uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+      with:
+        tool: wasm-bindgen-cli@${{ steps.locked.outputs.version }}
+        fallback: none
+
+    # install-action prints the installed version but asserts nothing about it.
+    - name: Verify the CLI on PATH matches Cargo.lock
+      shell: bash
+      env:
+        EXPECTED: ${{ steps.locked.outputs.version }}
+      run: |
+        ACTUAL=$(wasm-bindgen --version | awk '{print $2}')
+        if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+          echo "::error::wasm-bindgen-cli ${ACTUAL} is on PATH but Cargo.lock pins ${EXPECTED}"
+          exit 1
         fi
