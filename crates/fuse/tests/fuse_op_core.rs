@@ -1306,6 +1306,7 @@ mod published {
             child_scope_index: Vec::new(),
             parent_node_seed: None,
             owner_write_blob_epoch: Some(EPOCH),
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         });
         blocks.put(fixture.head_block.clone());

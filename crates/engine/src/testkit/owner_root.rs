@@ -81,6 +81,10 @@ pub struct OwnerRootSpec<'a> {
     /// epoch (its structure signature still binds the read epoch — mirrors
     /// reseal); `None` leaves the root held keyless.
     pub owner_write_blob_epoch: Option<u64>,
+    /// The write-body's opaque write-plane history link. Any committed writer can
+    /// author these bytes, so a fixture plants them to prove where they do and do
+    /// not survive a re-seal.
+    pub write_history_link: Vec<u8>,
 }
 
 /// The authored owner root: the head block plus the pieces a caller asserts on.
@@ -109,6 +113,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         parent_node_seed,
         owner_write_blob_epoch,
         grants,
+        write_history_link,
     } = spec;
     let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
 
@@ -154,7 +159,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_WRITE_BODY),
         &encode_write_body(&WriteBody {
             grant_ledger: grants.iter().map(|g| g.ledger_entry.clone()).collect(),
-            write_history_link: Vec::new(),
+            write_history_link,
             direct_child_scope_index: child_scope_index,
             unknown: PreservedFields::new(),
         })

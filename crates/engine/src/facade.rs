@@ -5085,6 +5085,7 @@ mod tests {
                 // cold-seeded write floor opens it and the owner recovers its
                 // write-scope seed for the held-set renewal signer.
                 owner_write_blob_epoch: Some(EPOCH),
+                write_history_link: Vec::new(),
                 grants: Vec::new(),
             });
             (fx.head_block, fx.head_cid_str, fx.name)

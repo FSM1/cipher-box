@@ -17,6 +17,14 @@ impl SeededEntropy {
         Self { state: seed }
     }
 
+    /// The first 32-byte draw off `seed` — what a primitive that mints one seed
+    /// before anything else gets, so a test can name every derived value.
+    pub fn first_draw(seed: u64) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        Self::new(seed).fill(&mut out).expect("infallible");
+        out
+    }
+
     fn next_u64(&mut self) -> u64 {
         // SplitMix64: tiny, well-distributed, dependency-free.
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);

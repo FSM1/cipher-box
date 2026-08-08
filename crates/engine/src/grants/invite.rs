@@ -708,7 +708,7 @@ mod tests {
     use super::*;
     use crate::grants::{PublishedGrantBlob, enforce_committed_ledger, self_locate};
     use crate::rotation::{
-        CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+        CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
     };
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
@@ -803,12 +803,12 @@ mod tests {
                 write_scope_seed: &WRITE_SCOPE_SEED,
                 write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
+                write_history: WriteHistory::Carried(&[]),
             },
             &CommittedSet {
                 commitment: &commitment,
                 commitment_sig: &sig,
                 grant_ledger: &ledger,
-                write_history_link: b"",
                 direct_child_scope_index: &[],
             },
             &[],

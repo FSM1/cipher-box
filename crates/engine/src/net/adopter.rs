@@ -424,26 +424,38 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         else {
             return Ok(None);
         };
-        let aad = AadContext {
-            v: env.v,
-            id: env.id,
-            scope: env.scope,
-            epoch: wf,
-            struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
-        };
-        let Ok(payload) =
-            open_owner_write_blob(self.owner_enc_secret, &owb.enc, &aad, &owb.ciphertext)
-        else {
-            return Ok(None);
-        };
-        // Belt-and-suspenders: the HPKE AAD already binds `epoch == wf`, so a
-        // successful open implies equality; a mismatch means something is off —
-        // treat as re-authorable, never adopt the seed.
-        if payload.write_epoch != wf {
-            return Ok(None);
-        }
-        Ok(Some(Zeroizing::new(*payload.write_scope_seed())))
+        Ok(open_write_scope_seed_at(
+            self.owner_enc_secret,
+            env,
+            owb,
+            wf,
+        ))
     }
+}
+
+/// Open `owb` at `write_epoch` and hand back the write scope seed it wraps, or
+/// `None` when it does not open there.
+///
+/// `write_epoch` is the caller's authority on the write plane's clock: the
+/// durable floor for a cold-start adopt, the owner-signed re-point object for a
+/// resumed name wave (`net/rotation.rs`).
+pub(crate) fn open_write_scope_seed_at(
+    owner_enc_secret: &X25519Secret,
+    env: &Envelope,
+    owb: &SignedOwnerWriteBlob,
+    write_epoch: u64,
+) -> Option<Zeroizing<[u8; 32]>> {
+    let aad = AadContext {
+        v: env.v,
+        id: env.id,
+        scope: env.scope,
+        epoch: write_epoch,
+        struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
+    };
+    let payload = open_owner_write_blob(owner_enc_secret, &owb.enc, &aad, &owb.ciphertext).ok()?;
+    // Belt-and-suspenders: the HPKE AAD already binds the epoch, so a successful
+    // open implies equality; a mismatch means something is off.
+    (payload.write_epoch == write_epoch).then(|| Zeroizing::new(*payload.write_scope_seed()))
 }
 
 /// A head block the caller already holds — the write path's own just-uploaded
@@ -618,6 +630,7 @@ mod tests {
                 child_scope_index: Vec::new(),
                 parent_node_seed: None,
                 owner_write_blob_epoch: owb_write_epoch,
+                write_history_link: Vec::new(),
                 grants: Vec::new(),
             });
 

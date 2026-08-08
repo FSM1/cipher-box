@@ -35,12 +35,14 @@
 //! No cross-crash state: a resumed wave re-derives each node's deterministic new
 //! name and skips already-republished nodes via
 //! [`WriteWavePublisher::is_republished`]; every effect is idempotent, so it
-//! converges to the same terminal state. The fresh write scope seed is recovered
-//! from the published root — that wiring is not landed, faked here via
-//! [`RotateScopeWritePlan::resume_write_scope_seed`]. Accepted limitation: a crash
+//! converges to the same terminal state. The fresh write scope seed comes from
+//! the published moved root through [`WriteSubtreeResolver::recover_wave`], and
+//! is refused unless it derives that root's own name
+//! ([`WriteRotateError::ResumedSeedNotAtItsRoot`]). Accepted limitation: a crash
 //! after the pointer flip but before interior retirement orphans the prior run's
 //! interior old names — the fail-safe direction (leaking a registration beats
-//! retiring a live name); reclaiming those orphaned names is not landed.
+//! retiring a live name); reclaiming those orphaned names from the moved root's
+//! write-plane history link is not landed.
 //!
 //! # Owner-only, fail-closed, deterministic
 //!
@@ -142,6 +144,19 @@ pub struct RepublishedNode {
     pub is_root: bool,
 }
 
+/// A prior wave over this scope, read back from published records: the fresh
+/// write scope seed it minted and the `ipnsName` its moved root was published at.
+/// The pair travels together because the name is what makes the seed checkable —
+/// see [`rotate_scope_write`].
+pub struct ResumedWriteWave {
+    /// The fresh write scope seed the crashed wave minted.
+    pub write_scope_seed: SecretBytes,
+    /// The `ipnsName` the moved root was published at.
+    pub root_name: IpnsName,
+    /// The write epoch the moved root was published at, as the owner signed it.
+    pub write_epoch: u64,
+}
+
 /// Resolve the write scope's subtree from published records — the read edge, the
 /// analogue of the cascade's `CascadeResealResolver`. Resolve + adoption-gate +
 /// unseal live behind this trait (`net/rotation.rs::WriteWaveNet`). A resolve
@@ -151,6 +166,12 @@ pub trait WriteSubtreeResolver {
     /// fail-closed [`ResolveFailure`] if its record cannot be authoritatively
     /// obtained.
     async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure>;
+
+    /// The in-flight wave to pick up, read from published records; `None` when
+    /// no moved root of this scope is published, which is a fresh rotation.
+    /// The whole of the crash-recovery seam (#26 D8): entropy versus a published
+    /// record, never an in-memory checkpoint a crash would have taken with it.
+    async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure>;
 }
 
 /// The write edge of the name wave: CAS republish, batch retire, and the
@@ -243,12 +264,6 @@ pub struct RotateScopeWritePlan<'a> {
     pub min_read_epoch: u64,
     /// The scope root's current `ipnsName` — becomes `prevRootName` and lingers.
     pub current_root_name: &'a IpnsName,
-    /// On a **resumed** wave, the fresh write scope seed recovered from the
-    /// published root (the write-plane history link); `None` on a fresh rotation,
-    /// which mints one via the entropy seam. Recovery wiring is not landed
-    /// (faked in tests); the seam boundary is
-    /// [`Entropy`]-vs-published-record, never in-memory carry.
-    pub resume_write_scope_seed: Option<&'a [u8; SECRET_LEN]>,
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
@@ -300,6 +315,19 @@ pub enum WriteRotateError {
     IdentityRepoint,
     /// Minting the fresh write scope seed failed (entropy seam). Retryable.
     Entropy(EntropyError),
+    /// The write scope seed recovered from a published moved root does not derive
+    /// that root's own `ipnsName` — the reverse of the check the republish makes
+    /// forward. Resuming on it would move the whole subtree to names derived from
+    /// a seed nothing owner-authentic ties to this scope, so the wave refuses
+    /// before a single republish. Release-active.
+    ResumedSeedNotAtItsRoot,
+    /// The recovered wave targets a different write epoch than this run does.
+    /// The pointer plane carries no adoption gate, so an older owner-signed
+    /// re-point stays replayable at the scope's one stable pointer name for ever;
+    /// requiring the recovered epoch to be the one this run publishes at is what
+    /// makes a resume pick up **this** wave rather than a superseded one.
+    /// Release-active.
+    ResumedWaveAtAnotherEpoch,
     /// A subtree node could not be authoritatively resolved (gate rejection or host
     /// unavailability), so the wave is not provably complete.
     Resolve {
@@ -341,6 +369,12 @@ impl core::fmt::Display for WriteRotateError {
                 f.write_str("re-point points the scope to its own predecessor name")
             }
             WriteRotateError::Entropy(e) => write!(f, "write-seed entropy error: {e}"),
+            WriteRotateError::ResumedSeedNotAtItsRoot => f.write_str(
+                "recovered write scope seed does not derive the root it was published at",
+            ),
+            WriteRotateError::ResumedWaveAtAnotherEpoch => {
+                f.write_str("recovered wave targets a different write epoch than this rotation")
+            }
             WriteRotateError::Resolve { node_id, reason } => write!(
                 f,
                 "subtree resolve of node [{}] failed: {reason}",
@@ -372,6 +406,8 @@ impl WriteRotateError {
             WriteRotateError::WriteEpochNotAdvancing => "write-epoch-not-advancing",
             WriteRotateError::IdentityRepoint => "identity-repoint",
             WriteRotateError::Entropy(_) => "entropy-error",
+            WriteRotateError::ResumedSeedNotAtItsRoot => "resumed-seed-not-at-its-root",
+            WriteRotateError::ResumedWaveAtAnotherEpoch => "resumed-wave-at-another-epoch",
             WriteRotateError::Resolve { .. } => "resolve-failed",
             WriteRotateError::Publish { .. } => "publish-failed",
             WriteRotateError::Repoint(_) => "repoint-seal-failed",
@@ -386,7 +422,9 @@ impl WriteRotateError {
             | WriteRotateError::CommitmentScopeMismatch
             | WriteRotateError::EpochExhausted
             | WriteRotateError::WriteEpochNotAdvancing
-            | WriteRotateError::IdentityRepoint => false,
+            | WriteRotateError::IdentityRepoint
+            | WriteRotateError::ResumedSeedNotAtItsRoot
+            | WriteRotateError::ResumedWaveAtAnotherEpoch => false,
             WriteRotateError::Entropy(_) => true,
             WriteRotateError::Publish { error, .. } => *error != WritePublishError::Rejected,
             WriteRotateError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
@@ -434,7 +472,7 @@ pub fn build_repoint_object(
 
 /// Perform the owner-only write-plane rotation for the scope in `plan`.
 ///
-/// Owner-checks the caller, mints (or resumes with) the fresh write scope seed,
+/// Owner-checks the caller, recovers or mints the fresh write scope seed,
 /// bumps `writeEpoch`, then runs the child-first name wave: descendants
 /// register-first + republish at their freshly derived names, the root **last**,
 /// then the owner-signed re-point publishes to all three channels, and finally the
@@ -479,12 +517,28 @@ where
         .checked_add(1)
         .ok_or(WriteRotateError::EpochExhausted)?;
 
-    // 3) The fresh write override seed — RANDOM via the entropy seam (never KDF-
-    //    derived), or the seed a resumed wave recovered from the published root.
+    // 3) The fresh write override seed — the seed a crashed wave already published
+    //    at its moved root, or RANDOM via the entropy seam (never KDF-derived).
     //    `Zeroizing` wipes it on every return path, including a panic unwind; this
     //    orchestrator is its terminal owner.
-    let write_scope_seed: Zeroizing<[u8; SECRET_LEN]> = match plan.resume_write_scope_seed {
-        Some(seed) => Zeroizing::new(*seed),
+    let resumed = resolver
+        .recover_wave()
+        .await
+        .map_err(|reason| WriteRotateError::Resolve {
+            node_id: scope_id,
+            reason,
+        })?;
+    let write_scope_seed: Zeroizing<[u8; SECRET_LEN]> = match resumed {
+        Some(wave) => {
+            if wave.write_epoch != new_write_epoch {
+                return Err(WriteRotateError::ResumedWaveAtAnotherEpoch);
+            }
+            let seed = Zeroizing::new(*wave.write_scope_seed.as_bytes());
+            if derive_write_name(&seed, &scope_id) != wave.root_name {
+                return Err(WriteRotateError::ResumedSeedNotAtItsRoot);
+            }
+            seed
+        }
         None => {
             let mut seed = Zeroizing::new([0u8; SECRET_LEN]);
             entropy
@@ -704,6 +758,8 @@ mod tests {
     use std::rc::Rc;
 
     const SCOPE: [u8; 16] = [0x5c; 16];
+    /// The write epoch every test's [`plan`] publishes at (`current_write_epoch + 1`).
+    const ROTATED_WRITE_EPOCH: u64 = 5;
     const OLD_WRITE_SCOPE_SEED: [u8; 32] = [0x0d; 32];
     const OWNER_POINTER_SEED: [u8; 32] = [0x0e; 32];
 
@@ -743,6 +799,10 @@ mod tests {
         derive_write_name(&OLD_WRITE_SCOPE_SEED, node_id)
     }
 
+    /// The moved root as published state holds it: where it landed, the seed its
+    /// grant section publishes, and the write epoch it published at.
+    type PublishedRoot = (IpnsName, [u8; SECRET_LEN], u64);
+
     /// One recorded wave effect, in call order — the tape the ordering invariants
     /// are asserted over.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -752,9 +812,29 @@ mod tests {
         Repoint(RepointChannel),
     }
 
+    /// The recovery a resolver reads back out of published state: the moved root
+    /// the publisher landed, and the write scope seed its grant section carries.
+    /// Nothing else crosses a crash, so a resume that works here works off
+    /// published records alone.
+    fn recover_from(state: &WaveState) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+        Ok(state.published_root.borrow().as_ref().map(resumed))
+    }
+
+    fn resumed((name, seed, write_epoch): &PublishedRoot) -> ResumedWriteWave {
+        ResumedWriteWave {
+            write_scope_seed: SecretBytes::new(*seed),
+            root_name: name.clone(),
+            write_epoch: *write_epoch,
+        }
+    }
+
     /// A fake subtree resolver over a fixed `node_id -> children` map.
     struct FakeResolver {
         nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
+        state: WaveState,
+        /// Overrides the published-state recovery, so a test can hand back a pair
+        /// whose seed and root name disagree.
+        recovery: Option<PublishedRoot>,
     }
 
     impl WriteSubtreeResolver for FakeResolver {
@@ -770,6 +850,13 @@ mod tests {
                 child_node_ids: children,
             })
         }
+
+        async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+            match &self.recovery {
+                Some(pair) => Ok(Some(resumed(pair))),
+                None => recover_from(&self.state),
+            }
+        }
     }
 
     /// A resolver modelling a resume AFTER the pointer already flipped: every node
@@ -778,6 +865,7 @@ mod tests {
     struct PostFlipResolver {
         nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
         seed: [u8; 32],
+        state: WaveState,
     }
 
     impl WriteSubtreeResolver for PostFlipResolver {
@@ -792,6 +880,10 @@ mod tests {
                 current_name: derive_write_name(&self.seed, node_id),
                 child_node_ids: children,
             })
+        }
+
+        async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+            recover_from(&self.state)
         }
     }
 
@@ -808,6 +900,10 @@ mod tests {
             }
             self.inner.resolve_node(node_id).await
         }
+
+        async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+            self.inner.recover_wave().await
+        }
     }
 
     /// Shared, "durable" published state plus the effect tape. Cloning the handle
@@ -816,6 +912,10 @@ mod tests {
     #[derive(Clone, Default)]
     struct WaveState {
         published: Rc<RefCell<HashSet<String>>>,
+        /// The moved root as published state holds it: the name it landed at and
+        /// the write scope seed its grant section publishes. The one thing a
+        /// resumed wave reads back — the recovery seam's whole source.
+        published_root: Rc<RefCell<Option<PublishedRoot>>>,
         retired: Rc<RefCell<HashSet<String>>>,
         events: Rc<RefCell<Vec<Event>>>,
         republish_calls: Rc<RefCell<HashMap<String, usize>>>,
@@ -879,6 +979,14 @@ mod tests {
                 .entry(key.clone())
                 .or_insert(0) += 1;
             self.state.published.borrow_mut().insert(key);
+            if let Some(seed) = node
+                .is_root
+                .then_some(node.write_scope_seed.as_ref())
+                .flatten()
+            {
+                *self.state.published_root.borrow_mut() =
+                    Some((node.new_name.clone(), *seed.as_bytes(), node.write_epoch));
+            }
             self.state.orders.borrow_mut().push(node.clone());
             self.state.events.borrow_mut().push(Event::Republish {
                 node_id: node.node_id,
@@ -912,13 +1020,23 @@ mod tests {
 
     /// A three-level tree: root(0x5c) → {0x02, 0x03}; 0x02 → {0x04, 0x05}.
     fn tree() -> FakeResolver {
+        tree_on(WaveState::default())
+    }
+
+    /// The same tree, reading its recovery out of `state` — the shared published
+    /// backing a resumed wave picks up from.
+    fn tree_on(state: WaveState) -> FakeResolver {
         let mut nodes = HashMap::new();
         nodes.insert(SCOPE, vec![nid(0x02), nid(0x03)]);
         nodes.insert(nid(0x02), vec![nid(0x04), nid(0x05)]);
         nodes.insert(nid(0x03), Vec::new());
         nodes.insert(nid(0x04), Vec::new());
         nodes.insert(nid(0x05), Vec::new());
-        FakeResolver { nodes }
+        FakeResolver {
+            nodes,
+            state,
+            recovery: None,
+        }
     }
 
     fn plan<'a>(
@@ -926,7 +1044,6 @@ mod tests {
         commitment: &'a GrantSetCommitment,
         sig: &'a [u8; ECDSA_SIG_LEN],
         current_root: &'a IpnsName,
-        resume: Option<&'a [u8; 32]>,
     ) -> RotateScopeWritePlan<'a> {
         RotateScopeWritePlan {
             scope_id: SCOPE,
@@ -938,7 +1055,6 @@ mod tests {
             current_write_epoch: 4,
             min_read_epoch: 7,
             current_root_name: current_root,
-            resume_write_scope_seed: resume,
         }
     }
 
@@ -957,7 +1073,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1063,7 +1179,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1099,7 +1215,7 @@ mod tests {
         let state = WaveState::default();
         let publisher = FakePublisher::new(state.clone());
         let current_root = old_name_of(&SCOPE);
-        let seed = [0x5e; 32];
+        let seed = SeededEntropy::first_draw(11);
 
         block_on(async {
             let mut e = SeededEntropy::new(11);
@@ -1107,7 +1223,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, Some(&seed)),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1170,7 +1286,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1208,7 +1324,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1241,43 +1357,36 @@ mod tests {
 
     #[test]
     fn mid_wave_crash_resumes_from_published_records_only() {
-        // Crash the wave after two republishes, then resume with a FRESH orchestrator
-        // over the SAME published state (no in-memory carry) and the recovered seed.
-        // The resumed wave completes, republishes each remaining node exactly once
-        // (already-done nodes skipped via published state), and re-points last.
+        // Crash the wave at the canonical re-point — past the root republish, so
+        // published state holds the moved root — then resume with a FRESH
+        // orchestrator, a fresh publisher, and an entropy stream that would mint a
+        // DIFFERENT seed. Nothing is handed in: the resume converges on the first
+        // run's names or not at all.
         let owner = owner();
         let (c, sig) = commitment(&owner);
-        let resolver = tree();
         let state = WaveState::default();
+        let resolver = tree_on(state.clone());
         let current_root = old_name_of(&SCOPE);
+        let minted = SeededEntropy::first_draw(9);
 
-        // The seed a fresh wave WOULD mint — captured so the resume threads it back
-        // in, standing in for recovery from the published root.
-        let recovered_seed = {
-            let mut e = SeededEntropy::new(9);
-            let mut seed = [0u8; 32];
-            e.fill(&mut seed).unwrap();
-            seed
-        };
-
-        // First attempt crashes after two republishes.
-        let crashing = FakePublisher::failing_after(state.clone(), 2);
+        // First attempt lands every republish, then dies on the pointer flip.
+        let crashing = FakePublisher::refusing(state.clone(), RepointChannel::ScopePointer);
         let err = block_on(async {
             let mut e = SeededEntropy::new(9);
             rotate_scope_write(
                 &mut e,
                 &resolver,
                 &crashing,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
         .expect_err("the wave crashes mid-flight");
         assert_eq!(err.check(), "publish-failed");
-        let published_after_crash = state.published.borrow().len();
-        assert!(
-            (1..5).contains(&published_after_crash),
-            "a strict, non-empty subset republished before the crash (got {published_after_crash})"
+        assert_eq!(
+            state.published.borrow().len(),
+            5,
+            "the whole subtree republished before the flip failed"
         );
         assert!(
             state.repoint_channels.borrow().is_empty(),
@@ -1287,12 +1396,12 @@ mod tests {
         // Resume: a brand-new orchestrator + publisher over the same durable state.
         let resume_pub = FakePublisher::new(state.clone());
         let outcome = block_on(async {
-            let mut e = SeededEntropy::new(123); // a DIFFERENT stream — no fresh mint on resume
+            let mut e = SeededEntropy::new(123); // a DIFFERENT stream — a fresh mint would diverge
             rotate_scope_write(
                 &mut e,
                 &resolver,
                 &resume_pub,
-                &plan(&owner, &c, &sig, &current_root, Some(&recovered_seed)),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1301,7 +1410,13 @@ mod tests {
         assert_eq!(outcome.new_write_epoch, 5);
         assert_eq!(
             outcome.new_root_name,
-            derive_write_name(&recovered_seed, &SCOPE)
+            derive_write_name(&minted, &SCOPE),
+            "the resume ran on the first run's published seed, not a fresh mint"
+        );
+        assert_ne!(
+            minted,
+            SeededEntropy::first_draw(123),
+            "the resume's own stream would have minted a different seed"
         );
 
         // Every node republished exactly once across BOTH runs — the resume skipped
@@ -1336,6 +1451,144 @@ mod tests {
     }
 
     #[test]
+    fn a_recovered_wave_at_another_write_epoch_is_refused_before_any_publish() {
+        // Nothing gates the scope pointer, and every re-point this scope ever
+        // published lives at the same stable name — so an older owner-signed
+        // re-point stays replayable for ever. Requiring the recovered epoch to be
+        // the one this run publishes at is what pins a resume to THIS wave.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let state = WaveState::default();
+        let stale_seed = [0x93; SECRET_LEN];
+        let resolver = FakeResolver {
+            recovery: Some((
+                derive_write_name(&stale_seed, &SCOPE),
+                stale_seed,
+                ROTATED_WRITE_EPOCH - 1,
+            )),
+            ..tree_on(state.clone())
+        };
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let err = block_on(async {
+            let mut e = SeededEntropy::new(32);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("a wave at another write epoch is not this run's to resume");
+        assert_eq!(err.check(), "resumed-wave-at-another-epoch");
+        assert!(!err.is_retryable(), "a replayed re-point is not a stall");
+        assert!(
+            state.published.borrow().is_empty(),
+            "nothing published on a refused recovery"
+        );
+    }
+
+    #[test]
+    fn a_recovered_seed_that_does_not_derive_its_root_name_is_refused() {
+        // The recovery's two halves must agree: a seed that derives some other
+        // name is what a forged write-plane history link, or a root published
+        // under a seed nothing ties to it, would hand back. Resuming on it would
+        // republish the whole subtree under attacker-chosen names, so the wave
+        // refuses before it touches the publisher.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let state = WaveState::default();
+        let resolver = FakeResolver {
+            // A real published root name, but not the one that seed derives.
+            recovery: Some((
+                derive_write_name(&[0x92; SECRET_LEN], &SCOPE),
+                [0x91; SECRET_LEN],
+                ROTATED_WRITE_EPOCH,
+            )),
+            ..tree_on(state.clone())
+        };
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let err = block_on(async {
+            let mut e = SeededEntropy::new(31);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("a seed that does not derive its own root name is refused");
+        assert_eq!(err.check(), "resumed-seed-not-at-its-root");
+        assert!(!err.is_retryable(), "no retry reconciles the two halves");
+        assert!(
+            state.published.borrow().is_empty(),
+            "nothing published on a refused recovery"
+        );
+    }
+
+    #[test]
+    fn a_crash_before_the_root_publishes_has_no_seed_to_recover() {
+        // The moved root is the only published carrier of the fresh seed, so a
+        // crash before it lands leaves nothing to recover: the retry mints its own
+        // and the first run's interior names are orphaned — the fail-safe
+        // direction the module documents.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let state = WaveState::default();
+        let resolver = tree_on(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let crashing = FakePublisher::failing_after(state.clone(), 2);
+        block_on(async {
+            let mut e = SeededEntropy::new(41);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &crashing,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("the wave crashes before the root republish");
+        assert!(
+            state.published_root.borrow().is_none(),
+            "no moved root published, so nothing carries the seed"
+        );
+        let orphaned: Vec<String> = state.published.borrow().iter().cloned().collect();
+        assert_eq!(orphaned.len(), 2, "two interior names landed");
+
+        let resume_pub = FakePublisher::new(state.clone());
+        let outcome = block_on(async {
+            let mut e = SeededEntropy::new(42);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &resume_pub,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect("the retry completes on a freshly minted seed");
+
+        assert_eq!(
+            outcome.new_root_name,
+            derive_write_name(&SeededEntropy::first_draw(42), &SCOPE),
+            "the retry minted its own seed"
+        );
+        for name in &orphaned {
+            assert!(
+                !state.retired.borrow().contains(name),
+                "the first run's names are orphaned, never retired"
+            );
+        }
+    }
+
+    #[test]
     fn resume_after_flip_never_retires_a_live_name() {
         // A resume AFTER the pointer already flipped: the resolver reports every
         // node's NEW name as current (the migrated records the flipped pointer now
@@ -1351,12 +1604,14 @@ mod tests {
         nodes.insert(nid(0x03), Vec::new());
         nodes.insert(nid(0x04), Vec::new());
         nodes.insert(nid(0x05), Vec::new());
+        let state = WaveState::default();
         let resolver = PostFlipResolver {
             nodes,
             seed: recovered_seed,
+            state: state.clone(),
         };
-        let state = WaveState::default();
-        // The fully-migrated published state: every new name already landed.
+        // The fully-migrated published state: every new name already landed, and
+        // the moved root carries the seed the resume recovers.
         for id in [SCOPE, nid(0x02), nid(0x03), nid(0x04), nid(0x05)] {
             let name = derive_write_name(&recovered_seed, &id);
             state
@@ -1364,6 +1619,11 @@ mod tests {
                 .borrow_mut()
                 .insert(name.as_str().to_owned());
         }
+        *state.published_root.borrow_mut() = Some((
+            derive_write_name(&recovered_seed, &SCOPE),
+            recovered_seed,
+            ROTATED_WRITE_EPOCH,
+        ));
         let publisher = FakePublisher::new(state.clone());
         let current_root = old_name_of(&SCOPE);
 
@@ -1373,7 +1633,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, Some(&recovered_seed)),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1398,7 +1658,7 @@ mod tests {
 
         let err = block_on(async {
             let mut e = SeededEntropy::new(3);
-            let mut p = plan(&owner, &c, &sig, &current_root, None);
+            let mut p = plan(&owner, &c, &sig, &current_root);
             p.owner_identity_signer = &impostor;
             rotate_scope_write(&mut e, &resolver, &publisher, &p).await
         })
@@ -1435,7 +1695,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1469,7 +1729,7 @@ mod tests {
                 &mut e,
                 &resolver,
                 &publisher,
-                &plan(&owner, &c, &sig, &current_root, None),
+                &plan(&owner, &c, &sig, &current_root),
             )
             .await
         })
@@ -1491,7 +1751,7 @@ mod tests {
 
         let err = block_on(async {
             let mut e = SeededEntropy::new(5);
-            let mut p = plan(&owner, &c, &sig, &current_root, None);
+            let mut p = plan(&owner, &c, &sig, &current_root);
             p.current_write_epoch = u64::MAX;
             rotate_scope_write(&mut e, &resolver, &publisher, &p).await
         })

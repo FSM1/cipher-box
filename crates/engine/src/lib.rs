@@ -84,8 +84,9 @@ pub use rotation::{
     ChildIndexResolver, CommittedSet, EagerSet, EnumerationError, PrevEpochSeed, ResealError,
     ResealSeeds, ResealedScopeRoot, ResolveFailure, RevokeError, RevokedCommittedSet, RotateError,
     RotateScopePlan, RotationOutcome, RotationTrigger, ScopeExitReport, ScopeExitRotator,
-    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, consume_scope_exit_triggers,
-    enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
+    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WriteHistory,
+    consume_scope_exit_triggers, enumerate_eager_set, reseal_scope_root, revoke_read_grant,
+    rotate_scope,
 };
 pub use seams::{OwedRetire, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
