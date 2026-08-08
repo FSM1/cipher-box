@@ -10,7 +10,7 @@ gates, release-tag e2e gating, nightly scheduling), the hosted-infra and
 gateway shape from [`blueprint/api.md`](api.md), the Tauri updater from
 [`blueprint/desktop.md`](desktop.md), the PWA install surface from
 [`blueprint/web-client.md`](web-client.md), and the clean-break migration
-stance ([#6](https://github.com/FSM1/cipher-box-next/issues/6)).
+stance ([FSM1/cipher-box-next#6](https://github.com/FSM1/cipher-box-next/issues/6)).
 
 ## Doctrine
 
@@ -36,24 +36,24 @@ replace it:
 3. **Staging deploys are boring and destructive-restorable.** Staging is the
    only deployed environment (there is no production; it stays funding-gated
    and parked). Everything hosted is an accelerator by design (api.md), and
-   the clean break (#6) removes all data-continuity obligations — so a
+   the clean break (FSM1/cipher-box-next#6) removes all data-continuity obligations — so a
    deploy may always be "fresh volumes, redeploy, done", and cutover is a
    redeploy, not a migration.
 
 What dies relative to v1 — with what killed it:
 
-| Gone                                                                                                                      | Killed by                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Independent per-component versioning, 16-entry manifest, component tags (`@cipherbox/web-vX`, `cipherbox-fuse-vX`, …)     | law 1 — one product version, tag `vX.Y.Z`                                                                                         |
-| `pr-release-preview.yml` + `.github/scripts/pr-release-preview.js` + the load-bearing bot commit + the force-push footgun | law 2                                                                                                                             |
-| `release-as` pins and the self-comparing changelog loop                                                                   | law 1 — nothing to pin; one version moves forward                                                                                 |
-| `cargo-lock-release-sync.yml` and the post-merge lock-sync fallback PR                                                    | crates are version-frozen (below); releases never touch Cargo.lock                                                                |
-| `release-gate.yml` + `ci-e2e.yml`'s `retrigger-release-gate` polling                                                      | the main gate (testing.md) — release readiness is "main is green", asserted once at staging-tag time                              |
-| The `--latest=false` un-marking loop in `release-please.yml` and `desktop-staging-release.yml`'s `mark-latest`            | one release stream — the release carrying desktop artifacts is the only release, so `/releases/latest` is correct by construction |
-| `build-tee` image job, `tee-worker` service, Phala compose files and deploy flow, `redis` in every stack                  | #24 — TEE dropped, republisher in-process; nothing queues, throttling and scheduling are in-process                               |
-| `check-api-client.sh` pre-commit gate, `api-spec` drift CI job                                                            | #28 D5/D6 — no generated clients; the contract suite is the gate, OpenAPI freshness is a hygiene diff (testing.md)                |
-| `vector-parity` job, `check-vector-parity.sh`, vector generator scripts                                                   | the KAT-manifest regime (core.md)                                                                                                 |
-| SC#6/SC#2 grep gates in `cargo-linux`                                                                                     | testing.md law 2 — simulation scenarios, not source greps                                                                         |
+| Gone                                                                                                                      | Killed by                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Independent per-component versioning, 16-entry manifest, component tags (`@cipherbox/web-vX`, `cipherbox-fuse-vX`, …)     | law 1 — one product version, tag `vX.Y.Z`                                                                                              |
+| `pr-release-preview.yml` + `.github/scripts/pr-release-preview.js` + the load-bearing bot commit + the force-push footgun | law 2                                                                                                                                  |
+| `release-as` pins and the self-comparing changelog loop                                                                   | law 1 — nothing to pin; one version moves forward                                                                                      |
+| `cargo-lock-release-sync.yml` and the post-merge lock-sync fallback PR                                                    | crates are version-frozen (below); releases never touch Cargo.lock                                                                     |
+| `release-gate.yml` + `ci-e2e.yml`'s `retrigger-release-gate` polling                                                      | the main gate (testing.md) — release readiness is "main is green", asserted once at staging-tag time                                   |
+| The `--latest=false` un-marking loop in `release-please.yml` and `desktop-staging-release.yml`'s `mark-latest`            | one release stream — the release carrying desktop artifacts is the only release, so `/releases/latest` is correct by construction      |
+| `build-tee` image job, `tee-worker` service, Phala compose files and deploy flow, `redis` in every stack                  | FSM1/cipher-box-next#24 — TEE dropped, republisher in-process; nothing queues, throttling and scheduling are in-process                |
+| `check-api-client.sh` pre-commit gate, `api-spec` drift CI job                                                            | FSM1/cipher-box-next#28 D5/D6 — no generated clients; the contract suite is the gate, OpenAPI freshness is a hygiene diff (testing.md) |
+| `vector-parity` job, `check-vector-parity.sh`, vector generator scripts                                                   | the KAT-manifest regime (core.md)                                                                                                      |
+| SC#6/SC#2 grep gates in `cargo-linux`                                                                                     | testing.md law 2 — simulation scenarios, not source greps                                                                              |
 
 ## v1 freeze mechanics
 
@@ -167,7 +167,7 @@ starved), same GHCR image flow, same scp-env + `compose pull` + migrations
 | `caddy`       | ports — static web + reverse proxy + the gateway auth front (below)                                                |
 | `alloy`       | ports — Grafana Cloud shipping unchanged                                                                           |
 | `redis`       | dies — nothing queues; throttling is in-process (verified effective by the contract suite)                         |
-| `tee-worker`  | dies (#24) — with it the Phala compose files, the CVM update ritual, and the simulator                             |
+| `tee-worker`  | dies (FSM1/cipher-box-next#24) — with it the Phala compose files, the CVM update ritual, and the simulator         |
 
 **Gateway deployment shape** (the api.md handoff): the token-authed
 trustless gateway is Caddy in front of Kubo's gateway port —
@@ -201,8 +201,8 @@ binding).
 
 One scheduled, announced, destructive redeploy: stop the v1 stack, remove
 the `postgres` and `ipfs` volumes, deploy the v2 stack fresh. No data
-migration, no dual-running (#6 — v1 is staging-only, all-DEVNET). Staging
-URL and Web3Auth config decisions carry per #6 (free to keep or change on
+migration, no dual-running (FSM1/cipher-box-next#6 — v1 is staging-only, all-DEVNET). Staging
+URL and Web3Auth config decisions carry per FSM1/cipher-box-next#6 (free to keep or change on
 merit). One accepted consequence, stated: existing v1 desktop installs
 auto-update into v2 via `/releases/latest` and their local vaults become
 orphans — consistent with the clean break; the v2 first-run treats them as
@@ -265,7 +265,7 @@ inherited limitation testing.md records; never a PR gate.
 
 ## Disposition of the v1 inventory
 
-Workflows (all edited in place, per #28 D7):
+Workflows (all edited in place, per FSM1/cipher-box-next#28 D7):
 
 | v1 workflow                                                                            | Disposition                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

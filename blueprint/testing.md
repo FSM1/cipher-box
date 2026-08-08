@@ -11,7 +11,7 @@ design (the timing profile), the KAT regime in
 [`blueprint/web-client.md`](web-client.md) and
 [`blueprint/desktop.md`](desktop.md), and the contract-and-clients section of
 [`blueprint/api.md`](api.md). This doc fixes the suite map, the CI gates, and
-the disposition of every v1 harness; per #28 D7, v2 rebuilds in the cipher-box
+the disposition of every v1 harness; per FSM1/cipher-box-next#28 D7, v2 rebuilds in the cipher-box
 repo, so "ports" below means edited in place, in history.
 
 ## Doctrine
@@ -44,18 +44,18 @@ only hosting; e2e tests only flows. Three laws, each a v1 inversion:
 
 What dies relative to v1 — with what killed it:
 
-| Gone                                                                                                       | Killed by                                                                                                                 |
-| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Lockstep TS/Rust vector suites, `tests/vectors/` twin consumers, `check-vector-parity.sh`                  | #27 D2 — one implementation; the KAT manifest defends the frozen contract; the WASM CI run is the residual parity surface |
-| `apps/web` unit tests with no CI runner; the `.spec.ts`/`.test.ts` include trap                            | #28 D1 — web keeps no logic worth unit-testing; the merge-blocking browser suite moves to `packages/client`               |
-| Post-merge-only web/desktop e2e (`ci-e2e.yml` on main push)                                                | the PR e2e gate below — a smoke slice blocks every PR, the full matrix blocks main                                        |
-| SC#6/SC#2 grep gates standing in for resolve/rotation invariants                                           | engine structure — one gated resolve path exists at all (#33 D7); simulation scenarios exercise it                        |
-| `check-api-client.sh`, `api:generate` drift job, generated-client compile checks as "contract enforcement" | #28 D6 — the live contract suite against a real API                                                                       |
-| Mock-heavy Nest specs green while the runtime threw (the take-pagination class)                            | the contract suite runs the real app + Postgres on every PR                                                               |
-| Serial single-worker e2e whose cascade aborts masked late specs                                            | per-test vault isolation via test-login → parallel workers                                                                |
-| The Windows twin operation tree "only CI can compile"                                                      | #32 — the vfs operation core is platform-neutral and tests anywhere; Windows CI checks a thin adapter                     |
-| `tee-worker` boot + secrets in every e2e recipe; redis/BullMQ for the republish relay                      | #24 — TEE dropped; the republisher is an in-process API module under the contract suite                                   |
-| Blanket line-coverage merge gates (sdk-core 80% breaking on barrel refactors; api-client's 0% theater)     | the coverage policy below — structural anti-vacuity gates, informational coverage                                         |
+| Gone                                                                                                       | Killed by                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lockstep TS/Rust vector suites, `tests/vectors/` twin consumers, `check-vector-parity.sh`                  | FSM1/cipher-box-next#27 D2 — one implementation; the KAT manifest defends the frozen contract; the WASM CI run is the residual parity surface |
+| `apps/web` unit tests with no CI runner; the `.spec.ts`/`.test.ts` include trap                            | FSM1/cipher-box-next#28 D1 — web keeps no logic worth unit-testing; the merge-blocking browser suite moves to `packages/client`               |
+| Post-merge-only web/desktop e2e (`ci-e2e.yml` on main push)                                                | the PR e2e gate below — a smoke slice blocks every PR, the full matrix blocks main                                                            |
+| SC#6/SC#2 grep gates standing in for resolve/rotation invariants                                           | engine structure — one gated resolve path exists at all (FSM1/cipher-box-next#33 D7); simulation scenarios exercise it                        |
+| `check-api-client.sh`, `api:generate` drift job, generated-client compile checks as "contract enforcement" | FSM1/cipher-box-next#28 D6 — the live contract suite against a real API                                                                       |
+| Mock-heavy Nest specs green while the runtime threw (the take-pagination class)                            | the contract suite runs the real app + Postgres on every PR                                                                                   |
+| Serial single-worker e2e whose cascade aborts masked late specs                                            | per-test vault isolation via test-login → parallel workers                                                                                    |
+| The Windows twin operation tree "only CI can compile"                                                      | FSM1/cipher-box-next#32 — the vfs operation core is platform-neutral and tests anywhere; Windows CI checks a thin adapter                     |
+| `tee-worker` boot + secrets in every e2e recipe; redis/BullMQ for the republish relay                      | FSM1/cipher-box-next#24 — TEE dropped; the republisher is an in-process API module under the contract suite                                   |
+| Blanket line-coverage merge gates (sdk-core 80% breaking on barrel refactors; api-client's 0% theater)     | the coverage policy below — structural anti-vacuity gates, informational coverage                                                             |
 
 ## Suite map
 
@@ -99,12 +99,12 @@ scenario fails the meta-test):
   surfacing its named trust-violation error;
 - the floor law — cold-seed from the re-point object, monotonic advance on
   AAD-confirmed unseals, regression rejection, pointer-driven advance;
-- all five rebase races from the #33 D5 table (conditional delete,
+- all five rebase races from the FSM1/cipher-box-next#33 D5 table (conditional delete,
   rename/rename, add/add auto-suffix, dest-first move, dual-link repair);
 - the rotation trigger table and the eager-set law — owner cascade vs
   grantee flat, sweep idempotence, concurrent sweepers, resumed name waves
   via the history link;
-- the keyless re-PUT adversary (#38) — forged old-epoch records at old
+- the keyless re-PUT adversary (FSM1/cipher-box-next#38) — forged old-epoch records at old
   names, re-point adoption, the pin-window bound;
 - revocation classification (revocation-signal vs unresolvable vs epoch-lag)
   and the withheld-update escalation;
@@ -113,7 +113,7 @@ scenario fails the meta-test):
   fail-fast.
 
 Adversarial cases are first-class: the harness can replay, transplant, and
-re-sign records with any key it holds; every crypto-review finding (#35)
+re-sign records with any key it holds; every crypto-review finding (FSM1/cipher-box-next#35)
 gets a pinned regression scenario.
 
 The engine also ships **its own KAT vectors**, under core's regime but for the
@@ -126,7 +126,7 @@ so a verdict change that is not a deliberate re-freeze fails there.
 
 ### The contract suite — the live API gate
 
-The sdk-e2e descendant (#28 D6), and it inherits sdk-e2e's most valuable v1
+The sdk-e2e descendant (FSM1/cipher-box-next#28 D6), and it inherits sdk-e2e's most valuable v1
 property: it runs on **every PR**. A Rust integration-test crate constructs
 real engines with production seam implementations pointed at the CI stack
 (real NestJS app + Postgres + Kubo + the `/routing/v1` store), drives facade
@@ -217,11 +217,11 @@ is not the contract gate.
 Path-filtered like v1 (the dorny pattern and reusable-workflow structure
 port), reorganized into three tiers:
 
-| Tier                         | Trigger        | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tier                         | Trigger        | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PR gate** — merge-blocking | every PR       | lint + typecheck; the tracker-reference scan (`Tracker Refs`); cargo workspace tests (core KATs + property layer, engine simulation); the fuse operation core (`FUSE Op Core`); the WASM KAT run; the `packages/client` browser suite; the TS workspace unit suites incl. the `apps/web` host suite (`Test`); the contract suite on the CI stack; Windows cargo check + adapter tests; DB migration drift check (ports as-is if the API keeps TypeORM); an e2e **smoke slice** (`Web E2E Smoke`, reported through the stable `Web E2E Smoke Result` context) — a bounded-minutes budget of web login-and-CRUD plus one timing-profile cross-client scenario |
-| **Main gate**                | push to main   | the full web-e2e suite, the desktop mounted matrix (macOS/Linux/Windows), the full cross-client matrix. Failure is treated revert-first, not fix-forward — this tier exists to bound the blast radius of what the smoke slice missed, never to be the first line                                                                                                                                                                                                                                                                                                                                                                |
-| **Dispatch / scheduled**     | manual or cron | the load harness (`crates/load`, v1's `tests/load/` scenarios ported onto the v2 surface — it drives the engine's real API client, so it is Rust beside the contract suite rather than a TS package); long-horizon liveness — lease renewal at seq+1 and the republisher walk against a compressed-EOL profile; staging release gates (mechanics → [#48](https://github.com/FSM1/cipher-box-next/issues/48))                                                                                                                                                                                                                    |
+| **Main gate**                | push to main   | the full web-e2e suite, the desktop mounted matrix (macOS/Linux/Windows), the full cross-client matrix. Failure is treated revert-first, not fix-forward — this tier exists to bound the blast radius of what the smoke slice missed, never to be the first line                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Dispatch / scheduled**     | manual or cron | the load harness (`crates/load`, v1's `tests/load/` scenarios ported onto the v2 surface — it drives the engine's real API client, so it is Rust beside the contract suite rather than a TS package); long-horizon liveness — lease renewal at seq+1 and the republisher walk against a compressed-EOL profile; staging release gates (mechanics → [FSM1/cipher-box-next#48](https://github.com/FSM1/cipher-box-next/issues/48))                                                                                                                                                                                                                            |
 
 The CI stack: Postgres, Kubo, the API under test, and a local `/routing/v1`
 record store — v1's `mock-ipns-routing` tool **promoted, not deleted**: a
@@ -233,14 +233,14 @@ stack; the local/CI redis port split (6380/6379) dies with them.
 
 ## The DX hook — the environment-scoped timing profile
 
-The sync timing profile (#33 D3) is the single lever that makes v2's
+The sync timing profile (FSM1/cipher-box-next#33 D3) is the single lever that makes v2's
 cross-client flows testable at speed, and this doc is its consumer contract:
 
 - **CI profile**: record TTL 1–5 s (small but nonzero — `0`/unset is how v1
   fell into a silent 5-minute default), compressed poll cadence, staleness
   thresholds, escalation window, pointer-consult interval, and a small
   staging budget so budget-exhaustion paths are reachable. Production
-  profile: TTL 1 minute, 30 s poll, per #33.
+  profile: TTL 1 minute, 30 s poll, per FSM1/cipher-box-next#33.
 - **Nocache manual refresh** is the TTL-independent forcing path — the
   deterministic sync barrier between clients in every cross-client scenario.
 - **No sleeps anywhere**: web polls the introspection hook, desktop polls
@@ -256,7 +256,7 @@ cross-client flows testable at speed, and this doc is its consumer contract:
 
 ## Hardware verification gates
 
-The #32 pre-build checks, owned here as task-shaped verifications with
+The FSM1/cipher-box-next#32 pre-build checks, owned here as task-shaped verifications with
 recorded results — they precede `crates/fuse` work, and they are not CI:
 
 1. FUSE-T ≥ 1.2.7 SMB invalidation round-trip, with measured cross-client
@@ -269,7 +269,7 @@ recorded results — they precede `crates/fuse` work, and they are not CI:
    (`mountSingleVolume`/`DataCacheHandler` behavior).
 
 Results are recorded alongside the profile constants they feed; a failed
-gate reopens the driver decision (#32), not this doc.
+gate reopens the driver decision (FSM1/cipher-box-next#32), not this doc.
 
 The #644 execution of these gates — harness, measurements, and per-gate
 verdicts — is recorded in `tools/hw-gates/RESULTS.md`. All five passed:
@@ -299,7 +299,7 @@ percentage never did.
 | `docker/docker-compose.yml` postgres/kubo services; GH service-container pattern                        | **Ports**                                                                                           |
 | `tools/mock-ipns-routing`                                                                               | **Promoted** — the hermetic `/routing/v1` CI record store                                           |
 | someguy service                                                                                         | staging/production accelerator only — leaves CI                                                     |
-| redis, tee-worker services and their secret plumbing                                                    | **Die** (#24)                                                                                       |
+| redis, tee-worker services and their secret plumbing                                                    | **Die** (FSM1/cipher-box-next#24)                                                                   |
 | `ci.yml` job skeleton, dorny path filters, reusable workflows, failure-artifact uploads                 | **Port** — refiltered for the v2 layout                                                             |
 | Migration drift check                                                                                   | **Ports** if the API keeps TypeORM migrations                                                       |
 | `tests/load/` harness                                                                                   | **Ported** — `crates/load`, dispatch-gated                                                          |
@@ -319,4 +319,4 @@ percentage never did.
   with test credentials, never a PR gate — an honest, inherited limitation.
 - **Runner provisioning, staging deploy gates, release-tag e2e gating,
   nightly scheduling** →
-  [deployment blueprint (#48)](https://github.com/FSM1/cipher-box-next/issues/48).
+  [deployment blueprint (FSM1/cipher-box-next#48)](https://github.com/FSM1/cipher-box-next/issues/48).

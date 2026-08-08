@@ -22,22 +22,22 @@ and an integrity-untrusted mailbox.
 
 What left the API relative to v1 — with the design that removed it:
 
-| Gone                                                                | Removed by                                                                              |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| IPNS publish/resolve relay endpoints                                | #23 — clients fan out `/routing/v1` PUTs directly                                       |
-| Record serving from the DB                                          | #23/#24 — record cache is non-canonical, no client resolve path                         |
-| `/shares`, `share_invites`                                          | #25 — grants live in metadata; discovery rides the mailbox                              |
-| People directory                                                    | #34 — never built; contact codes are self-authenticating                                |
-| All TEE endpoints, `tee_key_state`, connection-test                 | #24 — TEE dropped, designed-for re-signer seam only                                     |
-| Vault init/export endpoints, `vaults` table                         | #27 — bootstrap is the derived vault pointer; export is client-side                     |
-| `pin_migrations`                                                    | BYO re-pin is a client-side sweep over its own pin set                                  |
-| Download streaming through the API process                          | #34 — reads go to the trustless gateway                                                 |
-| Generated `api-client` packages and the `api:generate` codegen loop | #28 D5/D6 — one hand-written Rust client in the engine; contract enforced by live tests |
+| Gone                                                                | Removed by                                                                                                  |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| IPNS publish/resolve relay endpoints                                | FSM1/cipher-box-next#23 — clients fan out `/routing/v1` PUTs directly                                       |
+| Record serving from the DB                                          | FSM1/cipher-box-next#23/FSM1/cipher-box-next#24 — record cache is non-canonical, no client resolve path     |
+| `/shares`, `share_invites`                                          | FSM1/cipher-box-next#25 — grants live in metadata; discovery rides the mailbox                              |
+| People directory                                                    | FSM1/cipher-box-next#34 — never built; contact codes are self-authenticating                                |
+| All TEE endpoints, `tee_key_state`, connection-test                 | FSM1/cipher-box-next#24 — TEE dropped, designed-for re-signer seam only                                     |
+| Vault init/export endpoints, `vaults` table                         | FSM1/cipher-box-next#27 — bootstrap is the derived vault pointer; export is client-side                     |
+| `pin_migrations`                                                    | BYO re-pin is a client-side sweep over its own pin set                                                      |
+| Download streaming through the API process                          | FSM1/cipher-box-next#34 — reads go to the trustless gateway                                                 |
+| Generated `api-client` packages and the `api:generate` codegen loop | FSM1/cipher-box-next#28 D5/D6 — one hand-written Rust client in the engine; contract enforced by live tests |
 
 ## Identity and auth
 
 - Account = the Web3Auth-derived secp256k1 **identity key**; challenge-signature
-  login; SIWE wallet login stays as a secondary auth method (feature-set decision #5).
+  login; SIWE wallet login stays as a secondary auth method (feature-set decision FSM1/cipher-box-next#5).
 - Short-lived access JWT + rotating refresh token (HTTP-only cookie on web,
   OS keychain on desktop). Staging-gated test-login endpoint for e2e.
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
@@ -95,7 +95,7 @@ decay) inverted into structure.
   The old **scope-root** name stays registered, serving the owner-signed
   `movedTo` forwarding record, until the migration window closes — window
   length and closure signal are owned by
-  [rotation completeness (#38)](https://github.com/FSM1/cipher-box-next/issues/38)
+  [rotation completeness (FSM1/cipher-box-next#38)](https://github.com/FSM1/cipher-box-next/issues/38)
   — then retired. The API stays dumb: retire removes the caller's row; timing is
   client policy.
 
@@ -142,7 +142,7 @@ decay) inverted into structure.
 
 ## Republisher module and recovery
 
-Per the liveness design (#24), restated here as API surface:
+Per the liveness design (FSM1/cipher-box-next#24), restated here as API surface:
 
 - In-process, worker-shaped, cleanly extractable module. Walks distinct
   inventory names on a ~12 h cadence: resolve from the network, re-PUT the same
@@ -159,7 +159,7 @@ Per the liveness design (#24), restated here as API surface:
 Integrity-untrusted, swappable transport for one-shot sealed pointers
 (share pointers, write-rotation root re-points, invite claims, courtesy
 notifications). Nothing on it is load-bearing for safety: root migration has
-the `movedTo` record (#38), revocation is discovered in metadata.
+the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in metadata.
 
 - **Post**: any authenticated account → recipient identity pubkey; body is the
   HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. Posts to
@@ -168,7 +168,7 @@ the `movedTo` record (#38), revocation is discovered in metadata.
 - **Poll**: recipient-authenticated; returns `{id, receivedAt, blob}` — no
   sender metadata in the clear (the sealed payload is owner-signed inside).
   Clients poll on the sync design's 30 s cadence; no push in v2.0 (push-ready
-  seam per #33).
+  seam per FSM1/cipher-box-next#33).
 - **Ack**: delete by id. Retention: until acked, bounded — per-recipient
   pending cap (reject-new when full) and a 90-day unacked TTL aligned with
   record EOLs. Rate limits per sender account and per recipient mailbox.
@@ -178,7 +178,7 @@ the `movedTo` record (#38), revocation is discovered in metadata.
 ## Contact exchange — no directory
 
 There is **no people directory**. This supersedes the sharing design's
-directory component (#25) and resolves crypto-review finding F-6 structurally:
+directory component (FSM1/cipher-box-next#25) and resolves crypto-review finding F-6 structurally:
 
 - A **contact code** (QR / URL / pasted string) carries the self-authenticating
   bundle `{identityPk, encSubkey, bindingSig}` (~130 bytes). The engine verifies
@@ -204,7 +204,7 @@ directory component (#25) and resolves crypto-review finding F-6 structurally:
 
 ## Contract and clients
 
-Decomposition outcomes (#28 D5/D6), restated here as API surface:
+Decomposition outcomes (FSM1/cipher-box-next#28 D5/D6), restated here as API surface:
 
 - **The spec is server-owned.** The NestJS API keeps emitting its OpenAPI
   document from decorators, committed as a review/docs artifact. It is
@@ -247,9 +247,9 @@ correctness dependency.
 ## Open edges
 
 - `movedTo` migration-window length and closure signal (drives when the old
-  scope-root name is retired) → [#38](https://github.com/FSM1/cipher-box-next/issues/38).
+  scope-root name is retired) → [FSM1/cipher-box-next#38](https://github.com/FSM1/cipher-box-next/issues/38).
 - Module boundaries are fixed by
-  [#28](https://github.com/FSM1/cipher-box-next/issues/28) D3 (NestJS residual
+  [FSM1/cipher-box-next#28](https://github.com/FSM1/cipher-box-next/issues/28) D3 (NestJS residual
   surface + in-process, extractable republisher module); the gateway/someguy
   deployment shape →
-  [deployment blueprint (#48)](https://github.com/FSM1/cipher-box-next/issues/48).
+  [deployment blueprint (FSM1/cipher-box-next#48)](https://github.com/FSM1/cipher-box-next/issues/48).

@@ -11,7 +11,7 @@ and the seam contracts and facade law in
 [`blueprint/engine.md`](engine.md); the
 [feature set](https://github.com/FSM1/cipher-box-next/issues/5) keeps the FUSE
 mount as the primary desktop UX. This doc covers the two desktop-side units of
-the #28 D3 layout — `apps/desktop` (Tauri shell) and `crates/fuse` (FS core +
+the FSM1/cipher-box-next#28 D3 layout — `apps/desktop` (Tauri shell) and `crates/fuse` (FS core +
 host adapters). Where the engine blueprint already fixes behavior (adoption
 gate, sync core, rotation, grants, durability), this doc adds only the
 filesystem projection and native hosting around it, never a second copy of it.
@@ -31,22 +31,22 @@ for the local OS.
 
 What dies relative to v1 — with the design that killed it:
 
-| Gone                                                                                                          | Killed by                                                                                    |
-| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| The desktop twin engine (`crates/sdk` rotation/sync/queue) and its TS divergence table                        | #28 D1 — one Rust engine, linked natively                                                    |
-| Keys in the `InodeTable` (`InodeKind` read/write keys, IPNS seeds, `recipient_pins`)                          | engine facade — keys never cross it; the inode map is key-free                               |
-| mkdir+uploads-only journal, `Option<()>` durability placeholder, two durability classes                       | #33 D6 — every mutation rides the engine's durable op queue                                  |
-| `PublishCoordinator`, debounce queue, `mutated_folders`, `apply_owned_children` merge choreography            | #33 D6 — snapshot ⊕ pending-op overlay computed in the engine; the FS renders it             |
-| Scope-exit gate choreography in FUSE (`SentSharesCache`, pin refresh, mark-mutated, keys-after-gate ordering) | #26 D7 / engine.md — full-depth scope-exit detection and rotation are one engine transaction |
-| The freshness workaround stack: dir TTL 0, edge-triggered drains, the macOS publish-pump thread               | #32 — host adapters expose push invalidation, driven by the engine event stream              |
-| FUSE-T NFS backend and its kext-panic/no-invalidation flake class                                             | #32 — SMB backend unconditionally                                                            |
-| Whole-file 120 s content downloads before first byte                                                          | engine content plane — chunk-sealed DAG, ranged fetches                                      |
-| Per-op-type timeout zoo (3 s / 10 s / 120 s / 180 s `block_on` freezes)                                       | never-block law below — callbacks block on local durability only                             |
-| Duplicated operation logic per platform (`&mut self` fuser vs `Arc<Mutex>` WinFsp twin trees)                 | one FS operation core behind the host-adapter trait (#32)                                    |
-| TEE enrollment, device registry epochs, `tee_keys`                                                            | #24 D4 — TEE dropped                                                                         |
-| Plaintext temp write buffers on disk (`cb-write-*`)                                                           | sealed spill files under an ephemeral in-memory key (below)                                  |
-| Root-only 30 s `SyncDaemon` and its log-and-hope change detection                                             | #33 D2 — FUSE-op TTL checks drive the shared sync core                                       |
-| "No offline mode" — mount unresponsive without connectivity                                                   | #33 D6 — cache-first reads + durable op queue give full offline function                     |
+| Gone                                                                                                          | Killed by                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| The desktop twin engine (`crates/sdk` rotation/sync/queue) and its TS divergence table                        | FSM1/cipher-box-next#28 D1 — one Rust engine, linked natively                                                    |
+| Keys in the `InodeTable` (`InodeKind` read/write keys, IPNS seeds, `recipient_pins`)                          | engine facade — keys never cross it; the inode map is key-free                                                   |
+| mkdir+uploads-only journal, `Option<()>` durability placeholder, two durability classes                       | FSM1/cipher-box-next#33 D6 — every mutation rides the engine's durable op queue                                  |
+| `PublishCoordinator`, debounce queue, `mutated_folders`, `apply_owned_children` merge choreography            | FSM1/cipher-box-next#33 D6 — snapshot ⊕ pending-op overlay computed in the engine; the FS renders it             |
+| Scope-exit gate choreography in FUSE (`SentSharesCache`, pin refresh, mark-mutated, keys-after-gate ordering) | FSM1/cipher-box-next#26 D7 / engine.md — full-depth scope-exit detection and rotation are one engine transaction |
+| The freshness workaround stack: dir TTL 0, edge-triggered drains, the macOS publish-pump thread               | FSM1/cipher-box-next#32 — host adapters expose push invalidation, driven by the engine event stream              |
+| FUSE-T NFS backend and its kext-panic/no-invalidation flake class                                             | FSM1/cipher-box-next#32 — SMB backend unconditionally                                                            |
+| Whole-file 120 s content downloads before first byte                                                          | engine content plane — chunk-sealed DAG, ranged fetches                                                          |
+| Per-op-type timeout zoo (3 s / 10 s / 120 s / 180 s `block_on` freezes)                                       | never-block law below — callbacks block on local durability only                                                 |
+| Duplicated operation logic per platform (`&mut self` fuser vs `Arc<Mutex>` WinFsp twin trees)                 | one FS operation core behind the host-adapter trait (FSM1/cipher-box-next#32)                                    |
+| TEE enrollment, device registry epochs, `tee_keys`                                                            | FSM1/cipher-box-next#24 D4 — TEE dropped                                                                         |
+| Plaintext temp write buffers on disk (`cb-write-*`)                                                           | sealed spill files under an ephemeral in-memory key (below)                                                      |
+| Root-only 30 s `SyncDaemon` and its log-and-hope change detection                                             | FSM1/cipher-box-next#33 D2 — FUSE-op TTL checks drive the shared sync core                                       |
+| "No offline mode" — mount unresponsive without connectivity                                                   | FSM1/cipher-box-next#33 D6 — cache-first reads + durable op queue give full offline function                     |
 
 What is deliberately **kept** from v1: the fsync-barrier discipline and
 ciphertext-only-at-rest law of the write journal (generalized into the engine's
@@ -98,7 +98,7 @@ survives, but the secret goes straight to `start(secret)` and is zeroized).
 
 ## The FS core and host adapters
 
-Per the driver research (#32), the FS core's surface sits at the
+Per the driver research (FSM1/cipher-box-next#32), the FS core's surface sits at the
 **vfs-operation level, not the FUSE wire level**: one platform-neutral
 operation core (lookup, getattr, readdir, open/read/write/release, create,
 mkdir, unlink, rmdir, rename, statfs) implemented once, with a thin
@@ -123,20 +123,20 @@ The adapter trait carries, in each direction:
 
 |              | macOS                                                                                                                     | Linux                                                     | Windows                  | macOS successor                                                                                                           |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (#32)                                                     | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
+| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (FSM1/cipher-box-next#32)                                 | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
 | Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                                               |
 | Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
 
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
-regression). The hardware verification gates from #32 — SMB invalidation
+regression). The hardware verification gates from FSM1/cipher-box-next#32 — SMB invalidation
 round-trip, the v1 cross-client scenario, overwrite-rename atomicity, FUSE-T
 commercial license terms, an FSKit beta spike — are pre-build checks owned by
 the [testing strategy](https://github.com/FSM1/cipher-box-next/issues/47).
 
 ### Names and attributes
 
-- **Uniqueness is the engine's strict comparator** (#33 D5): NFC-normalized +
+- **Uniqueness is the engine's strict comparator** (FSM1/cipher-box-next#33 D5): NFC-normalized +
   case-folded, identical on every platform, names stored as-entered. Adapter
   lookup semantics stay platform-conventional (case-sensitive presentation on
   macOS/Linux, case-insensitive on Windows), but collision behavior is decided
@@ -147,7 +147,7 @@ the [testing strategy](https://github.com/FSM1/cipher-box-next/issues/47).
   (255 bytes, platform-reserved characters rejected at create) — v1 advertised
   `namelen=255` without enforcing it.
 - Inodes are allocated per mount session, stable across renames, keyed by the
-  engine's stable node id; `kind` comes from the child ref (#27 D7), so
+  engine's stable node id; `kind` comes from the child ref (FSM1/cipher-box-next#27 D7), so
   listings never flip type.
 
 ## Reads, writes, and the never-block law
@@ -155,7 +155,7 @@ the [testing strategy](https://github.com/FSM1/cipher-box-next/issues/47).
 **The law**: a kernel callback may block on **local durability** (op-queue
 fsync) and on **content-chunk fetches for uncached reads** — never on IPNS
 resolution, publish, rotation, or any API bookkeeping call. Cache-first
-resolution (#23 D5) plus the op queue (#33 D6) make everything else
+resolution (FSM1/cipher-box-next#23 D5) plus the op queue (FSM1/cipher-box-next#33 D6) make everything else
 asynchronous by construction; the v1 timeout zoo (3/10/120/180 s) has nothing
 left to bound. The FS core is async-native on Tokio with per-op cancellation;
 there is no `block_on` freeze of the whole mount behind one slow call.
@@ -164,7 +164,7 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   overlay already applied). Never a network wait: an uncached folder renders
   from last-known-good and reconciles in the background; a truly cold folder
   (no cache) returns once the first resolve lands, the one cold-start
-  exception (#33 D4).
+  exception (FSM1/cipher-box-next#33 D4).
 - **read** — the engine maps the range onto sealed chunks, serves cached
   chunks immediately, fetches missing ones (gateway accelerator → public
   fallback), CID-verifies, unseals, returns plaintext. First byte no longer
@@ -186,17 +186,17 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   is the engine's background pipeline.
 - **statfs** — quota from the engine's quota state (advisory for BYO).
   **Over-budget becomes honest**: the engine says which budget refused the write
-  (`OverBudgetCause`), so the offline staging budget running out (#33 D6
+  (`OverBudgetCause`), so the offline staging budget running out (FSM1/cipher-box-next#33 D6
   fail-fast) is `ENOSPC` and a hosted-quota refusal is `EDQUOT` — v1 returned
   neither, and collapsing both into "disk full" tells the user to free space on
   the wrong machine.
-- **Deletes** ride the engine's delete op; recycle-bin semantics (#5) are
+- **Deletes** ride the engine's delete op; recycle-bin semantics (FSM1/cipher-box-next#5) are
   vault-level engine behavior. The bin is not projected into the mount in
   v2.0; restore/purge live in the web UI and the tray's "Open CipherBox".
 
 ### Conflicts, dead letters, and rotation
 
-- A rebased op that loses a race follows the engine's per-op rules (#33 D5) —
+- A rebased op that loses a race follows the engine's per-op rules (FSM1/cipher-box-next#33 D5) —
   auto-suffixed add/add collisions and edit-wins deletes simply appear in the
   next snapshot; the FS core renders outcomes, it never merges.
 - **Dead-letters** (terminally unrebasable ops — e.g. access revoked while
@@ -206,7 +206,7 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   journal time — the dead-letter surface is the compensation channel).
 - **Scope-exit rotation** is invisible to the FS layer: a cross-scope `relink`
   or a delete from a granted scope triggers detection and rotation inside the
-  engine's op pipeline (#26 D7), as one transaction with the mutation. The
+  engine's op pipeline (FSM1/cipher-box-next#26 D7), as one transaction with the mutation. The
   refusal path (rotation impossible, fail-closed) rejects the **op at journal
   time** — the one mutation class where the ack waits on more than the fsync:
   the engine must accept the op before the kernel hears success. EIO with a
@@ -215,7 +215,7 @@ there is no `block_on` freeze of the whole mount behind one slow call.
 ## Freshness — the desktop trigger source
 
 Desktop drives the **same sync core** as web, from FUSE traffic instead of
-navigation (#33 D2):
+navigation (FSM1/cipher-box-next#33 D2):
 
 - Every lookup/readdir/getattr checks the target's snapshot age against the
   sync timing profile's staleness threshold; a stale hit fires a refresh hint
@@ -254,7 +254,7 @@ navigation (#33 D2):
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust
   violations and withheld-update escalations to a distinct warning state that
-  is never conflated with staleness (#33 D4). "Sync Now" is a manual-refresh
+  is never conflated with staleness (FSM1/cipher-box-next#33 D4). "Sync Now" is a manual-refresh
   facade command with nocache semantics.
 - **Lifecycle**: menu-bar app; mount failure never fails login (session stays
   up, tray shows the error); logout = facade logout (engine zeroizes),
@@ -277,7 +277,7 @@ The FS operation core is unit-testable without a kernel: the host-adapter
 trait means tests drive vfs operations directly against an engine with mock
 seams (the v1 Windows tree that "only CI can compile" shrinks to a thin
 adapter). Cross-platform e2e (mount, mutate, cross-client sync, offline
-replay, rotation-under-mount) and the #32 hardware gates are owned by the
+replay, rotation-under-mount) and the FSM1/cipher-box-next#32 hardware gates are owned by the
 [testing strategy](https://github.com/FSM1/cipher-box-next/issues/47);
 WinFsp CI remains authoritative for the Windows adapter, and dev-key mode is
 the headless harness entry.
@@ -309,5 +309,5 @@ the headless harness entry.
   cross-client measurements
   ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Designed-for, deliberately unbuilt**: FSKit adapter (above); desktop
-  embedded DHT behind RecordTransport (#23 D2); desktop PubSub push behind
-  RefreshHintSource (#33 D1).
+  embedded DHT behind RecordTransport (FSM1/cipher-box-next#23 D2); desktop PubSub push behind
+  RefreshHintSource (FSM1/cipher-box-next#33 D1).

@@ -8,7 +8,7 @@ Normative for the v2 build. Upstream inputs: the
 design, and the seam contracts and facade law in
 [`blueprint/engine.md`](engine.md); the
 [feature set](https://github.com/FSM1/cipher-box-next/issues/5) fixes what
-ships. This doc covers the three web-side units of the #28 D3 layout —
+ships. This doc covers the three web-side units of the FSM1/cipher-box-next#28 D3 layout —
 `crates/wasm`, `packages/client`, `apps/web`. Where the engine blueprint
 already fixes behavior (adoption gate, sync core, rotation, grants, API
 client), this doc adds only the browser hosting around it, never a second
@@ -23,24 +23,24 @@ and `apps/web` renders engine state and forwards intent. Every trust decision
 already happened below the facade (engine.md); the UI renders, it never
 decides. Key material exists only inside the engine worker's WASM memory —
 nothing key-shaped ever crosses the facade, structurally rather than by
-discipline. There is exactly **one engine instance per origin** (#28 D4): the
+discipline. There is exactly **one engine instance per origin** (FSM1/cipher-box-next#28 D4): the
 leader tab hosts it; every other tab is a thin mirror.
 
 What dies relative to v1 — with the design that killed it:
 
-| Gone                                                                                                                   | Killed by                                                                                                         |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Zustand `folderTree` mirror, the `children`/`rawChildren` two-plane split, sequence-clock store guards                 | #33 D6 — snapshot ⊕ pending-op overlay computed in the engine; the UI is a projection with no independent writers |
-| Three ad-hoc freshness legs (nav re-resolve, root-only 30 s poll, post-upload refresh) and the `forceResolve` foot-gun | engine sync core + event stream; the UI only emits refresh hints                                                  |
-| Web-side crypto: ShareDialog ECIES, invite key wrapping, the encrypt Web Worker, download decrypt in services          | #28 D1 — TS keeps no engine logic; grants live in metadata                                                        |
-| Generated `api-client` axios singleton, web-side token injection/refresh                                               | #28 D5 — the engine's hand-written API client owns the token lifecycle                                            |
-| Kind resolution maps (`isFileRefResolved`), kind-blind refs, folder-safe defaults                                      | #27 D7 — `kind` is an immutable field of the child ref                                                            |
-| `'root'` sentinel + `ipnsName` route params and store keys                                                             | #27 D9 + #26 D3 — names rotate; routes and identity key on the stable node id                                     |
-| Rotation driver, job checkpoints, badge state machine, Web Locks rotation lock                                         | #26 D8 — no job records; tab leadership subsumes the lock                                                         |
-| The per-depth shared-nav state machine and its manual key zeroization choreography                                     | keys never enter JS; shared scopes are ordinary snapshot state                                                    |
-| In-memory floor fallback + degraded-cache toast (v1 D-08)                                                              | #26 D4 / #39 D4 — FloorStore is required; the cold-seed floor law makes a wiped store staleness, not exposure     |
-| The decrypt Service Worker as a crypto layer, CTR streaming                                                            | chunk-sealed content gives native random access; the SW is demoted to a dumb byte pipe                            |
-| MiniSearch encrypted index, search palette                                                                             | #5 — client-side search deferred, designed-for                                                                    |
+| Gone                                                                                                                   | Killed by                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Zustand `folderTree` mirror, the `children`/`rawChildren` two-plane split, sequence-clock store guards                 | FSM1/cipher-box-next#33 D6 — snapshot ⊕ pending-op overlay computed in the engine; the UI is a projection with no independent writers                 |
+| Three ad-hoc freshness legs (nav re-resolve, root-only 30 s poll, post-upload refresh) and the `forceResolve` foot-gun | engine sync core + event stream; the UI only emits refresh hints                                                                                      |
+| Web-side crypto: ShareDialog ECIES, invite key wrapping, the encrypt Web Worker, download decrypt in services          | FSM1/cipher-box-next#28 D1 — TS keeps no engine logic; grants live in metadata                                                                        |
+| Generated `api-client` axios singleton, web-side token injection/refresh                                               | FSM1/cipher-box-next#28 D5 — the engine's hand-written API client owns the token lifecycle                                                            |
+| Kind resolution maps (`isFileRefResolved`), kind-blind refs, folder-safe defaults                                      | FSM1/cipher-box-next#27 D7 — `kind` is an immutable field of the child ref                                                                            |
+| `'root'` sentinel + `ipnsName` route params and store keys                                                             | FSM1/cipher-box-next#27 D9 + FSM1/cipher-box-next#26 D3 — names rotate; routes and identity key on the stable node id                                 |
+| Rotation driver, job checkpoints, badge state machine, Web Locks rotation lock                                         | FSM1/cipher-box-next#26 D8 — no job records; tab leadership subsumes the lock                                                                         |
+| The per-depth shared-nav state machine and its manual key zeroization choreography                                     | keys never enter JS; shared scopes are ordinary snapshot state                                                                                        |
+| In-memory floor fallback + degraded-cache toast (v1 D-08)                                                              | FSM1/cipher-box-next#26 D4 / FSM1/cipher-box-next#39 D4 — FloorStore is required; the cold-seed floor law makes a wiped store staleness, not exposure |
+| The decrypt Service Worker as a crypto layer, CTR streaming                                                            | chunk-sealed content gives native random access; the SW is demoted to a dumb byte pipe                                                                |
+| MiniSearch encrypted index, search palette                                                                             | FSM1/cipher-box-next#5 — client-side search deferred, designed-for                                                                                    |
 
 ## Component map
 
@@ -52,7 +52,7 @@ What dies relative to v1 — with the design that killed it:
   browser seam implementation (IndexedDB, OPFS, `fetch`), the login handoff,
   and the Service Worker brokerage. It wraps the facade, never extends it
   (engine.md facade law); it holds no vault semantics.
-- **`apps/web`** — React 18 + Vite SPA (#28 D7 — the repo's existing web
+- **`apps/web`** — React 18 + Vite SPA (FSM1/cipher-box-next#28 D7 — the repo's existing web
   toolchain, edited in place): routes, views, dialogs over facade state. No
   crypto, no seams, no tokens, no direct WASM imports — its only vault-facing
   dependency is `packages/client`.
@@ -82,7 +82,7 @@ What dies relative to v1 — with the design that killed it:
 ## Engine hosting and tab leadership
 
 One long-lived engine instance in a dedicated module worker, hosted by the
-**leader tab** (#28 D4). Leadership and failover (engineering judgment on the
+**leader tab** (FSM1/cipher-box-next#28 D4). Leadership and failover (engineering judgment on the
 mechanism; the invariant — one engine writer per origin — is D4's):
 
 - **Election**: every tab's `packages/client` requests an exclusive Web Lock
@@ -146,21 +146,21 @@ adds transport, never semantics.
 The web implementations of the engine's constructor seams (engine.md table),
 all living in `packages/client` and running inside the engine worker realm:
 
-| Seam                  | Web implementation                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **FloorStore**        | IndexedDB. Durable across logout by design. No in-memory fallback tier: an unavailable IndexedDB is an unsupported-browser hard error at login, not a degraded mode. Ephemeral storage (private windows) is safe: floors cold-seed from the re-point object's owner-vouched epochs (#39 D4), so a wiped store costs staleness, never a rolled-back revocation boundary |
-| **RecordTransport**   | `fetch` against the configured `/routing/v1` endpoint set (someguy + at least one public endpoint), each GET bounded by the caller's `maxBytes` and the whole request by a deadline — the set includes untrusted public endpoints                                                                                                                                      |
-| **Http**              | `fetch`, with `credentials` and the request deadline carried per request: `'include'` on the API origin so the HTTP-only refresh cookie rides it — which is why web's CredentialStore is a no-op — and `'omit'` everywhere else, so a gateway or BYO provider gets no ambient authority                                                                                |
-| **Mailbox**           | The engine's own API client over the Http seam — nothing web-specific                                                                                                                                                                                                                                                                                                  |
-| **RefreshHintSource** | UI navigation events forwarded through the facade, `visibilitychange` regain, `online` reconnect, cross-tab focus hints from follower tabs                                                                                                                                                                                                                             |
-| **Scheduler**         | Worker timers. Background throttling is tolerated: the 30 s tick and the ~hourly re-PUT job both survive coarse timers, and every wake-relevant transition already fires a refresh hint                                                                                                                                                                                |
-| **StagingStore**      | Op-queue rows in IndexedDB; staged upload bytes in OPFS (per-op files, sync access handles in the worker), behind the sync-timing-profile budget                                                                                                                                                                                                                       |
-| **SnapshotCache**     | IndexedDB, ciphertext-only at rest — cached records/metadata unseal in the engine on read; plaintext never lands in browser storage                                                                                                                                                                                                                                    |
-| **CredentialStore**   | No-op (see Http)                                                                                                                                                                                                                                                                                                                                                       |
+| Seam                  | Web implementation                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **FloorStore**        | IndexedDB. Durable across logout by design. No in-memory fallback tier: an unavailable IndexedDB is an unsupported-browser hard error at login, not a degraded mode. Ephemeral storage (private windows) is safe: floors cold-seed from the re-point object's owner-vouched epochs (FSM1/cipher-box-next#39 D4), so a wiped store costs staleness, never a rolled-back revocation boundary |
+| **RecordTransport**   | `fetch` against the configured `/routing/v1` endpoint set (someguy + at least one public endpoint), each GET bounded by the caller's `maxBytes` and the whole request by a deadline — the set includes untrusted public endpoints                                                                                                                                                          |
+| **Http**              | `fetch`, with `credentials` and the request deadline carried per request: `'include'` on the API origin so the HTTP-only refresh cookie rides it — which is why web's CredentialStore is a no-op — and `'omit'` everywhere else, so a gateway or BYO provider gets no ambient authority                                                                                                    |
+| **Mailbox**           | The engine's own API client over the Http seam — nothing web-specific                                                                                                                                                                                                                                                                                                                      |
+| **RefreshHintSource** | UI navigation events forwarded through the facade, `visibilitychange` regain, `online` reconnect, cross-tab focus hints from follower tabs                                                                                                                                                                                                                                                 |
+| **Scheduler**         | Worker timers. Background throttling is tolerated: the 30 s tick and the ~hourly re-PUT job both survive coarse timers, and every wake-relevant transition already fires a refresh hint                                                                                                                                                                                                    |
+| **StagingStore**      | Op-queue rows in IndexedDB; staged upload bytes in OPFS (per-op files, sync access handles in the worker), behind the sync-timing-profile budget                                                                                                                                                                                                                                           |
+| **SnapshotCache**     | IndexedDB, ciphertext-only at rest — cached records/metadata unseal in the engine on read; plaintext never lands in browser storage                                                                                                                                                                                                                                                        |
+| **CredentialStore**   | No-op (see Http)                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## UI state law
 
-- **Rendered state = the engine's word, verbatim** (#33 D6): the facade emits
+- **Rendered state = the engine's word, verbatim** (FSM1/cipher-box-next#33 D6): the facade emits
   snapshot updates with the pending-op overlay already applied plus per-node
   pending/dead-letter flags. The UI holds one mechanically derived
   subscription store (a `useSyncExternalStore` adapter over the event stream)
@@ -168,12 +168,12 @@ all living in `packages/client` and running inside the engine worker realm:
   second store to desync. UI-owned state (selection, dialogs, route) carries
   node ids only.
 - **Listings hydrate progressively**: name and kind render instantly from the
-  parent's child refs (#27 D7); size/mtime arrive as child resolves land in
+  parent's child refs (FSM1/cipher-box-next#27 D7); size/mtime arrive as child resolves land in
   the snapshot — no blocking resolution pass, no kind-flip UX.
 - **Routes key on the stable node id** — never `ipnsName` (names rotate under
   write rotation) and no `'root'` sentinel; the root is just the vault
   pointer's current root node.
-- **Staleness ladder rendering** (#33 D4): fresh → quiet reconciling
+- **Staleness ladder rendering** (FSM1/cipher-box-next#33 D4): fresh → quiet reconciling
   indicator → stale badge ("last synced X ago") → offline banner. Trust
   violations and withheld-update escalations render as a distinct warning
   class, never as staleness; dead-letters get a persistent, actionable
@@ -195,7 +195,7 @@ all living in `packages/client` and running inside the engine worker realm:
   transferred buffer, and zeroes its own copy. Everything derives in-engine
   via the KDF catalog: identity key, encryption subkey, pointer chain, vault
   entry.
-- **The engine owns the token lifecycle** (#28 D5): challenge-signature login
+- **The engine owns the token lifecycle** (FSM1/cipher-box-next#28 D5): challenge-signature login
   through its API client; access JWT in engine memory; refresh cookie rides
   the Http seam. SIWE stays secondary — wagmi collects the wallet signature
   on the UI thread and the facade forwards it (engine.md).
@@ -203,7 +203,7 @@ all living in `packages/client` and running inside the engine worker realm:
   cold-seed, root adoption (the engine's non-circular cold-start sequence) →
   first snapshot event. The UI shows exactly two cold-start states: an
   empty-cache "loading vault" and the trust-violation error class — cached
-  views otherwise render immediately (#33 D4).
+  views otherwise render immediately (FSM1/cipher-box-next#33 D4).
 - **Logout**: facade command — the engine zeroizes WASM state; the client
   tears down the worker and releases the leader lock. Floors, the op queue,
   staged bytes, and the ciphertext snapshot cache survive by design (durable
@@ -214,13 +214,13 @@ all living in `packages/client` and running inside the engine worker realm:
 - **Upload**: UI hands `File` handles to the facade (transfer or Blob-clone —
   never a byte copy through React state). The engine stages into the
   StagingStore, seals chunk-wise via core, uploads through the pin-provider
-  layer, and publishes — one journaled op regardless of online state (#33
+  layer, and publishes — one journaled op regardless of online state (FSM1/cipher-box-next#33
   D6). Per-file progress/error is event-stream state on the upload's op id;
   cancel is a facade command killing the op before publish.
 - **Download**: the engine fetches blocks (token-authed trustless gateway,
   public-gateway fallback), CID-verifies, unseals, and returns a `Blob`; the
   UI object-URLs it. Same path for previews.
-- **Streaming media — the SW is a dumb pipe** (the #28 D4 open point,
+- **Streaming media — the SW is a dumb pipe** (the FSM1/cipher-box-next#28 D4 open point,
   resolved): the media element requests an opaque `/stream/…` ticket URL; the
   Service Worker intercepts and forwards the Range to the engine worker over
   a `MessageChannel` port brokered at registration; the engine maps the range
@@ -234,7 +234,7 @@ all living in `packages/client` and running inside the engine worker realm:
   addresses. It reads neither end and keeps no state, so a killed worker costs a
   re-broker, never a channel already open.
 - **The same Service Worker precaches the app shell** (engineering judgment,
-  implied by #33 D6's full offline parity): a vault you can mutate offline is
+  implied by FSM1/cipher-box-next#33 D6's full offline parity): a vault you can mutate offline is
   a vault whose UI must boot offline. Cached snapshots + the op queue then
   give full offline function; the SW never caches vault data itself
   (ciphertext caching is the SnapshotCache's job).
@@ -246,7 +246,7 @@ all living in `packages/client` and running inside the engine worker realm:
 | `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                            |
 | `/files/:nodeId?` | Vault browser (absent id = current root)                                                                         |
 | `/shared`         | Received shares; browsing shared scopes is the same browser over the same snapshot                               |
-| `/bin`            | Recycle bin (kept per #5), restore/purge ops via facade                                                          |
+| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                      |
 | `/settings`       | Auth methods, MFA/devices (Core Kit UX), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export |
 | `/invite/:…`      | Invite claim — fragment secret handed to the facade unread                                                       |
 
@@ -277,7 +277,7 @@ belong to the
   engine's open edge (engine.md).
 - **PWA install surface** — the app-shell precache is decided; whether v2.0
   advertises installability (manifest, install prompt) is deployment
-  territory ([#48](https://github.com/FSM1/cipher-box-next/issues/48)).
+  territory ([FSM1/cipher-box-next#48](https://github.com/FSM1/cipher-box-next/issues/48)).
 - **Designed-for, deliberately unbuilt**: push overlay (API WebSocket hints)
-  behind RefreshHintSource (#33 D1); client-side search re-entry feeding an
-  index from the snapshot event stream (#5).
+  behind RefreshHintSource (FSM1/cipher-box-next#33 D1); client-side search re-entry feeding an
+  index from the snapshot event stream (FSM1/cipher-box-next#5).

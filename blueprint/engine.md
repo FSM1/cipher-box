@@ -11,9 +11,9 @@ Normative for the v2 build. Upstream inputs: the
 [rotation completeness](https://github.com/FSM1/cipher-box-next/issues/38), and
 [seal authentication](https://github.com/FSM1/cipher-box-next/issues/39) designs,
 scoped by the [component decomposition](https://github.com/FSM1/cipher-box-next/issues/28)
-(D1–D5). Where an earlier resolution was amended (#26 by #38/#39, #25's
-directory and canonical re-point channel by #34/#38, #23's per-host library
-picks by #28), the **amended** form is what appears below. The engine sits on
+(D1–D5). Where an earlier resolution was amended (FSM1/cipher-box-next#26 by FSM1/cipher-box-next#38/FSM1/cipher-box-next#39, FSM1/cipher-box-next#25's
+directory and canonical re-point channel by FSM1/cipher-box-next#34/FSM1/cipher-box-next#38, FSM1/cipher-box-next#23's per-host library
+picks by FSM1/cipher-box-next#28), the **amended** form is what appears below. The engine sits on
 [`blueprint/core.md`](core.md) — everything core owns (codecs, crypto suite,
 KDF catalog, record create/sign/verify, KATs) is referenced here, never
 re-specified.
@@ -24,29 +24,29 @@ re-specified.
 pure functions and a host surface — trust (the adoption gate and floors), state
 (snapshot cache, op queue, floors), scheduling, and side effects (publish, API
 traffic, mailbox) — implemented once in Rust, linked natively by the desktop
-app and loaded as a worker-hosted WASM instance on web (#28 D1/D4). TS keeps no
+app and loaded as a worker-hosted WASM instance on web (FSM1/cipher-box-next#28 D1/D4). TS keeps no
 engine logic. The engine owns IPNS end-to-end over dumb `/routing/v1`
-transports (#28 D2) and contains the single hand-written API client (#28 D5).
+transports (FSM1/cipher-box-next#28 D2) and contains the single hand-written API client (FSM1/cipher-box-next#28 D5).
 Hosts inject every capability as a constructor seam trait; a missing seam is a
-compile error, not a silent behavior gap (#26 D8).
+compile error, not a silent behavior gap (FSM1/cipher-box-next#26 D8).
 
 What dies relative to v1 — with the design that killed it:
 
-| Gone                                                                             | Killed by                                                    |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Twin TS/Rust engines (`sdk-core`/`sdk` + `crates/sdk`), 13 ungated resolve sites | #28 D1 — one Rust engine, both hosts                         |
-| `@helia/ipns` and per-host IPNS stack picks                                      | #28 D2 — core records + dumb transports                      |
-| Generated `api-client` packages, codegen loop                                    | #28 D5/D6 — one hand-written client, live contract tests     |
-| Optional floor injection (omit `rotationHighWater`, get nothing)                 | #26 D4 / #33 D7 — floors are a required constructor argument |
-| Rotation job records, checkpoints, recovery machinery                            | #26 D8 — published records are the sole source of truth      |
-| `nodeKeySource` and Gap-B host divergence in key sourcing                        | #26 D1/D3 — every key derived in-engine from seeds           |
-| Grant re-mint as a separate relay step (the Gap B/C class)                       | #25 D1 — grant re-seal rides the republish                   |
-| Republish enrollment side-car (`requiresReEnroll`, `'stale'` rows)               | #24 D6 — register-first on the publish path                  |
-| TEE enrollment client, key epochs, grace-window machinery                        | #24 D4 — TEE dropped, designed-for re-signer seam only       |
-| Two-plane store/tree state desync                                                | #33 D6 — snapshot ⊕ pending-op overlay, single owner         |
-| mkdir+uploads-only offline journal                                               | #33 D6 — every mutation rides the durable op queue           |
-| State-union merge and the delete-resurrection class                              | #33 D5 — op-rebase, uniformly                                |
-| Web one-level scope-exit coverage hole                                           | #26 D7 — full-depth detection, one implementation            |
+| Gone                                                                             | Killed by                                                                                            |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Twin TS/Rust engines (`sdk-core`/`sdk` + `crates/sdk`), 13 ungated resolve sites | FSM1/cipher-box-next#28 D1 — one Rust engine, both hosts                                             |
+| `@helia/ipns` and per-host IPNS stack picks                                      | FSM1/cipher-box-next#28 D2 — core records + dumb transports                                          |
+| Generated `api-client` packages, codegen loop                                    | FSM1/cipher-box-next#28 D5/D6 — one hand-written client, live contract tests                         |
+| Optional floor injection (omit `rotationHighWater`, get nothing)                 | FSM1/cipher-box-next#26 D4 / FSM1/cipher-box-next#33 D7 — floors are a required constructor argument |
+| Rotation job records, checkpoints, recovery machinery                            | FSM1/cipher-box-next#26 D8 — published records are the sole source of truth                          |
+| `nodeKeySource` and Gap-B host divergence in key sourcing                        | FSM1/cipher-box-next#26 D1/D3 — every key derived in-engine from seeds                               |
+| Grant re-mint as a separate relay step (the Gap B/C class)                       | FSM1/cipher-box-next#25 D1 — grant re-seal rides the republish                                       |
+| Republish enrollment side-car (`requiresReEnroll`, `'stale'` rows)               | FSM1/cipher-box-next#24 D6 — register-first on the publish path                                      |
+| TEE enrollment client, key epochs, grace-window machinery                        | FSM1/cipher-box-next#24 D4 — TEE dropped, designed-for re-signer seam only                           |
+| Two-plane store/tree state desync                                                | FSM1/cipher-box-next#33 D6 — snapshot ⊕ pending-op overlay, single owner                             |
+| mkdir+uploads-only offline journal                                               | FSM1/cipher-box-next#33 D6 — every mutation rides the durable op queue                               |
+| State-union merge and the delete-resurrection class                              | FSM1/cipher-box-next#33 D5 — op-rebase, uniformly                                                    |
+| Web one-level scope-exit coverage hole                                           | FSM1/cipher-box-next#26 D7 — full-depth detection, one implementation                                |
 
 ## Module map
 
@@ -67,8 +67,8 @@ Functional decomposition, not final file layout:
 ## Host seams
 
 The constructor takes the seam set whole; the six load-bearing seams are fixed
-by the decomposition (#28 D3) and the rotation design's mandatory-seam rule
-(#26 D8). Traits move opaque bytes and events — no seam holds logic.
+by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mandatory-seam rule
+(FSM1/cipher-box-next#26 D8). Traits move opaque bytes and events — no seam holds logic.
 
 | Seam                  | Contract                                                                                                  | Web (`packages/client`)                      | Desktop                       |
 | --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------- |
@@ -86,56 +86,56 @@ Notes:
 
 - The transport endpoint set is CipherBox someguy plus at least one independent
   public `/routing/v1` endpoint; nothing breaks if CipherBox infra vanishes
-  (#23 D1). A desktop embedded rust-libp2p kad backend is designed-for behind
-  `RecordTransport` (#23 D2). The `Mailbox` trait keeps a decentralized inbox
-  swappable behind the same abstraction (#25 D2).
+  (FSM1/cipher-box-next#23 D1). A desktop embedded rust-libp2p kad backend is designed-for behind
+  `RecordTransport` (FSM1/cipher-box-next#23 D2). The `Mailbox` trait keeps a decentralized inbox
+  swappable behind the same abstraction (FSM1/cipher-box-next#25 D2).
 - Entropy and timestamps are engine inputs to core's pure functions: the clock
   comes from `Scheduler`, entropy from per-target `getrandom` wiring (core.md).
 - `SnapshotCache` as a distinct seam, and the exact `CredentialStore` split,
-  are engineering judgment — implied by #33 D4's indefinitely-usable cached
-  views and #34's per-platform token storage, but not named by any resolution.
+  are engineering judgment — implied by FSM1/cipher-box-next#33 D4's indefinitely-usable cached
+  views and FSM1/cipher-box-next#34's per-platform token storage, but not named by any resolution.
 - There is deliberately **no** tab-leadership seam: the engine assumes it is
   the single writer. Leader election and the RPC facade belong to
-  `packages/client` (#28 D4); the engine's side of that contract is the facade
+  `packages/client` (FSM1/cipher-box-next#28 D4); the engine's side of that contract is the facade
   section below.
 
 ## Resolve/publish pipeline
 
 The engine owns IPNS end-to-end; core signs and verifies, transports move
-bytes (#28 D2).
+bytes (FSM1/cipher-box-next#28 D2).
 
 - **Resolve**: cache-first — the UI never blocks on network resolution;
   last-known-good renders immediately and resolves reconcile in the background
-  (#23 D5). Fan-out GET across the endpoint set, core record verify, then the
+  (FSM1/cipher-box-next#23 D5). Fan-out GET across the endpoint set, core record verify, then the
   adoption gate; only gate-passing records touch the snapshot. Cold-resolve
   tails (~11 s median, up to ~60 s) are tolerated as background reconciliation.
 - **Publish**: register-first, fail-closed — the API registration call
   precedes a name's first publish and publish blocks on it; ordinary writes
-  send single-item batches, name waves and sweeps send bulk (#34 D2). Core
+  send single-item batches, name waves and sweeps send bulk (FSM1/cipher-box-next#34 D2). Core
   signs (first publish embeds sequence 1; CAS publishes embed the exact
   expected sequence), then parallel PUT to all endpoints; success = any ack,
   remaining PUTs retry in the background; confirm by re-resolve; a lost race
-  re-resolves and rebases (#23 D3/D4).
+  re-resolves and rebases (FSM1/cipher-box-next#23 D3/D4).
 - **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
   (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
-  client-signed EOL; TTL and EOL are independent (#33 D3, #24 D1).
-- **Liveness — the engine's half of the two re-PUT layers** (#24 D2/D5): an
+  client-signed EOL; TTL and EOL are independent (FSM1/cipher-box-next#33 D3, FSM1/cipher-box-next#24 D1).
+- **Liveness — the engine's half of the two re-PUT layers** (FSM1/cipher-box-next#24 D2/D5): an
   ~hourly Scheduler job keyless-re-PUTs every record the session holds, so
   actively used vaults keep themselves alive; on session start and
   periodically, the engine checks the EOLs of names it holds keys for and
   below ~30 days remaining republishes the same CID at seq+1 through the
   normal CAS path. The API republisher (~12 h inventory walk) backstops
   dormant vaults only — no client depends on the background re-PUT loop, and
-  no client resolve path ever touches the API's record cache (#24 D3).
+  no client resolve path ever touches the API's record cache (FSM1/cipher-box-next#24 D3).
 - **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
   record with a fresh signature; lapse is an availability event, never loss
-  (#24 lapse semantics). The adoption gate therefore does **not** reject on
+  (FSM1/cipher-box-next#24 lapse semantics). The adoption gate therefore does **not** reject on
   EOL; the one carve-out is the vault settings resolve, whose reader is always
   its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
-  (#34 D4). Interior old names batch-retire at name-wave completion; the old
+  (FSM1/cipher-box-next#34 D4). Interior old names batch-retire at name-wave completion; the old
   scope-root name lingers serving the tombstone until the migration window
   closes (open edge below). An abandoned op retires the **whole** set its
   publish charged — the name it registered and every block it uploaded, root
@@ -154,18 +154,18 @@ bytes (#28 D2).
 
 ## Adoption gate and floors
 
-The gate runs on every resolve, no exceptions (#33 D7). Stage order composes
-the #33 pipeline with the #39 D3 seal-auth stage and the D4 floor law:
+The gate runs on every resolve, no exceptions (FSM1/cipher-box-next#33 D7). Stage order composes
+the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-auth stage and the D4 floor law:
 
 1. **Record verify** — core's full chain: Ed25519 pubkey from the name itself,
    `signatureV2`, data-field/Value consistency, EOL/sequence extraction.
 2. **Commitment verify** (scope roots) — the owner-signed grant-set commitment
-   against the contact-code-anchored owner identity (#34 D6, #39 D1).
+   against the contact-code-anchored owner identity (FSM1/cipher-box-next#34 D6, FSM1/cipher-box-next#39 D1).
 3. **Grant-section authentication** (scope roots) — every seed-bearing
    structure (grant blobs, owner blob, the optional owner-write-blob, ascent
    link, history links, write-body) verifies under **one** committed
    write-capable pseudonym via core's pure per-structure checks; any failure
-   rejects the **whole record** as a trust violation (#39 D3). The
+   rejects the **whole record** as a trust violation (FSM1/cipher-box-next#39 D3). The
    owner-write-blob is optional on the wire, but a **present** one with a
    missing or invalid structure signature is a whole-record trust violation,
    never staleness (its signature is recomputed at the authenticated envelope
@@ -204,21 +204,21 @@ avoid the product — a format change, not a relaxation of this rule.
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the
 rejected record. Duplicate `id`s and duplicate `ipnsName`s within a scope
-reject at decode in core (#39 D7); the gate surfaces them as trust violations.
+reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as trust violations.
 
-The **floor law** (#39 D4, superseding #26 D4's blob-seeded floors): floors
+The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point
 object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
 epoch field is an advisory routing hint. Additionally, a pointer `writeEpoch`
-above the durable floor advances it the moment it is seen (#38 D4) — from that
+above the durable floor advances it the moment it is seen (FSM1/cipher-box-next#38 D4) — from that
 instant every old-epoch record at the old name fails the gate. `FloorStore` is
 a required constructor argument, fail-closed on regression.
 
 **Cold start adopts nothing** until the floor store seeds from the
-owner-signed anchor. The sequence is non-circular by construction (#38 D3):
+owner-signed anchor. The sequence is non-circular by construction (FSM1/cipher-box-next#38 D3):
 own vault → scope/vault pointer (first act) → floors seeded → current root
 name → envelope grant blob → seeds → render. Residual, honestly scoped
-(#39 D4): a cold device can be shown a view missing at most grantee-triggered
+(FSM1/cipher-box-next#39 D4): a cold device can be shown a view missing at most grantee-triggered
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
@@ -333,26 +333,26 @@ degraded outcome applies a different policy rather than showing stale data.
 
 ## Sync core
 
-One model, two trigger sources (#33 D2): web drives it from navigation and the
+One model, two trigger sources (FSM1/cipher-box-next#33 D2): web drives it from navigation and the
 poll timer, desktop from FUSE-op TTL checks — the core is identical.
 
 - **State law**: rendered state = last-known-good remote snapshot ⊕
   pending-op overlay, single owner; the op queue is the only local divergence
-  (#33 D6). Every op but a delete authors its target's next record, so the
+  (FSM1/cipher-box-next#33 D6). Every op but a delete authors its target's next record, so the
   overlay stamps `mtime = authored_at` — overwriting the projected time, not
   filling it — and a content op also stamps its version's plaintext size,
   through the one function the drain's publish plan shares.
 - **Focus-window tick**, 30 s with jitter: refresh the vault pointer, the open
   folder, and its full ancestor chain to root; the scope-pointer resolves for
-  open shared scopes (#38 D4) and the mailbox poll (#34 D5) ride the same
+  open shared scopes (FSM1/cipher-box-next#38 D4) and the mailbox poll (FSM1/cipher-box-next#34 D5) ride the same
   tick. Immediate ticks on `RefreshHintSource` events. Any other cached folder
   refreshes on access past the staleness threshold — no background churn over
   the whole tree; cached shared scopes consult their scope pointer on access.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
   staleness thresholds, escalation window, and the pointer-consult interval
-  that bounds the read-only-survivor residual (#38 residuals). The profile is
+  that bounds the read-only-survivor residual (FSM1/cipher-box-next#38 residuals). The profile is
   the CI-DX hook — dev/CI values make cross-client e2e flows testable at speed
-  (#33 D3). It is a _named_ constant set, so measured per-device byte counts
+  (FSM1/cipher-box-next#33 D3). It is a _named_ constant set, so measured per-device byte counts
   live in the storage policy instead.
 - **Storage policy** (device-scoped): the staging budget and the read-cache
   ceiling, split from a headroom figure the host measures once and injects at
@@ -362,7 +362,7 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   over-budget rejection. A host that cannot measure headroom at all is a
   distinct state, not a measured zero: uploads are refused as _unmeasurable_
   rather than reported as a full device.
-- **Staleness ladder** (#33 D4): fresh → reconciling (quiet indicator) →
+- **Staleness ladder** (FSM1/cipher-box-next#33 D4): fresh → reconciling (quiet indicator) →
   stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
   Availability staleness keeps cached views usable indefinitely. Errors are
   exactly two things: trust violations and an empty-cache cold start. Manual
@@ -382,18 +382,18 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
-  is a scope-exit rotation trigger for the source (#26 D1/D7). A `move` is a
+  is a scope-exit rotation trigger for the source (FSM1/cipher-box-next#26 D1/D7). A `move` is a
   relink and a rename in one entry, optionally vacating the node already at the
   destination name — one POSIX rename is exactly one `move`, so the whole
   operation is journaled or none of it is. Replay is FIFO
   in performed order through the standard rebase, and rebases only onto
-  gate-passing state (#33 D5–D7).
+  gate-passing state (FSM1/cipher-box-next#33 D5–D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
-  (#33 D7); it also covers the network-suppression residual on the pointer
-  plane (#38 D2).
+  (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
+  plane (FSM1/cipher-box-next#38 D2).
 
-Per-op rebase rules (#33 D5):
+Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 
 | Race                        | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -406,13 +406,13 @@ Per-op rebase rules (#33 D5):
 
 Terminally unrebasable ops (e.g. access revoked while offline) **dead-letter**
 with a visible notice and staged bytes preserved; nothing is silently dropped
-(#33 D6). Web reaches full offline parity: uploads stage into OPFS/IndexedDB
+(FSM1/cipher-box-next#33 D6). Web reaches full offline parity: uploads stage into OPFS/IndexedDB
 behind the profile budget (past it, only new uploads fail fast; metadata ops
 queue unbounded).
 
 ## Rotation primitives
 
-Three primitives, no recovery machinery (#26 D8): no job records, no
+Three primitives, no recovery machinery (FSM1/cipher-box-next#26 D8): no job records, no
 checkpoints — published records are the sole source of truth. A pre-publish
 crash changed nothing durable; a post-publish crash recovers the override seed
 from the published root itself; a resumed name wave enumerates old names via
@@ -421,8 +421,8 @@ the write-plane history link.
 ### rotateScope
 
 Read-plane rotation: mint a random override seed at the scope root, republish
-the eager set, enqueue the sweep. The **eager set law** (#26 D2 as amended
-by #38 D5):
+the eager set, enqueue the sweep. The **eager set law** (FSM1/cipher-box-next#26 D2 as amended
+by FSM1/cipher-box-next#38 D5):
 
 - **Owner revocation rotations**: the rotated scope root plus **every
   transitively-reachable descendant scope root**, each **fully rotated** —
@@ -434,33 +434,33 @@ by #38 D5):
   old-seed holder is a live grantee who receives the new seed, so no cascade;
   the single root still republishes the full per-scope-root list — blobs
   re-wrapped for the committed set verbatim, ascent link re-sealed to its
-  public half, owner blob and history link refreshed (#26 D5, preserved by
-  #38 D5).
+  public half, owner blob and history link refreshed (FSM1/cipher-box-next#26 D5, preserved by
+  FSM1/cipher-box-next#38 D5).
 
-Enumeration walks the write-body's **direct-child-scope index** (#38 D6),
+Enumeration walks the write-body's **direct-child-scope index** (FSM1/cipher-box-next#38 D6),
 maintained by the ops that change scope parentage (grant, scope dissolution,
 cross-scope moves of a scope root) under the same dest-first + observed-repair
 semantics as any move. The rotator detached-signs every seed-bearing structure
-it re-seals with its writer pseudonym (#39 D2); a grantee re-wraps blobs for
-the committed tag set verbatim and can neither extend nor shrink it (#26 D5).
+it re-seals with its writer pseudonym (FSM1/cipher-box-next#39 D2); a grantee re-wraps blobs for
+the committed tag set verbatim and can neither extend nor shrink it (FSM1/cipher-box-next#26 D5).
 
 ### sweep
 
 Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
-descendant scope roots, which the cascade rotates eagerly (#26 D2,
+descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
 is behind its scope's current epoch. Runnable by any write-capable client;
 ordinary writes advance it for free. It also converges a subtree before a grant
 (the epoch-converged requirement) and self-heals the direct-child-scope index —
 a scope root encountered but missing from its parent's index is repaired and
-flagged (#38 D6), a walk-time repair that runs whether or not any node is being
+flagged (FSM1/cipher-box-next#38 D6), a walk-time repair that runs whether or not any node is being
 re-sealed. Only a name the walk resolved current may be written to an index: a
 below-floor root is classified and re-resolved first (below), so the repair can
 never persist the superseded name that caused it. Sweeps re-seal metadata only;
 content bytes are never re-encrypted
-by any rotation path (#26 D6). Scheduling is engineering judgment (#26 handed
-it to #33, which did not fix it): the sweep runs as an idle-cadence Scheduler
+by any rotation path (FSM1/cipher-box-next#26 D6). Scheduling is engineering judgment (FSM1/cipher-box-next#26 handed
+it to FSM1/cipher-box-next#33, which did not fix it): the sweep runs as an idle-cadence Scheduler
 job; idempotence plus CAS make concurrent sweepers safe — a lost race drops
 that node from the work-list on re-resolve.
 
@@ -469,7 +469,7 @@ never repaired. Rotations publish before they raise the floor, so the condition
 cannot mean the root lags — it means the record fetched is not the current one,
 typically a `directChildScopeIndex` entry naming a root a `rotateScopeWrite`
 has since moved. It resolves to a distinct _superseded_ verdict, handled by the
-pointer consult (#38 D4) and a re-resolve at `currentRootName`, failing closed
+pointer consult (FSM1/cipher-box-next#38 D4) and a re-resolve at `currentRootName`, failing closed
 if the fresh record is still below the floor. Admitting such a record would
 republish the scope's existing override seed at the current epoch — a
 revocation bypass, not a repair
@@ -479,7 +479,7 @@ revocation bypass, not a repair
 
 Owner-only write rotation: commitment re-sign, fresh write override seed, a
 background, parallel, **child-first name wave** republishing the subtree under
-freshly derived names, root re-pointed last (#26 D3). Surviving
+freshly derived names, root re-pointed last (FSM1/cipher-box-next#26 D3). Surviving
 write-grantees derive every new name locally — zero re-discovery; read-only
 survivors follow the owner-signed re-point object to the new root, then descend
 through **rewritten child refs**. A read-only grantee holds no `writeScopeSeed`
@@ -490,31 +490,31 @@ root and stop ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/deci
 The republish is therefore **not** byte-stable, and the wave touches read-plane
 _metadata_ while never re-keying it — the **read** override seed, read keys and
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves. The
-re-point publishes to three channels (#38 D3): the scope pointer record
+re-point publishes to three channels (FSM1/cipher-box-next#38 D3): the scope pointer record
 (canonical), the mailbox
 (accelerator, verifiable), and the old root name's final tombstone
-(accelerator, feeding #33's silent depth-guarded `movedTo` chase). Inventory
+(accelerator, feeding FSM1/cipher-box-next#33's silent depth-guarded `movedTo` chase). Inventory
 swap rides the normal paths: wave publishes enroll new names via
 register-first; interior old names batch-retire at completion; the old root
-lingers until the migration window closes (#34 D4).
+lingers until the migration window closes (FSM1/cipher-box-next#34 D4).
 
 ### Triggers
 
-Per #26 D7:
+Per FSM1/cipher-box-next#26 D7:
 
-| Trigger                                                                                                                                | Action                                                                                                                            |
-| -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                           |
-| Read revoke                                                                                                                            | Immediate revoking rekey: blob + ledger + commitment entry removed, `rotateScope` with the full cascade — one atomic owner action |
-| Write revoke / downgrade                                                                                                               | `rotateScopeWrite`; plus read rotation on full revoke                                                                             |
-| Discovered link expiry                                                                                                                 | Expiry is a ledger field; the next owner session observing it acts — no scheduler                                                 |
-| Manual hygiene rotate-now                                                                                                              | Per scope, same primitives                                                                                                        |
+| Trigger                                                                                                                                                    | Action                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                           |
+| Read revoke                                                                                                                                                | Immediate revoking rekey: blob + ledger + commitment entry removed, `rotateScope` with the full cascade — one atomic owner action |
+| Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                             |
+| Discovered link expiry                                                                                                                                     | Expiry is a ledger field; the next owner session observing it acts — no scheduler                                                 |
+| Manual hygiene rotate-now                                                                                                                                  | Per scope, same primitives                                                                                                        |
 
 Non-triggers: intra-scope rename/move, content writes, adding a grant to an
 existing scope root. Scheduled hygiene is deferred, designed-for — the same
 primitive on a timer.
 
-### Residuals (as amended by #38)
+### Residuals (as amended by FSM1/cipher-box-next#38)
 
 - Write-grantee survivors: the forgery window stays wave-bounded.
 - Read-only survivors: a revokee can pin their view for at most ~one
@@ -525,7 +525,7 @@ primitive on a timer.
 
 ## Pointer planes
 
-The three-plane model (#38 D1): owner plane (stable pointer names, owner-only
+The three-plane model (FSM1/cipher-box-next#38 D1): owner plane (stable pointer names, owner-only
 keys), write plane (rotating derived names), read plane (seeds). The engine
 publishes to the owner plane **only in owner sessions**.
 
@@ -535,11 +535,11 @@ publishes to the owner plane **only in owner sessions**.
 prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   grant blobs and persisted in each grantee's vault share list) — cold start
   is non-circular and public observers cannot link old↔new roots; revokee
-  readability is accepted (#38 D3, #39 D4). `writeEpoch` moves on owner-only
+  readability is accepted (FSM1/cipher-box-next#38 D3, FSM1/cipher-box-next#39 D4). `writeEpoch` moves on owner-only
   write rotation; `minReadEpoch` bumps only on owner-triggered read rotations,
   so grantee rotations need no owner signature and each plane's clock is
   authored by the authority that owns it.
-- **Consult discipline: polled, not fallback** (#38 D4). A revokee's forged
+- **Consult discipline: polled, not fallback** (FSM1/cipher-box-next#38 D4). A revokee's forged
   old-epoch records pass every other gate stage — valid old-key signature,
   fresh sequence, floor-level epoch, old-seed unseal — so staleness never
   fires and a fallback-only pointer is never consulted. Therefore the pointer
@@ -551,13 +551,13 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   highest known, adopt the highest index bearing a valid owner-signed payload,
   and stop at the first unresolvable index — which only the owner can extend;
   an owner-side index bump is the pointer-key-compromise recovery. Cost: one
-  extra resolve on cold start and per tick (#39 D5).
+  extra resolve on cold start and per tick (FSM1/cipher-box-next#39 D5).
 - Pointer names ride pin registration into the republisher inventory and get
-  the same 90-day EOL + lease renewal as every name (#24 as amended by #38).
+  the same 90-day EOL + lease renewal as every name (FSM1/cipher-box-next#24 as amended by FSM1/cipher-box-next#38).
 
 ## Grants and ledger
 
-Grants-in-metadata (#25 D1): key material lives in the published scope root —
+Grants-in-metadata (FSM1/cipher-box-next#25 D1): key material lives in the published scope root —
 grant blobs keyed by blinded tags, the authoritative ledger
 `(recipientIdentityPk, recipientEncPk, permission, tag)` in the write-body,
 and the epoch-free owner-signed grant-set commitment. The engine maintains all
@@ -565,11 +565,11 @@ three plus the per-(scope, writer) pseudonyms; re-mint does not exist as a
 separate step — every rekey re-seals surviving committed grants uniformly in
 the republish it already does.
 
-- **Authority** (#25 D7, #26 D5): sharing, revoking, and every commitment
+- **Authority** (FSM1/cipher-box-next#25 D7, FSM1/cipher-box-next#26 D5): sharing, revoking, and every commitment
   change are owner-only. Write-grantees write content and re-wrap blobs for
   committed tags during re-seals but cannot change the set — tags are
   name-bound, so read rotation leaves the commitment untouched.
-- **Contact import** (#34 D6): the engine verifies a contact code's binding
+- **Contact import** (FSM1/cipher-box-next#34 D6): the engine verifies a contact code's binding
   signature against the carried identity key at import — mandatory,
   fail-closed. Identity keys only ever arrive out-of-band; there is no
   directory. Fingerprint comparison stays optional host UX.
@@ -579,13 +579,13 @@ the republish it already does.
   over the subtree) → update the parent scope's direct-child-scope index →
   publish → post the sealed share pointer to the recipient's mailbox.
 - **Accept flow**: mailbox pointer (sender-signature verified inside the seal,
-  #39 D9) → resolve the name → gate (commitment verified against the
+  FSM1/cipher-box-next#39 D9) → resolve the name → gate (commitment verified against the
   contact-anchored owner identity) → self-locate the blob by blinded tag →
   unseal seeds → append `{name, sharerPub, displayName, permission}` to the
   sealed received-shares list in the recipient's own vault, persisting the
   `pointerReadKey`; the owner keeps a denormalized sent-index in theirs. Both
-  lists are self-healing bookmarks — the metadata is the authority (#25 D3).
-- **Revocation is discovered, not delivered** (#25 D3/D4): a fresh
+  lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
+- **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies
   revocation-signal vs unresolvable vs epoch-lag and surfaces the distinction
@@ -593,7 +593,7 @@ the republish it already does.
   "they keep what they saw; they lose everything new, now." Write
   revoke/downgrade = write rotation; old names are hijackable by the revokee
   and therefore dead to survivors — tombstones advisory only.
-- **Invites** (#25 D6): a grant blob wrapped to an ephemeral keypair, placed
+- **Invites** (FSM1/cipher-box-next#25 D6): a grant blob wrapped to an ephemeral keypair, placed
   in the envelope and ledger-tracked; the URL fragment carries the ephemeral
   private key and the owner's contact bundle. Links are honestly bearer and
   multi-claim; claim = a sealed, ephemeral-key-signed mailbox request the
@@ -603,10 +603,10 @@ the republish it already does.
   real via write rotation — which is why cheap, routinely-runnable write
   rotation is a hard requirement the primitives above satisfy — and the
   engine flags write links as bearer capabilities for host UI.
-- **Files are first-class grant targets** (#25 D5): envelope blobs +
+- **Files are first-class grant targets** (FSM1/cipher-box-next#25 D5): envelope blobs +
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
-- **Owner entry** (#39 D6): the own-vault **owner seed cache** — the
+- **Owner entry** (FSM1/cipher-box-next#39 D6): the own-vault **owner seed cache** — the
   last-confirmed `{seed, epoch}` per granted scope, refreshed on every
   confirmed owner read — is canonical; the grantee-maintained owner blob is an
   accelerator. Ancestor readers derive the expected ascent keypair from the
@@ -626,7 +626,7 @@ the republish it already does.
   (`reseal_scope_root`, so every root/interior write-scope cut, rotation, and
   cascade carries one) — the owner's recovery source for `write_name_signer`.
   The sweep authors none: it re-seals interior nodes, which publish no
-  write-body for a blob to sit beside (#27 D6). This slice authors and
+  write-body for a blob to sit beside (FSM1/cipher-box-next#27 D6). This slice authors and
   gate-verifies the blob; the owner read/consume that opens it into
   `HeldMaterial.write_scope_seed` rides a later facade slice.
 
@@ -635,9 +635,9 @@ the republish it already does.
 The mailbox carries discovery and courtesy traffic only — share pointers,
 write-rotation re-point accelerators, invite claims, courtesy notifications.
 Nothing on it is load-bearing for safety: root migration has the pointer
-plane, revocation is discovered in metadata (#34 D5, #38 D3).
+plane, revocation is discovered in metadata (FSM1/cipher-box-next#34 D5, FSM1/cipher-box-next#38 D3).
 
-- **Sender authentication** (#39 D9): every payload carries a sender-identity
+- **Sender authentication** (FSM1/cipher-box-next#39 D9): every payload carries a sender-identity
   signature inside the HPKE seal, verified against the contact-code-anchored
   key; unauthenticated items are dropped before a wasted resolve.
 - **Lifecycle**: post via the API client with a sender-supplied idempotency
@@ -654,29 +654,29 @@ plane, revocation is discovered in metadata (#34 D5, #38 D3).
 ## API client
 
 One hand-written Rust client, inside the engine, over the Http seam — shared
-by web and desktop; no generated clients anywhere (#28 D5). The NestJS API
+by web and desktop; no generated clients anywhere (FSM1/cipher-box-next#28 D5). The NestJS API
 keeps emitting its OpenAPI spec as a docs artifact; enforcement is the live
-contract-test suite owned by the testing-strategy blueprint (#28 D6).
+contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-next#28 D6).
 
 - **Token lifecycle** lives here; the web app never touches tokens.
   Challenge-signature login with the identity key is engine-native; SIWE stays
   a secondary method — the host supplies the wallet signature through the
   facade and the engine exchanges it (engineering judgment on the plumbing;
-  the method set is #34's). The short-lived access JWT is held in engine
+  the method set is FSM1/cipher-box-next#34's). The short-lived access JWT is held in engine
   memory; the rotating refresh token persists per platform via
-  `CredentialStore` (HTTP-only cookie on web, OS keychain on desktop, #34).
+  `CredentialStore` (HTTP-only cookie on web, OS keychain on desktop, FSM1/cipher-box-next#34).
   Refresh is single-flight with one retry-then-fail on 401 (judgment).
 - **Surface consumed** (mirrors api.md): auth/refresh (+ staging-only
   test-login), batch register `[{ipnsName, headCid?, contentCids[]}]` and
   batch retire, quota query (`advisory: true` for BYO), hosted upload, mailbox
   post/poll/ack, recovery fetch, the account BYO toggle, account hard-delete.
 - Register-first ordering is built into the publish pipeline, not left to
-  callers. Quota enforcement lives on the API upload endpoint (#34 D1); a
+  callers. Quota enforcement lives on the API upload endpoint (FSM1/cipher-box-next#34 D1); a
   pre-flight quota-query check to fail fast before bytes move is judgment.
 
 ## Content plane
 
-- **Pin-provider layer** (#34 D1): hosted (default), external (own
+- **Pin-provider layer** (FSM1/cipher-box-next#34 D1): hosted (default), external (own
   Kubo/PSA/Pinata endpoint), or dual — the engine decides where bytes go;
   every mode's publish flow still traverses registration. `ByoIpfsConfig`
   stays sealed in vault settings; provider connection testing is engine-side
@@ -697,7 +697,7 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
     placement refusal** — no leg would hold the block for the service to
     fetch, so the published record would name bytes that exist nowhere.
   - **Dual runs both legs, both retrying inside the op, and only hosted can
-    fail it** (#34 D1). Under strict-FIFO stop-at-first-failure a
+    fail it** (FSM1/cipher-box-next#34 D1). Under strict-FIFO stop-at-first-failure a
     both-must-succeed rule would let an offline home node stall every later
     mutation in the vault, so the op completes once hosted succeeds and
     external has either succeeded or exhausted its attempts. That budget is
@@ -768,11 +768,11 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
 - **Reads**: the token-authed trustless gateway is a member accelerator; any
   public trustless gateway is the no-auth fallback. The engine verifies CIDs
   client-side via core on every block/CAR response; media uses ranged fetches
-  (the service-worker decryption layer is web-blueprint territory) (#34 D7).
+  (the service-worker decryption layer is web-blueprint territory) (FSM1/cipher-box-next#34 D7).
 - **Chunking and retention** — owned here per core.md's hand-off, resolved as
   engineering judgment: the engine frames content into fixed-size chunks,
   seals each with core's content-seal primitive (fresh random per-version
-  content key, #26 D6), and assembles a DAG addressed by the version's
+  content key, FSM1/cipher-box-next#26 D6), and assembles a DAG addressed by the version's
   `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned.
   Retention default: keep all versions within quota, with an explicit
   user-initiated prune op. The framing is frozen (#820) and pinned by the
@@ -789,22 +789,22 @@ auth, manual refresh) and an event stream out (snapshot updates, staleness
 transitions, withheld-update escalations, dead-letters, attributable abuse
 events). Desktop calls it directly in the Tauri process; web wraps it via
 `crates/wasm` bindings inside a dedicated worker, with the RPC facade and tab
-leadership owned by `packages/client` (#28 D3/D4). The engine's contract is
+leadership owned by `packages/client` (FSM1/cipher-box-next#28 D3/D4). The engine's contract is
 only this: one live instance is the single writer, and every trust decision
 already happened below the facade — hosts render, they never decide.
 
 ## Open edges
 
 - **Migration-window closure** — how long the old scope-root name lingers
-  serving the tombstone before retire. #38 fixed the channel architecture but
+  serving the tombstone before retire. FSM1/cipher-box-next#38 fixed the channel architecture but
   not the window; proposed as a sync-timing-profile constant, to settle with
   the testing-strategy blueprint's e2e work.
 - **Sweep cadence** — the idle-cadence value joins the sync timing profile.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
-  WebSocket hints or desktop PubSub) behind `RefreshHintSource` (#33 D1);
-  desktop embedded DHT behind `RecordTransport` (#23 D2); decentralized inbox
-  behind `Mailbox` (#25 D2); the re-signer wrapped-key enrollment channel
-  (#24 D4); scheduled hygiene rotation (#26 D7).
+  WebSocket hints or desktop PubSub) behind `RefreshHintSource` (FSM1/cipher-box-next#33 D1);
+  desktop embedded DHT behind `RecordTransport` (FSM1/cipher-box-next#23 D2); decentralized inbox
+  behind `Mailbox` (FSM1/cipher-box-next#25 D2); the re-signer wrapped-key enrollment channel
+  (FSM1/cipher-box-next#24 D4); scheduled hygiene rotation (FSM1/cipher-box-next#26 D7).
 - **Worker packaging, RPC facade, tab leadership** →
   [web client blueprint](https://github.com/FSM1/cipher-box-next/issues/45);
   FUSE adapter over the facade → desktop blueprint; contract tests and the
