@@ -23,18 +23,18 @@ exports the pure checks the gate composes.
 
 What dies relative to v1 — with the design that killed it:
 
-| Gone                                                                      | Killed by                                                |
-| ------------------------------------------------------------------------- | -------------------------------------------------------- |
-| TS/Rust twin implementations, lockstep KATs, the 8-row divergence table   | #27 D2 — one Rust core, TS keeps no codec or crypto      |
-| JSON fixed-field-order determinism, base64 fields, decimal-string bigints | #27 D1 — deterministic CBOR everywhere                   |
-| AES-256-GCM/CTR suite, 45-byte AAD, role bytes                            | #27 D3/D4 — XChaCha20-Poly1305, structured AAD           |
-| eciesjs-default ECIES envelope (library-defined layout)                   | #27 D3 — RFC 9180 HPKE, spec-defined, full-envelope KATs |
-| Per-node `ipnsPrivateKey` storage + `reconstruct_write_body` recovery     | #26/#27 D6 — write plane fully derived                   |
-| `readKeySealed` child wraps, kind-blind child refs                        | #27 D7 — derivation + immutable `kind` in the ref        |
-| VaultKeyBlob v3, vault-init/export endpoints                              | #27 D9 — derived vault pointer + owner blob              |
-| `deny_unknown_fields` vs tolerant-decode contradiction                    | #27 D10 — tolerate + round-trip, one policy              |
-| Three validity parsers at two strictness levels across five packages      | #28 D2/D3 — one strict codec, exported from core         |
-| Content self-seal role `0x03` (built, vector-locked, dormant)             | not carried — no v2 analog                               |
+| Gone                                                                      | Killed by                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| TS/Rust twin implementations, lockstep KATs, the 8-row divergence table   | FSM1/cipher-box-next#27 D2 — one Rust core, TS keeps no codec or crypto        |
+| JSON fixed-field-order determinism, base64 fields, decimal-string bigints | FSM1/cipher-box-next#27 D1 — deterministic CBOR everywhere                     |
+| AES-256-GCM/CTR suite, 45-byte AAD, role bytes                            | FSM1/cipher-box-next#27 D3/D4 — XChaCha20-Poly1305, structured AAD             |
+| eciesjs-default ECIES envelope (library-defined layout)                   | FSM1/cipher-box-next#27 D3 — RFC 9180 HPKE, spec-defined, full-envelope KATs   |
+| Per-node `ipnsPrivateKey` storage + `reconstruct_write_body` recovery     | FSM1/cipher-box-next#26/FSM1/cipher-box-next#27 D6 — write plane fully derived |
+| `readKeySealed` child wraps, kind-blind child refs                        | FSM1/cipher-box-next#27 D7 — derivation + immutable `kind` in the ref          |
+| VaultKeyBlob v3, vault-init/export endpoints                              | FSM1/cipher-box-next#27 D9 — derived vault pointer + owner blob                |
+| `deny_unknown_fields` vs tolerant-decode contradiction                    | FSM1/cipher-box-next#27 D10 — tolerate + round-trip, one policy                |
+| Three validity parsers at two strictness levels across five packages      | FSM1/cipher-box-next#28 D2/D3 — one strict codec, exported from core           |
+| Content self-seal role `0x03` (built, vector-locked, dormant)             | not carried — no v2 analog                                                     |
 
 ## Module map
 
@@ -62,13 +62,13 @@ Functional decomposition, not final file layout:
   wrong major types reject fail-closed. The single tolerance is **unknown
   fields**: accepted, ignored for logic, preserved byte-stable, and re-emitted
   canonically on rewrite — an old client rewriting under shared write never
-  strips newer fields (#27 D10).
-- **Uniqueness fail-closed** (#39 D7): duplicate `id`s anywhere, and duplicate
+  strips newer fields (FSM1/cipher-box-next#27 D10).
+- **Uniqueness fail-closed** (FSM1/cipher-box-next#39 D7): duplicate `id`s anywhere, and duplicate
   `ipnsName`s within a scope, reject at decode.
 - **Versioning**: a single small-int `v` on the envelope covers format + crypto
   suite, bound into the AAD so downgrade fails the tag. Additive changes never
   bump it; any breaking change bumps and forces re-seal — expensive by design.
-  No body-level schema strings (#27 D5).
+  No body-level schema strings (FSM1/cipher-box-next#27 D5).
 
 ## Crypto suite
 
@@ -95,13 +95,13 @@ Functional decomposition, not final file layout:
 
 ## Envelope and structures
 
-Kind-uniform envelope (#27 D4): `{v, id, epochTag{scope, epoch}, readSealed,
+Kind-uniform envelope (FSM1/cipher-box-next#27 D4): `{v, id, epochTag{scope, epoch}, readSealed,
 writeSealed?, grantSection?}` — `kind` lives inside the sealed read-body, so
 observers cannot distinguish files from folders. Scope id = the scope root's
 node UUID.
 
 - **AAD** = `(v, id, scope, epoch, structTag)` under a fresh `cipherbox/v2`
-  domain separator. `ipnsName` is deliberately **not** in the AAD (#39 D7 —
+  domain separator. `ipnsName` is deliberately **not** in the AAD (FSM1/cipher-box-next#39 D7 —
   the name wave republishes epoch-lagged bodies under fresh names; transplant
   is closed by duplicate rejection instead).
 - **Read-body**: tagged union `folder {children[]}` | `file {versions[]}` plus
@@ -111,19 +111,19 @@ node UUID.
   re-wraps them via the metadata re-seal.
 - **Child refs**: `{id, name, ipnsName, kind, linkCounter}` — immutable fields
   plus the monotonic link counter that picks the deterministic loser in
-  dual-link repair (#33 D5). No key wraps, no size/mtime mirrors: child writes
+  dual-link repair (FSM1/cipher-box-next#33 D5). No key wraps, no size/mtime mirrors: child writes
   never republish the parent. The one exception is the write-plane name wave,
   which moves every child's `ipnsName` at once and so rewrites the parent's
   child refs, re-sealing its read body under its **unchanged** read key at its
   **unchanged** read epoch — a metadata rewrite, never a read rotation
   ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
   A node's own body still
-  moves names untouched, since `ipnsName` is not in the AAD (#39 D7).
-- **Write-body** (scope roots only, #27 D6): `{grant ledger, write-plane
+  moves names untouched, since `ipnsName` is not in the AAD (FSM1/cipher-box-next#39 D7).
+- **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
   child-scope index enumerates directly-descendant scope roots for the F-4
-  rotation cascade (#38 D6). Interior nodes publish no write-body at all.
+  rotation cascade (FSM1/cipher-box-next#38 D6). Interior nodes publish no write-body at all.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,
@@ -180,7 +180,7 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   authenticates it uniformly at `envelope.epoch`. The seed is never folded into
   the ascent link's shared override-seed payload (that would leak write
   capability to ancestor read-only readers).
-- **Structure signatures** (#39 D2/D3): the rotator's pseudonym Ed25519
+- **Structure signatures** (FSM1/cipher-box-next#39 D2/D3): the rotator's pseudonym Ed25519
   signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
 H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
   link, history links, and the write-body. Verification is per-structure and
@@ -188,8 +188,8 @@ H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer
-  carries the same object for the root scope (#39 D5). Mailbox payloads are
-  HPKE-sealed with a sender identity signature inside the seal (#39 D9), whose
+  carries the same object for the root scope (FSM1/cipher-box-next#39 D5). Mailbox payloads are
+  HPKE-sealed with a sender identity signature inside the seal (FSM1/cipher-box-next#39 D9), whose
   preimage binds the recipient key
   (`[domain, v, recipientEncPk, senderIdentityPk, payload]`) so a relayed item
   fails verification for any other recipient (#712); core owns their codecs and
@@ -259,7 +259,7 @@ open path would refuse is a version whose key is gone.
 
 ## KDF edge catalog
 
-Frozen per #39 D8 (F-9). Per-node material takes the shape
+Frozen per FSM1/cipher-box-next#39 D8 (F-9). Per-node material takes the shape
 `keyed_hash(key = derive_key("<edge context>", seed), message = id16)` — ids
 are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
@@ -289,15 +289,15 @@ override seeds (random at rotation), scope seeds at grant cuts (random).
 
 ## IPNS records
 
-Core owns records end-to-end on both platforms (#28 D2); transports are dumb
+Core owns records end-to-end on both platforms (FSM1/cipher-box-next#28 D2); transports are dumb
 byte movers injected by the engine.
 
 - **Create/sign**: spec-compliant V2 records (`signatureV2` over the CBOR data
   field; V1 fields emitted for ecosystem compatibility), `Value =
 /ipfs/<CID>` of the DAG-CBOR envelope. First publish embeds sequence 1; CAS
   publishes embed the exact expected sequence. Validity = 90-day client-signed
-  EOL (#24); TTL always explicitly set, value injected from the sync timing
-  profile (#33 D3) — core never defaults it.
+  EOL (FSM1/cipher-box-next#24); TTL always explicitly set, value injected from the sync timing
+  profile (FSM1/cipher-box-next#33 D3) — core never defaults it.
 - **Verify**: the full chain, pure — Ed25519 pubkey extracted from the name
   itself (identity multihash; never a side channel or DB column), `signatureV2`
   verify, data-field/Value consistency, EOL and sequence extraction for the
@@ -317,7 +317,7 @@ byte movers injected by the engine.
 
 ## KAT regime
 
-Single-implementation scope (#27 D2): KATs no longer defend cross-language
+Single-implementation scope (FSM1/cipher-box-next#27 D2): KATs no longer defend cross-language
 parity — they defend the **frozen contract** against future drift (refactors,
 dependency majors, WASM-target divergence) and pin the acceptance domain.
 
