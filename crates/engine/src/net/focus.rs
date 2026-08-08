@@ -39,6 +39,26 @@ impl FolderRefreshReport {
     }
 }
 
+/// What a folder's gate rejection costs the pass, or `None` when it costs it
+/// nothing.
+///
+/// A folder the lazy wave has not swept yet is epoch-lagged (CONTEXT.md): the
+/// plane answered and the gate did its job, and only the sweep re-seals it —
+/// which is why the sweep alone reads below the epoch stage
+/// ([`Strictness::AtOrAboveFloor`](crate::gate::floor::Strictness)). Failing the
+/// pass on it would report a *retryable* verdict for a state no retry clears,
+/// and would fire on every refresh a user makes while a wave is in flight. It is
+/// not abuse either, so nobody is accused. Every other rejection is attributable
+/// and fail-closed.
+fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
+    match reason {
+        RejectionReason::EpochBelowFloor { .. } => None,
+        RejectionReason::Trust(_) | RejectionReason::SequenceNotNewer { .. } => {
+            Some(RefreshVerdict::Rejected)
+        }
+    }
+}
+
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
 /// seed is borrowed and never zeroized here.
@@ -113,14 +133,9 @@ where
                     continue;
                 }
                 Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
-                    // A folder the lazy wave has not swept yet is epoch-lagged
-                    // (CONTEXT.md): sweep-pending staleness, not abuse. Every
-                    // other rejection here is an attributable one.
-                    if matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) {
-                        report.fold(RefreshVerdict::Unreachable);
-                    } else {
+                    if let Some(verdict) = rejection_verdict(&rejection.reason) {
                         emit_trust_violation(self.events, name.as_str(), rejection);
-                        report.fold(RefreshVerdict::Rejected);
+                        report.fold(verdict);
                     }
                     continue;
                 }
@@ -162,5 +177,27 @@ where
             return None;
         }
         IpnsName::parse(core::str::from_utf8(meta.ipns_name.as_deref()?).ok()?).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_epoch_lagged_folder_costs_the_pass_nothing() {
+        assert_eq!(
+            rejection_verdict(&RejectionReason::EpochBelowFloor { floor: 5, epoch: 4 }),
+            None,
+            "the sweep clears epoch lag; no retry of this pass can, so it fails nothing"
+        );
+        assert_eq!(
+            rejection_verdict(&RejectionReason::SequenceNotNewer {
+                floor: 5,
+                sequence: 4,
+            }),
+            Some(RefreshVerdict::Rejected),
+            "a replay is attributable and fail-closed"
+        );
     }
 }
