@@ -61,6 +61,7 @@ class Web3AuthSession implements CoreKitSession {
       // device approval are not built yet, so fail rather than half-log-in, and
       // end the partial session rather than leave it resident on the device.
       await this.coreKit.logout().catch(() => undefined);
+      this.clearStore();
       throw new Error('this device needs approval or a recovery phrase before it can sign in');
     }
     await this.coreKit.commitChanges();
@@ -78,11 +79,17 @@ class Web3AuthSession implements CoreKitSession {
     try {
       if (this.isLoggedIn()) await this.coreKit.logout();
     } finally {
-      // The SDK's own logout blanks its session id in place and leaves the rest
-      // of its store standing — a device factor share among it, once MFA is
-      // reachable. A refused logout must not leave that behind either.
-      this.store.removeItem(this.coreKit._storageKey);
+      this.clearStore();
     }
+  }
+
+  /**
+   * The SDK's own logout blanks its session id in place and leaves the rest of
+   * its store standing — a device factor share among it, once MFA is reachable.
+   * So every path that ends a session, refused or partial, clears it here.
+   */
+  private clearStore(): void {
+    this.store.removeItem(this.coreKit._storageKey);
   }
 
   _UNSAFE_exportTssKey(): Promise<string> {
