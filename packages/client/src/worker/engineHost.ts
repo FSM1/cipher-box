@@ -115,7 +115,6 @@ export class EngineHost implements EngineHostLike {
     await this.handle.command(buildCommand(this.wasm, command));
   }
 
-  // `async` here and below: a refused field rejects, never throws synchronously.
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
     const reserved = count(size, 'size');
     const fields = record(target, 'target');

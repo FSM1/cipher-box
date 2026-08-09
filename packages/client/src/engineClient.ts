@@ -188,8 +188,7 @@ export class EngineClient implements EngineTransport {
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
     const inner = this.writes.resolve(handle);
     if (inner === undefined) {
-      // Refused before any transfer, so this seam is the plaintext's terminal
-      // owner (security rule 7), exactly as `start` is for a secret it declines.
+      // Refused before any transfer: this seam is the chunk's terminal owner.
       new Uint8Array(chunk).fill(0);
       return Promise.reject(unknownHandle('write'));
     }

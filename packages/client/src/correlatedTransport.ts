@@ -79,7 +79,7 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
  * (AGENTS.md 7). A transferred buffer reads as empty, so a send that did run
  * leaves this a no-op.
  */
-function wipeCarried(transfer: Transferable[] | undefined): void {
+function wipeTransfer(transfer: Transferable[] | undefined): void {
   for (const item of transfer ?? []) {
     if (item instanceof ArrayBuffer && item.byteLength > 0) new Uint8Array(item).fill(0);
   }
@@ -140,7 +140,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
    * for a plain ack).
    *
    * `transfer` is what the send would have moved out of this realm; every route
-   * to a rejection without it scrubs them ([`wipeCarried`]).
+   * to a rejection without it scrubs them ([`wipeTransfer`]).
    */
   protected request<T, G = void>(
     readyGate: Promise<G>,
@@ -148,14 +148,14 @@ export abstract class CorrelatedTransport implements EngineTransport {
     transfer?: Transferable[]
   ): Promise<T> {
     if (this.terminalError) {
-      wipeCarried(transfer);
+      wipeTransfer(transfer);
       return Promise.reject(this.terminalError);
     }
     return readyGate.then(
       (gate) =>
         new Promise<T>((resolve, reject) => {
           if (this.terminalError) {
-            wipeCarried(transfer);
+            wipeTransfer(transfer);
             reject(this.terminalError);
             return;
           }
@@ -165,12 +165,12 @@ export abstract class CorrelatedTransport implements EngineTransport {
             send(id, gate);
           } catch (error) {
             this.pending.delete(id);
-            wipeCarried(transfer);
+            wipeTransfer(transfer);
             reject(error instanceof Error ? error : new Error(String(error)));
           }
         }),
       (error: unknown) => {
-        wipeCarried(transfer);
+        wipeTransfer(transfer);
         throw error;
       }
     );

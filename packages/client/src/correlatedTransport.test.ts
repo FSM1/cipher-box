@@ -101,8 +101,7 @@ describe('CorrelatedTransport chunk ownership', () => {
     await Promise.resolve();
     probe.answer(sent[0]);
 
-    // A real send transfers the buffer; wiping one that left is at best a no-op
-    // and at worst zeroes the bytes the receiver is about to seal.
+    // Wiping a sent chunk would zero the bytes the receiver is about to seal.
     await expect(pushed).resolves.toBeUndefined();
     expect(chunk).toEqual(plaintext());
   });

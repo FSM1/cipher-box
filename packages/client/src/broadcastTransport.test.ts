@@ -195,8 +195,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
     relayOn(bus, new FakeEngineTransport(), ports.courier('leader'));
-    // No port to move the plaintext out over, so this tab stays its terminal
-    // owner: a follower that cannot reach the leader keeps no readable chunk.
+    // No port to move the plaintext out over, so this tab stays its owner.
     const follower = followerOn(bus, 'follower-1', unavailableCourier);
     const plaintext = Uint8Array.of(4, 3, 2, 1);
 

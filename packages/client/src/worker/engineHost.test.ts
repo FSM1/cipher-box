@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fakeWasmEnums } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import type { WriteTarget } from './protocol.js';
@@ -43,6 +44,17 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
   return { wasm, constructed };
 }
 
+const emptyView = {
+  root: new Uint8Array(16),
+  folder: new Uint8Array(16),
+  folderName: '',
+  children: [],
+  ancestors: [],
+  deadLetters: [],
+  retainedRecords: 0,
+  staleness: fakeWasmEnums.Staleness.Fresh,
+};
+
 /**
  * A host over a wasm whose every call succeeds and records its arguments, so
  * only the host's own field checks can refuse a request.
@@ -50,15 +62,16 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
 function permissiveHost(): { host: EngineHost; calls: unknown[][] } {
   const calls: unknown[][] = [];
   const record =
-    (name: string) =>
+    (name: string, result: unknown = new Uint8Array(0)) =>
     (...args: unknown[]): Promise<unknown> => {
       calls.push([name, ...args]);
-      return Promise.resolve(new Uint8Array(0));
+      return Promise.resolve(result);
     };
   const wasm = {
+    ...fakeWasmEnums,
     EngineHandle: class {
       beginWrite = record('beginWrite');
-      snapshot = record('snapshot');
+      snapshot = record('snapshot', emptyView);
       download = record('download');
       openContentStream = record('openContentStream');
       readStream = record('readStream');
@@ -157,13 +170,7 @@ describe('EngineHost', () => {
   });
 });
 
-/**
- * Request fields arrive off a worker message, so a version-skewed sender can
- * carry a wrong-typed one. The WASM ABI coerces rather than refuses — a
- * 16-character string sets into a `Vec<u8>` as sixteen zero bytes, a string or
- * `NaN` ToInt32s into an offset — turning a malformed request into a valid one
- * against the wrong node or window.
- */
+/** Untrusted request fields, refused rather than coerced (`invalidField`). */
 describe('EngineHost request fields', () => {
   const node = new Uint8Array(16).fill(3);
 
@@ -204,13 +211,20 @@ describe('EngineHost request fields', () => {
     expect(calls).toEqual([]);
   });
 
+  it('lists the vault root for the one folder that is not bytes', async () => {
+    const { host, calls } = permissiveHost();
+
+    await host.snapshot(null);
+
+    expect(calls).toEqual([['snapshot', undefined]]);
+  });
+
   it('refuses a snapshot of a folder that is not bytes', async () => {
     const { host, calls } = permissiveHost();
 
     await expect(host.snapshot('root' as unknown as Uint8Array)).rejects.toThrow(
       'invalid request field folder: string'
     );
-    // `null` is the vault root, the one non-`Uint8Array` folder the wire allows.
     await expect(host.snapshot(undefined as unknown as Uint8Array)).rejects.toThrow(
       'invalid request field folder: undefined'
     );
