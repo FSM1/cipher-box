@@ -78,10 +78,6 @@ impl From<EngineError> for VfsError {
             error @ EngineError::TooManyStreams => VfsError::Unavailable {
                 message: error.to_string(),
             },
-            // Availability by construction: a fail-closed refusal to mint is
-            // classified `TrustViolation` upstream, so what reaches here is a
-            // stall a fresh `start` can clear.
-            EngineError::Provision { message } => VfsError::Unavailable { message },
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
             },

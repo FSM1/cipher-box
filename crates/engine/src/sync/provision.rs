@@ -866,6 +866,40 @@ mod tests {
         assert!(publisher.effects.borrow().is_empty(), "nothing published");
     }
 
+    /// Rule 6 on the axis the host sees: `Event::VaultUnprovisioned` carries this
+    /// flag, and it is the only thing telling a host whether trying again can
+    /// help. A refusal reported as retryable spins forever; a stall reported as
+    /// a refusal strands an account that one reconnect would have provisioned.
+    #[test]
+    fn only_stalls_are_reported_retryable() {
+        for refusal in [
+            ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished),
+            ProvisionError::FloorRegression(FloorRegression::WriteEpoch {
+                floor: 9,
+                vouched: GENESIS_EPOCH,
+            }),
+            ProvisionError::Publish {
+                stage: "root-record",
+                error: WritePublishError::Rejected,
+            },
+        ] {
+            assert!(
+                !refusal.is_retryable(),
+                "{refusal} is reached again by a retry"
+            );
+        }
+        for stall in [
+            ProvisionError::NotAFirstRun(VaultPointerProbe::Indeterminate),
+            ProvisionError::Publish {
+                stage: "vault-pointer",
+                error: WritePublishError::NotLanded,
+            },
+            ProvisionError::Entropy(EntropyError::new("seam down")),
+        ] {
+            assert!(stall.is_retryable(), "{stall} is an outage, not a verdict");
+        }
+    }
+
     /// A seam that reports success having written nothing would hand this account
     /// a world-known root secret, published before anything read it back.
     #[test]

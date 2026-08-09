@@ -479,7 +479,6 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",
         EngineError::ColdStart { .. } => "coldStart",
-        EngineError::Provision { .. } => "provision",
     };
     let js = js_sys::Error::new(&error.to_string());
     // Setting a plain property on a fresh `Error` cannot fail.

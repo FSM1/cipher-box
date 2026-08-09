@@ -644,6 +644,17 @@ pub enum Event {
         /// Human-readable classification (no key material).
         detail: String,
     },
+    /// This account has no vault yet and minting one did not land, so the write
+    /// path stays dark until a later `start` provisions it. Surfaced, never
+    /// silent (blueprint/engine.md "never a silent failure"): reads still paint
+    /// and ops still queue, but nothing will publish.
+    VaultUnprovisioned {
+        /// Whether a fresh `start` could clear this — an availability stall —
+        /// versus a fail-closed refusal to mint, which a retry reaches again.
+        retryable: bool,
+        /// Key-material-free classification of what stopped the mint.
+        detail: String,
+    },
     /// Progress of a content-plane transfer for one node: the driving op (if
     /// any), the phase reached, how far the transfer has got, and the failure
     /// classification on a failed phase.
@@ -859,16 +870,6 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
-    /// First-run vault provisioning stalled, so the account still has no vault
-    /// pointer and `start` returns before any loop spawns. Availability only —
-    /// a fail-closed refusal to mint surfaces as
-    /// [`TrustViolation`](EngineError::TrustViolation) instead. A fresh `start`
-    /// provisions again; `sync/provision.rs` says what a failure can leave on
-    /// the network. The message carries the failing stage, never key material.
-    Provision {
-        /// Diagnostic message; never carries key material.
-        message: String,
-    },
 }
 
 impl EngineError {
@@ -914,25 +915,6 @@ impl EngineError {
             ColdStartError::NotStarted => EngineError::NotStarted,
             trust => EngineError::ColdStart {
                 message: trust.to_string(),
-            },
-        }
-    }
-
-    /// Map a provisioning failure on rule 6's axis: the two host-seam arms keep
-    /// their own classification, a fail-closed verdict on the vault this run was
-    /// about to mint is a [`TrustViolation`](EngineError::TrustViolation) — a
-    /// retry reaches it again, so no surface may offer it as availability — and
-    /// only a stall a fresh `start` could clear is
-    /// [`Provision`](EngineError::Provision).
-    fn from_provision(err: ProvisionError) -> Self {
-        match err {
-            ProvisionError::Seam(seam) => EngineError::from_seam(seam),
-            ProvisionError::Entropy(e) => EngineError::from_entropy(e),
-            refusal if !refusal.is_retryable() => EngineError::TrustViolation {
-                message: refusal.to_string(),
-            },
-            stall => EngineError::Provision {
-                message: stall.to_string(),
             },
         }
     }
@@ -1033,9 +1015,6 @@ impl fmt::Display for EngineError {
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
             EngineError::ColdStart { message } => write!(f, "cold-start failed: {message}"),
-            EngineError::Provision { message } => {
-                write!(f, "first-run vault provisioning did not land: {message}")
-            }
         }
     }
 }
@@ -1825,10 +1804,17 @@ impl<T: SeamTypes> Engine<T> {
             if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
                 match self.provision_first_run_vault(&api, root_scope_id).await {
                     Ok(provisioned) => Some(provisioned),
+                    // Non-fatal, on the same terms as the empty chain this ran
+                    // for: cold start already paints an unprovisioned vault and
+                    // queues ops against it, so a mint that did not land leaves
+                    // the engine exactly where `main` left it — minus the
+                    // silence.
                     Err(err) => {
-                        self.session = None;
-                        *self.placement.borrow_mut() = None;
-                        return Err(EngineError::from_provision(err));
+                        let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
+                            retryable: err.is_retryable(),
+                            detail: err.to_string(),
+                        });
+                        None
                     }
                 }
             } else {
@@ -1902,6 +1888,16 @@ impl<T: SeamTypes> Engine<T> {
         self.api = Some(api);
         self.started = true;
         Ok(())
+    }
+
+    /// Whether this session holds the root scope's write seed — the material a
+    /// publish needs. `false` means the vault is unprovisioned (or held
+    /// keyless): reads paint and ops queue, but nothing will publish until a
+    /// later `start` mints it. The event stream announces the transition
+    /// ([`Event::VaultUnprovisioned`]); this answers a host that attached after.
+    pub fn is_provisioned(&self) -> bool {
+        let root = self.snapshot.borrow().root.0;
+        self.scope_write_seeds.borrow().contains_key(&root)
     }
 
     /// The live session identity, once [`start`](Self::start) has derived it.
@@ -3627,6 +3623,10 @@ mod tests {
     use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
+    /// Shaped as the API issues one; the engine signs nothing else.
+    const LOGIN_CHALLENGE_FIXTURE: &str =
+        "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     /// A JSON HTTP response the scripted client decodes as a Nest body.
     fn json_response(status: u16, body: Value) -> HttpResponse {
         HttpResponse {
@@ -3707,48 +3707,49 @@ mod tests {
         engine
     }
 
-    /// Rule 6 across the provisioning boundary: a refusal to mint must not reach
-    /// a host as availability, and a stall must not reach one as a trust verdict
-    /// — the surfaces below the facade branch on exactly this.
+    /// A mint that did not land must not cost the host its engine. Cold start
+    /// already paints an unprovisioned vault and queues ops against it, so a
+    /// failed provision leaves exactly that state — a fresh account on a flaky
+    /// network still opens the app, still reads, still queues — and says so
+    /// rather than failing silently.
     #[test]
-    fn a_provisioning_refusal_is_a_trust_violation_and_a_stall_is_not() {
-        use crate::rotation::WritePublishError;
-        use crate::sync::provision::VaultPointerProbe;
+    fn a_failed_provision_still_starts_the_engine_and_reports_itself() {
+        let (mut engine, mut events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+        // The vacancy probe answers, so the mint proceeds — and then the
+        // head-block upload has no route, exactly as an unreachable API leaves it.
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
 
-        for refusal in [
-            ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished),
-            ProvisionError::FloorRegression(crate::gate::floor::FloorRegression::WriteEpoch {
-                floor: 9,
-                vouched: 1,
-            }),
-            ProvisionError::Publish {
-                stage: "root-record",
-                error: WritePublishError::Rejected,
-            },
-        ] {
-            assert!(
-                matches!(
-                    EngineError::from_provision(refusal.clone()),
-                    EngineError::TrustViolation { .. }
-                ),
-                "{refusal} must never degrade to availability"
-            );
-        }
-        for stall in [
-            ProvisionError::NotAFirstRun(VaultPointerProbe::Indeterminate),
-            ProvisionError::Publish {
-                stage: "vault-pointer",
-                error: WritePublishError::NotLanded,
-            },
-        ] {
-            assert!(
-                matches!(
-                    EngineError::from_provision(stall.clone()),
-                    EngineError::Provision { .. }
-                ),
-                "{stall} is an availability stall, not a verdict"
-            );
-        }
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+            .expect("a mint that did not land is not a failed start");
+        assert!(
+            !engine.is_provisioned(),
+            "the write path is dark until a later start mints one"
+        );
+
+        let reported: Vec<Event> = core::iter::from_fn(|| events.try_next())
+            .filter(|event| matches!(event, Event::VaultUnprovisioned { .. }))
+            .collect();
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [Event::VaultUnprovisioned {
+                    retryable: true,
+                    ..
+                }]
+            ),
+            "an unreachable API is a stall the host may retry, announced once: {reported:?}"
+        );
     }
 
     #[test]
