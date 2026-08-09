@@ -1,0 +1,93 @@
+# `ci.yml` runs on `pull_request` only, and GitHub scopes a cache entry to the
+# ref that wrote it — a PR writes under `refs/pull/N/merge`, invisible to every
+# other PR, so each PR's first cargo run is cold. A run can also read entries
+# scoped to the default branch, which is what this workflow writes.
+#
+# Two entries, not one per cargo job: the per-job keys stay each PR's own save
+# key and gain a trailing `main-cargo-` / `main-wasm-cargo-` restore-key that
+# reaches these. The keys hash `Cargo.lock` and the toolchain — the two inputs
+# that invalidate a dependency tree — so a merge that changes neither hits its
+# own key and writes nothing. The repo's cache budget is already tight, and
+# these entries have to earn their bytes against the PR-scoped ones LRU evicts.
+name: Cargo Cache Seed
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/cargo-cache-seed.yml'
+  # An entry LRU evicted between lockfile changes has no push to recreate it.
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cargo-cache-seed
+  cancel-in-progress: true
+
+jobs:
+  # Serves every job keyed `linux-cargo-`, `core-kats-cargo-` and
+  # `client-browser-cargo-`: one host `target` tree and one registry.
+  native:
+    name: Seed the native Linux cargo cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: main-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: main-cargo-
+
+      # Compiled, not run: what a PR restores this for is the dependency tree.
+      # The desktop shell stays out — Tauri needs webkit2gtk system deps, and
+      # its own jobs cache under their own keys.
+      - name: Build the test targets the PR cargo jobs compile
+        run: cargo test --workspace --exclude cipherbox-desktop --no-run
+
+  # Serves the `wasm-engine-cargo-` and `web-e2e-cargo-` jobs, whose path set is
+  # the host build tree plus the browser target rather than the whole of `target`.
+  wasm:
+    name: Seed the wasm cargo cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/wasm32-unknown-unknown
+          key: main-wasm-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: main-wasm-cargo-
+
+      - uses: ./.github/actions/wasm-bindgen-cli
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - name: Build the engine WASM
+        run: pnpm --filter @cipherbox/web run build:wasm

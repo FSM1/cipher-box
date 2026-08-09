@@ -49,6 +49,20 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # The write path's block store. Without it `KuboPinStore` refuses every
+      # hosted upload with a 503, which the drain charges as a spent attempt —
+      # so a write spec dead-letters rather than merely failing to publish.
+      ipfs:
+        image: ipfs/kubo:v0.42.0
+        ports:
+          - 5001:5001
+          - 8080:8080
+        options: >-
+          --health-cmd "ipfs id"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
 
     env:
       DB_HOST: localhost
@@ -57,6 +71,7 @@ jobs:
       DB_PASSWORD: postgres
       DB_DATABASE: cipherbox_test
       JWT_SECRET: web-e2e-jwt-secret
+      KUBO_API_URL: http://localhost:5001
       # Every test cold-starts its own account from one runner IP, so the
       # per-IP auth bucket would otherwise cap how many specs can exist.
       THROTTLE_AUTH_LIMIT: '200'
@@ -73,6 +88,11 @@ jobs:
       # The hermetic record store, in place of the public default — a merge gate
       # must not resolve vault pointers over the internet.
       VITE_ROUTING_ENDPOINTS: http://localhost:3001
+      # The same stack's gateway, so a read pulls its blocks back from where the
+      # upload pinned them rather than from the tab that wrote them. By address,
+      # not by name: Kubo serves `localhost` as a *subdomain* gateway and 301s
+      # every path request to `<cid>.ipfs.localhost`, which resolves nowhere.
+      VITE_READ_ACCELERATOR_URL: http://127.0.0.1:8080
 
     steps:
       - name: Checkout code
@@ -97,7 +117,9 @@ jobs:
             target/release
             target/wasm32-unknown-unknown
           key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: web-e2e-cargo-
+          restore-keys: |
+            web-e2e-cargo-
+            main-wasm-cargo-
 
       - uses: ./.github/actions/wasm-bindgen-cli
         if: inputs.wasm-artifact == ''

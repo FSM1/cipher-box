@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
@@ -31,5 +31,77 @@ export class FilesPage {
   async signOut(): Promise<void> {
     await this.page.getByTestId('user-menu').hover();
     await this.page.getByTestId('logout-button').click();
+  }
+
+  /**
+   * One listed row, picked by the accessible name its own controls carry. The
+   * row's text would match a substring of a longer sibling's.
+   */
+  row(name: string): Locator {
+    return this.page
+      .getByTestId('file-list-item')
+      .filter({ has: this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }) });
+  }
+
+  /** Opens a folder. */
+  async open(name: string): Promise<void> {
+    await this.row(name).dblclick();
+  }
+
+  async createFolder(name: string): Promise<void> {
+    await this.page.getByTestId('new-folder-button').click();
+    const dialog = this.page.getByTestId('create-folder-dialog');
+    await dialog.getByLabel('folder name').fill(name);
+    await this.page.getByTestId('create-folder-confirm').click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  async rename(name: string, newName: string): Promise<void> {
+    await this.act(name, 'rename');
+    const dialog = this.page.getByTestId('rename-dialog');
+    await dialog.getByLabel('new name').fill(newName);
+    await this.page.getByTestId('rename-confirm').click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  /** Moves a row into a subfolder of the listing it is in. */
+  async move(name: string, destination: string): Promise<void> {
+    await this.act(name, 'move to...');
+    const dialog = this.page.getByTestId('move-dialog');
+    await dialog.getByTestId('move-dialog-folder').filter({ hasText: destination }).click();
+    await expect(dialog.getByTestId('move-dialog-destination')).toHaveText(destination);
+    await this.page.getByTestId('move-confirm').click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  async remove(name: string): Promise<void> {
+    await this.act(name, 'delete');
+    const dialog = this.page.getByTestId('delete-dialog');
+    await this.page.getByTestId('delete-confirm').click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  /** Hands the picker one file, as a drop would. */
+  async upload(name: string, bytes: Buffer): Promise<void> {
+    await this.page
+      .getByLabel('Choose files to upload')
+      .setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes });
+  }
+
+  /** Reads a listed file back through the preview, and returns what it shows. */
+  async preview(name: string): Promise<string> {
+    await this.act(name, 'preview');
+    const shown = this.page.getByTestId('preview-text');
+    await expect(shown).toBeVisible();
+    return (await shown.textContent()) ?? '';
+  }
+
+  /** Raises a row's action menu and picks one item off it. */
+  private async act(name: string, item: string): Promise<void> {
+    await this.page.getByRole('button', { name: `actions for ${name}`, exact: true }).click();
+    await this.page
+      .getByTestId('context-menu')
+      .getByRole('menuitem', { name: item, exact: true })
+      .click();
   }
 }

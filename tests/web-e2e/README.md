@@ -14,15 +14,11 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   contents
 - a cold start reaches a settled, empty vault at its root; the chrome renders
   it, and the event taps saw the snapshot that produced it
+- folder create, rename, move and delete, each ending on a drained queue that
+  carries no dead letter — so a write that never published fails the gate
+- an upload and the file read back off the network, asserted byte for byte
 - signing out returns the tab to the front door
 - the shipping bundle exposes no introspection hook
-
-## What it does not cover yet
-
-Nothing on the write path — no folder create/rename/move/delete, no upload, no
-download. `blueprint/testing.md` scopes this tier at login-and-CRUD, and the
-CRUD half is blocked on engine and workflow work outside this suite. The issue
-tracker carries what is outstanding and why.
 
 ## How the suite logs in
 
@@ -40,10 +36,10 @@ The `release` project runs the same specs' counterpart against a bundle built
 Both bundles must be built before Playwright starts; the config only serves
 them.
 
-1. Bring up Postgres and the record store:
+1. Bring up Postgres, Kubo and the record store:
 
    ```sh
-   docker compose -f docker/docker-compose.yml up -d postgres mock-ipns-routing
+   docker compose -f docker/docker-compose.yml up -d postgres ipfs mock-ipns-routing
    ```
 
 2. Apply migrations and boot the API:
@@ -52,16 +48,21 @@ them.
    export DB_HOST=localhost DB_PORT=5432 DB_USERNAME=postgres \
      DB_PASSWORD=postgres DB_DATABASE=cipherbox NODE_ENV=test \
      JWT_SECRET=web-e2e-jwt-secret THROTTLE_AUTH_LIMIT=200 \
+     KUBO_API_URL=http://localhost:5001 \
      CORS_ALLOWED_ORIGINS=http://localhost:4173,http://localhost:4174
    pnpm --filter @cipherbox/api migration:run
    pnpm --filter @cipherbox/api build && node apps/api/dist/main.js
    ```
 
+   Without `KUBO_API_URL` the API refuses every hosted upload with a 503, and
+   the write specs dead-letter rather than fail on an assertion.
+
 3. Build both bundles:
 
    ```sh
    export VITE_ENVIRONMENT=ci VITE_API_URL=http://localhost:3000 \
-     VITE_ROUTING_ENDPOINTS=http://localhost:3001
+     VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
+     VITE_READ_ACCELERATOR_URL=http://127.0.0.1:8080
    pnpm --filter @cipherbox/web run build:wasm
    pnpm --filter @cipherbox/web run build:bundle
    mv apps/web/dist apps/web/dist-release
