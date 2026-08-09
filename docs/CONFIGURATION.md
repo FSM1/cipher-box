@@ -20,8 +20,8 @@ Environment variables and configuration files for all CipherBox monorepo applica
 ## API (`apps/api`)
 
 NestJS server. Configuration is loaded via `@nestjs/config` (`ConfigModule.forRoot`) and read
-from `.env` at startup. The repo ships no `.env.example` files — the root `README.md` "Getting
-started" section carries the inline export block the local stack expects.
+from `.env` at startup. Copy `apps/api/.env.example` to `apps/api/.env` before first run; that
+template carries the local stack's values and is the one this catalogue extends.
 
 ### Database
 
@@ -77,7 +77,7 @@ started" section carries the inline export block the local stack expects.
 ## Web (`apps/web`)
 
 Vite + React SPA. All configuration is injected as `VITE_*` environment variables at build time.
-There is no `.env.example` to copy — set the variables below in `apps/web/.env` or the shell.
+Copy `apps/web/.env.example` to `apps/web/.env` before first run.
 
 | Variable                  | Required | Default                       | Description                                                                                                                    |
 | :------------------------ | :------- | :---------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
@@ -92,47 +92,11 @@ There is no `.env.example` to copy — set the variables below in `apps/web/.env
 
 ## Desktop (`apps/desktop`)
 
-Tauri + Vite + React application. Uses the same `VITE_*` convention as the web app.
-There is no `.env.example` to copy — set the variables below in `apps/desktop/.env` or the shell.
-
-### Build-time (Vite) variables
-
-| Variable                  | Required | Default                 | Description                                                                                         |
-| :------------------------ | :------- | :---------------------- | :-------------------------------------------------------------------------------------------------- |
-| `VITE_API_URL`            | No       | `http://localhost:3000` | Base URL of the CipherBox API.                                                                      |
-| `VITE_WEB3AUTH_CLIENT_ID` | **Yes**  | —                       | Web3Auth project client ID. <!-- VERIFY: obtain from Web3Auth dashboard -->                         |
-| `VITE_GOOGLE_CLIENT_ID`   | No       | —                       | Google OAuth client ID. <!-- VERIFY: obtain from Google Cloud Console -->                           |
-| `VITE_ENVIRONMENT`        | No       | `local`                 | Deployment environment label.                                                                       |
-| `VITE_TEST_LOGIN_SECRET`  | No       | —                       | Enables the test-login path inside the desktop app for E2E testing. Never set in production builds. |
-
-### Runtime (Rust backend) variables
-
-The Tauri Rust backend loads `apps/desktop/.env` at startup and resolves the API base URL in
-this order:
-
-1. Runtime env `CIPHERBOX_API_URL` (manual override)
-2. Runtime env `VITE_API_URL`
-3. Compile-time `VITE_API_URL` (baked into release builds by CI)
-4. Fallback `http://localhost:3000`
-
-| Variable            | Required | Default | Description                                                                                                                     |
-| :------------------ | :------- | :------ | :------------------------------------------------------------------------------------------------------------------------------ |
-| `CIPHERBOX_API_URL` | No       | —       | Runtime override for the API base URL used by the Rust backend (sync engine, FUSE mount). Takes precedence over `VITE_API_URL`. |
-
-### Tauri configuration (`apps/desktop/src-tauri/tauri.conf.json`)
-
-Static build-time configuration — not environment-variable driven.
-
-| Key                                 | Value                         | Description                                  |
-| :---------------------------------- | :---------------------------- | :------------------------------------------- |
-| `productName`                       | `CipherBox`                   | Application display name.                    |
-| `identifier`                        | `com.cipherbox.desktop`       | Bundle identifier used on macOS and Linux.   |
-| `plugins.updater.endpoints`         | GitHub Releases `latest.json` | Auto-updater manifest URL.                   |
-| `plugins.deep-link.desktop.schemes` | `cipherbox`                   | Custom URL scheme registered with the OS.    |
-| `build.devUrl`                      | `http://localhost:1420`       | Vite dev server URL used during `tauri dev`. |
-
-The updater `pubkey` in `tauri.conf.json` is the Minisign public key used to verify update
-artifacts — it is safe to commit and is not a secret.
+The v2 Tauri shell is a skeleton: it carries no TypeScript sources and reads no environment
+variable, so there is no `apps/desktop/.env.example` to copy and nothing here to configure.
+The tables that stood here described the v1 desktop app and named variables — `VITE_GOOGLE_CLIENT_ID`,
+`VITE_TEST_LOGIN_SECRET`, `CIPHERBOX_API_URL` — that no code reads. They are removed rather
+than corrected; `blueprint/desktop.md` is normative for what the shell will need.
 
 ---
 

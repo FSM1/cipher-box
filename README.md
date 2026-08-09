@@ -109,7 +109,9 @@ cipher-box/
 Prerequisites: Node.js 22+, pnpm 10+, Docker, and the Rust toolchain (pinned by
 `rust-toolchain.toml`).
 
-There are no `.env` files to copy — every variable the stack needs is exported inline below.
+Both services read a `.env` copied from a checked-in template. Those templates are the
+one place the local stack's configuration is written down; this page does not repeat
+their contents.
 
 ### 1. Start the infrastructure
 
@@ -129,36 +131,27 @@ docker compose -f docker/docker-compose.yml ps
 
 ### 2. Configure and start the API
 
-The two secrets below are throwaway values for a loopback stack. Never reuse them in
-any deployed environment: `JWT_SECRET` signs access tokens, and a `TEST_LOGIN_SECRET`
-known to a reader mints a session for any account outside production.
-
 ```bash
-export DB_HOST=localhost DB_PORT=5432 DB_USERNAME=postgres \
-  DB_PASSWORD=postgres DB_DATABASE=cipherbox \
-  NODE_ENV=development JWT_SECRET=local-dev-jwt-secret \
-  TEST_LOGIN_SECRET=local-dev-test-secret \
-  KUBO_API_URL=http://localhost:5001 \
-  ROUTING_V1_URL=http://localhost:3001 \
-  CORS_ALLOWED_ORIGINS=http://localhost:5173
+cp apps/api/.env.example apps/api/.env
 
 pnpm --filter @cipherbox/api migration:run
 pnpm --filter @cipherbox/api dev
 ```
 
-`KUBO_API_URL` is the one the hosted pin store reads. Without it every write answers
-503 — uploads and folder creates alike, since a record's head block is uploaded through
-the same endpoint. The API logs an error at boot when it is unset.
+The template's defaults match the compose stack, so it runs as copied. Both the server
+and the migration CLI read `apps/api/.env` from the package directory, which
+`pnpm --filter` sets as the working directory.
+
+Its two secrets are throwaway values for a loopback stack — never reuse them in a
+deployed environment. `JWT_SECRET` signs access tokens, and anyone holding
+`TEST_LOGIN_SECRET` can mint a session for any account outside production.
 
 ### 3. Build and serve the web app
 
 In a second shell:
 
 ```bash
-export VITE_API_URL=http://localhost:3000 \
-  VITE_ENVIRONMENT=local \
-  VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
-  VITE_READ_ACCELERATOR_URL=http://localhost:8080
+cp apps/web/.env.example apps/web/.env
 
 pnpm --filter @cipherbox/web dev
 ```
@@ -166,20 +159,19 @@ pnpm --filter @cipherbox/web dev
 - API: <http://localhost:3000> (OpenAPI at `/api-docs`)
 - Web: <http://localhost:5173>
 
-`VITE_ROUTING_ENDPOINTS` must be set — unset it defaults to the public
-`https://delegated-ipfs.dev`; see "Which record store the local stack uses" below.
-`VITE_READ_ACCELERATOR_URL` is optional: left unset the content gateway stays dormant,
-which is its fail-closed state, and reads fall back to the endpoints the engine already
-has.
+Vite reads `.env` at build time, so rebuild after editing it. The template leaves
+`VITE_READ_ACCELERATOR_URL` commented out on purpose: dormant is the content gateway's
+fail-closed state, and a blank value must land there rather than configuring a gateway
+whose every request fails.
 
 ### Which record store the local stack uses
 
 Compose starts two `/routing/v1` backends, and a local stack should use
-**`mock-ipns-routing` on port 3001** — the setting above for both `ROUTING_V1_URL` (API
-republisher) and `VITE_ROUTING_ENDPOINTS` (web client). It is hermetic and in-memory, so
-a record published locally resolves immediately and deterministically, and no test
-vault's IPNS names reach the public network. CI and the web-e2e suite make the same
-choice.
+**`mock-ipns-routing` on port 3001** — what both templates ship, as `ROUTING_V1_URL`
+(API republisher) and `VITE_ROUTING_ENDPOINTS` (web client). It is hermetic and
+in-memory, so a record published locally resolves immediately and deterministically, and
+no test vault's IPNS names reach the public network. CI and the web-e2e suite make the
+same choice.
 
 `someguy` on 8190 participates in the real accelerated DHT. It is there for staging
 parity and for deliberately testing public-network propagation; point the two variables
