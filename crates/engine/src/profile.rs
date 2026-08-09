@@ -24,8 +24,7 @@ pub struct SyncTimingProfile {
     /// TTL embedded in every published IPNS record. Always explicit;
     /// independent of the 90-day EOL.
     pub record_ttl: Duration,
-    /// Focus-window poll tick cadence (jitter is applied by the engine from
-    /// injected entropy).
+    /// Focus-window poll tick cadence.
     pub poll_cadence: Duration,
     /// Staleness-ladder threshold: a view unrefreshed this long shows the
     /// stale badge (~3 missed poll cycles per #33 D4).

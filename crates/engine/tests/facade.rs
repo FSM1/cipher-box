@@ -41,7 +41,6 @@ fn secret() -> LoginSecret {
 fn unimplemented_commands() -> Vec<(Command, &'static str)> {
     let node = NodeId([1; 16]);
     vec![
-        (Command::ManualRefresh, "manualRefresh"),
         (
             Command::Grant {
                 node,
@@ -80,6 +79,21 @@ fn unimplemented_commands() -> Vec<(Command, &'static str)> {
         (Command::RotateNow { node }, "rotateNow"),
         (Command::Logout, "logout"),
     ]
+}
+
+#[test]
+fn a_manual_refresh_with_no_sync_loop_reports_a_failed_refresh() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    // No vault pointer resolved a root, so no tick loop is running to force a
+    // pass: the refresh must fail rather than park or silently succeed.
+    assert!(matches!(
+        block_on(engine.command(Command::ManualRefresh)),
+        Err(EngineError::RefreshFailed { .. })
+    ));
 }
 
 #[test]

@@ -43,7 +43,7 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY,
+    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
     owner_scoped_key, record_content_root_cid,
 };
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
@@ -595,6 +595,24 @@ fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTas
     poll_each(tasks);
 }
 
+/// Drive one command to completion with the spawned loops running beside it —
+/// what a manual refresh needs, since it parks on the pass the tick loop runs.
+fn command_while_ticking(
+    engine: &mut Engine<FakeSeamTypes>,
+    command: Command,
+    tasks: &mut [BoxedTask],
+) -> Result<CommandOutcome, EngineError> {
+    let mut pending = Box::pin(engine.command(command));
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..64 {
+        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
+            return outcome;
+        }
+        poll_each(tasks);
+    }
+    panic!("the command never settled against the running loops");
+}
+
 /// A cold-started engine on `device`, with both spawned loops parked at their
 /// first sleep and the block plane wired for a whole scenario's worth of calls.
 fn boot(
@@ -744,6 +762,175 @@ fn child_id(engine: &Engine<FakeSeamTypes>, parent: NodeId, name: &str) -> NodeI
 }
 
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+
+    let started_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler);
+    poll_each(&mut tasks);
+    assert_eq!(
+        block_on(engine.snapshot(ROOT)).unwrap().children[0].pending,
+        PendingClass::Metadata,
+        "no cadence elapsed, so nothing has published yet"
+    );
+
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Ok(CommandOutcome::Done),
+        "the forced pass reconciled the owner root"
+    );
+    // The drain rides the same pass; the refresh returns on its read legs.
+    poll_each(&mut tasks);
+
+    assert_eq!(
+        block_on(engine.snapshot(ROOT)).unwrap().children[0].pending,
+        PendingClass::None,
+        "the forced pass published the queued op"
+    );
+    assert_eq!(
+        cipherbox_engine::seams::Scheduler::now(&world.scheduler),
+        started_at,
+        "the pass ran on the request, not on the poll cadence"
+    );
+}
+
+#[test]
+fn a_manual_refresh_resolves_the_owner_root_without_reading_the_cache() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let root_key = root_name.as_str().as_bytes().to_vec();
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        alice.snapshot_cache.reads().contains(&root_key),
+        "a scheduled tick resolves the root cache-first"
+    );
+
+    let before = alice.snapshot_cache.reads().len();
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        !alice.snapshot_cache.reads()[before..].contains(&root_key),
+        "a forced refresh bypasses the cache the scheduled tick honours"
+    );
+}
+
+#[test]
+fn a_manual_refresh_reports_an_unreachable_record_plane_as_a_failure() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    // Nothing gate-passing comes back off a dark record plane: the cached copy
+    // must not be reported as a landed refresh.
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+    assert!(matches!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Err(EngineError::RefreshFailed { .. })
+    ));
+}
+
+#[test]
+fn a_manual_refresh_reports_a_rejected_record_as_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let seeded = world
+        .record_store
+        .record_at(&endpoint, root_name.as_str())
+        .expect("the account's seeded root record");
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+    tick(&world, &engine, &mut tasks); // republishes the root, raising its floor
+
+    // A replay of the record this device already moved past: fail-closed, and
+    // reported as the verdict it is rather than as retryable staleness.
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), seeded.clone());
+    }
+    assert!(matches!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Err(EngineError::TrustViolation { .. })
+    ));
+}
+
+/// The forced pass reads the focus window as well as the root, so a folder in
+/// view that no endpoint served leaves the user on last-known-good — reporting
+/// that pass as landed would be a silent lie about what was reconciled.
+#[test]
+fn a_manual_refresh_reports_an_unreachable_focus_folder_as_a_failure() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    // Authored on another device, so the focusing device really descends into
+    // the folder instead of reading back its own staged state.
+    let author = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &author, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let alice = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 7);
+    block_on(engine.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Ok(CommandOutcome::Done),
+        "the whole window answers while the folder's record stands"
+    );
+
+    // Only the focused folder's record goes dark; the root still answers, so a
+    // root-only verdict would call this pass reconciled.
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(photos).as_str(), Vec::new());
+    }
+    assert!(matches!(
+        command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
+        Err(EngineError::RefreshFailed { .. })
+    ));
+}
 
 #[test]
 fn a_folder_create_publishes_and_resolves_back() {
@@ -2945,6 +3132,7 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
         &bob.snapshot_cache,
         &adopter,
         &write_name(photos),
+        ResolveMode::CacheFirst,
     ))
     .expect("the parent record resolves")
     .outcome;

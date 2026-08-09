@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useRefreshHints } from '../../engine/useRefreshHints';
+import { useRefreshOnWake } from '../../engine/useRefreshOnWake';
 import { NotificationToast } from '../NotificationToast';
 import { StagingBanner } from '../StagingBanner';
 import { AppFooter } from './AppFooter';
@@ -17,7 +17,7 @@ interface AppShellProps {
  * (blueprint/web-client.md "Composition").
  */
 export function AppShell({ children }: AppShellProps) {
-  useRefreshHints();
+  useRefreshOnWake();
 
   return (
     <div className="app-frame">

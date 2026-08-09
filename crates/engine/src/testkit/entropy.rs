@@ -5,7 +5,7 @@ use crate::entropy::{Entropy, EntropyError};
 /// Deterministic entropy from a 64-bit seed (SplitMix64 stream).
 ///
 /// **Test-only, not cryptographic.** Same seed, same byte stream — every
-/// engine-minted seed, nonce, and jitter value becomes reproducible, which
+/// engine-minted seed and nonce becomes reproducible, which
 /// is the point (determinism is injected, blueprint/testing.md law 3).
 pub struct SeededEntropy {
     state: u64,

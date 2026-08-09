@@ -14,18 +14,18 @@ export function FileBrowser() {
     useFolderNavigation();
   const { view } = useSnapshot();
   const store = useSnapshotStore();
-  // A ceiling refusal clears on its own, so it renders over the listing it
+  // A recoverable refusal clears on its own, so it renders over the listing it
   // interrupted; anything else is a verdict and blanks it.
-  const ceiling = error !== null && isRecoverable(error) ? error : null;
-  const settled = !isLoading && (error === null || (ceiling !== null && folder !== null));
+  const recoverable = error !== null && isRecoverable(error) ? error : null;
+  const settled = !isLoading && (error === null || (recoverable !== null && folder !== null));
 
   return (
     <div className="file-browser" data-testid="file-browser">
       <Breadcrumbs crumbs={breadcrumbs} onNavigate={navigateTo} />
       <DeadLetterNotice deadLetters={view?.deadLetters ?? []} />
-      {ceiling !== null && (
+      {recoverable !== null && (
         <div className="file-browser-notice" role="status" data-testid="file-browser-notice">
-          <span className="file-browser-notice-message">{ceiling.message}</span>
+          <span className="file-browser-notice-message">{recoverable.message}</span>
           <button
             type="button"
             className="file-browser-notice-retry"
@@ -35,7 +35,7 @@ export function FileBrowser() {
           </button>
         </div>
       )}
-      {error !== null && ceiling === null && (
+      {error !== null && recoverable === null && (
         <p className="file-browser-error" role="alert" data-testid="file-browser-error">
           {error.message}
         </p>

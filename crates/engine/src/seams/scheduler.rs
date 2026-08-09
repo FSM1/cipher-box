@@ -30,12 +30,11 @@ impl UnixMillis {
 /// threads and the same code compiles to WASM unchanged.
 pub type BoxedTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
-/// Jittered timers, background task execution, and the wall clock.
+/// Timers, background task execution, and the wall clock.
 ///
 /// The only source of time in the engine (determinism law): timestamps for
 /// core's pure functions come from [`Scheduler::now`], delays from
-/// [`Scheduler::sleep`]. Jitter is computed by the engine from injected
-/// entropy — hosts sleep exactly the duration asked. Hosts: worker timers
+/// [`Scheduler::sleep`] — hosts sleep exactly the duration asked. Hosts: worker timers
 /// (web, coarse throttling tolerated), tokio (desktop); the test kit ships
 /// a virtual clock.
 pub trait Scheduler {

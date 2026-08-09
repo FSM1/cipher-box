@@ -279,14 +279,60 @@ describe('broadcast transport ↔ leader relay', () => {
     await expect(follower.command({ kind: 'manualRefresh' }, [])).rejects.toThrow('closed');
   });
 
-  it('folds follower focus into the union and forwards a refresh hint', async () => {
+  it('folds follower focus into the union and forces a refresh', async () => {
     const { engine, follower } = wire();
     const before = engine.commands.length;
     follower.reportFocus(new Uint8Array([0xaa, 0xbb]));
     await tick();
 
-    const hints = engine.commands.slice(before).filter((c) => c.kind === 'manualRefresh');
-    expect(hints.length).toBe(1);
+    const forced = engine.commands.slice(before).filter((c) => c.kind === 'manualRefresh');
+    expect(forced.length).toBe(1);
+  });
+
+  it('collapses a burst of union changes onto one trailing pass', async () => {
+    const { engine, follower, relay } = wire();
+    let settle = (): void => undefined;
+    engine.respond = () => new Promise<void>((resolve) => (settle = () => resolve()));
+    const forced = (): number => engine.commands.filter((c) => c.kind === 'manualRefresh').length;
+
+    relay.reportLocalFocus('leader', new Uint8Array([1]));
+    await tick();
+    expect(forced()).toBe(1);
+
+    // Three more union changes while that pass is still running must not stack
+    // three more passes behind it.
+    follower.reportFocus(new Uint8Array([2]));
+    await tick();
+    relay.reportLocalFocus('leader', new Uint8Array([3]));
+    await tick();
+    follower.reportFocus(new Uint8Array([4]));
+    await tick();
+    expect(forced()).toBe(1);
+
+    engine.respond = () => Promise.resolve();
+    settle();
+    await tick();
+    expect(forced()).toBe(2);
+  });
+
+  it('drops the trailing pass a step-down overtook', async () => {
+    const { engine, follower, relay } = wire();
+    let settle = (): void => undefined;
+    engine.respond = () => new Promise<void>((resolve) => (settle = () => resolve()));
+    const forced = (): number => engine.commands.filter((c) => c.kind === 'manualRefresh').length;
+
+    relay.reportLocalFocus('leader', new Uint8Array([1]));
+    await tick();
+    follower.reportFocus(new Uint8Array([2])); // arms a trailing pass behind it
+    await tick();
+    expect(forced()).toBe(1);
+
+    relay.close();
+    engine.respond = () => Promise.resolve();
+    settle();
+    await tick();
+
+    expect(forced()).toBe(1);
   });
 
   it('round-trips a follower snapshot through the leader engine', async () => {

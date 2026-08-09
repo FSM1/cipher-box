@@ -5,7 +5,7 @@ use crate::seams::{EndpointId, SeamSet, SeamTypes};
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
     InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore,
-    ManualHintSource, ScriptedHttp, VirtualScheduler,
+    ScriptedHttp, VirtualScheduler,
 };
 
 /// The [`SeamTypes`] family binding every fake — the test kit's host.
@@ -16,7 +16,6 @@ impl SeamTypes for FakeSeamTypes {
     type RecordTransport = InMemoryRecordStore;
     type Http = ScriptedHttp;
     type Mailbox = InMemoryMailbox;
-    type RefreshHintSource = ManualHintSource;
     type Scheduler = VirtualScheduler;
     type StagingStore = InMemoryStagingStore;
     type SnapshotCache = InMemorySnapshotCache;
@@ -61,7 +60,6 @@ impl FakeWorld {
             snapshot_cache: InMemorySnapshotCache::default(),
             credential_store: InMemoryCredentialStore::default(),
             http: ScriptedHttp::default(),
-            hints: ManualHintSource::default(),
             mailbox: self.mailbox_hub.mailbox_for(recipient_public_key),
             received_share_store: InMemoryReceivedShareStore::default(),
             scheduler: self.scheduler.clone(),
@@ -90,8 +88,6 @@ pub struct FakeDevice {
     pub credential_store: InMemoryCredentialStore,
     /// Device-local scripted HTTP.
     pub http: ScriptedHttp,
-    /// Device-local hint source, driven by the test.
-    pub hints: ManualHintSource,
     /// This device's inbox on the shared hub.
     pub mailbox: InMemoryMailbox,
     /// Device-local durable received-shares bookmark (the grants accept flow's
@@ -112,7 +108,6 @@ impl FakeDevice {
             record_transport: self.record_store.clone(),
             http: self.http.clone(),
             mailbox: self.mailbox.clone(),
-            refresh_hints: self.hints.clone(),
             scheduler: self.scheduler.clone(),
             staging_store: self.staging_store.clone(),
             snapshot_cache: self.snapshot_cache.clone(),

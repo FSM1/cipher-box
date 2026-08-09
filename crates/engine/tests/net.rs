@@ -33,6 +33,7 @@ use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
     UnixMillis,
 };
+use cipherbox_engine::sync::ResolveMode;
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
 };
@@ -230,6 +231,7 @@ fn resolve_is_cache_first_and_renders_last_known_good_with_no_network_record() {
         &device.snapshot_cache,
         &adopter,
         &name,
+        ResolveMode::CacheFirst,
     ))
     .expect("resolve");
 
@@ -238,6 +240,36 @@ fn resolve_is_cache_first_and_renders_last_known_good_with_no_network_record() {
     assert!(
         adopter.seen().is_empty(),
         "with nothing fetched the gate is never invoked"
+    );
+}
+
+#[test]
+fn resolve_nocache_never_reads_the_cache_and_reports_no_last_known_good() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let name = name_of(&signer(1));
+    let key = name.as_str().as_bytes();
+
+    block_on(device.snapshot_cache.put(key, b"cached-lkg")).unwrap();
+    let adopter = StubAdopter::new(Verdict::Accept);
+
+    let resolved = block_on(resolve(
+        &device.record_store,
+        &device.snapshot_cache,
+        &adopter,
+        &name,
+        ResolveMode::NoCache,
+    ))
+    .expect("resolve");
+
+    assert_eq!(
+        resolved.last_known_good, None,
+        "a forced refresh reports only what the record plane served"
+    );
+    assert_eq!(resolved.outcome, ResolveOutcome::NoUpdate);
+    assert!(
+        device.snapshot_cache.reads().is_empty(),
+        "nocache bypasses the cache a scheduled tick honours"
     );
 }
 
@@ -267,6 +299,7 @@ fn resolve_picks_freshest_verified_record_gates_it_and_writes_the_snapshot() {
         &device.snapshot_cache,
         &adopter,
         &name,
+        ResolveMode::CacheFirst,
     ))
     .expect("resolve");
 
@@ -308,6 +341,7 @@ fn resolve_gate_rejection_pins_last_known_good_and_never_overwrites_the_snapshot
         &device.snapshot_cache,
         &adopter,
         &name,
+        ResolveMode::CacheFirst,
     ))
     .expect("resolve");
 
@@ -345,6 +379,7 @@ fn resolve_equal_sequence_is_current_not_a_trust_violation() {
         &device.snapshot_cache,
         &adopter,
         &name,
+        ResolveMode::CacheFirst,
     ))
     .expect("resolve");
 

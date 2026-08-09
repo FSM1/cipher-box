@@ -11,7 +11,7 @@
 //! [`KeyringCredentialStore`] keeps only the rotating refresh token and the
 //! last-account id in the OS keyring — never a seed or an unwrapped key.
 //!
-//! The nine seams split by concern:
+//! The eight seams split by concern:
 //!
 //! - [`FileFloorStore`], [`FileStagingStore`], [`FileSnapshotCache`] —
 //!   fsync-barriered files (the v1 high-water / write-journal discipline
@@ -20,11 +20,10 @@
 //! - [`ReqwestHttp`], [`ReqwestRecordTransport`] — `reqwest` over rustls.
 //! - [`TokioScheduler`] — timers, background tasks, wall clock on Tokio.
 //!
-//! `Mailbox` and `RefreshHintSource` are not implemented here: the mailbox
-//! is the engine's own API client over the [`ReqwestHttp`] seam (nothing
-//! desktop-specific), and refresh hints are produced by the `crates/fuse`
-//! operation core from FUSE-op TTL checks. This crate constructs no engine
-//! and touches no webview — the desktop shell wires those in a later slice.
+//! `Mailbox` is not implemented here: it is the engine's own API client over
+//! the [`ReqwestHttp`] seam, with nothing desktop-specific about it. This
+//! crate constructs no engine and touches no webview — the desktop shell wires
+//! those in a later slice.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -328,7 +328,7 @@ describe('a manual refresh', () => {
     expect(store.getSnapshot().view).toBe(refreshed);
   });
 
-  it('still pulls, and keeps the listing, when the engine refuses the refresh', async () => {
+  it('reports a refused refresh over the listing it left standing', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
     engine.emit({ kind: 'snapshotUpdated' });
@@ -336,13 +336,17 @@ describe('a manual refresh', () => {
     engine.pulls[0].resolve(listed);
     await flush();
 
-    // A refused hint is a verdict on the hint, never on the listing.
-    engine.refuseRefresh(new EngineRequestError('not implemented yet', 'unimplemented'));
+    engine.refuseRefresh(new EngineRequestError('nothing came back', 'refreshFailed'));
     store.refresh();
     await flush();
 
-    expect(engine.pulls).toHaveLength(2);
-    expect(store.getSnapshot()).toEqual({ view: listed, error: null });
+    // A failed refresh must not trigger a follow-up pull.
+    expect(engine.pulls).toHaveLength(1);
+    expect(store.getSnapshot()).toEqual({
+      view: listed,
+      error: { message: 'nothing came back', code: 'refreshFailed' },
+    });
+    expect(isRecoverable(store.getSnapshot().error!)).toBe(true);
   });
 
   it('clears a failure the retry cleared', async () => {
@@ -368,6 +372,10 @@ describe('a manual refresh', () => {
 describe('failure classification', () => {
   it('treats the stream ceiling as recoverable', () => {
     expect(isRecoverable({ message: 'ceiling', code: 'tooManyStreams' })).toBe(true);
+  });
+
+  it('treats a failed refresh as recoverable', () => {
+    expect(isRecoverable({ message: 'nothing came back', code: 'refreshFailed' })).toBe(true);
   });
 
   it('fails closed on anything it does not name', () => {

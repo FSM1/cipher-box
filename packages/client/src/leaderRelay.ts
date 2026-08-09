@@ -7,7 +7,7 @@
  *   result back, all over that follower's private `PortCourier` port;
  * - every engine event → fanned out over those same ports, in emission order;
  * - each tab's open folder → the leader's **focus-window union**, so freshness
- *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
+ *   follows whichever tab is focused, cross-tab.
  *
  * Nothing that names or measures vault content touches the `BroadcastChannel`
  * in either direction: it carries election and the port rendezvous only. One
@@ -155,6 +155,10 @@ export class LeaderRelay {
   private readonly unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
+  // Focus-driven refresh collapse: at most one pass in flight, at most one
+  // trailing pass behind it (see `forceRefresh`).
+  private refreshInFlight = false;
+  private refreshTrailing = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
   // message so followers reject a forged beacon or port rendezvous from a
   // non-leader same-origin context (integrity defense-in-depth; same-origin is
@@ -180,7 +184,7 @@ export class LeaderRelay {
   /** Folds the leader tab's own open folder into the focus-window union. */
   reportLocalFocus(clientId: string, node: Uint8Array | null): void {
     if (this.closed) return;
-    if (this.focus.set(clientId, node)) this.refreshHint();
+    if (this.focus.set(clientId, node)) this.forceRefresh();
   }
 
   close(): void {
@@ -232,7 +236,7 @@ export class LeaderRelay {
    */
   private reclaim(clientId: string): void {
     this.retirePresence(clientId);
-    if (this.focus.remove(clientId)) this.refreshHint();
+    if (this.focus.remove(clientId)) this.forceRefresh();
     this.releaseHandles(clientId);
     this.detachPortOf(clientId);
   }
@@ -330,7 +334,7 @@ export class LeaderRelay {
       const { node } = message as Extract<PortRequest, { type: 'cb:portFocus' }>;
       // Uncorrelated, so nothing to refuse; the registry keys on the bytes.
       if (node !== null && !(node instanceof Uint8Array)) return false;
-      if (this.focus.set(clientId, node)) this.refreshHint();
+      if (this.focus.set(clientId, node)) this.forceRefresh();
       return true;
     }
     const requestId = (message as { requestId?: unknown }).requestId;
@@ -581,12 +585,31 @@ export class LeaderRelay {
   }
 
   /**
-   * A tab's focus changed the union: forward a manual-refresh hint to the
-   * engine. This is the RefreshHintSource seam (a best-effort accelerator), not
-   * a new command semantic — a dropped hint costs staleness, never correctness.
+   * A tab's focus changed the union: force a pass over the new window. A burst
+   * of union changes collapses onto one trailing pass rather than queueing a
+   * network pass per change — the engine serializes commands, so a stacked
+   * burst would park every other call behind it. The relay is an accelerator,
+   * so a refusal costs staleness, never correctness: the tab that asked for a
+   * refresh reports its own failures.
    */
-  private refreshHint(): void {
-    void this.transport.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
+  private forceRefresh(): void {
+    // A pass in flight at close settles afterwards and would dispatch its
+    // trailing pass from a relay that has already stepped down.
+    if (this.closed) return;
+    if (this.refreshInFlight) {
+      this.refreshTrailing = true;
+      return;
+    }
+    this.refreshInFlight = true;
+    void this.transport
+      .command({ kind: 'manualRefresh' }, [])
+      .catch(() => undefined)
+      .finally(() => {
+        this.refreshInFlight = false;
+        if (!this.refreshTrailing) return;
+        this.refreshTrailing = false;
+        this.forceRefresh();
+      });
   }
 
   private post(message: LeaderMessage): void {

@@ -27,6 +27,7 @@ use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::model::Snapshot;
 use crate::sync::project::project_root;
+use crate::sync::tick::ResolveMode;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
 /// assembles the content-plane candidate and the reader's private context and
@@ -138,6 +139,7 @@ pub async fn resolve<T, S, A>(
     snapshot_cache: &S,
     adopter: &A,
     name: &IpnsName,
+    mode: ResolveMode,
 ) -> Result<Resolved, SeamError>
 where
     T: RecordTransport,
@@ -146,9 +148,11 @@ where
 {
     // The public resolve drops the transient hold/seed material — only the
     // engine drivers ([`resolve_gated`], [`resolve_and_hold`]) consume it.
-    Ok(resolve_gated(transport, snapshot_cache, adopter, name)
-        .await?
-        .resolved)
+    Ok(
+        resolve_gated(transport, snapshot_cache, adopter, name, mode)
+            .await?
+            .resolved,
+    )
 }
 
 /// The (node id, write scope seed) a gate-surfaced write grant contributes to
@@ -178,6 +182,7 @@ pub(crate) async fn resolve_gated<T, S, A>(
     snapshot_cache: &S,
     adopter: &A,
     name: &IpnsName,
+    mode: ResolveMode,
 ) -> Result<GatedResolve, SeamError>
 where
     T: RecordTransport,
@@ -185,8 +190,15 @@ where
     A: Adopter,
 {
     let cache_key = name.as_str().as_bytes();
-    // Cache-first: last-known-good renders immediately, reconcile runs behind it.
-    let last_known_good = snapshot_cache.get(cache_key).await?;
+    // Cache-first: last-known-good renders immediately, reconcile runs behind
+    // it. Nocache never reads the cache, so only what the record plane serves
+    // this pass can be rendered or reported (#33 D4). A gate-passing record
+    // still writes back either way, so a forced refresh only ever leaves the
+    // cache fresher.
+    let last_known_good = match mode {
+        ResolveMode::CacheFirst => snapshot_cache.get(cache_key).await?,
+        ResolveMode::NoCache => None,
+    };
 
     let (outcome, hold, held_record, read_scope_seed) =
         match fanout_get_verify(transport, name).await {
@@ -305,6 +317,7 @@ pub(crate) async fn resolve_and_hold<T, S, A>(
     name: &IpnsName,
     held: &RefCell<HeldRecords>,
     material: &HeldMaterial,
+    mode: ResolveMode,
 ) -> Result<HeldResolve, SeamError>
 where
     T: RecordTransport,
@@ -316,7 +329,7 @@ where
         hold: adopt_hold,
         held_record,
         read_scope_seed,
-    } = resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    } = resolve_gated(transport, snapshot_cache, adopter, name, mode).await?;
     let write_scope_seed = adopt_hold.clone();
     let done = |resolved| HeldResolve {
         resolved,
@@ -398,7 +411,8 @@ pub(crate) fn refresh_base_from_outcome(
 #[cfg(test)]
 mod tests {
     use super::{
-        HeldMaterial, OwnScopeMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold,
+        HeldMaterial, OwnScopeMaterial, ResolveMode, ResolveOutcome, head_cid_from_value,
+        resolve_and_hold,
     };
 
     use core::cell::RefCell;
@@ -550,6 +564,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold")
         .resolved;
@@ -609,6 +624,7 @@ mod tests {
                 &name,
                 &held,
                 &material,
+                ResolveMode::CacheFirst,
             ))
             .expect("resolve_and_hold");
             held.borrow()[&node_id].content_cids.clone()
@@ -651,6 +667,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .unwrap()
         .resolved;
@@ -686,6 +703,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold")
         .resolved;
@@ -749,6 +767,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold")
         .resolved;
@@ -830,6 +849,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold")
         .resolved;
@@ -880,6 +900,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold");
 
@@ -958,6 +979,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold");
 
@@ -1007,6 +1029,7 @@ mod tests {
             &name,
             &held,
             &material,
+            ResolveMode::CacheFirst,
         ))
         .expect("resolve_and_hold");
         let hr = held

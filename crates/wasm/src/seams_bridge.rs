@@ -1,7 +1,7 @@
 //! JS-seam → engine-seam adapters (wasm, browser target).
 //!
 //! Every browser seam is JavaScript (`packages/client` — IndexedDB, OPFS,
-//! `fetch`), so it cannot implement a Rust trait directly. For each of the nine
+//! `fetch`), so it cannot implement a Rust trait directly. For each of the eight
 //! engine seam traits this module declares the JS object's method surface as a
 //! wasm-bindgen import and wraps it in a Rust adapter that implements the trait.
 //! Two consumers share these adapters:
@@ -20,9 +20,8 @@
 
 use cipherbox_engine::seams::{
     BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpCredentials,
-    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport,
-    RefreshHint, RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore,
-    UnixMillis,
+    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport, Scheduler,
+    SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use core::time::Duration;
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -725,36 +724,6 @@ impl Mailbox for MailboxAdapter {
     async fn ack(&self, item_id: &str) -> SeamResult<()> {
         self.js.ack(item_id).await.map_err(seam_error)?;
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// RefreshHintSource.
-// ---------------------------------------------------------------------------
-
-#[wasm_bindgen]
-extern "C" {
-    /// JS `RefreshHintSourceSeam` (packages/client). `nextHint` resolves to a
-    /// truthy value for a hint, or `null`/`undefined` when the source is
-    /// closed for good.
-    pub type JsRefreshHintSourceSeam;
-
-    #[wasm_bindgen(method, catch, js_name = nextHint)]
-    async fn next_hint(this: &JsRefreshHintSourceSeam) -> Result<JsValue, JsValue>;
-}
-
-pub(crate) struct RefreshHintSourceAdapter {
-    pub(crate) js: JsRefreshHintSourceSeam,
-}
-
-impl RefreshHintSource for RefreshHintSourceAdapter {
-    async fn next_hint(&mut self) -> Option<RefreshHint> {
-        // A rejected or nullish resolution means end-of-stream; the engine
-        // stops listening. Losing a hint costs staleness, never correctness.
-        match self.js.next_hint().await {
-            Ok(value) if !value.is_null() && !value.is_undefined() => Some(RefreshHint),
-            _ => None,
-        }
     }
 }
 

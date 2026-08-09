@@ -71,9 +71,13 @@ use cipherbox_core::hex::lower as hex_lower;
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
+use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
-use crate::sync::tick::{FocusWindow, focus_folders, focus_folders_due};
+use crate::sync::tick::{
+    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, resolve_mode,
+    run_tick_loop,
+};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -811,6 +815,16 @@ pub enum EngineError {
         /// The seal check that fired; never key material.
         check: &'static str,
     },
+    /// A forced refresh ([`Command::ManualRefresh`]) could not land: no
+    /// endpoint served a record the pass could adopt, or no sync loop is
+    /// running to force a pass at all. Availability, retryable — a rejected
+    /// record is [`TrustViolation`](EngineError::TrustViolation) instead. The
+    /// rendered view is unchanged last-known-good, so a host reports the
+    /// refresh as failed rather than repainting as though it had landed.
+    RefreshFailed {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
     /// A host seam failed (durable op-queue I/O). Availability, never a trust
     /// decision — trust classification happens below the facade.
     Seam {
@@ -981,6 +995,7 @@ impl fmt::Display for EngineError {
             EngineError::ContentKeySealFailed { check } => {
                 write!(f, "content key seal failed: [{check}]")
             }
+            EngineError::RefreshFailed { message } => write!(f, "refresh failed: {message}"),
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -1481,7 +1496,7 @@ const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
     seams: SeamSet<T>,
-    /// Seeds, nonces, jitter, and command-path node-id minting. Shared with the
+    /// Seeds, nonces, and command-path node-id minting. Shared with the
     /// spawned drain, which needs a fresh seal nonce per authored record.
     entropy: Rc<RefCell<Box<dyn Entropy>>>,
     profile: SyncTimingProfile,
@@ -1567,6 +1582,9 @@ pub struct Engine<T: SeamTypes> {
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
+    /// The resolve tick's second wake source, shared with the spawned loop:
+    /// [`Command::ManualRefresh`] files a request here and awaits its verdict.
+    manual_refresh: ManualRefresh,
     /// The cold-start session identity, derived from the login secret at
     /// [`start`](Self::start). `None` until then; the single place derived key
     /// material lives once the engine is live. The resolve/publish/rotation
@@ -1639,6 +1657,7 @@ impl<T: SeamTypes> Engine<T> {
                 pending_reclaim: Rc::new(Cell::new(0)),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
+                manual_refresh: ManualRefresh::default(),
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
@@ -1826,6 +1845,8 @@ impl<T: SeamTypes> Engine<T> {
     /// because a panic while dropping aborts the process.
     fn shut_down(&self) {
         self.alive.set(false);
+        // Every parked manual refresh fails now: no pass is left to answer it.
+        self.manual_refresh.close();
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
         }
@@ -2046,22 +2067,26 @@ impl<T: SeamTypes> Engine<T> {
         // held-set fallback key.
         let root_id = self.snapshot.borrow().root.0;
 
+        let manual = self.manual_refresh.clone();
+        manual.arm();
+
         self.seams.scheduler.spawn(Box::pin(async move {
-            run_liveness_loop(&scheduler, interval, || async {
+            run_tick_loop(&scheduler, &manual, interval, async |cause| {
                 if !alive.get() {
-                    return LivenessControl::Stop;
+                    return TickControl::Stop;
                 }
+                let mode = resolve_mode(cause);
                 // The pass owns a copy for exactly its own duration; the engine
                 // emptied the cell if it is already gone.
                 let enc_subkey = tick_enc_subkey.borrow().clone();
                 let Some(enc_subkey) = enc_subkey else {
-                    return LivenessControl::Stop;
+                    return TickControl::Stop;
                 };
                 // Carries the member's BYO bearer, so the pass owns a copy on the
                 // same terms as the enc subkey above.
                 let decision = placement.borrow().clone();
                 let Some(decision) = decision else {
-                    return LivenessControl::Stop;
+                    return TickControl::Stop;
                 };
                 // Before the steady-state hold consults them: a floor raised
                 // since the last pass revokes the seeds this pass would
@@ -2105,6 +2130,7 @@ impl<T: SeamTypes> Engine<T> {
                     &root_name,
                     &held,
                     &material,
+                    mode,
                 )
                 .await;
                 // A gate-passing adopt re-surfaces the scope seeds: refresh the
@@ -2146,10 +2172,11 @@ impl<T: SeamTypes> Engine<T> {
                 // so the queue rebases onto the deepest state this pass
                 // reconciled, not just the root's.
                 let open = focus_folders(&base.borrow(), &focus.borrow());
+                let mut folder_verdict = RefreshVerdict::Reconciled;
                 if let Some(read_seed) = &read_seed
                     && !open.is_empty()
                 {
-                    let changed = FolderRefresh {
+                    let report = FolderRefresh {
                         transport: &transport,
                         snapshot_cache: &snapshot_cache,
                         http: &http,
@@ -2159,14 +2186,39 @@ impl<T: SeamTypes> Engine<T> {
                         events: &events,
                         scope_id: root_id,
                         scope_read_seed: read_seed,
+                        mode,
                     }
                     .run(&open)
                     .await;
                     stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
-                    if changed {
+                    if report.changed {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
+                    folder_verdict = report.verdict;
                 }
+                // `Adopted`/`Current` are the reconciled outcomes: both prove the
+                // record plane answered with gate-passing state, so both stamp
+                // the ladder's `last_success` (#33 D4). A gate rejection is a
+                // trust verdict, never the staleness the other failures are.
+                let root_verdict = match &resolved {
+                    Ok(r) => match &r.outcome {
+                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
+                            RefreshVerdict::Reconciled
+                        }
+                        ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
+                        ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
+                    },
+                    Err(_) => RefreshVerdict::Unreachable,
+                };
+                // The ladder measures the record plane, which the root leg alone
+                // proves answered: one focused folder that did not is staleness
+                // on that folder, not a plane-wide outage.
+                let reconciled = root_verdict == RefreshVerdict::Reconciled;
+                // Answer the manual requests on every read leg the pass forced,
+                // the focus window included — a refresh that left the folder in
+                // view unresolved has not landed. The drain below reports its own
+                // progress through the op events.
+                manual.settle(root_verdict.worst(folder_verdict));
                 // The drain rides the same tick: it publishes onto exactly the
                 // gate-passing state this pass just reconciled. Both scope seeds
                 // are required — without them there is no name to publish under
@@ -2208,16 +2260,6 @@ impl<T: SeamTypes> Engine<T> {
                 // After the drain, so the pass's own removals are swept in the
                 // same tick rather than a cadence later.
                 collect_orphans(&staging, &live_blocks).await;
-                // `Adopted`/`Current` are the reconciled outcomes: both prove the
-                // record plane answered with gate-passing state, so both stamp
-                // the ladder's `last_success` (#33 D4).
-                let reconciled = matches!(
-                    &resolved,
-                    Ok(r) if matches!(
-                        r.outcome,
-                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
-                    )
-                );
                 let mut status = sync_status.borrow_mut();
                 status.reconcile_in_flight = false;
                 if reconciled {
@@ -2235,7 +2277,7 @@ impl<T: SeamTypes> Engine<T> {
                     let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
                 }
                 drop(status);
-                LivenessControl::Continue
+                TickControl::Continue
             })
             .await;
         }));
@@ -2367,6 +2409,7 @@ impl<T: SeamTypes> Engine<T> {
                         },
                     })
             }
+            Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
@@ -2394,6 +2437,37 @@ impl<T: SeamTypes> Engine<T> {
         cached_seed(&self.scope_read_seeds, scope_id)
     }
 
+    /// Force a resolve-and-drain pass now and report what its read legs
+    /// reconciled — the nocache forcing path (#33 D4): the pass it brings
+    /// forward skips the snapshot cache, so only what the record plane serves
+    /// counts, and an unreachable plane is a failure rather than a silent
+    /// repaint off last-known-good.
+    ///
+    /// Requests coalesce onto one pass, which the tick loop runs
+    /// ([`ManualRefresh`]). The drain rides that pass but reports through its
+    /// own op events; this returns on the read legs.
+    async fn manual_refresh(&self) -> Result<(), EngineError> {
+        let failed = |message: &str| EngineError::RefreshFailed {
+            message: message.to_owned(),
+        };
+        let verdict = self
+            .manual_refresh
+            .request()
+            .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
+        match verdict.await {
+            Ok(RefreshVerdict::Reconciled) => Ok(()),
+            Ok(RefreshVerdict::Unreachable) => {
+                Err(failed("no endpoint served a record this pass could adopt"))
+            }
+            // Fail-closed, and reported as the verdict it is: a host retries
+            // availability and must never retry a rejection (rule 6).
+            Ok(RefreshVerdict::Rejected) => Err(EngineError::TrustViolation {
+                message: "the record plane served a record the adoption gate rejected".to_owned(),
+            }),
+            Err(_) => Err(failed("the sync loop stopped before the pass ran")),
+        }
+    }
+
     /// Refresh the focus window's folders that are past the on-access staleness
     /// threshold, returning whether the base changed.
     async fn refresh_focus_on_access(&self, now: UnixMillis) -> bool {
@@ -2411,7 +2485,7 @@ impl<T: SeamTypes> Engine<T> {
         let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
             return false;
         };
-        let changed = FolderRefresh {
+        let report = FolderRefresh {
             transport: &self.seams.record_transport,
             snapshot_cache: &self.seams.snapshot_cache,
             http: &self.seams.http,
@@ -2421,11 +2495,12 @@ impl<T: SeamTypes> Engine<T> {
             events: &self.events,
             scope_id,
             scope_read_seed: &scope_read_seed,
+            mode: ResolveMode::CacheFirst,
         }
         .run(&due)
         .await;
         stamp_focus_refreshed(&self.focus_refreshed, &due, now);
-        changed
+        report.changed
     }
 
     // -----------------------------------------------------------------------
@@ -3214,6 +3289,7 @@ impl<T: SeamTypes> Engine<T> {
             &self.seams.snapshot_cache,
             &adopter,
             &name,
+            ResolveMode::CacheFirst,
         )
         .await
         .map_err(|e| match e {

@@ -27,6 +27,7 @@ pub mod pointer;
 pub(crate) mod project;
 pub mod rebase;
 pub mod record;
+pub(crate) mod refresh;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
@@ -56,8 +57,7 @@ pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,
-    focus_folders_due, focus_set, jittered_cadence, on_access_refresh_due, resolve_mode,
-    run_tick_loop,
+    focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
 };
 
 /// Whole milliseconds of `duration`, truncating and saturating — the engine's

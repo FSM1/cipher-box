@@ -16,10 +16,8 @@
 //! same durable state) — that is how durability is asserted without a
 //! process restart. Kits for transports take a live instance.
 //!
-//! Two seams ship no kit, deliberately: `Http` (pure passthrough — its
-//! behavior is the live contract suite's job) and `RefreshHintSource`
-//! (host-driven events, no seam-local semantics; losing hints costs only
-//! staleness).
+//! One seam ships no kit, deliberately: `Http` is a pure passthrough, so
+//! its behavior is the live contract suite's job.
 
 pub mod contact_store;
 pub mod credential_store;

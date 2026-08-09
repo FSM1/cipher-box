@@ -66,7 +66,8 @@ impl From<EngineError> for VfsError {
                 VfsError::TrustViolation { message }
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
-            EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
+            EngineError::ContentUnavailable { message }
+            | EngineError::RefreshFailed { message } => VfsError::Unavailable { message },
             // Retryable once the vault settings resolve or are saved again, and
             // not a storage verdict: the device has room, the engine simply does
             // not know where the member wants the bytes.
@@ -176,6 +177,9 @@ mod tests {
         for error in [
             EngineError::ContentUnavailable {
                 message: "no reachable source".into(),
+            },
+            EngineError::RefreshFailed {
+                message: "no endpoint served a record this pass could adopt".into(),
             },
             EngineError::UnsupportedContentFormat { version: 9 },
         ] {

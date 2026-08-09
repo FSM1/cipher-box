@@ -34,6 +34,7 @@ use crate::sync::pointer::{
     PointerError, PointerFetch, VaultPointerAdoption, resolve_vault_pointer,
 };
 use crate::sync::project::project_root;
+use crate::sync::tick::ResolveMode;
 
 /// The session inputs the cold-start chain needs, all read from the derived
 /// [`SessionIdentity`](crate::session::SessionIdentity) and the auth-provided
@@ -229,6 +230,7 @@ where
         snapshot_cache,
         adopter,
         &adoption.repoint.current_root,
+        ResolveMode::CacheFirst,
     )
     .await
     .map_err(ColdStartError::Seam)?;

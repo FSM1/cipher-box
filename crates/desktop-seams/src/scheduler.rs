@@ -6,13 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use cipherbox_engine::seams::{BoxedTask, Scheduler, UnixMillis};
 
-/// Jittered timers, background task execution, and the wall clock, backed by
+/// Timers, background task execution, and the wall clock, backed by
 /// Tokio (blueprint/engine.md "Scheduler", desktop column).
 ///
 /// The only source of time in the engine on desktop: [`now`](Self::now)
 /// reads the system wall clock, [`sleep`](Self::sleep) delegates to
-/// `tokio::time::sleep`. Jitter is the engine's business (computed from
-/// injected entropy); this seam sleeps exactly the duration asked.
+/// `tokio::time::sleep`; this seam sleeps exactly the duration asked.
 ///
 /// Because [`BoxedTask`] is deliberately `!Send` (the single-writer engine
 /// is pinned to one execution context), [`spawn`](Self::spawn) uses

@@ -2,11 +2,10 @@
 //!
 //! Entropy is an engine input to core's pure functions (blueprint/engine.md
 //! "Host seams" notes; blueprint/core.md doctrine). It is deliberately *not*
-//! one of the nine host seams: production wiring is per-target `getrandom`,
+//! one of the eight host seams: production wiring is per-target `getrandom`,
 //! owned by the engine's construction site, not host logic. It is still
 //! injected — engine logic never calls an RNG directly — so tests substitute
-//! the test kit's seeded source and every seed, jitter, and nonce becomes
-//! reproducible.
+//! the test kit's seeded source and every seed and nonce becomes reproducible.
 
 use core::fmt;
 
@@ -44,7 +43,7 @@ impl fmt::Display for EntropyError {
 
 impl std::error::Error for EntropyError {}
 
-/// A source of entropy for key seeds, nonces, and timer jitter.
+/// A source of entropy for key seeds and nonces.
 ///
 /// Production implementations must be cryptographically secure
 /// (per-target `getrandom`, whose acquisition is fallible — hence the

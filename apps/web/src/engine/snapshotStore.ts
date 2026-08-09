@@ -30,12 +30,13 @@ export interface SnapshotState {
 }
 
 /**
- * Whether a later pull clears this on its own: `tooManyStreams` is a ceiling,
- * not a verdict. Named codes only, so a codeless transport fault and every code
- * this does not name — trust verdicts among them — stay fatal.
+ * Whether a later pull clears this on its own: `tooManyStreams` is a ceiling
+ * and `refreshFailed` is an unreachable record plane, neither a verdict about
+ * what is rendered. Named codes only, so a codeless transport fault and every
+ * code this does not name — trust verdicts among them — stay fatal.
  */
 export function isRecoverable(error: SnapshotError): boolean {
-  return error.code === 'tooManyStreams';
+  return error.code === 'tooManyStreams' || error.code === 'refreshFailed';
 }
 
 export interface SnapshotStore {
@@ -49,7 +50,7 @@ export interface SnapshotStore {
   setFocus(node: Uint8Array | null): void;
   /** Re-asserts the cached focus after a consumer drove `facade.setFocus` itself. */
   refocus(): void;
-  /** Re-pulls the focused folder, behind a best-effort nocache resolve. */
+  /** Forces a nocache pass, then re-pulls the focused folder. */
   refresh(): void;
   /** Releases the event subscription. */
   dispose(): void;
@@ -111,6 +112,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     for (const listener of listeners) listener();
   };
 
+  // A failure only lands if no newer intent has superseded the call that raised
+  // it; every async leg reports through this one continuation.
+  const failIfCurrent =
+    (id: number) =>
+    (error: unknown): void => {
+      if (id === generation) commit({ error: describe(error) });
+    };
+
   const pull = (): void => {
     if (disposed) return;
     if (inFlight) {
@@ -122,19 +131,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     const seq = stalenessSeq;
     void client.facade
       .snapshot(focus)
-      .then(
-        (view) => {
-          if (id !== generation) return;
-          commit({
-            view,
-            error: null,
-            staleness: seq === stalenessSeq ? view.staleness : undefined,
-          });
-        },
-        (error: unknown) => {
-          if (id === generation) commit({ error: describe(error) });
-        }
-      )
+      .then((view) => {
+        if (id !== generation) return;
+        commit({
+          view,
+          error: null,
+          staleness: seq === stalenessSeq ? view.staleness : undefined,
+        });
+      }, failIfCurrent(id))
       .finally(() => {
         inFlight = false;
         if (!coalesced) return;
@@ -147,14 +151,9 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     if (disposed) return;
     client.reportFocus(focus);
     const id = ++generation;
-    client.facade.setFocus(focus).then(
-      () => {
-        if (id === generation) pull();
-      },
-      (error: unknown) => {
-        if (id === generation) commit({ error: describe(error) });
-      }
-    );
+    client.facade.setFocus(focus).then(() => {
+      if (id === generation) pull();
+    }, failIfCurrent(id));
   };
 
   const unsubscribe = client.facade.subscribe((event) => {
@@ -189,11 +188,11 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     refresh() {
       if (disposed) return;
       const id = generation;
-      const again = (): void => {
+      // A refused pass leaves the rendered view exactly where it was, so it is
+      // reported rather than repainted over as though it had landed.
+      void client.facade.manualRefresh().then(() => {
         if (id === generation) pull();
-      };
-      // The nocache hint is best-effort: only the pull it precedes sets `error`.
-      void client.facade.manualRefresh().then(again, again);
+      }, failIfCurrent(id));
     },
     dispose() {
       disposed = true;
