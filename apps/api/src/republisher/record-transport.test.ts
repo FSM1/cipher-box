@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fakeConfig } from '../testing/fakes';
 import { RoutingV1RecordTransport } from './record-transport';
 
@@ -55,10 +56,8 @@ function fakeResponse(opts: {
   return { response, read, readerCancel, bodyCancel };
 }
 
-function transport(): RoutingV1RecordTransport {
-  return new RoutingV1RecordTransport(
-    fakeConfig({ ROUTING_V1_URL: 'https://routing.test' }).service
-  );
+function transport(routingUrl = 'https://routing.test'): RoutingV1RecordTransport {
+  return new RoutingV1RecordTransport(fakeConfig({ ROUTING_V1_URL: routingUrl }).service);
 }
 
 describe('RoutingV1RecordTransport response-size cap', () => {
@@ -163,5 +162,29 @@ describe('RoutingV1RecordTransport response-size cap', () => {
     expect(readerCancel).toHaveBeenCalledTimes(1);
     // Cap is 64 KiB; one chunk past = 5 reads. Assert we stopped far below the GB.
     expect(read.mock.calls.length).toBeLessThan(16);
+  });
+});
+
+describe('RoutingV1RecordTransport configuration report', () => {
+  let errorSpy: MockInstance<Logger['error']>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the unset variable and its consequence at construction', () => {
+    transport('');
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ROUTING_V1_URL'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('walk'));
+  });
+
+  it('stays silent when the routing endpoint is configured', () => {
+    transport();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

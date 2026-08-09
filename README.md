@@ -116,18 +116,16 @@ their contents.
 ### 1. Start the infrastructure
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 180
 pnpm install
 ```
 
 That brings up Postgres (5432), Kubo (5001 RPC, 8080 gateway), someguy (8190), and the
 mock record store (3001). Kubo's RPC is an unauthenticated admin API and the dev compose
-binds it to all interfaces, so run this stack on a network you trust. Wait for the
-services to report healthy:
+binds it to all interfaces, so run this stack on a network you trust.
 
-```bash
-docker compose -f docker/docker-compose.yml ps
-```
+`--wait` holds until every service's healthcheck passes and exits non-zero if one does
+not within the timeout, so the migration below cannot race a Postgres still starting.
 
 ### 2. Configure and start the API
 
