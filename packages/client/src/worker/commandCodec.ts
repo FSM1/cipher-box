@@ -276,6 +276,12 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         routingKey: event.routingKey ?? '',
         detail: event.detail ?? '',
       };
+    case 'vaultUnprovisioned':
+      return {
+        kind: 'vaultUnprovisioned',
+        retryable: event.retryable ?? false,
+        detail: event.detail ?? '',
+      };
     case 'opProgress':
       return {
         kind: 'opProgress',

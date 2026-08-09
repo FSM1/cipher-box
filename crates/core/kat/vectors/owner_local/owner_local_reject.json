@@ -1,0 +1,130 @@
+[
+  {
+    "name": "tampered-ciphertext",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a636970686572746578745822e01132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "foreign-recipient",
+    "kind": "received-shares",
+    "ownerSecret": "3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50",
+    "blob": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-family-transplant",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a636970686572746578745672238901f30e35a9d292f59531bd00347f1bf5ecbead",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "short-enc",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63581f3a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe6a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "invalid-field-length",
+    "class": "malformed"
+  },
+  {
+    "name": "low-order-enc",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b8006a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "hpke-non-contributory",
+    "class": "trust"
+  },
+  {
+    "name": "missing-enc",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a26176016a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "missing-field",
+    "class": "malformed"
+  },
+  {
+    "name": "missing-ciphertext",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a261760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe24",
+    "check": "missing-field",
+    "class": "malformed"
+  },
+  {
+    "name": "forward-version",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760263656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "unsupported-record-version",
+    "class": "malformed"
+  },
+  {
+    "name": "unknown-header-field",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a461760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246573746173684f756e61757468656e746963617465646a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
+    "check": "unknown-record-field",
+    "class": "malformed"
+  },
+  {
+    "name": "base-mode-forgery",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582021c3332b61be6a7b6ab8461e155651b17501b6e07532ecf9ab6661bd5a2ca5756a63697068657274657874581ee0ae5fb38c934ab8013e497d008c2646d4d6219784084bccb248f803a0fe",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-received-shares-as-contact-book",
+    "kind": "contact-book",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b6a636970686572746578745820cebf53425a59fd8767eb12dc7c1757aef7ac5c72af6af41af6985c0a45430b95",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-received-shares-as-invite-records",
+    "kind": "invite-records",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b6a636970686572746578745820cebf53425a59fd8767eb12dc7c1757aef7ac5c72af6af41af6985c0a45430b95",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-contact-book-as-received-shares",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-contact-book-as-invite-records",
+    "kind": "invite-records",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-invite-records-as-received-shares",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582035fdea9e30d3a32c8c366dd18e1eee4c13266995fd5c1c04ea694206cea3087c6a636970686572746578745820de50f215ae17b4f22cc1cf164eecc3a3e6946abff6d3c70115c9a9efaf1dd283",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-invite-records-as-contact-book",
+    "kind": "contact-book",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582035fdea9e30d3a32c8c366dd18e1eee4c13266995fd5c1c04ea694206cea3087c6a636970686572746578745820de50f215ae17b4f22cc1cf164eecc3a3e6946abff6d3c70115c9a9efaf1dd283",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  }
+]

@@ -167,6 +167,7 @@ export type EventDescriptor =
   | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
+  | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
   | {
       kind: 'opProgress';
       opId: bigint | null;

@@ -25,6 +25,7 @@ pub mod op;
 pub mod overlay;
 pub mod pointer;
 pub(crate) mod project;
+pub(crate) mod provision;
 pub mod rebase;
 pub mod record;
 pub(crate) mod refresh;
