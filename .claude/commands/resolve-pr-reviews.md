@@ -45,7 +45,19 @@ gh api graphql -f query="
 }"
 ```
 
-Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+Filter to only unresolved threads.
+
+Then fetch the review **bodies** as well, because nitpicks and out-of-scope notes never
+appear as threads:
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews \
+  --jq '.[] | select(.body | length > 0) | "\(.user.login) \(.submitted_at)\n\(.body)"'
+```
+
+Zero unresolved threads does not end the run — a nitpick-only review has no threads at
+all. Stop only when there are no threads **and** no nitpick or out-of-scope items;
+otherwise continue to step 8.
 
 ### 3. Triage each comment
 
@@ -121,10 +133,34 @@ mutation {
 }'
 ```
 
-### 8. Report summary
+### 8. Post a disposition comment for nitpicks and out-of-scope items
+
+Nitpicks and "outside the diff range" / "out of PR scope" notes live only inside a
+collapsible section of the review body (`🧹 Nitpick comments (N)`). They create **no
+inline threads**, so step 7 cannot reach them and GitHub records nothing about their
+fate. Without a posted comment there is no evidence they were ever read.
+
+Post one comment on the PR stating, per item, what was done:
+
+```bash
+gh pr comment $PR_NUMBER --repo $REPO_OWNER/$REPO_NAME --body-file <file>
+```
+
+Requirements:
+
+- One line per nitpick and per out-of-scope item — taken, already true, or rejected.
+- A rejection states the reason. "Rejected per the comment rules in AGENTS.md" is a
+  reason; silence is not.
+- An item deferred to an issue names that issue.
+- A blanket "addressed the feedback" is not a disposition. It records nothing.
+
+Post it even when every item was rejected, and even when the PR is already merged.
+
+### 9. Report summary
 
 Print a summary table:
 
 - Thread count resolved
 - Fixes made (with file:line references)
 - Comments marked as already addressed or not applicable
+- Nitpick and out-of-scope items, and the disposition comment URL from step 8

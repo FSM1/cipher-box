@@ -27,11 +27,14 @@
 //!
 //! The work-list is computed purely from published records, so a re-run
 //! reconstructs it identically. A node that cannot be resolved, re-sealed or
-//! published is never silently skipped: the pass aborts with a [`SweepError`]
-//! naming it. The one spec-mandated per-node exception is a **lost CAS race** —
-//! the loser drops the node and re-resolves, and since the winner may be an
-//! ordinary metadata write that does not advance the epoch, a drop is not proof
-//! of convergence; [`run_sweep`] re-runs until a pass drops nothing.
+//! published is never silently skipped — it is either named by a [`SweepError`]
+//! that aborts the pass, or bucketed in the outcome. Two buckets are per-node
+//! rather than fatal, because the lazy wave's unit of progress is one interior
+//! node: a **lost CAS race** ([`SweepOutcome::dropped_lost_race`]), whose winner
+//! may be an ordinary metadata write that does not advance the epoch, and a node
+//! this pass could not read at all ([`SweepOutcome::unreachable`]).
+//! [`run_sweep`] re-runs while either is non-empty for a reason a retry could
+//! clear; a caller needing the subtree proven converged refuses on both.
 
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
@@ -161,6 +164,15 @@ impl SweepResolveFailure {
     fn is_retryable(self) -> bool {
         matches!(self, Self::Unavailable | Self::ConflictingChildLabel)
     }
+
+    /// Whether this condemns the one node it was raised on rather than the whole
+    /// pass. The lazy wave's unit of progress is a single interior node, so a
+    /// node nothing can re-seal or descend into is isolated
+    /// ([`SweepOutcome::unreachable`]); a `Superseded` root and a C2 label
+    /// conflict are statements about the scope, and still abort.
+    fn isolates_the_node(self) -> bool {
+        matches!(self, Self::Unreadable | Self::Rejected | Self::Unavailable)
+    }
 }
 
 /// The read edge the sweep runs on: resolve + adoption-gate + unseal. The owner
@@ -251,17 +263,39 @@ pub struct SweepOutcome {
     /// Descendant scope roots the walk stopped at: eager-set members the cascade
     /// rotates, never swept.
     pub skipped_scope_roots: Vec<[u8; 16]>,
-    /// Nodes whose body no seed on this scope's ratchet opens
-    /// ([`SweepResolveFailure::Unreadable`]). Neither swept nor descended into,
-    /// and no retry clears it — surfaced so a caller that needs the subtree
-    /// proven converged (grant creation) can refuse, rather than reading an
-    /// `Ok` outcome as complete.
-    pub unreachable: Vec<[u8; 16]>,
+    /// Every node this pass could not read, with the verdict that condemned it
+    /// ([`SweepResolveFailure::isolates_the_node`]). Neither swept nor descended
+    /// into, so a caller that needs the subtree proven converged (grant
+    /// creation) refuses on a non-empty list rather than reading an `Ok` outcome
+    /// as complete. The reason rides along because a trust rejection and an
+    /// availability stall are not the same answer: only the latter is worth
+    /// another pass.
+    pub unreachable: Vec<([u8; 16], SweepResolveFailure)>,
     /// Scope roots the walk encountered that were missing from the scope's
     /// direct-child-scope index, repaired into it and **durably published** —
     /// "repaired and flagged" (#38 D6). A repair that loses the CAS is not
     /// flagged; it never landed.
     pub flagged_indexes: Vec<[u8; 16]>,
+}
+
+impl SweepOutcome {
+    /// Whether re-running the idempotent pass could still convert something: a
+    /// lost race whose winner may not have advanced the epoch, or a node the
+    /// pass could not read for a reason a retry clears. A node no seed opens and
+    /// a record the gate refused are settled — another pass answers identically.
+    fn worth_another_pass(&self) -> bool {
+        !self.dropped_lost_race.is_empty()
+            || self
+                .unreachable
+                .iter()
+                .any(|(_, reason)| reason.is_retryable())
+    }
+
+    /// The nodes this pass could not read, without the verdicts — what a caller
+    /// proving convergence names as unconverged.
+    pub fn unreachable_nodes(&self) -> impl Iterator<Item = [u8; 16]> + '_ {
+        self.unreachable.iter().map(|(node_id, _)| *node_id)
+    }
 }
 
 /// A fail-closed sweep failure, returned instead of a partial [`SweepOutcome`]
@@ -529,11 +563,8 @@ where
             }
             let (resolved, found) = match resolve_child_current(resolver, &scope_ref, child).await {
                 Ok(pair) => pair,
-                // Nothing to re-seal from and no body to descend into, and a
-                // committed writer can plant one — so it is isolated to this
-                // node rather than aborting the scope's whole pass.
-                Err(SweepResolveFailure::Unreadable) => {
-                    outcome.unreachable.push(child.node_id);
+                Err(reason) if reason.isolates_the_node() => {
+                    outcome.unreachable.push((child.node_id, reason));
                     continue;
                 }
                 Err(reason) => {
@@ -639,22 +670,21 @@ fn conflict(node_id: [u8; 16]) -> SweepError {
 }
 
 /// Drive the sweep as an idle-cadence job: run [`sweep_pass`] and re-run it, one
-/// `cadence` sleep apart via the [`Scheduler`] seam, until a pass both succeeds
-/// **and** drops nothing to a lost race — the point convergence is actually
-/// confirmed — or the `max_passes` cap is hit. A retryable availability stall
-/// re-runs; a trust failure returns immediately.
+/// `cadence` sleep apart via the [`Scheduler`] seam, until a pass succeeds
+/// leaving nothing a retry could still convert — the point convergence is
+/// actually confirmed — or the `max_passes` cap is hit. A retryable availability
+/// stall re-runs; a trust failure returns immediately.
 ///
-/// On cap exhaustion it returns the last availability `Err`, or — if the final
-/// pass merely still had lost-race drops — `Ok` with those nodes surfaced in
-/// [`SweepOutcome::dropped_lost_race`], so a host racing a persistently hot
-/// writer sees the residual rather than a false "complete".
+/// On cap exhaustion it returns the last availability `Err`, or `Ok` with the
+/// residual surfaced, so a host racing a persistently hot writer — or a name it
+/// cannot fetch — sees what is left rather than a false "complete".
 ///
 /// # Caller contract
 ///
-/// An `Ok` outcome is convergence-complete **only when
-/// [`SweepOutcome::dropped_lost_race`] is empty**. The returned outcome reflects
-/// the **final** pass; earlier passes' work is durable on the network but is not
-/// aggregated into it.
+/// An `Ok` outcome is convergence-complete **only when both
+/// [`SweepOutcome::dropped_lost_race`] and [`SweepOutcome::unreachable`] are
+/// empty**. The returned outcome reflects the **final** pass; earlier passes'
+/// work is durable on the network but is not aggregated into it.
 pub async fn run_sweep<S, R, P>(
     scheduler: &S,
     resolver: &R,
@@ -672,7 +702,7 @@ where
     loop {
         attempts += 1;
         match sweep_pass(resolver, publisher, scope).await {
-            Ok(outcome) if outcome.dropped_lost_race.is_empty() => return Ok(outcome),
+            Ok(outcome) if !outcome.worth_another_pass() => return Ok(outcome),
             Ok(outcome) => {
                 if attempts >= max_passes {
                     return Ok(outcome);
@@ -1009,22 +1039,29 @@ mod tests {
         );
     }
 
-    // --- Nodes no seed of this scope's ratchet opens ---
+    // --- Nodes this pass cannot read ---
 
+    /// One node no seed opens, one a revoked writer's record fails the gate on,
+    /// one no fetch answers for. The unit of progress is a single interior node,
+    /// so each is surfaced and stepped past rather than costing every other node
+    /// in the scope its convergence.
     #[test]
     fn an_unreadable_node_is_isolated_and_the_rest_still_converges() {
-        // One node's record claims an epoch this scope's ratchet cannot reach.
-        // Nothing can re-seal it and no retry clears it, so it is surfaced and
-        // stepped past rather than aborting every other node's convergence.
-        let net = FakeNet::new(5, &[0x01, 0x02])
-            .node(0x01, 1, &[])
-            .node(0x02, 1, &[])
-            .node_fault(0x01, SweepResolveFailure::Unreadable);
+        for reason in [
+            SweepResolveFailure::Unreadable,
+            SweepResolveFailure::Rejected,
+            SweepResolveFailure::Unavailable,
+        ] {
+            let net = FakeNet::new(5, &[0x01, 0x02])
+                .node(0x01, 1, &[])
+                .node(0x02, 1, &[])
+                .node_fault(0x01, reason);
 
-        let outcome = run(&net, 0x00).expect("the pass completes");
-        assert_eq!(outcome.unreachable, vec![id(0x01)]);
-        assert_eq!(outcome.converged, vec![id(0x02)]);
-        assert_eq!(net.publishes(0x01), 0, "nothing to re-seal it from");
+            let outcome = run(&net, 0x00).expect("the pass completes");
+            assert_eq!(outcome.unreachable, vec![(id(0x01), reason)]);
+            assert_eq!(outcome.converged, vec![id(0x02)], "{reason}");
+            assert_eq!(net.publishes(0x01), 0, "nothing to re-seal it from");
+        }
     }
 
     #[test]
@@ -1036,7 +1073,10 @@ mod tests {
             .node_fault(0x01, SweepResolveFailure::Unreadable);
 
         let outcome = run(&net, 0x00).expect("the pass completes");
-        assert_eq!(outcome.unreachable, vec![id(0x01)]);
+        assert_eq!(
+            outcome.unreachable,
+            vec![(id(0x01), SweepResolveFailure::Unreadable)]
+        );
         assert!(outcome.converged.is_empty());
         assert!(outcome.already_converged.is_empty());
     }
@@ -1115,25 +1155,37 @@ mod tests {
 
     // --- Fail-closed completeness ---
 
+    /// Isolating a node must not cost the driver its retry: an availability
+    /// stall is the one isolated verdict another pass can still clear, so
+    /// `run_sweep` spends its budget on it rather than reporting a first-pass
+    /// `Ok` over a node it simply could not fetch.
     #[test]
-    fn a_rejected_node_aborts_the_pass_fatally() {
-        let net = FakeNet::new(5, &[0x01, 0x02])
-            .node(0x01, 1, &[])
-            .node(0x02, 1, &[])
-            .node_fault(0x02, SweepResolveFailure::Rejected);
-        let err = run(&net, 0x00).expect_err("fails closed");
-        assert_eq!(err.check(), "node-unresolved");
-        assert!(!err.is_retryable());
-        assert_eq!(net.publishes(0x01), 0, "nothing is published on an abort");
-    }
-
-    #[test]
-    fn an_unavailable_node_aborts_retryably() {
+    fn an_isolated_availability_stall_still_spends_the_drivers_passes() {
         let net = FakeNet::new(5, &[0x01])
             .node(0x01, 1, &[])
             .node_fault(0x01, SweepResolveFailure::Unavailable);
-        let err = run(&net, 0x00).expect_err("fails closed");
-        assert!(err.is_retryable());
+        let outcome = drive(&net, 3, 2).expect("the residual is surfaced, not an error");
+        assert_eq!(
+            outcome.unreachable,
+            vec![(id(0x01), SweepResolveFailure::Unavailable)]
+        );
+    }
+
+    /// A settled verdict is not worth another pass — no retry re-opens a node no
+    /// seed reaches or a record the gate refused — so the driver returns on the
+    /// first pass with the node surfaced.
+    #[test]
+    fn a_settled_isolation_does_not_spend_the_drivers_passes() {
+        for reason in [
+            SweepResolveFailure::Unreadable,
+            SweepResolveFailure::Rejected,
+        ] {
+            let net = FakeNet::new(5, &[0x01])
+                .node(0x01, 1, &[])
+                .node_fault(0x01, reason);
+            let outcome = drive(&net, 3, 0).expect("the pass completes");
+            assert_eq!(outcome.unreachable, vec![(id(0x01), reason)]);
+        }
     }
 
     #[test]
@@ -1247,9 +1299,7 @@ mod tests {
 
     #[test]
     fn the_driver_returns_a_trust_failure_immediately() {
-        let net = FakeNet::new(5, &[0x01])
-            .node(0x01, 1, &[])
-            .node_fault(0x01, SweepResolveFailure::Rejected);
+        let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]).forged(0x00);
         let err = drive(&net, 5, 0).expect_err("fatal");
         assert!(!err.is_retryable());
     }

@@ -100,6 +100,11 @@ impl PreflightedHead {
     pub fn cid(&self) -> &str {
         &self.cid
     }
+
+    /// The head block itself — the bytes a publish uploads at [`Self::cid`].
+    pub fn block(&self) -> &[u8] {
+        &self.block
+    }
 }
 
 /// Envelope-level dry run: check the head block really is the envelope beside

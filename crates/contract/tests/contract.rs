@@ -1310,6 +1310,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
                 parent_node_seed: None,
+                owes_ascent_link: false,
                 pseudonym_signer: &owner_pseudonym,
             },
             seeds: ResealSeeds {

@@ -745,6 +745,7 @@ impl Event {
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
+            facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
             facade::Event::OpProgress { .. } => "opProgress",
         }
         .to_string()
@@ -857,12 +858,23 @@ impl Event {
         }
     }
 
-    /// `renewalFailed`: the key-free failure classification; otherwise
-    /// `undefined`.
+    /// `renewalFailed` / `vaultUnprovisioned`: the key-free failure
+    /// classification; otherwise `undefined`.
     #[wasm_bindgen(getter)]
     pub fn detail(&self) -> Option<String> {
         match &self.inner {
-            facade::Event::RenewalFailed { detail, .. } => Some(detail.clone()),
+            facade::Event::RenewalFailed { detail, .. }
+            | facade::Event::VaultUnprovisioned { detail, .. } => Some(detail.clone()),
+            _ => None,
+        }
+    }
+
+    /// `vaultUnprovisioned`: whether a fresh `start` could clear it; otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn retryable(&self) -> Option<bool> {
+        match &self.inner {
+            facade::Event::VaultUnprovisioned { retryable, .. } => Some(*retryable),
             _ => None,
         }
     }

@@ -124,6 +124,10 @@ pub struct ParentScopePlan<'a> {
     /// The parent scope root's identity + signing capability.
     /// [`ScopeRootIdentity::owner_enc_secret`] is overridden with the owner's own
     /// subkey, so this plan cannot disable the parent's tag-binding check.
+    ///
+    /// [`ScopeRootIdentity::owes_ascent_link`] is **not** overridden and is the
+    /// caller's to get right: granting inside an already-granted scope makes the
+    /// parent itself a descendant, and its re-seal must keep its ascent link.
     pub identity: ScopeRootIdentity<'a>,
     /// The parent's current read-plane seeds (`prev = None`).
     pub seeds: ResealSeeds<'a>,
@@ -303,8 +307,8 @@ where
     // publish lost the race: either way the grantee could descend into a node
     // still sealed at an epoch its fresh seed does not reach.
     if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
-        let mut unconverged = swept.dropped_lost_race;
-        unconverged.extend(swept.unreachable);
+        let mut unconverged = swept.dropped_lost_race.clone();
+        unconverged.extend(swept.unreachable_nodes());
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
@@ -348,6 +352,8 @@ where
             owner_enc_pub: grantee.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(grantee.parent_node_seed),
+            // A grant on an interior folder anchors a scope under its parent.
+            owes_ascent_link: true,
             pseudonym_signer: owner.pseudonym_signer,
         };
         let seeds = ResealSeeds {
@@ -411,6 +417,7 @@ where
             owner_enc_pub: &target.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(&parent_node_seed),
+            owes_ascent_link: true,
             pseudonym_signer: &target.pseudonym_signer,
         };
         let seeds = ResealSeeds {
@@ -975,6 +982,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
                 parent_node_seed: None,
+                owes_ascent_link: false,
                 pseudonym_signer: &owner_pseudonym,
             },
             seeds: ResealSeeds {
@@ -1087,6 +1095,7 @@ mod tests {
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &owner_pseudonym,
                 },
                 seeds: ResealSeeds {
@@ -1249,13 +1258,27 @@ mod tests {
         );
     }
 
+    /// A node this device cannot read is as unproven as one whose publish lost
+    /// the race: the grantee could descend into it.
     #[test]
     fn an_unreachable_node_in_the_granted_folder_refuses_the_grant() {
-        // A node this device cannot read is as unproven as one whose publish
-        // lost the race: the grantee could descend into it.
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, 1)
             .unreadable(INTERIOR_NODE);
+        refuses_as_unconverged(net);
+    }
+
+    /// The pass isolates an unresolvable node rather than aborting, so this
+    /// refusal — not the abort — is what keeps the grant fail-closed.
+    #[test]
+    fn an_unresolvable_interior_node_is_rejected_fail_closed() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, 1)
+            .unresolvable(INTERIOR_NODE);
+        refuses_as_unconverged(net);
+    }
+
+    fn refuses_as_unconverged(net: FakeNet) {
         let (outcome, published, _hub) = run(7, &[], net, &[]);
         match outcome {
             Err(CreateGrantError::SubtreeNotConverged { unconverged }) => {
@@ -1263,18 +1286,6 @@ mod tests {
             }
             other => panic!("expected SubtreeNotConverged, got {other:?}"),
         }
-        assert!(published.is_empty());
-    }
-
-    #[test]
-    fn an_unresolvable_interior_node_is_rejected_fail_closed() {
-        // A node the sweep cannot resolve is a fail-closed convergence abort,
-        // never a silent partial share.
-        let net = FakeNet::new(Ok(()))
-            .with_interior(INTERIOR_NODE, 1)
-            .unresolvable(INTERIOR_NODE);
-        let (outcome, published, _hub) = run(7, &[], net, &[]);
-        assert_eq!(outcome.unwrap_err().check(), "converge-failed");
         assert!(published.is_empty());
     }
 

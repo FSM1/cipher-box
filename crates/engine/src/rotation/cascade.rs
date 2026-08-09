@@ -528,6 +528,7 @@ where
                     owner_enc_pub: &target.owner_enc_pub,
                     owner_enc_secret: root_plan.identity.owner_enc_secret,
                     parent_node_seed: Some(&child_parent_node_seed),
+                    owes_ascent_link: true,
                     pseudonym_signer: &target.pseudonym_signer,
                 },
                 committed: CommittedSet {
@@ -929,6 +930,7 @@ mod tests {
                     owner_enc_pub: &self.owner_pub,
                     owner_enc_secret: self.bind_owner_enc_secret.then_some(&self.net.owner.enc),
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
                 committed: CommittedSet {
