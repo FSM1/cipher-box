@@ -102,11 +102,11 @@ describe('buildCommand', () => {
 
   it('rejects a wrong-typed string field rather than letting wasm-bindgen coerce it', () => {
     expect(refuses({ kind: 'rename', node: new Uint8Array(16), newName: 12345 })).toThrow(
-      'invalid command field newName: number'
+      'invalid request field newName: number'
     );
     expect(
       refuses({ kind: 'create', parent: new Uint8Array(16), name: null, nodeKind: 'file' })
-    ).toThrow('invalid command field name: null');
+    ).toThrow('invalid request field name: null');
   });
 
   it('rejects a wrong-typed byte-array field', () => {
@@ -117,22 +117,22 @@ describe('buildCommand', () => {
         recipientIdentityPublicKey: 'deadbeef',
         permission: 'read',
       })
-    ).toThrow('invalid command field recipientIdentityPublicKey: string');
-    expect(refuses({ kind: 'delete', node: [1, 2, 3] })).toThrow('invalid command field node');
+    ).toThrow('invalid request field recipientIdentityPublicKey: string');
+    expect(refuses({ kind: 'delete', node: [1, 2, 3] })).toThrow('invalid request field node');
   });
 
   it('rejects an unknown node kind or permission rather than defaulting one', () => {
     expect(
       refuses({ kind: 'create', parent: new Uint8Array(16), name: 'a', nodeKind: 'symlink' })
-    ).toThrow('invalid command field nodeKind: string');
+    ).toThrow('invalid request field nodeKind: string');
     expect(
       refuses({ kind: 'createInviteLink', node: new Uint8Array(16), permission: 'admin' })
-    ).toThrow('invalid command field permission: string');
+    ).toThrow('invalid request field permission: string');
   });
 
   it('rejects an op id that is not the engine bigint', () => {
     expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
-      'invalid command field opId: number'
+      'invalid request field opId: number'
     );
   });
 });

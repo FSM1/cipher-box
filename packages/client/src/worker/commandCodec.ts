@@ -28,14 +28,21 @@ import type {
 } from './engineWasm.js';
 
 /**
- * A descriptor crosses a realm boundary as plain data, so its fields arrive
+ * A request crosses a realm boundary as plain data, so its fields arrive
  * untrusted however they are typed here: a version-skewed peer can carry a
  * wrong-typed one, and wasm-bindgen would coerce it — a `12345` newName
- * marshalled as `"12345"` — rather than reject it. Hence the checkers below
- * take `unknown`, and every field a builder reads passes through one.
+ * marshalled as `"12345"`, a 16-character string set into a `Vec<u8>` as
+ * sixteen zero bytes — rather than reject it. Hence the checkers below take
+ * `unknown`, and every field the worker reads off a request passes through one.
  */
 function invalidField(field: string, value: unknown): Error {
-  return new Error(`invalid command field ${field}: ${value === null ? 'null' : typeof value}`);
+  return new Error(`invalid request field ${field}: ${value === null ? 'null' : typeof value}`);
+}
+
+/** An untrusted wire object; a non-object carries no fields at all. */
+export function record(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) throw invalidField(field, value);
+  return value as Record<string, unknown>;
 }
 
 function bytes(value: unknown, field: string): Uint8Array {
@@ -43,8 +50,20 @@ function bytes(value: unknown, field: string): Uint8Array {
   return value;
 }
 
-function text(value: unknown, field: string): string {
+export function text(value: unknown, field: string): string {
   if (typeof value !== 'string') throw invalidField(field, value);
+  return value;
+}
+
+/**
+ * A byte count or offset. The number ABI coerces rather than rejects — a string
+ * or a `NaN` arrives as a valid-looking integer — so the range the engine can
+ * actually act on is checked here.
+ */
+export function count(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidField(field, value);
+  }
   return value;
 }
 
@@ -53,7 +72,7 @@ function opId(value: unknown, field: string): bigint {
   return value;
 }
 
-function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
+export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes(value, field));
 }
 

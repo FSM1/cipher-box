@@ -73,6 +73,19 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
 }
 
 /**
+ * Scrubs the buffers a send would have transferred. A request that rejects
+ * before its send leaves this frame their terminal owner — nothing detaches
+ * them and no callee can reach them — so the plaintext is cleared here
+ * (AGENTS.md 7). A transferred buffer reads as empty, so a send that did run
+ * leaves this a no-op.
+ */
+function wipeCarried(transfer: Transferable[] | undefined): void {
+  for (const item of transfer ?? []) {
+    if (item instanceof ArrayBuffer && item.byteLength > 0) new Uint8Array(item).fill(0);
+  }
+}
+
+/**
  * Delivers one event to every listener, isolating a throwing subscriber so it
  * cannot drop the event for the rest.
  */
@@ -125,16 +138,24 @@ export abstract class CorrelatedTransport implements EngineTransport {
    * synchronous `send` failure deletes the pending entry before rejecting so it
    * is never stranded. Resolves with the response's result value (`undefined`
    * for a plain ack).
+   *
+   * `transfer` is what the send would have moved out of this realm; every route
+   * to a rejection without it scrubs them ([`wipeCarried`]).
    */
   protected request<T, G = void>(
     readyGate: Promise<G>,
-    send: (id: number, gate: G) => void
+    send: (id: number, gate: G) => void,
+    transfer?: Transferable[]
   ): Promise<T> {
-    if (this.terminalError) return Promise.reject(this.terminalError);
+    if (this.terminalError) {
+      wipeCarried(transfer);
+      return Promise.reject(this.terminalError);
+    }
     return readyGate.then(
       (gate) =>
         new Promise<T>((resolve, reject) => {
           if (this.terminalError) {
+            wipeCarried(transfer);
             reject(this.terminalError);
             return;
           }
@@ -144,15 +165,24 @@ export abstract class CorrelatedTransport implements EngineTransport {
             send(id, gate);
           } catch (error) {
             this.pending.delete(id);
+            wipeCarried(transfer);
             reject(error instanceof Error ? error : new Error(String(error)));
           }
-        })
+        }),
+      (error: unknown) => {
+        wipeCarried(transfer);
+        throw error;
+      }
     );
   }
 
   /** The void-ack variant of [`request`](CorrelatedTransport.request). */
-  protected dispatch(readyGate: Promise<void>, send: (id: number) => void): Promise<void> {
-    return this.request<void>(readyGate, send);
+  protected dispatch(
+    readyGate: Promise<void>,
+    send: (id: number) => void,
+    transfer?: Transferable[]
+  ): Promise<void> {
+    return this.request<void>(readyGate, send, transfer);
   }
 
   /** Correlates a response to its request id, resolving or rejecting it. */

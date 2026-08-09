@@ -214,9 +214,13 @@ describe('EngineClient leadership + transport swap', () => {
       expect.objectContaining({ type: 'pushChunk', handle: 1n })
     );
 
-    await expect(follower.pushChunk(stale, Uint8Array.of(9).buffer)).rejects.toMatchObject({
+    const refused = Uint8Array.of(9, 9, 9, 9);
+    await expect(follower.pushChunk(stale, refused.buffer as ArrayBuffer)).rejects.toMatchObject({
       code: 'unknownWriteHandle',
     });
+    // Refused before any transfer, so this seam stayed the plaintext's terminal
+    // owner: a failed-over tab keeps no readable chunk in its heap.
+    expect(refused).toEqual(new Uint8Array(4));
     await expect(follower.commitWrite(stale)).rejects.toMatchObject({
       code: 'unknownWriteHandle',
     });

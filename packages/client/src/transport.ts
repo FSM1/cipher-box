@@ -113,14 +113,19 @@ export class LocalTransport extends CorrelatedTransport {
   }
 
   start(secret: ArrayBuffer): Promise<void> {
-    return this.dispatch(this.ready, (id) =>
-      this.worker.postMessage({ type: 'start', id, secret }, [secret])
+    const transfer = [secret];
+    return this.dispatch(
+      this.ready,
+      (id) => this.worker.postMessage({ type: 'start', id, secret }, transfer),
+      transfer
     );
   }
 
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
-    return this.dispatch(this.ready, (id) =>
-      this.worker.postMessage({ type: 'command', id, command }, transfer)
+    return this.dispatch(
+      this.ready,
+      (id) => this.worker.postMessage({ type: 'command', id, command }, transfer),
+      transfer
     );
   }
 
@@ -131,8 +136,11 @@ export class LocalTransport extends CorrelatedTransport {
   }
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    return this.dispatch(this.ready, (id) =>
-      this.worker.postMessage({ type: 'pushChunk', id, handle, chunk }, [chunk])
+    const transfer = [chunk];
+    return this.dispatch(
+      this.ready,
+      (id) => this.worker.postMessage({ type: 'pushChunk', id, handle, chunk }, transfer),
+      transfer
     );
   }
 

@@ -211,9 +211,13 @@ export class BroadcastTransport extends CorrelatedTransport {
     build: (requestId: number) => PortRequest,
     transfer?: Transferable[]
   ): Promise<T> {
-    return this.request<T, MessagePortLike>(this.ensurePort(), (requestId, port) => {
-      port.postMessage(build(requestId), transfer);
-    });
+    return this.request<T, MessagePortLike>(
+      this.ensurePort(),
+      (requestId, port) => {
+        port.postMessage(build(requestId), transfer);
+      },
+      transfer
+    );
   }
 
   private ensurePort(): Promise<MessagePortLike> {

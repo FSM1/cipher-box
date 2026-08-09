@@ -14,7 +14,15 @@ import type {
 } from './protocol.js';
 import type { EngineWasm } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
-import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
+import {
+  buildCommand,
+  count,
+  nodeId,
+  readEvent,
+  readSnapshot,
+  record,
+  text,
+} from './commandCodec.js';
 
 /**
  * The engine-facing surface the protocol server ([`serveEngine`]) drives. The
@@ -107,20 +115,23 @@ export class EngineHost implements EngineHostLike {
     await this.handle.command(buildCommand(this.wasm, command));
   }
 
-  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
-    if ('node' in target) {
+  // `async` here and below: a refused field rejects, never throws synchronously.
+  async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    const reserved = count(size, 'size');
+    const fields = record(target, 'target');
+    if ('node' in fields) {
       return this.handle.beginWrite(
         undefined,
         undefined,
-        this.wasm.NodeId.fromBytes(target.node),
-        size
+        nodeId(this.wasm, fields.node, 'node'),
+        reserved
       );
     }
     return this.handle.beginWrite(
-      this.wasm.NodeId.fromBytes(target.parent),
-      target.name,
+      nodeId(this.wasm, fields.parent, 'parent'),
+      text(fields.name, 'name'),
       undefined,
-      size
+      reserved
     );
   }
 
@@ -138,7 +149,7 @@ export class EngineHost implements EngineHostLike {
 
   async snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     const view = await this.handle.snapshot(
-      folder === null ? undefined : this.wasm.NodeId.fromBytes(folder)
+      folder === null ? undefined : nodeId(this.wasm, folder, 'folder')
     );
     return readSnapshot(this.wasm, view);
   }
@@ -148,15 +159,17 @@ export class EngineHost implements EngineHostLike {
   }
 
   async download(node: Uint8Array): Promise<ArrayBuffer> {
-    return ownedBuffer(await this.handle.download(this.wasm.NodeId.fromBytes(node)));
+    return ownedBuffer(await this.handle.download(nodeId(this.wasm, node, 'node')));
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
-    return this.handle.openContentStream(this.wasm.NodeId.fromBytes(node));
+  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
   }
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
-    return ownedBuffer(await this.handle.readStream(handle, offset, length));
+    return ownedBuffer(
+      await this.handle.readStream(handle, count(offset, 'offset'), count(length, 'length'))
+    );
   }
 
   async closeStream(handle: StreamHandle): Promise<void> {
