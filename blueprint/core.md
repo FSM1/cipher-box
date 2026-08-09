@@ -202,8 +202,9 @@ manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
 (`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`), `content-key`
-(`0x0c`). Every new tag extends the manifest and its vectors before merge; the
-`owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
+(`0x0c`), `owner-local` (`0x0d`). Every new tag extends the manifest and its
+vectors before merge; the `owner-write-blob` KAT set is
+`owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,
 truncation, and struct-tag / scope / writeEpoch AAD transplants), with the tag's
@@ -256,6 +257,27 @@ three-key clear header as the settings record, with `{scope, epoch}` bound in
 the AAD and the `contentCid` bound inside the seal. Both directions refuse a
 malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
 open path would refuse is a version whose key is gone.
+
+The `owner-local` structure carries **every durable store the owner alone
+authors and reads** — received shares, the contact book, and the invite records
+— under one format rather than one module per store (FSM1/cipher-box-next ADR
+0006). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+three-key clear header as the settings record (`v`, `enc`, `ciphertext`), with
+the owner tag bound into the AAD and never serialized. What is new is the
+**store kind**: a frozen registry of `(name, discriminator)` pairs —
+`received-shares` (`0x01`), `contact-book` (`0x02`), `invite-records` (`0x03`) —
+whose discriminator rides the AAD and whose name completes the HPKE `info`
+string `cipherbox/v2/owner-local/<name>`. The kind is a key-schedule input and
+**never a wire field**, so a blob offered as the wrong store is refused by the
+AEAD rather than by a comparison: a decryption failure, not a parse failure. The
+KAT set is `owner_local_accept` (an empty body, plus one populated body per kind,
+each reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
+`owner_local_reject` (the settings record's reject family — tampered ciphertext,
+a foreign recipient, a cross-family transplant, a short and a low-order `enc`, a
+missing `enc` and a missing `ciphertext`, a forward `v`, an unknown clear-header
+field, and a base-mode forgery — plus a **cross-kind negative for every ordered
+pair of kinds**, which is what proves the discriminator earns the separation that
+distinct per-store `info` strings used to give for free).
 
 ## KDF edge catalog
 

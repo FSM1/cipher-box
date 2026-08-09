@@ -21,8 +21,9 @@
 //! also plaintext at rest, so it discloses the owner's contact graph to a local
 //! reader; the grant ledger that would otherwise carry those identity keys is
 //! sealed under the scope's write key, so this is a new disclosure rather than
-//! a restatement of a published one. Closing all four wants the book sealed
-//! HPKE-to-self, which needs a frozen structure tag of its own.
+//! a restatement of a published one. Sealing the book under the `owner-local`
+//! structure closes the disclosure and the third-party insertion; the rollback
+//! and the deletion need a monotone counter that structure does not carry.
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::CodecError;

@@ -22,10 +22,13 @@ const fastify = Fastify({
   },
 });
 
-// CORS headers for browser-based recovery tool testing (read-only access)
+// CORS headers for the browser-driven suites. PUT is advertised because this
+// store implements it: a record write carries a non-simple `Content-Type`, so
+// the browser preflights, and a policy naming only GET aborts the very publish
+// the route below serves.
 fastify.addHook('onRequest', async (request, reply) => {
   reply.header('Access-Control-Allow-Origin', '*');
-  reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  reply.header('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
   reply.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
   if (request.method === 'OPTIONS') {
     return reply.status(204).send();

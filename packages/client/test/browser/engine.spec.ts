@@ -67,6 +67,14 @@ test.describe('engine worker host', () => {
     expect(result.afterStart).toMatch(/^(refreshed|refresh failed)/);
     // After logout the transport is torn down and rejects further work.
     expect(result.afterLogout).toContain('closed');
+
+    // A mint the environment cannot land does not cost the host its engine: the
+    // start above resolved, and the engine said why the write path is dark
+    // rather than failing or going quiet. This harness has no pin or registry
+    // route, which is the same shape a real first login on a dead network hits.
+    expect(result.unprovisioned).not.toBeNull();
+    expect(result.unprovisioned?.retryable).toBe(true);
+    expect(result.unprovisioned?.detail).toContain('root-record');
   });
 
   test('snapshot and download reads over the real engine', async ({ page }) => {

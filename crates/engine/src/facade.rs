@@ -45,9 +45,10 @@ use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPointerFetch, ResolveOutcome, RootAdopter, eol_renew_pass, keyless_re_put,
-    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
+    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, eol_renew_pass,
+    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
+use crate::owner_keys::OwnerSessionKeys;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
@@ -65,6 +66,9 @@ use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedConten
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
+use crate::sync::provision::{
+    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionPlan, ProvisionedVault, provision_vault,
+};
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use cipherbox_core::hex::lower as hex_lower;
 
@@ -638,6 +642,17 @@ pub enum Event {
         /// The record's routing key (`ipnsName`); non-secret.
         routing_key: String,
         /// Human-readable classification (no key material).
+        detail: String,
+    },
+    /// This account has no vault yet and minting one did not land, so the write
+    /// path stays dark until a later `start` provisions it. Surfaced, never
+    /// silent (blueprint/engine.md "never a silent failure"): reads still paint
+    /// and ops still queue, but nothing will publish.
+    VaultUnprovisioned {
+        /// Whether a fresh `start` could clear this — an availability stall —
+        /// versus a fail-closed refusal to mint, which a retry reaches again.
+        retryable: bool,
+        /// Key-material-free classification of what stopped the mint.
         detail: String,
     },
     /// Progress of a content-plane transfer for one node: the driving op (if
@@ -1779,6 +1794,30 @@ impl<T: SeamTypes> Engine<T> {
                 return Err(EngineError::from_cold_start(err));
             }
         };
+        // An empty chain is an account that has never published: mint its genesis
+        // vault before anything reads one (`sync/provision.rs`). Register-first
+        // has no offline form, so the harness's no-API mode skips provisioning
+        // for the same reason it skips login ([`ApiBaseUrl::offline`]).
+        let provisioned =
+            if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
+                match self.provision_first_run_vault(&api, root_scope_id).await {
+                    Ok(provisioned) => Some(provisioned),
+                    // Non-fatal, on the same terms as the empty chain this ran
+                    // for: cold start already paints an unprovisioned vault and
+                    // queues ops against it, so a mint that did not land leaves
+                    // the engine exactly where `main` left it — minus the
+                    // silence.
+                    Err(err) => {
+                        let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
+                            retryable: err.is_retryable(),
+                            detail: err.to_string(),
+                        });
+                        None
+                    }
+                }
+            } else {
+                None
+            };
         // Both seeds are stamped from the owner-vouched re-point the cold-seed
         // installed the floors from, and which the adopt and the owner-write-blob
         // AAD then bound to — the epochs they belong to, not a later floor read
@@ -1798,7 +1837,7 @@ impl<T: SeamTypes> Engine<T> {
         // this ⊕ the pending-op overlay). The resolved root name — the vault
         // pointer's `currentRoot` — drives the resolve-tick loop; `None` on an
         // empty chain, where the tick loop stays a dormant no-op.
-        let root_name = outcome
+        let mut root_name = outcome
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
@@ -1812,6 +1851,25 @@ impl<T: SeamTypes> Engine<T> {
                 root_name.as_ref(),
                 vouched.map(|repoint| repoint.write_epoch),
             );
+        }
+        // A just-provisioned vault has no adopt to surface its seeds — this run
+        // minted them — so they deposit here, stamped at the epochs its own
+        // re-point vouches and the floors it seeded from them.
+        if let Some(provisioned) = provisioned {
+            deposit_seed(
+                &self.scope_read_seeds,
+                root_scope_id,
+                provisioned.read_scope_seed,
+                Some(provisioned.repoint.min_read_epoch),
+            );
+            deposit_write_seed(
+                &self.scope_write_seeds,
+                root_scope_id,
+                provisioned.write_scope_seed,
+                Some(&provisioned.root_name),
+                Some(provisioned.repoint.write_epoch),
+            );
+            root_name = Some(provisioned.root_name);
         }
         *self.snapshot.borrow_mut() = outcome.base;
         // A successful cold start is a successful reconcile: stamp it so the
@@ -1828,6 +1886,16 @@ impl<T: SeamTypes> Engine<T> {
         self.api = Some(api);
         self.started = true;
         Ok(())
+    }
+
+    /// Whether this session holds the root scope's write seed — the material a
+    /// publish needs. `false` means the vault is unprovisioned (or held
+    /// keyless): reads paint and ops queue, but nothing will publish until a
+    /// later `start` mints it. The event stream announces the transition
+    /// ([`Event::VaultUnprovisioned`]); this answers a host that attached after.
+    pub fn is_provisioned(&self) -> bool {
+        let root = self.snapshot.borrow().root.0;
+        self.scope_write_seeds.borrow().contains_key(&root)
     }
 
     /// The live session identity, once [`start`](Self::start) has derived it.
@@ -1957,6 +2025,48 @@ impl<T: SeamTypes> Engine<T> {
             &params,
             &mut |event: Event| {
                 let _ = events.unbounded_send(event);
+            },
+        )
+        .await
+    }
+
+    /// Mint this account's first vault: the genesis scope root and the vault
+    /// pointer naming it ([`provision_vault`]). Called from
+    /// [`start`](Self::start) on an empty pointer chain only, before the seed
+    /// deposits and before any loop spawns.
+    ///
+    /// The owner's per-scope derivations go in as [`OwnerSessionKeys`], the same
+    /// arm every re-seal resolves them through — so the writer pseudonym the
+    /// commitment names is by construction the one a later rotation signs under.
+    async fn provision_first_run_vault(
+        &self,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        root_scope_id: [u8; 16],
+    ) -> Result<ProvisionedVault, ProvisionError>
+    where
+        T::RecordTransport: Clone + 'static,
+        T::Scheduler: Clone + 'static,
+    {
+        let session = self.session.as_ref().expect("session set by start");
+        let publisher = VaultProvisionNet {
+            transport: &self.seams.record_transport,
+            api,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+        };
+        provision_vault(
+            &self.entropy,
+            &OwnerSessionKeys::new(session),
+            &publisher,
+            &self.seams.floor_store,
+            &ProvisionPlan {
+                scope_id: root_scope_id,
+                payload_version: POINTER_PAYLOAD_VERSION,
+                owner_identity: session.identity(),
+                owner_enc_secret: session.enc_subkey(),
+                vault_pointer_signer: &session.vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX),
+                created_at: self.seams.scheduler.now().0,
             },
         )
         .await
@@ -2450,10 +2560,16 @@ impl<T: SeamTypes> Engine<T> {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
         };
-        let verdict = self
-            .manual_refresh
-            .request()
-            .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
+        let verdict = self.manual_refresh.request().ok_or_else(|| {
+            // The loop does not spawn without a root name, and an unprovisioned
+            // vault has none — so say that, rather than reporting the missing
+            // loop and leaving the host to guess why its refresh does nothing.
+            failed(if self.is_provisioned() {
+                "no sync loop is running to force a pass"
+            } else {
+                "this account has no vault yet: a later start mints one"
+            })
+        })?;
         match verdict.await {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
             Ok(RefreshVerdict::Unreachable) => {
@@ -3511,12 +3627,39 @@ mod tests {
     use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
+    /// Shaped as the API issues one; the engine signs nothing else.
+    const LOGIN_CHALLENGE_FIXTURE: &str =
+        "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     /// A JSON HTTP response the scripted client decodes as a Nest body.
     fn json_response(status: u16, body: Value) -> HttpResponse {
         HttpResponse {
             status,
             headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
             body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    /// Script the API calls first-run provisioning makes on a configured base
+    /// URL: the vacancy probe against the recovery cache, the head-block upload
+    /// answered at the block's own address, then register-first for the root
+    /// name and for the vault pointer.
+    fn serve_provisioning(device: &FakeDevice) {
+        // The vacancy probe: the API's record cache has never seen this name.
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
+        device.http.enqueue_derived(|request| {
+            let block = request.body.clone().unwrap_or_default();
+            Ok(json_response(
+                200,
+                json!({ "cid": crate::content::root_block_cid(&block), "size": block.len() }),
+            ))
+        });
+        for _ in 0..2 {
+            device
+                .http
+                .enqueue_derived(|_| Ok(json_response(200, json!([]))));
         }
     }
 
@@ -3566,6 +3709,51 @@ mod tests {
         );
         block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
         engine
+    }
+
+    /// A mint that did not land must not cost the host its engine. Cold start
+    /// already paints an unprovisioned vault and queues ops against it, so a
+    /// failed provision leaves exactly that state — a fresh account on a flaky
+    /// network still opens the app, still reads, still queues — and says so
+    /// rather than failing silently.
+    #[test]
+    fn a_failed_provision_still_starts_the_engine_and_reports_itself() {
+        let (mut engine, mut events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+        // The vacancy probe answers, so the mint proceeds — and then the
+        // head-block upload has no route, exactly as an unreachable API leaves it.
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
+
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+            .expect("a mint that did not land is not a failed start");
+        assert!(
+            !engine.is_provisioned(),
+            "the write path is dark until a later start mints one"
+        );
+
+        let reported: Vec<Event> = core::iter::from_fn(|| events.try_next())
+            .filter(|event| matches!(event, Event::VaultUnprovisioned { .. }))
+            .collect();
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [Event::VaultUnprovisioned {
+                    retryable: true,
+                    ..
+                }]
+            ),
+            "an unreachable API is a stall the host may retry, announced once: {reported:?}"
+        );
     }
 
     #[test]
@@ -3629,6 +3817,8 @@ mod tests {
             200,
             json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
         ));
+        // A configured base URL means the empty pointer chain provisions.
+        serve_provisioning(&device);
 
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
 

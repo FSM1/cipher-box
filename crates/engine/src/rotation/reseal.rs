@@ -49,7 +49,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
@@ -498,7 +498,7 @@ pub fn reseal_scope_root<E: Entropy>(
         // Terminal-owner cleanup: the payload owns its own zeroizing copy, so wipe
         // this local write-seed copy before the next iteration.
         write_seed.zeroize();
-        let mut ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
@@ -517,7 +517,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- Owner blob: the override seed wrapped to the owner. ---
     let owner_blob = {
         let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-        let mut ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_OWNER_BLOB);
         let sealed = seal_owner_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
@@ -536,7 +536,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // lives. Its AAD binds the write epoch — the write plane's own clock. ---
     let owner_write_blob = {
         let payload = OwnerWriteBlobPayload::new(*seeds.write_scope_seed, seeds.write_epoch);
-        let mut ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
         let ctx = ctx_for(
             identity.v,
             scope_id,
@@ -560,7 +560,7 @@ pub fn reseal_scope_root<E: Entropy>(
     let ascent_link = match identity.parent_node_seed {
         Some(parent_node_seed) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-            let mut ephemeral = fill::<32, E>(entropy)?;
+            let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
