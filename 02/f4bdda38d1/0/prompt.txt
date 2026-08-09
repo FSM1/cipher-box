@@ -1,0 +1,33 @@
+<task-notification>
+<task-id>a985e4803b6a46ea9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/984d1348-d0d1-4d42-9b60-189d14a7b32a/tasks/a985e4803b6a46ea9.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify 1158 nitpicks against main" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six items resolved. Verdict below.
+
+## PR #1158 CodeRabbit review — 6-item disposition
+
+Review `4887180949` was on `319341e36`; the branch tip merged as `31b595818` → squash `17528aabc`. **All 5 nitpicks were fixed on the branch after the review** — they just never got a summary comment, which is why the record looked empty.
+
+| # | File | What it asked | State on `origin/main` (`53017163c`) |
+|---|---|---|---|
+| N1 | `crates/engine/src/sync/overlay.rs` | Add overlay tests for the `OpKind::Prune` arm — a projected count above `keep_latest` is capped, `None` stays `None` | **Done in #1158 itself.** Both tests exist: `overlay_prune_caps_a_projected_content_version` (L290) and `overlay_prune_leaves_an_unprojected_count_unknown` (L311). Absent at `319341e36`, so added in a post-review commit. |
+| N2 | `crates/engine/tests/write_plane.rs` L421-426 | Stop `map_or(0, …)` turning a malformed retire body into a successful `{"retired":0}` ack | **Done in #1158.** Now `.expect("a retire call carries a body")` + `.expect("a retire body is a name array")` at L423-429. Was still `map_or(0, …)` at the review commit. |
+| N3 | `crates/engine/tests/write_plane.rs` L6993-7058 | Cover the duplicate-CID refusal — a doomed version sharing a survivor's `contentCid` must be refused, publish unchanged, no retire issued | **Done in #1158.** `a_prune_whose_doomed_version_shares_a_surviving_cid_is_refused` at ~L7365 asserts `DeadLetterReason::PayloadRefused`, unchanged sequence, unchanged retire-target count, and `pending_reclaim_bytes() == 0`. This was the one nitpick that was genuinely a trust-boundary gap; it got real coverage. |
+| N4 | `crates/engine/src/lib.rs` | Export `Expansion` at the crate root next to `expand_retire_targets` | **Done in #1158.** `Expansion` is in the `pub use content::{…}` list (and `RetireTarget` was added too). Absent at the review commit. |
+| N5 | `crates/engine/src/sync/staging.rs` | Seed `RETIRE_LEDGER_PREFIX` in the orphan-sweep test so the new `is_bookkeeping` branch is proven | **Done in #1158.** The prefix loop in the sweep test (L562-564) now includes `RETIRE_LEDGER_PREFIX` alongside the two op-mark prefixes. Only 2 occurrences of the constant at the review commit; 4 on main. |
+| **A1** | `crates/engine/src/sync/drain.rs` L1711-1735 | *Actionable, 🟠 Major:* a failed `owe_retires` after `publish_node` marks the op complete loses the reclaim debt permanently | **Deliberately deferred, still live on main — correctly so.** FSM1 confirmed the mechanism, rejected CodeRabbit's suggested fix with a concrete counter-argument (journaling pre-publish lets `drain_owed_retires` unpin content a live record still names — loss, not leak), and filed **#1170** (OPEN, `v2-build`/`comp:engine`). CodeRabbit conceded and recorded a learning. On main, `publish_node` still passes `Some(applied.op_id)` and `StagingRetireLedger::owe(…)` still runs after it; `OwedRetire` still has no unconfirmed state. |
+
+### One thing that changed after #1158
+
+A1 was **partially narrowed by a later PR**: `983ed67a8` — *fix: subtract the retained versions before a prune retires a doomed root (#1173)* — introduced `prune_debt`, which now computes the owed set **before** the publish ("a debt this pass cannot compute must leave the history it was read from standing"). That closes the *computation*-failure window. The *write* window is unchanged: `owe()` still lands after the record acks, so a crash or a down staging store between the two still drops the debt. #1170's acceptance criteria (a durable unconfirmed ledger state the drain skips until the publish confirms) are untouched.
+
+### Nothing was correctly rejected here
+
+Worth noting explicitly since it is the usual pattern in this repo: none of the 5 nitpicks asked for an absence-justifying comment, unchanged-code apologia, or a tracker reference in code. All 5 were legitimate test/export gaps and all 5 were taken. The only rejection was A1's *suggested remedy* — and that rejection was reasoned, documented in-thread, and converted into a tracked issue rather than dropped.
+
+**Nothing to act on.** All five nitpicks were addressed on the branch before merge, and the one actionable finding is an accurately-scoped open issue (#1170) that a later PR has already partially narrowed — the only latent item is that #1170 remains genuinely unfixed on `main`, which is expected and already tracked.</result>
+<usage><subagent_tokens>51555</subagent_tokens><tool_uses>17</tool_uses><duration_ms>97896</duration_ms></usage>
+</task-notification>
