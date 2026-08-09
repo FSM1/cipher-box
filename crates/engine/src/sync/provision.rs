@@ -241,23 +241,6 @@ impl core::fmt::Display for ProvisionError {
 impl std::error::Error for ProvisionError {}
 
 impl ProvisionError {
-    /// A stable, key-material-free classification name (host/log facing).
-    pub fn check(&self) -> &'static str {
-        match self {
-            Self::NotAFirstRun(VaultPointerProbe::AlreadyPublished) => "vault-already-published",
-            Self::NotAFirstRun(VaultPointerProbe::Indeterminate) => "vault-pointer-indeterminate",
-            Self::Entropy(_) => "entropy-error",
-            Self::Commitment(_) => "commitment-encode-failed",
-            Self::Reseal(e) => e.check(),
-            Self::Author(e) => e.check(),
-            Self::Preflight(_) => "preflight-failed",
-            Self::Repoint(_) => "repoint-seal-failed",
-            Self::Publish { .. } => "publish-failed",
-            Self::FloorRegression(_) => "floor-regression",
-            Self::Seam(_) => "seam-error",
-        }
-    }
-
     /// Whether a fresh `start` could clear this — an availability stall — versus
     /// this build's own fail-closed verdict on the vault it was about to mint,
     /// which a retry reaches again. Rule 6: a refusal is never laundered into a
@@ -810,7 +793,7 @@ mod tests {
         let publisher = FakePublisher::refusing_root();
         let err = run(&session, &publisher, &InMemoryFloorStore::default(), 6)
             .expect_err("a root that did not land is not a provisioned vault");
-        assert_eq!(err.check(), "publish-failed");
+        assert!(matches!(err, ProvisionError::Publish { .. }), "{err}");
         assert!(
             publisher.effects.borrow().is_empty(),
             "nothing is published once the root refused",
@@ -911,7 +894,7 @@ mod tests {
             },
         ))
         .expect_err("an all-zero scope seed is never published");
-        assert_eq!(err.check(), "entropy-error");
+        assert!(matches!(err, ProvisionError::Entropy(_)), "{err}");
         assert!(publisher.effects.borrow().is_empty(), "nothing published");
     }
 

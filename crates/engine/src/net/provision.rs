@@ -2,7 +2,7 @@
 //! ([`crate::sync::provision`]) — the same register-first CAS pipeline every
 //! other write rides, with no crypto and no trust logic added.
 
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use crate::api::{ApiClient, ApiError};
@@ -72,7 +72,10 @@ where
         // or lagging answer can block a mint and never cause a wrong one. A 404
         // is the sole affirmative "no such record"; anything else is silence.
         match self.api.recovery_fetch(name.as_str()).await {
-            Ok(_) => return Err(VaultPointerProbe::AlreadyPublished),
+            Ok(bytes) if !bytes.is_empty() => return Err(VaultPointerProbe::AlreadyPublished),
+            // A 2xx carrying no record is an intermediary talking, not the cache
+            // answering: it proves nothing either way.
+            Ok(_) => return Err(VaultPointerProbe::Indeterminate),
             Err(ApiError::Status { status: 404, .. }) => {}
             Err(_) => return Err(VaultPointerProbe::Indeterminate),
         }
@@ -97,7 +100,24 @@ where
                 .get_record(&endpoint, name.as_str(), MAX_RECORD_BYTES)
                 .await
             {
-                Ok(Some(_)) => return Err(VaultPointerProbe::AlreadyPublished),
+                // Only bytes that verify at this name prove a publication. The
+                // endpoint set includes untrusted public endpoints, and the
+                // verdict this feeds is permanent, so unverifiable bytes still
+                // refuse — nothing here reaches `Ok(())` — but as availability,
+                // denying one hostile endpoint the power to forge a permanent
+                // trust verdict against an account that never published.
+                Ok(Some(bytes)) => {
+                    return Err(
+                        if IpnsRecord::unmarshal(&bytes)
+                            .and_then(|record| record.verify(name))
+                            .is_ok()
+                        {
+                            VaultPointerProbe::AlreadyPublished
+                        } else {
+                            VaultPointerProbe::Indeterminate
+                        },
+                    );
+                }
                 Ok(None) => {}
                 Err(_) => return Err(VaultPointerProbe::Indeterminate),
             }
@@ -165,7 +185,6 @@ where
 mod tests {
     use super::*;
 
-    use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
 
     use crate::profile::SyncTimingProfile;
@@ -266,6 +285,48 @@ mod tests {
         recovery_reply(&device, 404);
 
         assert_eq!(probe(&device, &SyncTimingProfile::CI), Ok(()));
+    }
+
+    /// The pointer name is derived from the login secret, so only the secret
+    /// holder can put real bytes there — but an untrusted public endpoint can
+    /// serve anything at any name. Garbage must still refuse (never `Ok(())`),
+    /// yet it must not be reported as the permanent verdict that a genuine
+    /// publication earns, or one hostile endpoint denies account creation for
+    /// good and tells the host it was a trust violation.
+    #[test]
+    fn unverifiable_bytes_refuse_without_forging_a_permanent_verdict() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        device.record_store.seed_record(
+            &EndpointId::new("fake:public-routing"),
+            pointer_name().as_str(),
+            b"not an ipns record".to_vec(),
+        );
+        recovery_reply(&device, 404);
+
+        assert_eq!(
+            probe(&device, &SyncTimingProfile::CI),
+            Err(VaultPointerProbe::Indeterminate),
+            "bytes that do not verify at the name prove nothing, but admit nothing",
+        );
+    }
+
+    /// The same rule on the API leg: a 2xx with no body is an intermediary
+    /// talking, not the record cache answering.
+    #[test]
+    fn an_empty_recovery_body_proves_nothing_either_way() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        device.http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+
+        assert_eq!(
+            probe(&device, &SyncTimingProfile::CI),
+            Err(VaultPointerProbe::Indeterminate),
+        );
     }
 
     /// A transport that offers no endpoint answers nothing, which is the same
