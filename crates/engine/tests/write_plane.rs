@@ -2315,6 +2315,18 @@ fn assert_no_blocks_staged(device: &FakeDevice, version: &[Vec<u8>]) {
     }
 }
 
+/// The counterpart: a dead letter keeps the member's staged version, so the one
+/// copy of an unpublished write is still there to retry from (`CONTEXT.md`).
+fn assert_blocks_staged(device: &FakeDevice, version: &[Vec<u8>]) {
+    let staged = block_on(device.staging_store.staged_keys()).unwrap();
+    for cid in version {
+        assert!(
+            staged.contains(cid),
+            "a dead letter preserves the version it could not publish"
+        );
+    }
+}
+
 /// Every upload progress event of one op, in emission order.
 fn upload_progress(
     events: &mut EventStream,
@@ -2564,6 +2576,8 @@ fn a_standing_server_refusal_dead_letters_instead_of_cycling_forever() {
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     blocks.refuse_upload(Box::new(|_| Some(pin_store_unavailable())));
     let op_id = write_photo(&mut engine, "photo.bin");
+    let (root_cid, leaves) = staged_version(&alice);
+    let version: Vec<Vec<u8>> = leaves.into_iter().chain([root_cid]).collect();
 
     let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
@@ -2583,6 +2597,31 @@ fn a_standing_server_refusal_dead_letters_instead_of_cycling_forever() {
             .is_empty(),
         "and it has left the queue rather than parking its head"
     );
+    // The whole point of settling the op is that the member is told; settling it
+    // by destroying the only copy of their write would be the worse bug.
+    assert_blocks_staged(&alice, &version);
+}
+
+/// The staged version outlives the cold start that drops the op record, so the
+/// preservation is durable rather than an artefact of this session's queue.
+#[test]
+fn a_dead_lettered_uploads_version_survives_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(pin_store_unavailable())));
+    write_photo(&mut engine, "photo.bin");
+    let (root_cid, leaves) = staged_version(&alice);
+    let version: Vec<Vec<u8>> = leaves.into_iter().chain([root_cid]).collect();
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+    drop(engine);
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+    assert_blocks_staged(&alice, &version);
 }
 
 /// An over-quota refusal is a hold, not a failed attempt: the op and its

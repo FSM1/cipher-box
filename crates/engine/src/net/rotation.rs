@@ -806,6 +806,9 @@ struct SweptScopeSource {
     read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     parent_node_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
+    /// Whether the gated record carried an ascent link, so the index repair's
+    /// re-seal cannot silently publish this root without one.
+    carried_ascent_link: bool,
     commitment: GrantSetCommitment,
     commitment_sig: [u8; ECDSA_SIG_LEN],
     history_links: Vec<SignedSealed>,
@@ -1021,6 +1024,7 @@ where
             read_scope_seed,
             write_scope_seed: write_scope_seed.clone(),
             parent_node_seed: self.ancestry.parent_node_seed(&scope.scope_id),
+            carried_ascent_link: section.ascent_link.is_some(),
             commitment: section.commitment,
             commitment_sig: section.commitment_sig,
             history_links: section.history_links,
@@ -1213,6 +1217,7 @@ where
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: Some(self.keys.enc_secret),
                 parent_node_seed: source.parent_node_seed.as_deref(),
+                owes_ascent_link: source.carried_ascent_link,
                 pseudonym_signer: &pseudonym_signer,
             },
             &ResealSeeds {
@@ -1519,6 +1524,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::UnusableRecipientKey
         | ResealError::TagNotBoundToRecipient
         | ResealError::AscentLinkMismatch
+        | ResealError::AscentLinkDropped
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
@@ -1874,6 +1880,7 @@ where
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: Some(self.owner_enc_secret),
                 parent_node_seed: self.parent_node_seed,
+                owes_ascent_link: plane.section.ascent_link.is_some(),
                 pseudonym_signer: &pseudonym_signer,
             },
             &ResealSeeds {
@@ -2775,6 +2782,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
                 parent_node_seed: None,
+                owes_ascent_link: false,
                 pseudonym_signer: &pseudonym,
             },
             &ResealSeeds {
@@ -3071,6 +3079,7 @@ mod tests {
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
@@ -3169,6 +3178,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
                 parent_node_seed,
+                owes_ascent_link: parent_node_seed.is_some(),
                 pseudonym_signer: &pseudonym,
             },
             &ResealSeeds {
@@ -3520,6 +3530,7 @@ mod tests {
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
@@ -4885,6 +4896,7 @@ mod tests {
             ResealError::UnusableRecipientKey,
             ResealError::TagNotBoundToRecipient,
             ResealError::AscentLinkMismatch,
+            ResealError::AscentLinkDropped,
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
@@ -4902,6 +4914,7 @@ mod tests {
                 | ResealError::UnusableRecipientKey
                 | ResealError::TagNotBoundToRecipient
                 | ResealError::AscentLinkMismatch
+                | ResealError::AscentLinkDropped
                 | ResealError::TooManyHistoryLinks
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending

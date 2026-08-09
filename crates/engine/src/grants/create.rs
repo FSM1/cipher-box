@@ -348,6 +348,8 @@ where
             owner_enc_pub: grantee.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(grantee.parent_node_seed),
+            // A grant on an interior folder anchors a scope under its parent.
+            owes_ascent_link: true,
             pseudonym_signer: owner.pseudonym_signer,
         };
         let seeds = ResealSeeds {
@@ -411,6 +413,7 @@ where
             owner_enc_pub: &target.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
             parent_node_seed: Some(&parent_node_seed),
+            owes_ascent_link: true,
             pseudonym_signer: &target.pseudonym_signer,
         };
         let seeds = ResealSeeds {
@@ -975,6 +978,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
                 parent_node_seed: None,
+                owes_ascent_link: false,
                 pseudonym_signer: &owner_pseudonym,
             },
             seeds: ResealSeeds {
@@ -1087,6 +1091,7 @@ mod tests {
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &owner_pseudonym,
                 },
                 seeds: ResealSeeds {
