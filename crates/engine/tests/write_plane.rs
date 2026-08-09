@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
-    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, GatewaySource, PinMode, RetentionPolicy, SealedChunk,
+    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
     assemble, decode_root,
 };
 use cipherbox_engine::facade::PendingClass;
@@ -578,10 +578,7 @@ fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, 
         // plane, not the auth handshake.
         ApiBaseUrl::offline(),
         GatewayConfig {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: None,
-            }),
+            accelerator: Some("https://gw.test".into()),
             public_fallbacks: Vec::new(),
         },
     )
@@ -602,10 +599,7 @@ fn engine_on_api(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamType
         StoragePolicy::CI,
         ApiBaseUrl::parse("http://api.test").expect("a configured base"),
         GatewayConfig {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: None,
-            }),
+            accelerator: Some("https://gw.test".into()),
             public_fallbacks: Vec::new(),
         },
     )
@@ -3403,13 +3397,10 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
     assert_eq!(parents[0].id, photos);
 
     let gateway = GatewayConfig {
-        accelerator: Some(GatewaySource {
-            base_url: "https://gw.test".into(),
-            bearer: None,
-        }),
+        accelerator: Some("https://gw.test".into()),
         public_fallbacks: Vec::new(),
     }
-    .into_gateway();
+    .into_gateway(SessionBearer::default());
     let adopter = ChildAdopter::new(
         &gateway,
         &bob.http,
@@ -7975,4 +7966,9 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
         "a prune that never expanded retires nothing"
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0, "and journals no debt");
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        2,
+        "and leaves the history it could not expand standing"
+    );
 }

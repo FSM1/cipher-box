@@ -24,7 +24,7 @@ use super::types::{
     SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest,
     TestLoginResponse, TokenResponse, UploadResult,
 };
-use crate::content::DAG_ROOT_CODEC;
+use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
     bearer_header,
@@ -50,8 +50,6 @@ const CID_CODEC_INDEX: usize = 1;
 /// single writer (blueprint/engine.md Facade), so interior mutability with no
 /// borrow held across an `await` is sufficient — no lock is needed.
 struct State {
-    /// The short-lived access JWT, in memory only. Zeroized on replacement/drop.
-    access_token: Option<Zeroizing<String>>,
     /// Waiters coalesced behind the one in-flight refresh (single-flight).
     /// `Some(vec)` means a refresh is in progress; the leader owns the vec and
     /// notifies every waiter with a clone of the result when it finishes.
@@ -89,6 +87,11 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     http: H,
     credentials: C,
     base_url: String,
+    /// The short-lived access JWT, in memory only. Zeroized on replacement/drop.
+    /// A [`SessionBearer`] rather than a plain field so the read accelerator can
+    /// share the same cell ([`with_session_bearer`](Self::with_session_bearer))
+    /// and present the token this client rotates.
+    session: SessionBearer,
     state: RefCell<State>,
 }
 
@@ -104,11 +107,20 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             http,
             credentials,
             base_url: base,
+            session: SessionBearer::default(),
             state: RefCell::new(State {
-                access_token: None,
                 refresh_waiters: None,
             }),
         }
+    }
+
+    /// Publish this session's access token into `bearer` instead of a private
+    /// cell, so the read accelerator's gateway leg presents the live token and
+    /// follows every refresh rotation and logout without being rebuilt. Called
+    /// before login, while no token is held.
+    pub fn with_session_bearer(mut self, bearer: SessionBearer) -> Self {
+        self.session = bearer;
+        self
     }
 
     /// The API base URL, without a trailing slash.
@@ -118,7 +130,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
     /// Whether an access token is currently held in memory.
     pub fn is_authenticated(&self) -> bool {
-        self.state.borrow().access_token.is_some()
+        self.session.is_held()
     }
 
     // --- auth: identity, SIWE, test-login, refresh, logout ---
@@ -545,26 +557,18 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         for (name, value) in extra_headers {
             headers.push(((*name).to_owned(), (*value).to_owned()));
         }
-        // Scope the borrow so it never crosses the await below.
-        let bearer = {
-            let mut state = self.state.borrow_mut();
-            let built = state
-                .access_token
-                .as_ref()
-                .map(|token| bearer_header(token.as_str()));
-            match built {
-                Some(Ok(header)) => Some(header),
-                // Drop a token that can never be a header value instead of
-                // refusing every later call while still holding it: the next
-                // call then goes out unauthenticated and its 401 drives one
-                // refresh. The refresh credential is a separate secret and
-                // stays, so a malformed response cannot end the session.
-                Some(Err(_)) => {
-                    state.access_token = None;
-                    return Err(ApiError::Decode("unusable access token".into()));
-                }
-                None => None,
+        let bearer = match self.session.peek().map(|t| bearer_header(t.as_str())) {
+            Some(Ok(header)) => Some(header),
+            // Drop a token that can never be a header value instead of
+            // refusing every later call while still holding it: the next
+            // call then goes out unauthenticated and its 401 drives one
+            // refresh. The refresh credential is a separate secret and
+            // stays, so a malformed response cannot end the session.
+            Some(Err(_)) => {
+                self.session.clear();
+                return Err(ApiError::Decode("unusable access token".into()));
             }
+            None => None,
         };
         if let Some(header) = bearer {
             headers.push(header);
@@ -636,13 +640,13 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         self.credentials
             .store_refresh_token(refresh_token.as_bytes())
             .await?;
-        self.state.borrow_mut().access_token = Some(Zeroizing::new(access_token));
+        self.session.set(access_token);
         Ok(())
     }
 
     /// Drop the in-memory access token and any persisted refresh token.
     async fn clear_session(&self) -> Result<(), ApiError> {
-        self.state.borrow_mut().access_token = None;
+        self.session.clear();
         self.credentials.clear_refresh_token().await?;
         Ok(())
     }

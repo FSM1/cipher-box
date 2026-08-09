@@ -951,7 +951,7 @@ fn kind_str(kind: ByoKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::GatewayConfig;
+    use crate::content::{GatewayConfig, SessionBearer};
     use crate::testkit::{FakeWorld, SeededEntropy, block_on};
 
     fn keep(n: u64) -> RetentionPolicy {
@@ -1226,7 +1226,7 @@ mod tests {
             accelerator: None,
             public_fallbacks: Vec::new(),
         }
-        .into_gateway();
+        .into_gateway(SessionBearer::default());
 
         let marks = [
             name.as_str().as_bytes().to_vec(),

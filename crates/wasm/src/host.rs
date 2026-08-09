@@ -20,8 +20,8 @@ use std::rc::Rc;
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
-    ContentProfile, Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes,
-    StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
+    ContentProfile, Entropy, EntropyError, GatewayConfig, SeamSet, SeamTypes, StoragePlatform,
+    StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -88,8 +88,10 @@ impl EngineHandle {
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
-    /// is configured from `acceleratorBaseUrl` (+ optional `acceleratorBearer`)
-    /// and `publicGateways`.
+    /// is configured from `acceleratorBaseUrl` and `publicGateways`;
+    /// `acceleratorBearer` is refused, because the accelerator's credential is
+    /// the session access token the engine holds in linear memory and never
+    /// surfaces.
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,
@@ -105,6 +107,13 @@ impl EngineHandle {
         // Wrapped before the first `?`: an early return would otherwise drop the
         // Rust-owned bearer String unzeroized (security rule 7).
         let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+        // Refused rather than ignored: a host that reached a credential into the
+        // public bundle must hear that it did, not have it silently dropped.
+        if accelerator_bearer.is_some() {
+            return Err(JsError::new(
+                "acceleratorBearer is refused: the accelerator credential is session-scoped",
+            ));
+        }
 
         let api_base_url = ApiBaseUrl::parse(api_base_url.as_deref().unwrap_or_default())?;
 
@@ -160,18 +169,8 @@ impl EngineHandle {
         // reads fail closed as `Unavailable` (availability, never a trust
         // violation).
         let gateway = GatewayConfig {
-            accelerator: accelerator_base_url.map(|base_url| GatewaySource {
-                base_url,
-                bearer: accelerator_bearer,
-            }),
-            public_fallbacks: public_gateways
-                .unwrap_or_default()
-                .into_iter()
-                .map(|base_url| GatewaySource {
-                    base_url,
-                    bearer: None,
-                })
-                .collect(),
+            accelerator: accelerator_base_url,
+            public_fallbacks: public_gateways.unwrap_or_default(),
         };
 
         let (engine, events) = Engine::new(
@@ -607,5 +606,31 @@ mod tests {
             );
             assert!(message.contains("apiBaseUrl"), "{message}");
         }
+    }
+
+    /// A bearer reaching the constructor came from a build-time variable in the
+    /// public bundle. Refused loudly rather than dropped, and refused ahead of
+    /// every other check so no partly-built engine holds it.
+    #[wasm_bindgen_test]
+    fn a_host_supplied_accelerator_bearer_is_refused() {
+        let error = EngineHandle::new(
+            js_sys::Object::new().into(),
+            None,
+            Some("http://api.test".to_owned()),
+            Some("https://gw.test".to_owned()),
+            Some("a-build-time-token".to_owned()),
+            None,
+            None,
+        )
+        .err()
+        .expect("a host-supplied bearer is a construction failure");
+
+        let message = String::from(
+            JsValue::from(error)
+                .unchecked_into::<js_sys::Error>()
+                .message(),
+        );
+        assert!(message.contains("acceleratorBearer"), "{message}");
+        assert!(!message.contains("a-build-time-token"), "{message}");
     }
 }

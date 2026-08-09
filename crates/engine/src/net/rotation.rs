@@ -2305,7 +2305,7 @@ mod tests {
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
     use super::*;
-    use crate::content::GatewaySource;
+    use crate::content::{GatewaySource, SessionBearer};
     use crate::rotation::sweep::sim;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
@@ -2515,7 +2515,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: Some(GatewaySource {
                         base_url: "https://gw.test".into(),
-                        bearer: None,
+                        bearer: SessionBearer::default(),
                     }),
                     public_fallbacks: Vec::new(),
                 },

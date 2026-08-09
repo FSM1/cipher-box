@@ -31,7 +31,7 @@ pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
 };
 pub use read::{
-    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, is_plane_anchor,
+    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, SessionBearer, is_plane_anchor,
     leaf_range_for_byte_range, read_block,
 };
 pub use retention::{

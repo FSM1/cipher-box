@@ -52,9 +52,9 @@ pub use content::{
     ContentWriter, DAG_ROOT_CODEC, DagError, ExpandError, Expansion, FinishedContent, Gateway,
     GatewayConfig, GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded,
     ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RetireTarget, RootManifest, SealError,
-    SealedChunk, SealedContent, assemble, decode_root, expand_retire_targets, frame_and_seal,
-    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_one_chunk,
-    test_connection, validate_byo_config,
+    SealedChunk, SealedContent, SessionBearer, assemble, decode_root, expand_retire_targets,
+    frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
+    seal_one_chunk, test_connection, validate_byo_config,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{

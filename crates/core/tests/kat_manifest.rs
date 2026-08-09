@@ -1475,6 +1475,66 @@ fn vector_names_are_unique_within_each_file() {
     }
 }
 
+/// Every `ephemeralScalar` the embedded corpus carries, paired with the vector
+/// it belongs to. Walks the parsed JSON rather than the typed families so a
+/// family added later is covered without being enrolled anywhere.
+fn ephemeral_scalars<'a>(value: &'a serde_json::Value, out: &mut Vec<(&'a str, &'a str)>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                ephemeral_scalars(item, out);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            if let Some(scalar) = fields.get("ephemeralScalar").and_then(|s| s.as_str()) {
+                let name = fields
+                    .get("name")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("<unnamed>");
+                out.push((name, scalar));
+            }
+            for nested in fields.values() {
+                ephemeral_scalars(nested, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// How many HPKE-sealed vectors the corpus pins, the anti-vacuity backstop for
+/// the freshness walk below: a renamed field or a dropped family would
+/// otherwise leave it asserting over nothing.
+const HPKE_EPHEMERAL_VECTOR_COUNT: usize = 20;
+
+/// HPKE ephemeral reuse under one recipient key and `info` is a confidentiality
+/// break (`seal::seal_owner_local`), and several accept families seal every
+/// vector to the same recipient under the same `info` — so within one file a
+/// repeated scalar is that break. Only a regenerated corpus could introduce
+/// one, which is exactly when it would slip in unnoticed. Distinct files seal
+/// under distinct recipients, so freshness is pinned per file.
+#[test]
+fn ephemeral_scalars_are_fresh_within_each_vector_file() {
+    let mut total = 0;
+    for (path, body) in FIXTURES {
+        let parsed: serde_json::Value =
+            serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: not JSON ({e})"));
+        let mut found = Vec::new();
+        ephemeral_scalars(&parsed, &mut found);
+        total += found.len();
+        let mut seen = BTreeSet::new();
+        for (name, scalar) in found {
+            assert!(
+                seen.insert(scalar),
+                "{path}: vector {name} repeats another vector's ephemeral scalar"
+            );
+        }
+    }
+    assert_eq!(
+        total, HPKE_EPHEMERAL_VECTOR_COUNT,
+        "hpke ephemeral vector count drift"
+    );
+}
+
 /// The codec's decode-reachable checks, fixed HERE as the anti-vacuity anchor
 /// (mirrors kat_gen.rs). The suite/kdf checks live on the same error surface
 /// but are pinned by the contact and hpke families, not the codec reject file.

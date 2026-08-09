@@ -13,7 +13,7 @@ use super::SeededEntropy;
 use super::fakes::ScriptedHttp;
 use crate::content::{
     ContentKey, ContentProfile, ContentVersion, ContentWriter, Gateway, GatewaySource, SealedChunk,
-    SealedContent,
+    SealedContent, SessionBearer,
 };
 use crate::seams::{HttpResponse, SeamError};
 
@@ -83,7 +83,7 @@ pub fn gateway() -> Gateway {
         accelerator: None,
         public_fallbacks: vec![GatewaySource {
             base_url: "https://public.gw.test".into(),
-            bearer: None,
+            bearer: SessionBearer::default(),
         }],
     }
 }

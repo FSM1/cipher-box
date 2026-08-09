@@ -29,8 +29,8 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    DefaultsReason, Gateway, GatewayConfig, GatewaySource, OrphanHeads, ProviderError,
-    RetentionPolicy, SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings,
+    DefaultsReason, Gateway, GatewayConfig, OrphanHeads, ProviderError, RetentionPolicy,
+    SessionBearer, SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings,
     load_settings, publish_settings, settings_name,
 };
 
@@ -132,12 +132,9 @@ fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
 fn gateway() -> Gateway {
     GatewayConfig {
         accelerator: None,
-        public_fallbacks: vec![GatewaySource {
-            base_url: "http://gateway.test".to_owned(),
-            bearer: None,
-        }],
+        public_fallbacks: vec!["http://gateway.test".to_owned()],
     }
-    .into_gateway()
+    .into_gateway(SessionBearer::default())
 }
 
 fn configured() -> VaultSettings {
