@@ -109,8 +109,7 @@ cipher-box/
 Prerequisites: Node.js 22+, pnpm 10+, Docker, and the Rust toolchain (pinned by
 `rust-toolchain.toml`).
 
-There are no `.env` files to copy. Every variable the stack needs is exported inline
-below, so the recipe is read in the same breath as the commands that consume it.
+There are no `.env` files to copy — every variable the stack needs is exported inline below.
 
 ### 1. Start the infrastructure
 
@@ -120,13 +119,19 @@ pnpm install
 ```
 
 That brings up Postgres (5432), Kubo (5001 RPC, 8080 gateway), someguy (8190), and the
-mock record store (3001). Wait for them to report healthy:
+mock record store (3001). Kubo's RPC is an unauthenticated admin API and the dev compose
+binds it to all interfaces, so run this stack on a network you trust. Wait for the
+services to report healthy:
 
 ```bash
 docker compose -f docker/docker-compose.yml ps
 ```
 
 ### 2. Configure and start the API
+
+The two secrets below are throwaway values for a loopback stack. Never reuse them in
+any deployed environment: `JWT_SECRET` signs access tokens, and a `TEST_LOGIN_SECRET`
+known to a reader mints a session for any account outside production.
 
 ```bash
 export DB_HOST=localhost DB_PORT=5432 DB_USERNAME=postgres \
@@ -147,7 +152,7 @@ the same endpoint. The API logs an error at boot when it is unset.
 
 ### 3. Build and serve the web app
 
-In a second shell, with the same `docker compose` stack up:
+In a second shell:
 
 ```bash
 export VITE_API_URL=http://localhost:3000 \
@@ -161,9 +166,9 @@ pnpm --filter @cipherbox/web dev
 - API: <http://localhost:3000> (OpenAPI at `/api-docs`)
 - Web: <http://localhost:5173>
 
-`VITE_ROUTING_ENDPOINTS` must be set: unset it defaults to the public
-`https://delegated-ipfs.dev`, which will not see records this stack publishes.
-`VITE_READ_ACCELERATOR_URL` is optional — left unset the content gateway stays dormant,
+`VITE_ROUTING_ENDPOINTS` must be set — unset it defaults to the public
+`https://delegated-ipfs.dev`; see "Which record store the local stack uses" below.
+`VITE_READ_ACCELERATOR_URL` is optional: left unset the content gateway stays dormant,
 which is its fail-closed state, and reads fall back to the endpoints the engine already
 has.
 
@@ -194,7 +199,6 @@ authenticated session use the build-time introspection hook instead; see
 
 A first folder create does not yet publish, because nothing provisions a fresh account's
 first vault pointer, so its writes are accepted, rendered pending, and reach no endpoint.
-That is the remaining gap between this stack and a full demo.
 
 ## Security model
 

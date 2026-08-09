@@ -394,4 +394,4 @@ Detailed specifications are maintained in separate documents:
   discipline, naming conventions, do-and-don't rules
 - [CAPACITY.md](CAPACITY.md) — storage limits, quota accounting, capacity planning
 - [VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md) — vault export/import format spec
-- [DEVELOPMENT.md](DEVELOPMENT.md) — local dev setup, environment variables, workflow
+- [../README.md](../README.md) — local dev setup: the one recipe that boots the stack
