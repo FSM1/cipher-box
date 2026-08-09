@@ -6,7 +6,7 @@ import { buildJwtOptions } from '../auth/auth.module';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
-import { KuboPinStore, PinStore } from '../registry/pin-store';
+import { RegistryModule } from '../registry/registry.module';
 import { ContentController } from './content.controller';
 import { ContentService } from './content.service';
 
@@ -19,6 +19,7 @@ import { ContentService } from './content.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([PinnedCid, User]),
+    RegistryModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -26,6 +27,6 @@ import { ContentService } from './content.service';
     }),
   ],
   controllers: [ContentController],
-  providers: [ContentService, JwtAuthGuard, { provide: PinStore, useClass: KuboPinStore }],
+  providers: [ContentService, JwtAuthGuard],
 })
 export class ContentModule {}

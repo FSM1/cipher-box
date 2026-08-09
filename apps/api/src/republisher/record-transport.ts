@@ -59,6 +59,11 @@ export class RoutingV1RecordTransport extends RecordTransport {
     this.baseUrl = raw && raw.trim() ? raw.replace(/\/+$/, '') : undefined;
     const timeout = Number(configService.get('ROUTING_V1_TIMEOUT_MS'));
     this.timeoutMs = Number.isInteger(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS;
+    if (!this.baseUrl) {
+      // The walk returns before it can alert, so boot is the only place this
+      // surfaces before names start expiring.
+      this.logger.error('ROUTING_V1_URL is unset; the republisher walk will not run');
+    }
   }
 
   override get configured(): boolean {

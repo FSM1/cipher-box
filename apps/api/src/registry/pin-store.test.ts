@@ -1,5 +1,5 @@
-import { ServiceUnavailableException } from '@nestjs/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fakeConfig } from '../testing/fakes';
 import { KuboPinStore, PinCidMismatchError } from './pin-store';
 
@@ -84,5 +84,28 @@ describe('KuboPinStore.pin', () => {
       ServiceUnavailableException
     );
     expect(calls).toEqual([]);
+  });
+});
+
+describe('KuboPinStore configuration report', () => {
+  let errorSpy: MockInstance<Logger['error']>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the unset variable and its consequence at construction', () => {
+    store('');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('KUBO_API_URL'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('503'));
+  });
+
+  it('stays silent when Kubo is configured', () => {
+    store();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

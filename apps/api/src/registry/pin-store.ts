@@ -72,6 +72,13 @@ export class KuboPinStore extends PinStore {
     super();
     const raw = configService.get<string>('KUBO_API_URL');
     this.apiUrl = raw && raw.trim() ? raw.replace(/\/+$/, '') : undefined;
+    if (!this.apiUrl) {
+      // At boot, not per request: otherwise a misconfigured deploy only learns
+      // this under load.
+      this.logger.error(
+        'KUBO_API_URL is unset; hosted uploads will be refused with 503 and unpins will no-op'
+      );
+    }
   }
 
   override async pin(cid: string, bytes: Uint8Array): Promise<void> {

@@ -109,27 +109,86 @@ cipher-box/
 Prerequisites: Node.js 22+, pnpm 10+, Docker, and the Rust toolchain (pinned by
 `rust-toolchain.toml`).
 
+Both services read a `.env` copied from a checked-in template. Those templates are the
+one place the local stack's configuration is written down; this page does not repeat
+their contents.
+
+### 1. Start the infrastructure
+
 ```bash
-# 1. Start infrastructure services
-docker compose -f docker/docker-compose.yml up -d
-
-# 2. Install dependencies
+docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 180
 pnpm install
-
-# 3. Copy environment files
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-
-# 4. Start API and web app
-pnpm dev
 ```
 
-- API: <http://localhost:3000>
+That brings up Postgres (5432), Kubo (5001 RPC, 8080 gateway), someguy (8190), and the
+mock record store (3001). Kubo's RPC is an unauthenticated admin API and the dev compose
+binds it to all interfaces, so run this stack on a network you trust.
+
+`--wait` holds until every service's healthcheck passes and exits non-zero if one does
+not within the timeout, so the migration below cannot race a Postgres still starting.
+
+### 2. Configure and start the API
+
+```bash
+cp apps/api/.env.example apps/api/.env
+
+pnpm --filter @cipherbox/api migration:run
+pnpm --filter @cipherbox/api dev
+```
+
+The template's defaults match the compose stack, so it runs as copied. Both the server
+and the migration CLI read `apps/api/.env` from the package directory, which
+`pnpm --filter` sets as the working directory.
+
+Its two secrets are throwaway values for a loopback stack — never reuse them in a
+deployed environment. `JWT_SECRET` signs access tokens, and anyone holding
+`TEST_LOGIN_SECRET` can mint a session for any account outside production.
+
+### 3. Build and serve the web app
+
+In a second shell:
+
+```bash
+cp apps/web/.env.example apps/web/.env
+
+pnpm --filter @cipherbox/web dev
+```
+
+- API: <http://localhost:3000> (OpenAPI at `/api-docs`)
 - Web: <http://localhost:5173>
 
-Note that during the rewrite this boots the v2 skeleton (a stub API and web shell); the
-legacy [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) still describes the v1 setup and is being
-rewritten during the build.
+Vite reads `.env` at build time, so rebuild after editing it. The template leaves
+`VITE_READ_ACCELERATOR_URL` commented out on purpose: dormant is the content gateway's
+fail-closed state, and a blank value must land there rather than configuring a gateway
+whose every request fails.
+
+### Which record store the local stack uses
+
+Compose starts two `/routing/v1` backends, and a local stack should use
+**`mock-ipns-routing` on port 3001** — what both templates ship, as `ROUTING_V1_URL`
+(API republisher) and `VITE_ROUTING_ENDPOINTS` (web client). It is hermetic and
+in-memory, so a record published locally resolves immediately and deterministically, and
+no test vault's IPNS names reach the public network. CI and the web-e2e suite make the
+same choice.
+
+`someguy` on 8190 participates in the real accelerated DHT. It is there for staging
+parity and for deliberately testing public-network propagation; point the two variables
+above at `http://localhost:8190` only when that is what you are testing. Both must name
+the same backend, or the republisher re-PUTs into a store the client never reads.
+
+### What this stack can demonstrate today
+
+The API's write path is live end to end: authenticate and `POST /content/upload`
+returns 201 with bytes pinned in the local Kubo.
+
+Interactive login through the web UI needs `VITE_WEB3AUTH_CLIENT_ID` and
+`VITE_WEB3AUTH_VERIFIER`, which a clean checkout does not carry — the UI boots and
+renders without them, but a Core Kit session cannot be created. The suites that need an
+authenticated session use the build-time introspection hook instead; see
+[`tests/web-e2e/README.md`](tests/web-e2e/README.md).
+
+A first folder create does not yet publish, because nothing provisions a fresh account's
+first vault pointer, so its writes are accepted, rendered pending, and reach no endpoint.
 
 ## Security model
 
