@@ -1795,11 +1795,9 @@ impl<T: SeamTypes> Engine<T> {
             }
         };
         // An empty chain is an account that has never published: mint its genesis
-        // vault before anything reads one. Fail-closed on the same terms as cold
-        // start, so no half-provisioned account reaches the seed deposits or the
-        // tick loop (`sync/provision.rs`). Register-first has no offline form, so
-        // the harness's no-API mode skips provisioning for the same reason it
-        // skips login ([`ApiBaseUrl::offline`]).
+        // vault before anything reads one (`sync/provision.rs`). Register-first
+        // has no offline form, so the harness's no-API mode skips provisioning
+        // for the same reason it skips login ([`ApiBaseUrl::offline`]).
         let provisioned =
             if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
                 match self.provision_first_run_vault(&api, root_scope_id).await {
