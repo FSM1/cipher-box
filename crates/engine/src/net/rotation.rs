@@ -2305,7 +2305,7 @@ mod tests {
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
     use super::*;
-    use crate::content::{GatewaySource, SessionBearer};
+    use crate::content::GatewaySource;
     use crate::rotation::sweep::sim;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
@@ -2513,10 +2513,7 @@ mod tests {
                 api,
                 floors: device.floor_store.clone(),
                 gateway: Gateway {
-                    accelerator: Some(GatewaySource {
-                        base_url: "https://gw.test".into(),
-                        bearer: SessionBearer::default(),
-                    }),
+                    accelerator: Some(GatewaySource::public("https://gw.test")),
                     public_fallbacks: Vec::new(),
                 },
                 profile: SyncTimingProfile::CI,

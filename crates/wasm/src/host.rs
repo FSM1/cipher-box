@@ -89,9 +89,8 @@ impl EngineHandle {
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
     /// is configured from `acceleratorBaseUrl` and `publicGateways`;
-    /// `acceleratorBearer` is refused, because the accelerator's credential is
-    /// the session access token the engine holds in linear memory and never
-    /// surfaces.
+    /// `acceleratorBearer` is refused (the accelerator's credential is the
+    /// engine's session token, never a host's).
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,
@@ -107,8 +106,8 @@ impl EngineHandle {
         // Wrapped before the first `?`: an early return would otherwise drop the
         // Rust-owned bearer String unzeroized (security rule 7).
         let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
-        // Refused rather than ignored: a host that reached a credential into the
-        // public bundle must hear that it did, not have it silently dropped.
+        // Refused, not ignored: a credential reaching here came from the public
+        // bundle, and the host must hear that rather than have it dropped.
         if accelerator_bearer.is_some() {
             return Err(JsError::new(
                 "acceleratorBearer is refused: the accelerator credential is session-scoped",
@@ -609,28 +608,30 @@ mod tests {
     }
 
     /// A bearer reaching the constructor came from a build-time variable in the
-    /// public bundle. Refused loudly rather than dropped, and refused ahead of
-    /// every other check so no partly-built engine holds it.
+    /// public bundle, so it is refused rather than dropped — and refused before
+    /// the `apiBaseUrl` check, which the blank base here is what proves.
     #[wasm_bindgen_test]
-    fn a_host_supplied_accelerator_bearer_is_refused() {
-        let error = EngineHandle::new(
-            js_sys::Object::new().into(),
-            None,
-            Some("http://api.test".to_owned()),
-            Some("https://gw.test".to_owned()),
-            Some("a-build-time-token".to_owned()),
-            None,
-            None,
-        )
-        .err()
-        .expect("a host-supplied bearer is a construction failure");
+    fn a_host_supplied_accelerator_bearer_is_refused_first() {
+        for api_base_url in [Some("http://api.test".to_owned()), None] {
+            let error = EngineHandle::new(
+                js_sys::Object::new().into(),
+                None,
+                api_base_url,
+                Some("https://gw.test".to_owned()),
+                Some("a-build-time-token".to_owned()),
+                None,
+                None,
+            )
+            .err()
+            .expect("a host-supplied bearer is a construction failure");
 
-        let message = String::from(
-            JsValue::from(error)
-                .unchecked_into::<js_sys::Error>()
-                .message(),
-        );
-        assert!(message.contains("acceleratorBearer"), "{message}");
-        assert!(!message.contains("a-build-time-token"), "{message}");
+            let message = String::from(
+                JsValue::from(error)
+                    .unchecked_into::<js_sys::Error>()
+                    .message(),
+            );
+            assert!(message.contains("acceleratorBearer"), "{message}");
+            assert!(!message.contains("a-build-time-token"), "{message}");
+        }
     }
 }

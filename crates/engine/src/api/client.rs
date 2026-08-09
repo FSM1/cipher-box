@@ -46,37 +46,32 @@ const CONTENT_CID: &str = "X-Content-Cid";
 /// Byte offset of the multicodec in the frozen CIDv1 framing.
 const CID_CODEC_INDEX: usize = 1;
 
-/// Mutable client state, single-owner behind a [`RefCell`]: the engine is the
-/// single writer (blueprint/engine.md Facade), so interior mutability with no
-/// borrow held across an `await` is sufficient — no lock is needed.
-struct State {
-    /// Waiters coalesced behind the one in-flight refresh (single-flight).
-    /// `Some(vec)` means a refresh is in progress; the leader owns the vec and
-    /// notifies every waiter with a clone of the result when it finishes.
-    refresh_waiters: Option<Vec<oneshot::Sender<Result<(), ApiError>>>>,
-}
+/// Waiters coalesced behind the one in-flight refresh (single-flight). `Some`
+/// means a refresh is in progress; the leader owns the vec and notifies every
+/// waiter with a clone of the result when it finishes.
+///
+/// Single-owner behind a [`RefCell`]: the engine is the single writer
+/// (blueprint/engine.md Facade), so interior mutability with no borrow held
+/// across an `await` is sufficient — no lock is needed.
+type RefreshWaiters = RefCell<Option<Vec<oneshot::Sender<Result<(), ApiError>>>>>;
 
 /// Holds single-flight leadership for one rotation and releases it on `Drop`,
 /// so a leader cancelled while parked on the network cannot leave the slot
 /// occupied by senders nothing will ever fire.
 struct RefreshLead<'a> {
-    state: &'a RefCell<State>,
+    waiters: &'a RefreshWaiters,
 }
 
 impl RefreshLead<'_> {
     /// Takes the waiters to notify, leaving the slot for `Drop` to release.
     fn waiters(&self) -> Vec<oneshot::Sender<Result<(), ApiError>>> {
-        self.state
-            .borrow_mut()
-            .refresh_waiters
-            .take()
-            .unwrap_or_default()
+        self.waiters.borrow_mut().take().unwrap_or_default()
     }
 }
 
 impl Drop for RefreshLead<'_> {
     fn drop(&mut self) {
-        self.state.borrow_mut().refresh_waiters = None;
+        *self.waiters.borrow_mut() = None;
     }
 }
 
@@ -88,11 +83,8 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     credentials: C,
     base_url: String,
     /// The short-lived access JWT, in memory only. Zeroized on replacement/drop.
-    /// A [`SessionBearer`] rather than a plain field so the read accelerator can
-    /// share the same cell ([`with_session_bearer`](Self::with_session_bearer))
-    /// and present the token this client rotates.
     session: SessionBearer,
-    state: RefCell<State>,
+    refresh_waiters: RefreshWaiters,
 }
 
 impl<H: Http, C: CredentialStore> ApiClient<H, C> {
@@ -108,16 +100,13 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             credentials,
             base_url: base,
             session: SessionBearer::default(),
-            state: RefCell::new(State {
-                refresh_waiters: None,
-            }),
+            refresh_waiters: RefCell::new(None),
         }
     }
 
-    /// Publish this session's access token into `bearer` instead of a private
-    /// cell, so the read accelerator's gateway leg presents the live token and
-    /// follows every refresh rotation and logout without being rebuilt. Called
-    /// before login, while no token is held.
+    /// Hold this session's access token in `bearer` rather than a private cell,
+    /// so a reader sharing it sees every rotation. Replaces the cell outright:
+    /// call it on a fresh client, before login.
     pub fn with_session_bearer(mut self, bearer: SessionBearer) -> Self {
         self.session = bearer;
         self
@@ -258,8 +247,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// token. On failure the local session is torn down.
     pub async fn refresh(&self) -> Result<(), ApiError> {
         let receiver = {
-            let mut state = self.state.borrow_mut();
-            match state.refresh_waiters.as_mut() {
+            let mut slot = self.refresh_waiters.borrow_mut();
+            match slot.as_mut() {
                 // A refresh is already running: enqueue and await its result.
                 Some(waiters) => {
                     let (tx, rx) = oneshot::channel();
@@ -268,7 +257,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 }
                 // We are the leader: mark a refresh in progress and run it.
                 None => {
-                    state.refresh_waiters = Some(Vec::new());
+                    *slot = Some(Vec::new());
                     None
                 }
             }
@@ -285,7 +274,9 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             };
         }
 
-        let lead = RefreshLead { state: &self.state };
+        let lead = RefreshLead {
+            waiters: &self.refresh_waiters,
+        };
         let result = self.do_refresh().await;
         for tx in lead.waiters() {
             let _ = tx.send(result.clone());

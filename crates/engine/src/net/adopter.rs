@@ -568,7 +568,7 @@ mod tests {
     use cipherbox_core::seal::{Envelope, GrantSection};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
-    use crate::content::{GatewaySource, SessionBearer};
+    use crate::content::GatewaySource;
     use crate::seams::HttpResponse;
     use crate::session::SessionIdentity;
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
@@ -674,10 +674,7 @@ mod tests {
 
     fn gateway() -> Gateway {
         Gateway {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: SessionBearer::default(),
-            }),
+            accelerator: Some(GatewaySource::public("https://gw.test")),
             public_fallbacks: Vec::new(),
         }
     }

@@ -1541,10 +1541,10 @@ pub struct Engine<T: SeamTypes> {
     /// Read by the cold-start [`RootAdopter`] and the resolve-tick driver's
     /// per-pass adopter.
     gateway: Gateway,
-    /// The read accelerator's credential, shared with the API client
-    /// [`start`](Self::start) builds: the accelerator is CipherBox's own
-    /// token-authed gateway, so the session access token is what gates it, and
-    /// no host-supplied build-time bearer exists to leak.
+    /// The session access token, shared by the API client [`start`](Self::start)
+    /// builds and the read accelerator's gateway leg — the accelerator is
+    /// CipherBox's own token-authed gateway, so the session is what gates it.
+    /// One cell for both: clearing it de-authenticates the API client too.
     accelerator_bearer: SessionBearer,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
@@ -1798,9 +1798,12 @@ impl<T: SeamTypes> Engine<T> {
             Err(err) => {
                 // Fail-closed symmetry with the login path: clear the derived
                 // session and the placement decision beside it, so no key material
-                // stays resident and the engine reports unstarted.
+                // stays resident and the engine reports unstarted. The access
+                // token login already stored outlives the dropped client in the
+                // shared bearer cell, so it is dropped here by name.
                 self.session = None;
                 *self.placement.borrow_mut() = None;
+                self.accelerator_bearer.clear();
                 return Err(EngineError::from_cold_start(err));
             }
         };
@@ -1923,9 +1926,10 @@ impl<T: SeamTypes> Engine<T> {
     /// because a panic while dropping aborts the process.
     fn shut_down(&self) {
         self.alive.set(false);
-        // The gateway clone a parked tick holds shares this cell, so clearing it
-        // is what stops a token outliving the engine (security rule 7).
-        self.accelerator_bearer.clear();
+        // Sealed, not cleared: the gateway clone a parked tick holds shares this
+        // cell, and a refresh still on the wire would re-arm a plain clear
+        // (security rule 7).
+        self.accelerator_bearer.seal();
         // Every parked manual refresh fails now: no pass is left to answer it.
         self.manual_refresh.close();
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {

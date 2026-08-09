@@ -13,7 +13,7 @@ use super::SeededEntropy;
 use super::fakes::ScriptedHttp;
 use crate::content::{
     ContentKey, ContentProfile, ContentVersion, ContentWriter, Gateway, GatewaySource, SealedChunk,
-    SealedContent, SessionBearer,
+    SealedContent,
 };
 use crate::seams::{HttpResponse, SeamError};
 
@@ -81,10 +81,7 @@ pub fn doomed_version(plaintext: &[u8]) -> (ContentVersion, Vec<u8>, Vec<String>
 pub fn gateway() -> Gateway {
     Gateway {
         accelerator: None,
-        public_fallbacks: vec![GatewaySource {
-            base_url: "https://public.gw.test".into(),
-            bearer: SessionBearer::default(),
-        }],
+        public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
     }
 }
 

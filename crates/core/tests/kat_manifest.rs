@@ -7,7 +7,7 @@
 //! through the committed generator (`examples/kat_gen.rs`); the exact counts
 //! and coverage lists here are the anti-vacuity backstop.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 // On wasm32-unknown-unknown (the browser-shaped KAT leg) there is no libtest
 // harness; wasm-bindgen-test provides one. Shadowing `test` with its attribute
@@ -1475,52 +1475,62 @@ fn vector_names_are_unique_within_each_file() {
     }
 }
 
-/// Every `ephemeralScalar` the embedded corpus carries, paired with the vector
-/// it belongs to. Walks the parsed JSON rather than the typed families so a
-/// family added later is covered without being enrolled anywhere.
-fn ephemeral_scalars<'a>(value: &'a serde_json::Value, out: &mut Vec<(&'a str, &'a str)>) {
-    match value {
-        serde_json::Value::Array(items) => {
-            for item in items {
-                ephemeral_scalars(item, out);
-            }
-        }
-        serde_json::Value::Object(fields) => {
-            if let Some(scalar) = fields.get("ephemeralScalar").and_then(|s| s.as_str()) {
-                let name = fields
-                    .get("name")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("<unnamed>");
-                out.push((name, scalar));
-            }
-            for nested in fields.values() {
-                ephemeral_scalars(nested, out);
-            }
-        }
-        _ => {}
-    }
+/// Which vector files carry HPKE ephemerals, and how many each pins — the
+/// anti-vacuity anchor for the freshness check below, in the same shape as the
+/// other named domains here. A family that stopped emitting `ephemeralScalar`
+/// would silently drop out of a bare total; naming the files makes it a failure
+/// that says which one went dark.
+const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
+    ("vectors/content_key/content_key_accept.json", 2),
+    ("vectors/grant/ascent_link_accept.json", 1),
+    ("vectors/grant/grant_blob_accept.json", 2),
+    ("vectors/grant/owner_blob_accept.json", 1),
+    ("vectors/grant/owner_write_blob_accept.json", 1),
+    ("vectors/hpke/seal.json", 3),
+    ("vectors/op_record/op_record_accept.json", 2),
+    ("vectors/owner_local/owner_local_accept.json", 4),
+    ("vectors/payload/mailbox_accept.json", 2),
+    ("vectors/settings_record/settings_record_accept.json", 2),
+];
+
+/// Every `(vector name, ephemeral scalar)` a vector file pins, scalars folded to
+/// lowercase so a generator that switched hex case could not hide a byte-level
+/// repeat behind a string comparison.
+fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, String)> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: not JSON ({e})"));
+    parsed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|vector| {
+            let scalar = vector.get("ephemeralScalar")?.as_str()?;
+            let name = vector.get("name").and_then(|n| n.as_str()).unwrap_or(path);
+            Some((name.to_owned(), scalar.to_ascii_lowercase()))
+        })
+        .collect()
 }
 
-/// How many HPKE-sealed vectors the corpus pins, the anti-vacuity backstop for
-/// the freshness walk below: a renamed field or a dropped family would
-/// otherwise leave it asserting over nothing.
-const HPKE_EPHEMERAL_VECTOR_COUNT: usize = 20;
-
-/// HPKE ephemeral reuse under one recipient key and `info` is a confidentiality
-/// break (`seal::seal_owner_local`), and several accept families seal every
-/// vector to the same recipient under the same `info` — so within one file a
-/// repeated scalar is that break. Only a regenerated corpus could introduce
-/// one, which is exactly when it would slip in unnoticed. Distinct files seal
-/// under distinct recipients, so freshness is pinned per file.
+/// HPKE ephemeral reuse under one recipient key and one `info` is a
+/// confidentiality break (`seal::seal_owner_local`). A vector file is a superset
+/// of each `(recipient, info)` group inside it — `owner_local_accept` alone
+/// spans four `info` values and pins two vectors under one — so per-file
+/// uniqueness forbids every real repeat, plus some harmless ones.
+///
+/// It is deliberately not pinned corpus-wide: separate families do reuse a
+/// scalar under one recipient and *different* `info` values, which the key
+/// schedule separates — `content_key_accept` and `settings_record_accept` share
+/// both their recipient and both their scalars today. Only a regenerated corpus
+/// could introduce a real repeat, which is exactly when it would go unnoticed.
 #[test]
 fn ephemeral_scalars_are_fresh_within_each_vector_file() {
-    let mut total = 0;
+    let mut pinned = BTreeMap::new();
     for (path, body) in FIXTURES {
-        let parsed: serde_json::Value =
-            serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: not JSON ({e})"));
-        let mut found = Vec::new();
-        ephemeral_scalars(&parsed, &mut found);
-        total += found.len();
+        let found = ephemeral_scalars(body, path);
+        if found.is_empty() {
+            continue;
+        }
+        pinned.insert(*path, found.len());
         let mut seen = BTreeSet::new();
         for (name, scalar) in found {
             assert!(
@@ -1529,10 +1539,8 @@ fn ephemeral_scalars_are_fresh_within_each_vector_file() {
             );
         }
     }
-    assert_eq!(
-        total, HPKE_EPHEMERAL_VECTOR_COUNT,
-        "hpke ephemeral vector count drift"
-    );
+    let expected: BTreeMap<&str, usize> = HPKE_EPHEMERAL_FAMILIES.iter().copied().collect();
+    assert_eq!(pinned, expected, "hpke ephemeral family coverage drift");
 }
 
 /// The codec's decode-reachable checks, fixed HERE as the anti-vacuity anchor
