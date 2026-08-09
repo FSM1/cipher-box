@@ -50,6 +50,16 @@ function bytes(value: unknown, field: string): Uint8Array {
   return value;
 }
 
+/**
+ * A transferred payload. `new Uint8Array(value)` coerces anything else into a
+ * plausible view — a string of digits becomes that many zero bytes — so the
+ * buffer is checked before a view is taken over it.
+ */
+export function buffer(value: unknown, field: string): ArrayBuffer {
+  if (!(value instanceof ArrayBuffer)) throw invalidField(field, value);
+  return value;
+}
+
 export function text(value: unknown, field: string): string {
   if (typeof value !== 'string') throw invalidField(field, value);
   return value;

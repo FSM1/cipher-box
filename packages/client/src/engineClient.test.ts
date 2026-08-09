@@ -186,6 +186,17 @@ describe('EngineClient leadership + transport swap', () => {
     await leader.dispose();
   });
 
+  it('scrubs the login secret a closed client refuses', async () => {
+    const { tab } = origin();
+    const client = tab();
+    await client.dispose();
+    const secret = Uint8Array.of(1, 2, 3, 4);
+
+    await expect(client.start(secret.buffer as ArrayBuffer)).rejects.toThrow('closed');
+
+    expect(secret).toEqual(new Uint8Array(4));
+  });
+
   it('refuses a write handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {

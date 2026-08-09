@@ -25,7 +25,14 @@ import type {
 export type EngineEventListener = (event: EventDescriptor) => void;
 
 export interface EngineTransport {
-  /** Hands the login secret to the engine once (transferred, not copied). */
+  /**
+   * Hands the login secret to the engine once (transferred, not copied).
+   *
+   * Every buffer this seam takes is consumed on **every** outcome: transferred
+   * away when the send runs, scrubbed in place when the call is refused before
+   * it (security rule 7). A retry must therefore re-read its source rather than
+   * re-send the buffer a retryable rejection handed back.
+   */
   start(secret: ArrayBuffer): Promise<void>;
   /** Sends one command; `transfer` lists any owned buffers to move, not copy. */
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;

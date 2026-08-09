@@ -70,6 +70,8 @@ function permissiveHost(): { host: EngineHost; calls: unknown[][] } {
   const wasm = {
     ...fakeWasmEnums,
     EngineHandle: class {
+      start = record('start');
+      pushChunk = record('pushChunk');
       beginWrite = record('beginWrite');
       snapshot = record('snapshot', emptyView);
       download = record('download');
@@ -207,6 +209,20 @@ describe('EngineHost request fields', () => {
 
     await expect(host.beginWrite(target as WriteTarget, size as number)).rejects.toThrow(
       `invalid request field ${message}`
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a transferred payload that is not a buffer', async () => {
+    const { host, calls } = permissiveHost();
+
+    await expect(host.start('hunter2' as unknown as ArrayBuffer)).rejects.toThrow(
+      'invalid request field secret: string'
+    );
+    // A view is not the transfer the wire declares, and `new Uint8Array(view)`
+    // would copy it — leaving the sender's plaintext for the scrub to miss.
+    await expect(host.pushChunk(7n, Uint8Array.of(1, 2) as unknown as ArrayBuffer)).rejects.toThrow(
+      'invalid request field chunk: object'
     );
     expect(calls).toEqual([]);
   });

@@ -15,6 +15,7 @@ import type {
 import type { EngineWasm } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
+  buffer,
   buildCommand,
   count,
   nodeId,
@@ -107,8 +108,8 @@ export class EngineHost implements EngineHostLike {
     }
   }
 
-  start(secret: ArrayBuffer): Promise<void> {
-    return this.scrubbing(secret, (view) => this.handle.start(view));
+  async start(secret: ArrayBuffer): Promise<void> {
+    return this.scrubbing(buffer(secret, 'secret'), (view) => this.handle.start(view));
   }
 
   async command(command: CommandDescriptor): Promise<void> {
@@ -134,8 +135,8 @@ export class EngineHost implements EngineHostLike {
     );
   }
 
-  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    return this.scrubbing(chunk, (view) => this.handle.pushChunk(handle, view));
+  async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.scrubbing(buffer(chunk, 'chunk'), (view) => this.handle.pushChunk(handle, view));
   }
 
   commitWrite(handle: WriteHandle): Promise<bigint> {
