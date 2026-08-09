@@ -31,6 +31,7 @@ export interface WasmEvent {
   readonly error?: string;
   readonly routingKey?: string;
   readonly detail?: string;
+  readonly retryable?: boolean;
   readonly deadLetterReason?: number;
 }
 

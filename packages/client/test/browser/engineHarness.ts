@@ -15,6 +15,8 @@ export interface RealEngineResult {
   secretDetached: boolean;
   afterStart: string;
   afterLogout: string;
+  /** The `vaultUnprovisioned` report, if the engine could not mint a vault. */
+  unprovisioned: { retryable: boolean; detail: string } | null;
 }
 
 export interface BoundaryOutcome {
@@ -83,7 +85,16 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
     secretDetached: false,
     afterStart: '',
     afterLogout: '',
+    unprovisioned: null,
   };
+
+  // This harness mocks auth and `/routing/v1` but serves no pin or registry
+  // route, so the mint cannot land here. Subscribed before `start` so the
+  // report is not missed: a start that swallowed it would look identical.
+  facade.subscribe((event: EventDescriptor) => {
+    if (event.kind !== 'vaultUnprovisioned') return;
+    result.unprovisioned = { retryable: event.retryable, detail: event.detail };
+  });
 
   // A command before start is rejected as "not started" — the gate proving the
   // engine's start lifecycle is enforced across the boundary.
