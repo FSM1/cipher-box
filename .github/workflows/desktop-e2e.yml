@@ -112,21 +112,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # --- Build desktop frontend (Tauri embeds from frontendDist) ---
-
-      - name: Build desktop frontend
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-          cd apps/desktop
-          pnpm vite build
-        env:
-          VITE_API_URL: http://localhost:3000
-          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-
       # --- Build debug binary ---
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
