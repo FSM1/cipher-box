@@ -511,7 +511,14 @@ where
         let Some((_, record_bytes)) = fanout_get_verify(self.transport, name).await else {
             return Err(RootGateVerdict::Unavailable);
         };
-        let mut adopter = RootAdopter::new(
+        gated_scope_root(&self.root_adopter(scope_id), name, &record_bytes).await
+    }
+
+    /// The adopter every root read of this arm runs under, carrying the ancestor
+    /// seed this walk has already proved when it has one. Shared by both root
+    /// edges so the label and the ascent authority cannot drift apart.
+    fn root_adopter(&self, scope_id: [u8; 16]) -> RootAdopter<'_, H, F> {
+        let adopter = RootAdopter::new(
             self.gateway,
             self.http,
             self.floors,
@@ -519,10 +526,10 @@ where
             self.keys.identity,
             scope_id,
         );
-        if let Some(seed) = self.ancestry.parent_node_seed(&scope_id) {
-            adopter = adopter.under_parent_node_seed(seed);
+        match self.ancestry.parent_node_seed(&scope_id) {
+            Some(seed) => adopter.under_parent_node_seed(seed),
+            None => adopter,
         }
-        gated_scope_root(&adopter, name, &record_bytes).await
     }
 
     /// Unseal a gated scope root's write-body under the owner's recovered write
@@ -559,13 +566,22 @@ where
     /// ascent authority. The seed recorded is the **published** one — the
     /// cascade re-keys top-down, so a descendant's record still carries the
     /// ascent link its parent's pre-cascade seed sealed.
+    ///
+    /// Caller contract: `scope` is a claimed **descendant** scope root — a
+    /// `directChildScopeIndex` entry, or one reparented into a grant's subtree —
+    /// so the record is proven a child ([`gated_child_root`]), not merely a
+    /// scope root. A scope's *own* root goes through [`Self::gated_root`]
+    /// instead, since a vault root carries no ascent link to require.
     async fn gated_write_plane(
         &self,
         scope: &ChildScopeRef,
     ) -> Result<GatedWritePlane, ResolveFailure> {
         let name = scope_name(&scope.ipns_name)?;
-        let root = self
-            .gated_root(scope.scope_id, &name)
+        let adopter = self.root_adopter(scope.scope_id);
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let root = gated_child_root(&adopter, &name, &record_bytes, scope.scope_id)
             .await
             .map_err(ResolveFailure::from)?;
         let (write_body, write_epoch) = self.write_body(&root, scope.scope_id).await?;
@@ -2292,10 +2308,10 @@ mod tests {
     use crate::content::GatewaySource;
     use crate::rotation::sweep::sim;
     use crate::rotation::{
-        CascadeError, CascadeOutcome, CommittedSet, PrevEpochSeed, ResealSeeds, RotateScopePlan,
-        RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError, cascade_rotate_scope,
-        derive_write_name, enumerate_eager_set, reseal_scope_root, rotate_scope,
-        rotate_scope_write, sweep_pass,
+        CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
+        RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError,
+        cascade_rotate_scope, derive_write_name, enumerate_eager_set, reseal_scope_root,
+        rotate_scope, rotate_scope_write, sweep_pass,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
     use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint};
@@ -3052,6 +3068,67 @@ mod tests {
             eager_set.into_descendants(),
             vec![child_ref, grandchild_ref],
             "the closure is both levels, ascending by scope id",
+        );
+    }
+
+    /// The owner's own vault root, planted in a descendant's child-scope index
+    /// by a committed writer of that scope. It is a real owner-signed record
+    /// whose node id is its scope id, so every other gate stage passes; only the
+    /// ascent-link requirement stops the cascade adopting it as an eager-set
+    /// member and re-keying it under this scope's seed.
+    #[test]
+    fn a_vault_root_planted_in_a_descendants_index_never_enters_the_eager_set() {
+        let planted_scope = [0x77; 16];
+        let planted = vault_root(planted_scope, Vec::new());
+        assert!(
+            planted.grant_section.ascent_link.is_none(),
+            "a vault root is exactly the record with nothing binding it to a parent",
+        );
+        let child = interior(
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            vec![child_ref(planted_scope, &planted)],
+        );
+        let child_ref = child_ref(CHILD_SCOPE, &child);
+
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(planted_scope, &planted, Some(OWNER_ROOT_EPOCH));
+
+        assert_eq!(
+            block_on(enumerate_eager_set(
+                SCOPE,
+                core::slice::from_ref(&child_ref),
+                &harness.net(core::slice::from_ref(&child_ref)),
+            ))
+            .expect_err("the planted root is refused"),
+            EnumerationError {
+                scope_id: planted_scope,
+                reason: ResolveFailure::Rejected,
+            },
+        );
+    }
+
+    /// A writer naming its own scope in its own index is the shape that would
+    /// turn an ancestry-derived ascent rule into a revocation DoS: the entry
+    /// makes a root look like its own child. The walk skips it before any
+    /// resolve, so the enumeration completes and the rotation still cuts.
+    #[test]
+    fn a_scope_naming_itself_as_its_own_child_is_skipped_not_fatal() {
+        let harness = Harness::plain();
+        let root = vault_root(SCOPE, Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let self_entry = child_ref(SCOPE, &root);
+
+        let eager_set = block_on(enumerate_eager_set(
+            SCOPE,
+            core::slice::from_ref(&self_entry),
+            &harness.net(core::slice::from_ref(&self_entry)),
+        ))
+        .expect("a self-entry terminates the walk rather than failing it");
+        assert!(
+            eager_set.into_descendants().is_empty(),
+            "the root is not its own descendant",
         );
     }
 
