@@ -2812,10 +2812,11 @@ fn classify_register(error: ApiError) -> Halt {
         }
         ApiError::MalformedContentCid => Halt::Permanent(DeadLetterReason::PayloadRefused),
         ApiError::Status { status, .. } if !answers_about_the_caller(status) => Halt::UploadAttempt,
-        ApiError::Forbidden | ApiError::Decode(_) => Halt::UploadAttempt,
-        ApiError::Status { .. } | ApiError::Transport(_) | ApiError::Unauthorized => {
-            Halt::Unclassified
-        }
+        ApiError::Decode(_) => Halt::UploadAttempt,
+        ApiError::Status { .. }
+        | ApiError::Transport(_)
+        | ApiError::Unauthorized
+        | ApiError::Forbidden => Halt::Unclassified,
     }
 }
 
@@ -2858,13 +2859,16 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
         // re-send is what no retry changes.
         ApiError::MalformedContentCid => Halt::Permanent(DeadLetterReason::PayloadRefused),
         ApiError::Status { status, .. } if !answers_about_the_caller(status) => Halt::UploadAttempt,
-        ApiError::Forbidden | ApiError::Decode(_) => Halt::UploadAttempt,
+        ApiError::Decode(_) => Halt::UploadAttempt,
         // A transport failure never reached a gate, and a session the client's
         // own refresh-then-retry could not revive is answered by a re-login
-        // rather than by spending this version's attempt budget.
-        ApiError::Status { .. } | ApiError::Transport(_) | ApiError::Unauthorized => {
-            Halt::Unclassified
-        }
+        // rather than by spending this version's attempt budget. A 403 judges
+        // the caller's authorization the same way, so it is not these bytes'
+        // to pay for.
+        ApiError::Status { .. }
+        | ApiError::Transport(_)
+        | ApiError::Unauthorized
+        | ApiError::Forbidden => Halt::Unclassified,
     }
 }
 
@@ -3308,14 +3312,17 @@ mod tests {
 
     /// A failure that judged something other than these bytes is availability:
     /// retried indefinitely and charged nothing, so an unreachable network, a
-    /// session a re-login revives, or a throttle window never abandons an op.
+    /// session a re-login revives, an authorization a re-grant restores, or a
+    /// throttle window never abandons an op.
     #[test]
     fn a_failure_carrying_no_verdict_on_these_bytes_is_availability() {
         for error in [
             RecordPublishError::Upload(ApiError::Transport(crate::seams::SeamError::new("gone"))),
             RecordPublishError::Upload(ApiError::Unauthorized),
+            RecordPublishError::Upload(ApiError::Forbidden),
             RecordPublishError::Upload(answered(429)),
             RecordPublishError::Publish(PublishError::Register(ApiError::Unauthorized)),
+            RecordPublishError::Publish(PublishError::Register(ApiError::Forbidden)),
             RecordPublishError::Publish(PublishError::Register(answered(429))),
             RecordPublishError::HeadCidMismatch {
                 expected: "a".to_owned(),
