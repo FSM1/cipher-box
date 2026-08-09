@@ -2801,44 +2801,74 @@ pub(crate) async fn published_op_mark<St: StagingStore>(
     .await
 }
 
-/// Classify a register-first refusal on the discriminator the registry stamps,
-/// never the status alone (the [`classify_upload`] discipline): the batch this
-/// op builds is refused identically on every retry, and the queue is strict
-/// FIFO, so an unclassified refusal parks the op at the head forever.
+/// Classify a register-first refusal under [`classify_upload`]'s rule, over the
+/// discriminator the registry stamps.
 fn classify_register(error: ApiError) -> Halt {
-    let ApiError::Status {
-        status: 400, code, ..
-    } = error
-    else {
-        return Halt::Unclassified;
-    };
-    match code.as_deref() {
-        Some(REGISTRY_BATCH_REFUSED) => Halt::Permanent(DeadLetterReason::PayloadRefused),
-        _ => Halt::UploadAttempt,
+    match error {
+        ApiError::Status {
+            status: 400, code, ..
+        } if code.as_deref() == Some(REGISTRY_BATCH_REFUSED) => {
+            Halt::Permanent(DeadLetterReason::PayloadRefused)
+        }
+        ApiError::MalformedContentCid => Halt::Permanent(DeadLetterReason::PayloadRefused),
+        ApiError::Status { status, .. } if !answers_about_the_caller(status) => Halt::UploadAttempt,
+        ApiError::Decode(_) => Halt::UploadAttempt,
+        ApiError::Status { .. }
+        | ApiError::Transport(_)
+        | ApiError::Unauthorized
+        | ApiError::Forbidden => Halt::Unclassified,
     }
+}
+
+/// A status that judges the caller's session or its request rate rather than the
+/// bytes it carried, so it may not spend the version's attempt budget: five
+/// charged ticks is under three minutes, and the drain would destroy a queued
+/// write over a throttle window that clears on its own.
+fn answers_about_the_caller(status: u16) -> bool {
+    status == 429
 }
 
 /// Classify a content-upload failure for the valve. The same server verdicts a
 /// head-block upload can carry, since content blocks and head blocks go through
 /// one endpoint.
+///
+/// Exhaustive by construction, on one rule: a refusal that judged **these bytes**
+/// is charged, so a standing refusal — the 503 an unreachable pin store answers —
+/// escalates to a dead-letter instead of parking the strict-FIFO queue's head
+/// forever. A failure that judged the transport, the session, or the request rate
+/// is not.
 fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
-    let ApiError::Status {
-        status: 413, code, ..
-    } = error
-    else {
-        return Halt::Unclassified;
-    };
-    // 413 covers two unrelated causes, so each verdict rests on **positive
-    // evidence only**: the discriminators the API stamps. A response
-    // carrying neither did not come from a gate that inspected these bytes — a
-    // proxy body cap answers 413 with no code at all — and neither holding the
-    // head nor abandoning the op is a conclusion it supports.
-    match code.as_deref() {
-        Some(QUOTA_EXCEEDED) => Halt::Blocked {
-            needed_bytes: refused_bytes,
+    match error {
+        // 413 covers two unrelated causes, so each verdict rests on **positive
+        // evidence only**: the discriminators the API stamps. A response
+        // carrying neither did not come from a gate that inspected these bytes —
+        // a proxy body cap answers 413 with no code at all — and neither holding
+        // the head nor abandoning the op is a conclusion it supports. The same
+        // rule is why no bare status dead-letters: the API stamps no `code` on
+        // its 400s, so one is indistinguishable from a proxy's.
+        ApiError::Status {
+            status: 413, code, ..
+        } => match code.as_deref() {
+            Some(QUOTA_EXCEEDED) => Halt::Blocked {
+                needed_bytes: refused_bytes,
+            },
+            Some(UPLOAD_TOO_LARGE) => Halt::Permanent(DeadLetterReason::PayloadRefused),
+            _ => Halt::UploadAttempt,
         },
-        Some(UPLOAD_TOO_LARGE) => Halt::Permanent(DeadLetterReason::PayloadRefused),
-        _ => Halt::UploadAttempt,
+        // Refused before a request was built, so the address this op would
+        // re-send is what no retry changes.
+        ApiError::MalformedContentCid => Halt::Permanent(DeadLetterReason::PayloadRefused),
+        ApiError::Status { status, .. } if !answers_about_the_caller(status) => Halt::UploadAttempt,
+        ApiError::Decode(_) => Halt::UploadAttempt,
+        // A transport failure never reached a gate, and a session the client's
+        // own refresh-then-retry could not revive is answered by a re-login
+        // rather than by spending this version's attempt budget. A 403 judges
+        // the caller's authorization the same way, so it is not these bytes'
+        // to pay for.
+        ApiError::Status { .. }
+        | ApiError::Transport(_)
+        | ApiError::Unauthorized
+        | ApiError::Forbidden => Halt::Unclassified,
     }
 }
 
@@ -3153,6 +3183,15 @@ mod tests {
         assert_eq!(attempts.counts, BTreeMap::from([(OpId(2), 1)]));
     }
 
+    /// A refusal the API answered with no discriminator stamped on it.
+    fn answered(status: u16) -> ApiError {
+        ApiError::Status {
+            status,
+            message: None,
+            code: None,
+        }
+    }
+
     /// Positive evidence only: one status covers the account-quota gate and the
     /// transport cap, so each verdict needs the API's own discriminator.
     #[test]
@@ -3271,17 +3310,20 @@ mod tests {
         }
     }
 
-    /// Every other publish failure is availability: retried indefinitely and
-    /// charged nothing, so an unreachable network never abandons an op.
+    /// A failure that judged something other than these bytes is availability:
+    /// retried indefinitely and charged nothing, so an unreachable network, a
+    /// session a re-login revives, an authorization a re-grant restores, or a
+    /// throttle window never abandons an op.
     #[test]
-    fn a_failure_carrying_no_server_verdict_is_availability() {
+    fn a_failure_carrying_no_verdict_on_these_bytes_is_availability() {
         for error in [
-            RecordPublishError::Upload(ApiError::Status {
-                status: 503,
-                message: None,
-                code: None,
-            }),
+            RecordPublishError::Upload(ApiError::Transport(crate::seams::SeamError::new("gone"))),
             RecordPublishError::Upload(ApiError::Unauthorized),
+            RecordPublishError::Upload(ApiError::Forbidden),
+            RecordPublishError::Upload(answered(429)),
+            RecordPublishError::Publish(PublishError::Register(ApiError::Unauthorized)),
+            RecordPublishError::Publish(PublishError::Register(ApiError::Forbidden)),
+            RecordPublishError::Publish(PublishError::Register(answered(429))),
             RecordPublishError::HeadCidMismatch {
                 expected: "a".to_owned(),
                 returned: "b".to_owned(),
@@ -3290,6 +3332,34 @@ mod tests {
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
         }
+    }
+
+    /// A status with no discriminator carries no permanent verdict — the API
+    /// stamps none on its 400s, so one is indistinguishable from a proxy's — but
+    /// it did judge these bytes, so it costs an attempt. Uncharged, a standing
+    /// 503 parks the strict-FIFO queue's head forever and the op never settles.
+    #[test]
+    fn a_refusal_of_these_bytes_costs_an_attempt_and_never_dead_letters_on_sight() {
+        for status in [400, 409, 500, 502, 503] {
+            for error in [
+                RecordPublishError::Upload(answered(status)),
+                RecordPublishError::Publish(PublishError::Register(answered(status))),
+            ] {
+                assert_eq!(
+                    classify_publish(error, 4096),
+                    Halt::UploadAttempt,
+                    "a refusal answered {status} escalates by budget, not on sight"
+                );
+            }
+        }
+        assert_eq!(
+            classify_publish(
+                RecordPublishError::Upload(ApiError::MalformedContentCid),
+                4096
+            ),
+            Halt::Permanent(DeadLetterReason::PayloadRefused),
+            "an address no request could carry is the one client-side certainty"
+        );
     }
 
     /// A trust refusal is charged so the queue stops at the budget instead of

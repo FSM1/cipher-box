@@ -438,6 +438,7 @@ mod tests {
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
@@ -547,6 +548,7 @@ mod tests {
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
@@ -615,6 +617,7 @@ mod tests {
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
@@ -678,6 +681,7 @@ mod tests {
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
                     parent_node_seed: None,
+                    owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
