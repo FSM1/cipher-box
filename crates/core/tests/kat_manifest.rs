@@ -4842,7 +4842,6 @@ fn owner_local_kind_registry_is_frozen() {
 /// here.
 #[test]
 fn every_enc_subkey_hpke_info_string_is_distinct() {
-    let m = manifest();
     let mut infos: Vec<&[u8]> = vec![
         OP_RECORD_HPKE_INFO,
         SETTINGS_RECORD_HPKE_INFO,
@@ -4852,7 +4851,7 @@ fn every_enc_subkey_hpke_info_string_is_distinct() {
     infos.extend(owner_local.iter().map(Vec::as_slice));
     assert_eq!(
         infos.iter().collect::<BTreeSet<_>>().len(),
-        3 + m.owner_local.kinds.len(),
+        infos.len(),
         "two structures sealed to one enc subkey share a key schedule"
     );
 }

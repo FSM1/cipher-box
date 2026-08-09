@@ -121,7 +121,7 @@ pub fn owner_local_aad(header: &OwnerLocalHeader) -> Vec<u8> {
 /// not open it, and only the secret's holder can author one.
 ///
 /// `ephemeral_scalar` must be **fresh per seal**: HPKE ephemeral reuse across
-/// two seals under one recipient key is a confidentiality break
+/// two seals under one recipient key and `info` is a confidentiality break
 /// ([`hpke::hpke_seal`]).
 pub fn seal_owner_local(
     owner_enc_secret: &X25519Secret,
