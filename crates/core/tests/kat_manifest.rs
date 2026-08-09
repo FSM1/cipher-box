@@ -28,10 +28,10 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, RECEIVED_SHARES_HPKE_INFO, RECEIVED_SHARES_V,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind,
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_RECEIVED_SHARES,
+    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
     STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
     decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
     decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
@@ -39,8 +39,8 @@ use cipherbox_core::seal::{
     decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
     encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
     open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
-    open_owner_write_blob, open_read_body, open_received_shares, open_settings_record,
-    seal_content_key, seal_op_record, seal_received_shares, seal_settings_record,
+    open_owner_local, open_owner_write_blob, open_read_body, open_settings_record,
+    seal_content_key, seal_op_record, seal_owner_local, seal_settings_record,
     structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
@@ -270,12 +270,12 @@ const FIXTURES: &[(&str, &str)] = &[
         include_str!("../kat/vectors/content_key/content_key_reject.json"),
     ),
     (
-        "vectors/received_shares/received_shares_accept.json",
-        include_str!("../kat/vectors/received_shares/received_shares_accept.json"),
+        "vectors/owner_local/owner_local_accept.json",
+        include_str!("../kat/vectors/owner_local/owner_local_accept.json"),
     ),
     (
-        "vectors/received_shares/received_shares_reject.json",
-        include_str!("../kat/vectors/received_shares/received_shares_reject.json"),
+        "vectors/owner_local/owner_local_reject.json",
+        include_str!("../kat/vectors/owner_local/owner_local_reject.json"),
     ),
 ];
 
@@ -301,24 +301,34 @@ struct Manifest {
     op_record: OpRecordManifest,
     settings_record: SettingsRecordManifest,
     content_key: ContentKeyManifest,
-    received_shares: ReceivedSharesManifest,
+    owner_local: OwnerLocalManifest,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReceivedSharesManifest {
+struct OwnerLocalManifest {
     struct_tag: u8,
     v: u64,
     hpke_mode: u8,
-    hpke_info: String,
+    hpke_info_prefix: String,
+    kinds: Vec<OwnerLocalKindSpec>,
     accept: FileCount,
     reject: RejectSection,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReceivedSharesAcceptVector {
+struct OwnerLocalKindSpec {
     name: String,
+    discriminator: u8,
+    hpke_info: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerLocalAcceptVector {
+    name: String,
+    kind: String,
     owner_secret: String,
     owner_public: String,
     ephemeral_scalar: String,
@@ -328,8 +338,9 @@ struct ReceivedSharesAcceptVector {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReceivedSharesRejectVector {
+struct OwnerLocalRejectVector {
     name: String,
+    kind: String,
     owner_secret: String,
     blob: String,
     check: String,
@@ -1226,14 +1237,21 @@ fn content_key_reject_vectors(m: &Manifest) -> Vec<ContentKeyRejectVector> {
     serde_json::from_str(fixture(&m.content_key.reject.file)).expect("content_key_reject shape")
 }
 
-fn received_shares_accept_vectors(m: &Manifest) -> Vec<ReceivedSharesAcceptVector> {
-    serde_json::from_str(fixture(&m.received_shares.accept.file))
-        .expect("received_shares_accept shape")
+fn owner_local_accept_vectors(m: &Manifest) -> Vec<OwnerLocalAcceptVector> {
+    serde_json::from_str(fixture(&m.owner_local.accept.file)).expect("owner_local_accept shape")
 }
 
-fn received_shares_reject_vectors(m: &Manifest) -> Vec<ReceivedSharesRejectVector> {
-    serde_json::from_str(fixture(&m.received_shares.reject.file))
-        .expect("received_shares_reject shape")
+fn owner_local_reject_vectors(m: &Manifest) -> Vec<OwnerLocalRejectVector> {
+    serde_json::from_str(fixture(&m.owner_local.reject.file)).expect("owner_local_reject shape")
+}
+
+/// The kind a vector names, or a failure — an unknown kind is manifest drift,
+/// never a vector to skip.
+fn owner_local_kind(name: &str) -> OwnerLocalKind {
+    *OwnerLocalKind::ALL
+        .iter()
+        .find(|k| k.name() == name)
+        .unwrap_or_else(|| panic!("owner-local vector names an unregistered kind {name}"))
 }
 
 fn owner_write_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
@@ -1392,8 +1410,8 @@ fn fixture_table_matches_manifest_files() {
         m.settings_record.reject.file.as_str(),
         m.content_key.accept.file.as_str(),
         m.content_key.reject.file.as_str(),
-        m.received_shares.accept.file.as_str(),
-        m.received_shares.reject.file.as_str(),
+        m.owner_local.accept.file.as_str(),
+        m.owner_local.reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1594,11 +1612,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(content_key_reject_vectors(&m).into_iter().map(|v| v.check));
-    covered.extend(
-        received_shares_reject_vectors(&m)
-            .into_iter()
-            .map(|v| v.check),
-    );
+    covered.extend(owner_local_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1811,7 +1825,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("op-record", 10),
     ("settings-record", 11),
     ("content-key", 12),
-    ("received-shares", 13),
+    ("owner-local", 13),
 ];
 
 #[test]
@@ -4790,62 +4804,116 @@ fn content_cid_str_reject_vectors_fail_closed() {
 }
 
 #[test]
-fn received_shares_accept_vectors_seal_reproduce_and_open() {
+fn owner_local_kind_registry_is_frozen() {
     let m = manifest();
-    assert_eq!(m.received_shares.struct_tag, STRUCT_TAG_RECEIVED_SHARES);
-    assert_eq!(m.received_shares.v, RECEIVED_SHARES_V);
-    assert_eq!(m.received_shares.hpke_mode, MODE_AUTH);
+    assert_eq!(m.owner_local.struct_tag, STRUCT_TAG_OWNER_LOCAL);
+    assert_eq!(m.owner_local.v, OWNER_LOCAL_V);
+    assert_eq!(m.owner_local.hpke_mode, MODE_AUTH);
     assert_eq!(
-        m.received_shares.hpke_info.as_bytes(),
-        RECEIVED_SHARES_HPKE_INFO
+        m.owner_local.hpke_info_prefix.as_bytes(),
+        OWNER_LOCAL_HPKE_INFO_PREFIX
+    );
+    assert_eq!(
+        m.owner_local.kinds.len(),
+        OwnerLocalKind::ALL.len(),
+        "owner-local kind count drift"
     );
 
-    let vectors = received_shares_accept_vectors(&m);
+    for (spec, kind) in m.owner_local.kinds.iter().zip(OwnerLocalKind::ALL) {
+        assert_eq!(spec.name, kind.name(), "owner-local kind order/name drift");
+        assert_eq!(
+            spec.discriminator,
+            kind.discriminator(),
+            "owner-local {}: discriminator drift",
+            spec.name
+        );
+        assert_eq!(
+            spec.hpke_info.as_bytes(),
+            kind.hpke_info(),
+            "owner-local {}: info string drift",
+            spec.name
+        );
+    }
+}
+
+/// The enc-subkey structures are only non-transplantable while their key
+/// schedules differ, and `owner-local` is the first family whose `info` string
+/// is computed rather than a literal — so a collision first becomes possible
+/// here.
+#[test]
+fn every_enc_subkey_hpke_info_string_is_distinct() {
+    let mut infos: Vec<&[u8]> = vec![
+        OP_RECORD_HPKE_INFO,
+        SETTINGS_RECORD_HPKE_INFO,
+        CONTENT_KEY_HPKE_INFO,
+    ];
+    let owner_local: Vec<Vec<u8>> = OwnerLocalKind::ALL.iter().map(|k| k.hpke_info()).collect();
+    infos.extend(owner_local.iter().map(Vec::as_slice));
+    assert_eq!(
+        infos.iter().collect::<BTreeSet<_>>().len(),
+        infos.len(),
+        "two structures sealed to one enc subkey share a key schedule"
+    );
+}
+
+#[test]
+fn owner_local_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    let vectors = owner_local_accept_vectors(&m);
     assert_eq!(
         vectors.len(),
-        m.received_shares.accept.count,
-        "received-shares accept count drift"
+        m.owner_local.accept.count,
+        "owner-local accept count drift"
     );
     assert!(
         vectors.iter().any(|v| v.body.is_empty()) && vectors.iter().any(|v| !v.body.is_empty()),
-        "received-shares accept must cover both an empty and a populated body"
+        "owner-local accept must cover both an empty and a populated body"
     );
+    let covered_kinds: BTreeSet<&str> = vectors.iter().map(|v| v.kind.as_str()).collect();
+    for kind in OwnerLocalKind::ALL {
+        assert!(
+            covered_kinds.contains(kind.name()),
+            "owner-local accept must pin a blob for the {} kind",
+            kind.name()
+        );
+    }
 
     let mut names = BTreeSet::new();
     for v in &vectors {
         assert!(
             names.insert(v.name.clone()),
-            "duplicate received-shares accept {}",
+            "duplicate owner-local accept {}",
             v.name
         );
+        let kind = owner_local_kind(&v.kind);
         let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
         let owner_public = unhex32(&v.name, &v.owner_public);
         assert_eq!(
             owner.public().to_bytes(),
             owner_public,
-            "received-shares accept {}: owner keypair",
+            "owner-local accept {}: owner keypair",
             v.name
         );
         let eph = unhex32(&v.name, &v.ephemeral_scalar);
         let body = unhex(&v.name, &v.body);
 
-        let sealed = seal_received_shares(&owner, &eph, &body)
-            .unwrap_or_else(|e| panic!("received-shares accept {}: seal ({e})", v.name));
+        let sealed = seal_owner_local(&owner, kind, &eph, &body)
+            .unwrap_or_else(|e| panic!("owner-local accept {}: seal ({e})", v.name));
         assert_eq!(
             hex::encode(&sealed),
             v.blob,
-            "received-shares accept {}: blob drift",
+            "owner-local accept {}: blob drift",
             v.name
         );
 
         let blob = unhex(&v.name, &v.blob);
-        // The owner tag stays AAD-bound and unserialized, so a blob naming a key
-        // that cannot open it is unrepresentable.
-        let decoded = decode(&blob)
-            .unwrap_or_else(|e| panic!("received-shares accept {}: decode ({e})", v.name));
+        // The owner tag and the kind stay AAD-bound and unserialized, so a blob
+        // naming a key or a store that cannot open it is unrepresentable.
+        let decoded =
+            decode(&blob).unwrap_or_else(|e| panic!("owner-local accept {}: decode ({e})", v.name));
         let keys: Vec<&str> = decoded
             .as_map()
-            .unwrap_or_else(|e| panic!("received-shares accept {}: map ({e})", v.name))
+            .unwrap_or_else(|e| panic!("owner-local accept {}: map ({e})", v.name))
             .entries()
             .iter()
             .map(|(k, _)| k.as_str())
@@ -4853,32 +4921,32 @@ fn received_shares_accept_vectors_seal_reproduce_and_open() {
         assert_eq!(
             keys,
             ["v", "enc", "ciphertext"],
-            "received-shares accept {}: clear header must not carry the owner tag",
+            "owner-local accept {}: clear header must carry neither the owner tag nor the kind",
             v.name
         );
 
-        let plaintext = open_received_shares(&owner, &blob)
-            .unwrap_or_else(|e| panic!("received-shares accept {}: open ({e})", v.name));
+        let plaintext = open_owner_local(&owner, kind, &blob)
+            .unwrap_or_else(|e| panic!("owner-local accept {}: open ({e})", v.name));
         assert_eq!(
             &plaintext[..],
             &body[..],
-            "received-shares accept {}: body",
+            "owner-local accept {}: body",
             v.name
         );
     }
 }
 
 #[test]
-fn received_shares_reject_vectors_fire_the_named_check() {
+fn owner_local_reject_vectors_fire_the_named_check() {
     let m = manifest();
-    let vectors = received_shares_reject_vectors(&m);
+    let vectors = owner_local_reject_vectors(&m);
     assert_eq!(
         vectors.len(),
-        m.received_shares.reject.count,
-        "received-shares reject count drift"
+        m.owner_local.reject.count,
+        "owner-local reject count drift"
     );
     let listed: BTreeSet<&str> = m
-        .received_shares
+        .owner_local
         .reject
         .checks
         .iter()
@@ -4887,7 +4955,7 @@ fn received_shares_reject_vectors_fire_the_named_check() {
     let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
     assert_eq!(
         listed, in_vectors,
-        "manifest checks vs received-shares reject.json"
+        "manifest checks vs owner-local reject.json"
     );
     for required in [
         "hpke-open-failed",
@@ -4899,46 +4967,87 @@ fn received_shares_reject_vectors_fire_the_named_check() {
     ] {
         assert!(
             listed.contains(required),
-            "received-shares reject must cover the {required} check"
+            "owner-local reject must cover the {required} check"
         );
     }
 
     assert!(
         vectors.iter().any(|v| v.name == "base-mode-forgery"),
-        "received-shares reject must pin a base-mode forgery under the owner's own tag"
+        "owner-local reject must pin a base-mode forgery under the owner's own tag"
     );
     // Key-schedule separation, not framing: the settings record shares this
     // frame and version byte, so only the struct tag and the distinct info
     // string can refuse it.
     assert!(
         vectors.iter().any(|v| v.name == "cross-family-transplant"),
-        "received-shares reject must pin a cross-family transplant from the settings record"
+        "owner-local reject must pin a cross-family transplant from the settings record"
     );
 
     let mut names = BTreeSet::new();
     for v in &vectors {
         assert!(
             names.insert(v.name.clone()),
-            "duplicate received-shares reject {}",
+            "duplicate owner-local reject {}",
             v.name
         );
+        let kind = owner_local_kind(&v.kind);
         let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
         let blob = unhex(&v.name, &v.blob);
-        let err = match open_received_shares(&owner, &blob) {
+        let err = match open_owner_local(&owner, kind, &blob) {
             Err(e) => e,
-            Ok(_) => panic!("received-shares reject {}: open accepted it", v.name),
+            Ok(_) => panic!("owner-local reject {}: open accepted it", v.name),
         };
         assert_eq!(
             err.check(),
             v.check,
-            "received-shares reject {}: check ({err})",
+            "owner-local reject {}: check ({err})",
             v.name
         );
         assert_eq!(
             err.class(),
             v.class,
-            "received-shares reject {}: class ({err})",
+            "owner-local reject {}: class ({err})",
             v.name
         );
+    }
+}
+
+/// The vector the kind discriminator exists to justify: the failure must land at
+/// the AEAD rather than at a comparison.
+#[test]
+fn owner_local_cross_kind_vectors_cover_every_ordered_pair() {
+    let m = manifest();
+    let vectors = owner_local_reject_vectors(&m);
+
+    for sealed_as in OwnerLocalKind::ALL {
+        for opened_as in OwnerLocalKind::ALL {
+            if sealed_as == opened_as {
+                continue;
+            }
+            let name = format!("cross-kind-{}-as-{}", sealed_as.name(), opened_as.name());
+            let v = vectors
+                .iter()
+                .find(|v| v.name == name)
+                .unwrap_or_else(|| panic!("owner-local reject must pin {name}"));
+            assert_eq!(
+                v.kind,
+                opened_as.name(),
+                "{name}: the vector must open under the other kind"
+            );
+            assert_eq!(
+                (v.check.as_str(), v.class.as_str()),
+                ("hpke-open-failed", "trust"),
+                "{name}: cross-kind separation must be a decryption failure, not a parse failure"
+            );
+
+            // The blob is a real blob of its own kind: the pair only proves
+            // separation while the sealing kind still opens it.
+            let owner = X25519Secret::from_scalar(unhex32(&name, &v.owner_secret));
+            let blob = unhex(&name, &v.blob);
+            assert!(
+                open_owner_local(&owner, sealed_as, &blob).is_ok(),
+                "{name}: the blob must open under the kind it was sealed as"
+            );
+        }
     }
 }
