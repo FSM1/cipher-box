@@ -486,7 +486,12 @@ mod tests {
         ))
         .expect("clobber");
         assert!(
-            matches!(block_on(store.load()), Err(InviteStoreError::Unreadable(_))),
+            matches!(
+                block_on(store.load()),
+                Err(InviteStoreError::Unreadable(
+                    InviteRecordsCodecError::Codec(_)
+                ))
+            ),
             "a body this build cannot decode is a trust verdict, never an empty set"
         );
     }

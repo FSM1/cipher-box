@@ -203,7 +203,9 @@ mod tests {
         assert!(
             matches!(
                 block_on(store.load()),
-                Err(ReceivedShareStoreError::Unreadable(_))
+                Err(ReceivedShareStoreError::Unreadable(
+                    ReceivedSharesCodecError::Codec(_)
+                ))
             ),
             "a body this build cannot decode is a trust verdict, never an empty list"
         );

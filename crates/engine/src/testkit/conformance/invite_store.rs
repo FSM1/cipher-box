@@ -120,6 +120,6 @@ where
     store.persist(&[]).await.unwrap();
     assert!(
         open().await.load().await.unwrap().is_empty(),
-        "persisting an empty set clears the backing"
+        "persisting an empty set retires every recorded link"
     );
 }
