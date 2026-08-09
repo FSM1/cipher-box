@@ -180,7 +180,9 @@ describe('RoutingV1RecordTransport configuration report', () => {
     transport('');
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ROUTING_V1_URL'));
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('walk'));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('the republisher walk will not run')
+    );
   });
 
   it('stays silent when the routing endpoint is configured', () => {
