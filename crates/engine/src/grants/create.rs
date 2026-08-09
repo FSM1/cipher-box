@@ -124,6 +124,10 @@ pub struct ParentScopePlan<'a> {
     /// The parent scope root's identity + signing capability.
     /// [`ScopeRootIdentity::owner_enc_secret`] is overridden with the owner's own
     /// subkey, so this plan cannot disable the parent's tag-binding check.
+    ///
+    /// [`ScopeRootIdentity::owes_ascent_link`] is **not** overridden and is the
+    /// caller's to get right: granting inside an already-granted scope makes the
+    /// parent itself a descendant, and its re-seal must keep its ascent link.
     pub identity: ScopeRootIdentity<'a>,
     /// The parent's current read-plane seeds (`prev = None`).
     pub seeds: ResealSeeds<'a>,

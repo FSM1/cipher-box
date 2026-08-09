@@ -703,14 +703,11 @@ where
                 }
                 let reason = DeadLetterReason::AttemptsExhausted;
                 if halt == Halt::UploadAttempt {
-                    self.dead_letter_keeping_staged(scope, op_id, op, reason, report)
-                        .await;
+                    self.dead_letter(scope, op_id, op, reason, report).await;
                 } else if self.dequeue_op(op_id).await.is_ok() {
                     // An acked PUT may be resolvable at the name, so nothing is
                     // retired: unpinning content a live record still names is
-                    // loss, where leaving the rows charged is only a leak. The
-                    // upload frees each leaf as it confirms, so the version is
-                    // on the network and this drops only what it stranded.
+                    // loss, where leaving the rows charged is only a leak.
                     self.release_staged_blocks(op).await;
                     report.dead_letters.push((op_id, op.target, reason));
                 }
@@ -2476,30 +2473,6 @@ where
             .await
             .map_err(|_| Halt::UploadAttempt)?;
         self.dequeue_op(op_id).await
-    }
-
-    /// Dead-letter one op whose version never reached the network, keeping what
-    /// is still staged of it: a dead letter surfaces to the member with their
-    /// staged content preserved rather than silently dropped (`CONTEXT.md`), and
-    /// an upload halted part-way leaves the only remaining copy of those blocks
-    /// here. Preserving the op record is what stops orphan GC taking them.
-    ///
-    /// The registry rows still retire — the op's target is unreachable, so no
-    /// published record can name what the upload did land.
-    async fn dead_letter_keeping_staged(
-        &self,
-        scope: &DrainScope<'_>,
-        op_id: OpId,
-        op: &Op,
-        reason: DeadLetterReason,
-        report: &mut DrainReport,
-    ) {
-        if op.content_root_cid().is_some() && self.preserve_dead_letter(op_id).await.is_err() {
-            return;
-        }
-        if self.abandon(scope, op_id, op).await.is_ok() {
-            report.dead_letters.push((op_id, op.target, reason));
-        }
     }
 
     /// Dead-letter one op. A failed retire leaves it queued for the next pass
