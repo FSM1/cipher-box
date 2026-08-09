@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MediaBroker, type MediaBrokerOptions, type MediaReader } from './broker.js';
 import { EngineRequestError } from '../correlatedTransport.js';
@@ -617,17 +617,23 @@ describe('MediaBroker.whenIdle', () => {
 
   it('re-arms rather than settling when the port is replaced mid-save', async () => {
     // A killed worker re-brokers and re-opens; retiring the ticket here would
-    // 404 the retry the pipe is about to make.
-    const h = harness(20, { lingerMs: 10_000 });
-    const idle = watch(h.broker.whenIdle(h.ticket, 40));
+    // 404 the retry the pipe is about to make. Fake timers, because a real one
+    // overrunning the deadline expires the waiter and asserts the wrong thing.
+    vi.useFakeTimers();
+    try {
+      const h = harness(20, { lingerMs: 10_000 });
+      const idle = watch(h.broker.whenIdle(h.ticket, 40));
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const next = new MessageChannel();
-    h.broker.serve(next.port1);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+      await vi.advanceTimersByTimeAsync(25);
+      const next = new MessageChannel();
+      h.broker.serve(next.port1);
+      await vi.advanceTimersByTimeAsync(25);
 
-    expect(idle()).toBeNull();
-    next.port1.close();
-    next.port2.close();
+      expect(idle()).toBeNull();
+      next.port1.close();
+      next.port2.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

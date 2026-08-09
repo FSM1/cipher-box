@@ -3,7 +3,7 @@ import type { EngineClient, MediaService } from '@cipherbox/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
-import { useFileDownload } from './useFileDownload';
+import { useFileDownload, type SaveOutcome, type SaveRequest } from './useFileDownload';
 
 /** The pipe this tab gets; `null` is the browser without a Service Worker. */
 const mediaControl = { create: (): MediaService | null => null };
@@ -13,6 +13,9 @@ vi.mock('../engine/createMediaService', () => ({
 
 const NODE = new Uint8Array(16).fill(3);
 
+const batch = (names: readonly string[]): SaveRequest[] =>
+  names.map((name) => ({ node: NODE, name, size: 12n }));
+
 /**
  * A pipe whose tickets only go idle when the test says so, which is what a
  * transfer still in flight looks like to the hook.
@@ -21,6 +24,7 @@ function fakePipe() {
   const live = new Set<string>();
   const minted: string[] = [];
   const waiting = new Map<string, (read: boolean) => void>();
+  const listeners = new Set<(failure: { url: string; message: string }) => void>();
 
   const service = {
     streaming: true,
@@ -31,6 +35,10 @@ function fakePipe() {
       minted.push(url);
       live.add(url);
       return url;
+    },
+    onStreamError: (listener: (failure: { url: string; message: string }) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     whenStreamIdle: (url: string) =>
       new Promise<boolean>((resolve) => {
@@ -43,10 +51,22 @@ function fakePipe() {
     service,
     live,
     minted,
+    listeners,
     /** The transfer for this ticket ended, or the browser never began it. */
     finish: async (url: string, read = true): Promise<void> => {
       await act(async () => {
         waiting.get(url)?.(read);
+        await Promise.resolve();
+      });
+    },
+    /**
+     * The broker gave up on this ticket's body. It settles the wait as read,
+     * which is what the broker itself does once a body has claimed the ticket.
+     */
+    abandon: async (url: string, message: string): Promise<void> => {
+      await act(async () => {
+        for (const listener of listeners) listener({ url, message });
+        waiting.get(url)?.(true);
         await Promise.resolve();
       });
     },
@@ -95,10 +115,10 @@ describe('bounding the tickets a streamed save leaves live', () => {
     mediaControl.create = () => pipe.service;
     const { result } = mount(fakeEngine());
 
-    let saved: boolean | null = null;
+    let saved: SaveOutcome | null = null;
     await act(async () => {
-      void result.current.save(NODE, 'notes.txt', 12n).then((ok) => {
-        saved = ok;
+      void result.current.save(NODE, 'notes.txt', 12n).then((outcome) => {
+        saved = outcome;
       });
       await Promise.resolve();
     });
@@ -110,7 +130,7 @@ describe('bounding the tickets a streamed save leaves live', () => {
 
     await pipe.finish('/stream/ticket-1');
 
-    await waitFor(() => expect(saved).toBe(true));
+    await waitFor(() => expect(saved).toBe('saved'));
     expect([...pipe.live]).toEqual([]);
   });
 
@@ -119,18 +139,53 @@ describe('bounding the tickets a streamed save leaves live', () => {
     mediaControl.create = () => pipe.service;
     const { result } = mount(fakeEngine());
 
-    let saved: boolean | null = null;
+    let saved: SaveOutcome | null = null;
     await act(async () => {
-      void result.current.save(NODE, 'notes.txt', 12n).then((ok) => {
-        saved = ok;
+      void result.current.save(NODE, 'notes.txt', 12n).then((outcome) => {
+        saved = outcome;
       });
       await Promise.resolve();
     });
     await pipe.finish('/stream/ticket-1', false);
 
-    await waitFor(() => expect(saved).toBe(false));
+    await waitFor(() => expect(saved).toBe('refused'));
     expect(pipe.live.size).toBe(0);
     expect(result.current.error).toBe('the browser did not start the download');
+  });
+
+  it('reports a stream the broker gave up on as a failure, not a completed save', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let saved: SaveOutcome | null = null;
+    await act(async () => {
+      void result.current.save(NODE, 'notes.txt', 12n).then((outcome) => {
+        saved = outcome;
+      });
+      await Promise.resolve();
+    });
+    await pipe.abandon('/stream/ticket-1', 'the record is gone');
+
+    await waitFor(() => expect(saved).toBe('failed'));
+    expect(result.current.error).toBe('the record is gone');
+    expect(pipe.live.size).toBe(0);
+  });
+
+  it('drops the failure listener with the ticket it watched', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    await act(async () => {
+      void result.current.save(NODE, 'notes.txt', 12n);
+      await Promise.resolve();
+    });
+    expect(pipe.listeners.size).toBe(1);
+
+    await pipe.finish('/stream/ticket-1');
+
+    await waitFor(() => expect(pipe.listeners.size).toBe(0));
   });
 
   it('leaves one live ticket however many files a caller saves in a loop', async () => {
@@ -141,10 +196,9 @@ describe('bounding the tickets a streamed save leaves live', () => {
     const names = ['a.bin', 'b.bin', 'c.bin', 'd.bin', 'e.bin'];
     let done = false;
     await act(async () => {
-      void (async () => {
-        for (const name of names) await result.current.save(NODE, name, 12n);
+      void result.current.saveAll(batch(names)).then(() => {
         done = true;
-      })();
+      });
       await Promise.resolve();
     });
 
@@ -174,6 +228,52 @@ describe('bounding the tickets a streamed save leaves live', () => {
   });
 });
 
+describe('saving a selection', () => {
+  it('carries a failed file forward and names it, rather than dropping the rest', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let done = false;
+    await act(async () => {
+      void result.current.saveAll(batch(['a.bin', 'b.bin', 'c.bin'])).then(() => {
+        done = true;
+      });
+      await Promise.resolve();
+    });
+
+    await pipe.finish('/stream/ticket-1');
+    await pipe.abandon('/stream/ticket-2', 'the record is gone');
+    expect(pipe.minted).toHaveLength(3);
+    await pipe.finish('/stream/ticket-3');
+
+    await waitFor(() => expect(done).toBe(true));
+    expect(clicked).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
+    expect(result.current.error).toBe('could not download b.bin');
+  });
+
+  it('stops at the file the browser refused, since it will refuse the rest too', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let done = false;
+    await act(async () => {
+      void result.current.saveAll(batch(['a.bin', 'b.bin', 'c.bin'])).then(() => {
+        done = true;
+      });
+      await Promise.resolve();
+    });
+
+    await pipe.finish('/stream/ticket-1');
+    await pipe.finish('/stream/ticket-2', false);
+
+    await waitFor(() => expect(done).toBe(true));
+    expect(pipe.minted).toHaveLength(2);
+    expect(result.current.error).toBe('the browser did not start the download');
+  });
+});
+
 describe('the buffered fallback', () => {
   const originalCreate = URL.createObjectURL;
   const originalRevoke = URL.revokeObjectURL;
@@ -183,14 +283,16 @@ describe('the buffered fallback', () => {
     URL.revokeObjectURL = originalRevoke;
   });
 
-  it('reads through the facade and reports a refusal instead of saving', async () => {
+  it('reports a read the facade refused as this file failing, not as a refusal', async () => {
     const engine = fakeEngine(() => Promise.reject(new Error('the record is gone')));
     const { result } = mount(engine);
 
+    let saved: SaveOutcome | null = null;
     await act(async () => {
-      await result.current.save(NODE, 'notes.txt', 12n);
+      saved = await result.current.save(NODE, 'notes.txt', 12n);
     });
 
+    expect(saved).toBe('failed');
     expect(clicked).toEqual([]);
     expect(result.current.error).toBe('the record is gone');
 
