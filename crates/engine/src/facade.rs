@@ -2562,10 +2562,16 @@ impl<T: SeamTypes> Engine<T> {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
         };
-        let verdict = self
-            .manual_refresh
-            .request()
-            .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
+        let verdict = self.manual_refresh.request().ok_or_else(|| {
+            // The loop does not spawn without a root name, and an unprovisioned
+            // vault has none — so say that, rather than reporting the missing
+            // loop and leaving the host to guess why its refresh does nothing.
+            failed(if self.is_provisioned() {
+                "no sync loop is running to force a pass"
+            } else {
+                "this account has no vault yet: a later start mints one"
+            })
+        })?;
         match verdict.await {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
             Ok(RefreshVerdict::Unreachable) => {
