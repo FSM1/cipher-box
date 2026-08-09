@@ -214,44 +214,6 @@ jobs:
             sleep 1
           done
 
-      - name: Install Redis (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install redis
-          brew services start redis
-
-      - name: Install Redis (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y redis-server
-          sudo systemctl start redis-server
-
-      - name: Install Redis (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          choco install memurai-developer -y --no-progress
-          # Memurai installs as a Windows service and starts automatically
-          $svc = Get-Service -Name "Memurai" -ErrorAction SilentlyContinue
-          if ($svc -and $svc.Status -eq "Running") {
-            Write-Host "Memurai service is running"
-          } else {
-            # Fallback: start service manually
-            Start-Service -Name "Memurai" -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 3
-          }
-          # Verify Redis is responding
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + $env:PATH
-          $ready = $false
-          for ($i = 0; $i -lt 10; $i++) {
-            try {
-              $result = & redis-cli ping 2>$null
-              if ($result -eq "PONG") { $ready = $true; break }
-            } catch {}
-            Start-Sleep -Seconds 1
-          }
-          if ($ready) { Write-Host "Redis (Memurai) ready" } else { Write-Host "WARNING: Redis may not be ready" }
-
       # --- Build backend packages ---
 
       - name: Build mock-ipns-routing
@@ -276,8 +238,6 @@ jobs:
           CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:1420
           KUBO_API_URL=http://localhost:5001
           ROUTING_V1_URL=http://localhost:3001
-          REDIS_HOST=localhost
-          REDIS_PORT=6379
           TEST_LOGIN_SECRET=e2e-test-secret-ci-only
           ACCESS_TOKEN_TTL=2h
           ENVEOF
@@ -337,8 +297,6 @@ jobs:
           CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:1420
           KUBO_API_URL: http://localhost:5001
           ROUTING_V1_URL: http://localhost:3001
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
           # Long TTL: the headless desktop binary holds one token for the whole
           # suite and cannot silently refresh; 15m expires mid-run on macOS.
@@ -376,8 +334,6 @@ jobs:
           CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:1420
           KUBO_API_URL: http://localhost:5001
           ROUTING_V1_URL: http://localhost:3001
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
           IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
 
