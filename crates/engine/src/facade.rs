@@ -2402,6 +2402,9 @@ impl<T: SeamTypes> Engine<T> {
                     ContactStoreError::Full => EngineError::MalformedInput {
                         check: "contact-book-full",
                     },
+                    ContactStoreError::Encode(_) => EngineError::MalformedInput {
+                        check: "contact-book-unstorable",
+                    },
                     ContactStoreError::Seam(e) => EngineError::Seam {
                         message: e.message().to_owned(),
                     },

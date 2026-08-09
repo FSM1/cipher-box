@@ -6,8 +6,10 @@ use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
 
 use crate::grants::accept::{decode_stored_list, encode_stored_list};
-use crate::grants::{ReceivedShareStore, ReceivedSharesList};
-use crate::seams::{SeamError, SeamResult};
+use crate::grants::{
+    MAX_RECEIVED_SHARES, ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesList,
+};
+use crate::seams::SeamError;
 
 #[derive(Default)]
 struct Inner {
@@ -42,24 +44,25 @@ impl InMemoryReceivedShareStore {
 }
 
 impl ReceivedShareStore for InMemoryReceivedShareStore {
-    async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
-        let encoded = encode_stored_list(shares)
-            .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
+    async fn persist(&self, shares: &ReceivedSharesList) -> Result<(), ReceivedShareStoreError> {
+        if shares.len() > MAX_RECEIVED_SHARES {
+            return Err(ReceivedShareStoreError::Full);
+        }
+        let encoded = encode_stored_list(shares).map_err(ReceivedShareStoreError::Encode)?;
         let mut inner = self.inner.lock().expect("lock");
         if inner.failing {
-            return Err(SeamError::new("received-share store offline"));
+            return Err(SeamError::new("received-share store offline").into());
         }
         inner.persists += 1;
         inner.stored = Some(encoded);
         Ok(())
     }
 
-    async fn load(&self) -> SeamResult<ReceivedSharesList> {
+    async fn load(&self) -> Result<ReceivedSharesList, ReceivedShareStoreError> {
         let stored = self.inner.lock().expect("lock").stored.clone();
         match stored {
             None => Ok(ReceivedSharesList::new()),
-            Some(bytes) => decode_stored_list(&bytes)
-                .map_err(|e| SeamError::new(format!("received-shares decode failed: {e}"))),
+            Some(bytes) => decode_stored_list(&bytes).map_err(ReceivedShareStoreError::Unreadable),
         }
     }
 }

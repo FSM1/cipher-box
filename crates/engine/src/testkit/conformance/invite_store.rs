@@ -4,7 +4,7 @@
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SECRET_LEN;
 
-use crate::grants::{InviteStore, RecordedInvite};
+use crate::grants::{InviteStore, InviteStoreError, MAX_INVITE_RECORDS, RecordedInvite};
 use crate::seams::UnixMillis;
 
 fn record(byte: u8, expires_at: Option<UnixMillis>) -> RecordedInvite {
@@ -14,6 +14,17 @@ fn record(byte: u8, expires_at: Option<UnixMillis>) -> RecordedInvite {
         ephemeral_enc_pk: [byte ^ 0xf0; SECRET_LEN],
         expires_at,
     }
+}
+
+/// One record past the frozen bound, every tag distinct.
+fn over_bound() -> Vec<RecordedInvite> {
+    (0..=MAX_INVITE_RECORDS as u32)
+        .map(|i| {
+            let mut link = record(0x11, None);
+            link.tag[..4].copy_from_slice(&i.to_be_bytes());
+            link
+        })
+        .collect()
 }
 
 /// The stored records in tag order, so a kit assertion never depends on an
@@ -68,6 +79,20 @@ where
         held(&open().await).await,
         vec![two],
         "a link absent from the persisted set does not survive — this is how a revoke lands"
+    );
+
+    store.persist(&[one]).await.unwrap();
+    assert!(
+        matches!(
+            store.persist(&over_bound()).await,
+            Err(InviteStoreError::Full)
+        ),
+        "a set past MAX_INVITE_RECORDS is a bound the host can act on, not an outage to retry"
+    );
+    assert_eq!(
+        held(&open().await).await,
+        vec![one],
+        "a refused set leaves the recorded links untouched"
     );
 
     store.persist(&[]).await.unwrap();

@@ -76,6 +76,10 @@ pub enum ContactStoreError {
     /// set this import would make is the one past the bound — so a host can
     /// offer [`ContactStore::forget`] rather than report corruption.
     Full,
+    /// The book to store is not one this build may write: two codes for one
+    /// identity, or a field past its bound. A write-path refusal, so never
+    /// [`Unreadable`](Self::Unreadable) — nothing was read.
+    Encode(BookCodecError),
     /// Entropy acquisition failed, so no book is sealed and none is written.
     Entropy(EntropyError),
     /// Sealing the book for storage failed. A write-path failure, so never
@@ -97,6 +101,7 @@ impl fmt::Display for ContactStoreError {
             ContactStoreError::Full => {
                 write!(f, "the contact book already holds {MAX_CONTACTS} contacts")
             }
+            ContactStoreError::Encode(e) => write!(f, "the contact book to store {e}"),
             ContactStoreError::Entropy(e) => write!(f, "contact book: {e}"),
             ContactStoreError::Seal(e) => write!(f, "contact book seal failed: {}", e.check()),
             ContactStoreError::Seam(e) => write!(f, "contact book: {e}"),
@@ -109,12 +114,6 @@ impl std::error::Error for ContactStoreError {}
 impl From<SeamError> for ContactStoreError {
     fn from(e: SeamError) -> Self {
         ContactStoreError::Seam(e)
-    }
-}
-
-impl From<BookCodecError> for ContactStoreError {
-    fn from(e: BookCodecError) -> Self {
-        ContactStoreError::Unreadable(e)
     }
 }
 
@@ -274,16 +273,14 @@ impl<'a, St: StagingStore, E: Entropy> StagingContactStore<'a, St, E> {
         let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
             return Ok(Vec::new());
         };
-        // A stored book this session cannot open is state, never an empty book:
-        // the next import would overwrite contacts it never saw.
         let body = open_owner_local(self.enc_secret, OwnerLocalKind::ContactBook, &blob)
-            .map_err(BookCodecError::DidNotOpen)?;
-        Ok(decode_book(&body)?)
+            .map_err(|e| ContactStoreError::Unreadable(BookCodecError::DidNotOpen(e)))?;
+        decode_book(&body).map_err(ContactStoreError::Unreadable)
     }
 
     /// Replace the whole book.
     async fn put(&self, book: &[Recorded]) -> Result<(), ContactStoreError> {
-        let body = encode_book(book)?;
+        let body = encode_book(book).map_err(ContactStoreError::Encode)?;
         let ephemeral =
             fresh_ephemeral(&mut *self.entropy.borrow_mut()).map_err(ContactStoreError::Entropy)?;
         let blob = seal_owner_local(
@@ -600,6 +597,33 @@ mod tests {
             Err(ContactStoreError::Unreadable(
                 BookCodecError::UnverifiableCode(_)
             ))
+        ));
+    }
+
+    /// The write path's own refusals are not a verdict on stored bytes: a book
+    /// this build declines to encode leaves the stored book unimpeached, so a
+    /// host must not be told the owner's contacts are corrupt.
+    #[test]
+    fn a_book_this_build_refuses_to_encode_is_not_reported_as_unreadable() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x62);
+        let entropy = seeded(62);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let (contact, encoded) = import_recorded(&code(0x33)).expect("import");
+        let clash = [
+            Recorded {
+                contact,
+                code: encoded.clone(),
+            },
+            Recorded {
+                contact,
+                code: encoded,
+            },
+        ];
+
+        assert!(matches!(
+            block_on(store.put(&clash)),
+            Err(ContactStoreError::Encode(BookCodecError::DuplicateIdentity))
         ));
     }
 

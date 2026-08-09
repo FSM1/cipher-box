@@ -40,8 +40,8 @@ use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 
-use crate::entropy::{Entropy, fresh_ephemeral};
-use crate::seams::{SeamError, SeamResult, StagingStore, UnixMillis};
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
+use crate::seams::{SeamError, StagingStore, UnixMillis};
 use crate::sync::owner_scoped_key;
 
 use super::accept::{TooLong, fixed, reject_unknown, req, within};
@@ -61,7 +61,7 @@ const INVITE_RECORDS_V: u64 = 1;
 /// The frozen bound on recorded links, enforced release-active in both codec
 /// directions (AGENTS.md rule 8). One record per live link across every scope
 /// the owner has invited to; it bounds reader CPU and the staging budget alike.
-pub(crate) const MAX_INVITE_RECORDS: usize = 1024;
+pub const MAX_INVITE_RECORDS: usize = 1024;
 
 /// Why encoding or decoding a stored record set failed.
 ///
@@ -69,9 +69,13 @@ pub(crate) const MAX_INVITE_RECORDS: usize = 1024;
 /// does not extend core's frozen `Malformed` registry, whose names the KAT
 /// manifest pins.
 #[derive(Debug)]
-enum InviteRecordsCodecError {
+pub enum InviteRecordsCodecError {
     /// The det-CBOR framing was malformed.
     Codec(CodecError),
+    /// The stored blob did not open under this session's `enc-subkey` as an
+    /// `invite-records` blob — tampered, another identity's, or another
+    /// owner-local store's.
+    DidNotOpen(CodecError),
     /// Two records under one tag: no defined authority for that link's
     /// permission or deadline, refused in both directions (AGENTS.md rule 8).
     DuplicateTag,
@@ -81,7 +85,10 @@ enum InviteRecordsCodecError {
     ZeroDeadline,
     /// A set written at a grammar version this build does not read. Never
     /// treated as empty: the links are there, this build cannot read them.
-    UnsupportedVersion { version: u64 },
+    UnsupportedVersion {
+        /// The version the stored body declared.
+        version: u64,
+    },
     /// A collection or field past its frozen bound.
     TooLong(TooLong),
 }
@@ -90,6 +97,7 @@ impl fmt::Display for InviteRecordsCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InviteRecordsCodecError::Codec(e) => write!(f, "codec: {e}"),
+            InviteRecordsCodecError::DidNotOpen(e) => write!(f, "did not open: {}", e.check()),
             InviteRecordsCodecError::DuplicateTag => f.write_str("names one tag twice"),
             InviteRecordsCodecError::ZeroDeadline => f.write_str("records a zero deadline"),
             InviteRecordsCodecError::UnsupportedVersion { version } => {
@@ -119,7 +127,7 @@ impl<E: Into<CodecError>> From<E> for InviteRecordsCodecError {
 /// it.
 pub trait InviteStore {
     /// Durably persist the whole set of recorded links.
-    async fn persist(&self, links: &[RecordedInvite]) -> SeamResult<()>;
+    async fn persist(&self, links: &[RecordedInvite]) -> Result<(), InviteStoreError>;
 
     /// The persisted records, or an empty set when the backing holds no entry
     /// at all — the module header states what a dropped entry costs.
@@ -128,7 +136,61 @@ pub trait InviteStore {
     /// a holder's hands, so a stored set this build cannot open is
     /// unrecoverable authority, and reporting it as empty would let the next
     /// [`persist`](Self::persist) overwrite every link behind it.
-    async fn load(&self) -> SeamResult<Vec<RecordedInvite>>;
+    async fn load(&self) -> Result<Vec<RecordedInvite>, InviteStoreError>;
+}
+
+/// Why an invite-store operation failed.
+///
+/// Classified on the shape the owner-local stores share
+/// ([`ReceivedShareStoreError`](super::ReceivedShareStoreError) carries the
+/// rationale). The records are an authorization input — `convert_invite_claim`
+/// decides what may be claimed from them — so "the stored set did not open" is
+/// a report that the owner's own authority was tampered with, and must never
+/// reach a host as a retryable outage.
+#[derive(Debug)]
+pub enum InviteStoreError {
+    /// Stored bytes this build cannot read as an invite record set. Never
+    /// reported as an empty set: the next persist would overwrite links whose
+    /// fragments are already in holders' hands.
+    Unreadable(InviteRecordsCodecError),
+    /// The set to persist holds more than [`MAX_INVITE_RECORDS`]. The stored
+    /// bytes are fine — the offered set is the one past the bound — so a host
+    /// can revoke a live link rather than report corruption.
+    Full,
+    /// The offered set is not one this build may store: two records under one
+    /// tag, or a zero deadline. A write-path refusal, so never
+    /// [`Unreadable`](Self::Unreadable) — nothing was read.
+    Encode(InviteRecordsCodecError),
+    /// Entropy acquisition failed, so no set is sealed and none is written.
+    Entropy(EntropyError),
+    /// Sealing the set for storage failed.
+    Seal(CodecError),
+    /// The durable backing failed.
+    Seam(SeamError),
+}
+
+impl fmt::Display for InviteStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InviteStoreError::Unreadable(e) => write!(f, "the stored invite record set {e}"),
+            InviteStoreError::Full => write!(
+                f,
+                "the invite records already hold {MAX_INVITE_RECORDS} links"
+            ),
+            InviteStoreError::Encode(e) => write!(f, "the invite record set to store {e}"),
+            InviteStoreError::Entropy(e) => write!(f, "invite records: {e}"),
+            InviteStoreError::Seal(e) => write!(f, "invite records seal failed: {}", e.check()),
+            InviteStoreError::Seam(e) => write!(f, "invite records: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for InviteStoreError {}
+
+impl From<SeamError> for InviteStoreError {
+    fn from(e: SeamError) -> Self {
+        InviteStoreError::Seam(e)
+    }
 }
 
 /// The invite store the engine ships over a host's [`StagingStore`].
@@ -161,34 +223,33 @@ impl<'a, St: StagingStore, E: Entropy> StagingInviteStore<'a, St, E> {
 }
 
 impl<St: StagingStore, E: Entropy> InviteStore for StagingInviteStore<'_, St, E> {
-    async fn persist(&self, links: &[RecordedInvite]) -> SeamResult<()> {
-        let body = encode_records(links)
-            .map_err(|e| SeamError::new(format!("invite records encode failed: {e}")))?;
-        let ephemeral = fresh_ephemeral(&mut *self.entropy.borrow_mut())
-            .map_err(|e| SeamError::new(format!("invite records: {}", e.message())))?;
+    async fn persist(&self, links: &[RecordedInvite]) -> Result<(), InviteStoreError> {
+        if links.len() > MAX_INVITE_RECORDS {
+            return Err(InviteStoreError::Full);
+        }
+        let body = encode_records(links).map_err(InviteStoreError::Encode)?;
+        let ephemeral =
+            fresh_ephemeral(&mut *self.entropy.borrow_mut()).map_err(InviteStoreError::Entropy)?;
         let blob = seal_owner_local(
             self.enc_secret,
             OwnerLocalKind::InviteRecords,
             &ephemeral,
             &body,
         )
-        .map_err(|e| SeamError::new(format!("invite records seal failed: {e}")))?;
+        .map_err(InviteStoreError::Seal)?;
         self.staging
             .put_staged_bytes(self.staging_key(), &blob)
-            .await
+            .await?;
+        Ok(())
     }
 
-    async fn load(&self) -> SeamResult<Vec<RecordedInvite>> {
+    async fn load(&self) -> Result<Vec<RecordedInvite>, InviteStoreError> {
         let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
             return Ok(Vec::new());
         };
         let body = open_owner_local(self.enc_secret, OwnerLocalKind::InviteRecords, &blob)
-            .map_err(|_| SeamError::new("invite records: the stored set did not open"))?;
-        decode_records(&body).map_err(|e| {
-            SeamError::new(format!(
-                "invite records: the stored set did not decode: {e}"
-            ))
-        })
+            .map_err(|e| InviteStoreError::Unreadable(InviteRecordsCodecError::DidNotOpen(e)))?;
+        decode_records(&body).map_err(InviteStoreError::Unreadable)
     }
 }
 
@@ -412,8 +473,13 @@ mod tests {
         block_on(staging.put_staged_bytes(store.staging_key(), b"not a sealed set"))
             .expect("clobber");
         assert!(
-            block_on(store.load()).is_err(),
-            "an unreadable stored set is an error, never an empty set"
+            matches!(
+                block_on(store.load()),
+                Err(InviteStoreError::Unreadable(
+                    InviteRecordsCodecError::DidNotOpen(_)
+                ))
+            ),
+            "an unreadable stored set is a trust verdict, never a retryable seam failure"
         );
     }
 
@@ -439,8 +505,8 @@ mod tests {
         ))
         .expect("clobber");
         assert!(
-            block_on(store.load()).is_err(),
-            "a body this build cannot decode is an error, never an empty set"
+            matches!(block_on(store.load()), Err(InviteStoreError::Unreadable(_))),
+            "a body this build cannot decode is a trust verdict, never an empty set"
         );
     }
 
@@ -461,8 +527,13 @@ mod tests {
         .expect("stage");
 
         assert!(
-            block_on(store.load()).is_err(),
-            "another store's blob is an error, never a set to adopt"
+            matches!(
+                block_on(store.load()),
+                Err(InviteStoreError::Unreadable(
+                    InviteRecordsCodecError::DidNotOpen(_)
+                ))
+            ),
+            "another store's blob is a trust verdict, never a set to adopt"
         );
     }
 
@@ -490,8 +561,13 @@ mod tests {
         .expect("clobber");
 
         assert!(
-            block_on(store.load()).is_err(),
-            "a record the owner did not seal never loads"
+            matches!(
+                block_on(store.load()),
+                Err(InviteStoreError::Unreadable(
+                    InviteRecordsCodecError::DidNotOpen(_)
+                ))
+            ),
+            "a record the owner did not seal is a trust verdict, never a link to convert"
         );
     }
 
@@ -520,7 +596,10 @@ mod tests {
         let secret = enc(0x51);
         let entropy = RefCell::new(SilentEntropy);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        assert!(block_on(store.persist(&[record(0x33, None)])).is_err());
+        assert!(matches!(
+            block_on(store.persist(&[record(0x33, None)])),
+            Err(InviteStoreError::Entropy(_))
+        ));
         assert!(
             block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged bytes")
