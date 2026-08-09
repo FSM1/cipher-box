@@ -22,7 +22,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
-use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
+use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{
@@ -34,7 +34,7 @@ use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid}
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
-/// received-shares list, or a contact book. All are per-owner, so their whole prefixes are
+/// received-shares list, a contact book, or the owner's invite records. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
 fn is_bookkeeping(key: &[u8]) -> bool {
@@ -43,6 +43,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(RETIRE_LEDGER_PREFIX)
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)
+        || key.starts_with(INVITE_RECORDS_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -564,6 +565,7 @@ mod tests {
                 RETIRE_LEDGER_PREFIX,
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
+                INVITE_RECORDS_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())

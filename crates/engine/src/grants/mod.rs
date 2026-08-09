@@ -16,6 +16,7 @@ pub mod contact;
 pub mod contact_store;
 pub mod create;
 pub mod invite;
+pub mod invite_store;
 pub mod ledger;
 pub mod owner_entry;
 pub mod received_share_store;
@@ -43,6 +44,7 @@ pub use invite::{
     InviteRevocation, LinkCapability, MintedInvite, OwnerAuthority, RecordedInvite,
     convert_invite_claim, mint_invite_grant, post_invite_claim, revoke_invite_link,
 };
+pub use invite_store::{INVITE_RECORDS_PREFIX, InviteStore, StagingInviteStore};
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
     entry_tag_is_bound, mint_grant_row, recipient_blinded_tag, self_locate,
