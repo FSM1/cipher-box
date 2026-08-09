@@ -62,6 +62,20 @@ describe('sealing the Core Kit store', () => {
     await expect(sealed(keys, locks).getItem(KEY)).resolves.toBe(STORE_VALUE);
   });
 
+  it('re-reads the key store rather than trusting a memo another tab replaced', async () => {
+    const keys = new MemoryKeys();
+    const locks = new SerialLocks();
+    const reader = sealed(keys, locks);
+    await reader.setItem(KEY, STORE_VALUE);
+    await reader.getItem(KEY);
+
+    // The other tab logs out and back in, which re-keys the store under it.
+    keys.held = null;
+    await sealed(keys, locks).setItem(KEY, STORE_VALUE);
+
+    await expect(reader.getItem(KEY)).resolves.toBe(STORE_VALUE);
+  });
+
   it('mints one wrapping key however many tabs cold-start at once', async () => {
     const keys = new MemoryKeys();
     const locks = new SerialLocks();
@@ -93,6 +107,24 @@ describe('a sealed store it cannot open', () => {
 
     await expect(sealed(keys).getItem(KEY)).resolves.toBeNull();
 
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('refuses ciphertext transplanted from another storage key', async () => {
+    const keys = new MemoryKeys();
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+    const envelope = window.localStorage.getItem(KEY) ?? '';
+    window.localStorage.setItem('another_store', envelope);
+
+    await expect(sealed(keys).getItem('another_store')).resolves.toBeNull();
+  });
+
+  it('drops an envelope from a version this build does not know', async () => {
+    const keys = new MemoryKeys();
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+    window.localStorage.setItem(KEY, JSON.stringify({ ...rawEnvelope(), v: 2 }));
+
+    await expect(sealed(keys).getItem(KEY)).resolves.toBeNull();
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 

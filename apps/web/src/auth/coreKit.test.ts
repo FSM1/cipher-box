@@ -2,7 +2,7 @@ import { COREKIT_STATUS } from '@web3auth/mpc-core-kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
-import { createCoreKitSession, sealedCoreKitStore } from './coreKit';
+import { createCoreKitSession } from './coreKit';
 
 const STORE_KEY = 'corekit_store';
 
@@ -18,6 +18,7 @@ const sdk = vi.hoisted(() => ({
   statusAfterLogin: 'LOGGED_IN',
   logoutError: undefined as Error | undefined,
   logoutCalls: 0,
+  initFailure: undefined as Error | undefined,
 }));
 vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@web3auth/mpc-core-kit')>();
@@ -30,6 +31,9 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       get status(): string {
         return sdk.status;
+      }
+      init(): Promise<void> {
+        return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
       async loginWithOAuth(): Promise<void> {
         sdk.status = sdk.statusAfterLogin;
@@ -65,6 +69,7 @@ describe('the Core Kit store', () => {
     sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
     sdk.logoutError = undefined;
     sdk.logoutCalls = 0;
+    sdk.initFailure = undefined;
     window.localStorage.clear();
     keys = new MemoryKeys();
     store = sealedTestStore(keys);
@@ -78,12 +83,26 @@ describe('the Core Kit store', () => {
     expect(window.localStorage.getItem(STORE_KEY)).not.toContain('sessionId');
   });
 
-  it('keeps the ciphertext origin-wide, so a tab that did not log in can still be promoted', async () => {
-    // A store written before the seal is dropped on read, which is only
-    // observable if the default store is this origin's `localStorage`.
-    window.localStorage.setItem(STORE_KEY, SESSION);
+  it('is left standing when a restore failed only because the key store was unreachable', async () => {
+    // Seeded through a store of its own, so the session's has no key in hand
+    // and has to reach the one that is about to refuse.
+    await sealedTestStore(keys).setItem(STORE_KEY, SESSION);
+    const stored = window.localStorage.getItem(STORE_KEY);
+    keys.refusal = new Error('the wrapping-key database is shut');
+    sdk.initFailure = REFUSED;
 
-    await expect(sealedCoreKitStore().getItem(STORE_KEY)).resolves.toBeNull();
+    await expect(session().restore()).rejects.toThrow(REFUSED);
+
+    expect(window.localStorage.getItem(STORE_KEY)).toBe(stored);
+    expect(keys.held).not.toBeNull();
+  });
+
+  it('is cleared when a restore found something the SDK could not parse', async () => {
+    const created = session();
+    await store.setItem(STORE_KEY, '{"sessionId":"a-truncated-writ');
+    sdk.initFailure = REFUSED;
+
+    await expect(created.restore()).rejects.toThrow(REFUSED);
 
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
   });

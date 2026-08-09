@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { MediaBroker, type MediaBrokerOptions, type MediaReader } from './broker.js';
+import {
+  MediaBroker,
+  type IdleOutcome,
+  type MediaBrokerOptions,
+  type MediaReader,
+} from './broker.js';
 import { EngineRequestError } from '../correlatedTransport.js';
 import type { StreamHandle } from '../worker/protocol.js';
 import type { MediaRequest, MediaResponse } from './protocol.js';
@@ -563,12 +568,12 @@ describe('MediaBroker', () => {
 
 describe('MediaBroker.whenIdle', () => {
   /** Records the settlement without awaiting it, so pending can be asserted. */
-  function watch(promise: Promise<boolean>): () => boolean | null {
-    let outcome: boolean | null = null;
-    void promise.then((read) => {
-      outcome = read;
+  function watch(promise: Promise<IdleOutcome>): () => IdleOutcome | null {
+    let settled: IdleOutcome | null = null;
+    void promise.then((outcome) => {
+      settled = outcome;
     });
-    return () => outcome;
+    return () => settled;
   }
 
   const startRead = async (h: Harness): Promise<void> => {
@@ -597,12 +602,12 @@ describe('MediaBroker.whenIdle', () => {
 
     h.send({ type: 'cb:media:close', requestId: 1 });
     await waitFor(() => idle() !== null, 'the ticket to go idle');
-    expect(idle()).toBe(true);
+    expect(idle()).toEqual({ read: true, failure: null });
   });
 
   it('reports a ticket no body ever claims as unread', async () => {
     const h = harness(20);
-    expect(await h.broker.whenIdle(h.ticket, 1)).toBe(false);
+    expect(await h.broker.whenIdle(h.ticket, 1)).toEqual({ read: false, failure: null });
   });
 
   it('settles a waiter when the ticket is revoked out from under the read', async () => {
@@ -612,7 +617,40 @@ describe('MediaBroker.whenIdle', () => {
     h.broker.revoke(h.ticket);
 
     await waitFor(() => idle() !== null, 'the revoked ticket to settle');
-    expect(idle()).toBe(true);
+    expect(idle()).toEqual({ read: true, failure: null });
+  });
+
+  it('reports the read it gave up on, which a body that died still went idle from', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+    await startRead(h);
+    h.reader.failure = new Error('the record is gone');
+
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => idle() !== null, 'the failed read to settle');
+
+    // Read, because a body claimed it — which is exactly why the boolean alone
+    // cannot tell a truncated transfer from a whole one.
+    expect(idle()).toEqual({ read: true, failure: 'the record is gone' });
+  });
+
+  it('carries no failure to a waiter armed after the one it settled', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+    await startRead(h);
+    h.reader.failure = new Error('the record is gone');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => idle() !== null, 'the failed read to settle');
+
+    // The pipe re-opens the ticket, as it does after a dropped handle.
+    const retried = watch(h.broker.whenIdle(h.ticket, 10_000));
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 4, 'the second head');
+    h.send({ type: 'cb:media:close', requestId: 2 });
+    await waitFor(() => retried() !== null, 'the retried ticket to go idle');
+
+    expect(retried()).toEqual({ read: true, failure: null });
   });
 
   it('re-arms rather than settling when the port is replaced mid-save', async () => {

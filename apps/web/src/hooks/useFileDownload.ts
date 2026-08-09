@@ -27,12 +27,12 @@ const NEVER_FETCHED = 'the browser did not start the download';
 /**
  * How a save ended. `refused` is the save never being attempted, which will hold
  * for the next file too; `failed` is this one file's read giving out, which says
- * nothing about the next. A stream that dies after its first byte still goes
- * idle having been read, so only the broker's failure tells it from a whole file.
+ * nothing about the next. `saved` means the broker did not give up on the read,
+ * which is as much as this tab can know once the bytes are the browser's.
  */
 export type SaveOutcome = 'saved' | 'refused' | 'failed';
 
-/** One file of a batch save. */
+/** One file to save. */
 export interface SaveRequest {
   readonly node: Uint8Array;
   /** The name the file lands under on disk. */
@@ -44,7 +44,7 @@ export interface SaveRequest {
 export interface FileDownload {
   error: string | null;
   /** Resolves once the file's bytes have stopped moving. */
-  save(node: Uint8Array, name: string, size: bigint | null): Promise<SaveOutcome>;
+  save(file: SaveRequest): Promise<SaveOutcome>;
   /** Saves each file in turn, stopping at a refusal and naming what failed. */
   saveAll(files: readonly SaveRequest[]): Promise<void>;
   /** Drops a failure the user has moved on from. */
@@ -68,7 +68,7 @@ export function useFileDownload(): FileDownload {
   }, [media]);
 
   const save = useCallback(
-    async (node: Uint8Array, name: string, size: bigint | null): Promise<SaveOutcome> => {
+    async ({ node, name, size }: SaveRequest): Promise<SaveOutcome> => {
       if (client === null) {
         setError('the engine is not ready yet');
         return 'refused';
@@ -79,26 +79,19 @@ export function useFileDownload(): FileDownload {
         const ticket = streamTicket(media, node, size, OPAQUE);
         if (ticket !== null) {
           tickets.current.add(ticket);
-          // Subscribed before the fetch it watches: a body that dies on its
-          // first window fails before a later subscribe would be listening.
-          let abandoned: string | null = null;
-          const unsubscribe = media.onStreamError((failure) => {
-            if (failure.url === ticket) abandoned ??= failure.message;
-          });
-          saveToDisk(ticket, name);
           try {
-            const read = await media.whenStreamIdle(ticket, STREAM_START_MS);
-            if (abandoned !== null) {
-              setError(abandoned);
+            saveToDisk(ticket, name);
+            const idle = await media.whenStreamIdle(ticket, STREAM_START_MS);
+            if (idle.failure !== null) {
+              setError(idle.failure);
               return 'failed';
             }
-            if (!read) {
+            if (!idle.read) {
               setError(NEVER_FETCHED);
               return 'refused';
             }
             return 'saved';
           } finally {
-            unsubscribe();
             tickets.current.delete(ticket);
             media.revokeStreamUrl(ticket);
           }
@@ -123,14 +116,16 @@ export function useFileDownload(): FileDownload {
     async (files: readonly SaveRequest[]): Promise<void> => {
       const failed: string[] = [];
       for (const file of files) {
-        const outcome = await save(file.node, file.name, file.size);
+        const outcome = await save(file);
         // A browser that blocks the second download blocks every one after it.
         if (outcome === 'refused') break;
         if (outcome === 'failed') failed.push(file.name);
       }
-      // A per-file failure is reported here or nowhere: each save clears the
-      // banner the one before it set.
-      if (failed.length > 0) setError(`could not download ${failed.join(', ')}`);
+      if (failed.length === 0) return;
+      // Each save clears the banner the one before it set, so the batch reports
+      // here or nowhere; whatever stopped it keeps the last word.
+      const summary = `could not download ${failed.join(', ')}`;
+      setError((stopped) => (stopped === null ? summary : `${summary}; ${stopped}`));
     },
     [save]
   );

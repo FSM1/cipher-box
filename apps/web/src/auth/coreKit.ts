@@ -47,7 +47,7 @@ class Web3AuthSession implements CoreKitSession {
       // Only an unreadable store wedges the next login through that same read.
       // A restore that failed for any other reason — the SDK's feature check
       // has no network — must leave a good store standing.
-      if (!(await this.storeIsReadable())) await this.clearStore();
+      if (await this.storeIsCorrupt()) await this.clearStore();
       throw failure;
     }
   }
@@ -103,15 +103,25 @@ class Web3AuthSession implements CoreKitSession {
     return this.store.purge(this.coreKit._storageKey);
   }
 
-  /** The SDK reads its store as `JSON.parse(raw || '{}')[key]`; nothing else opens. */
-  private async storeIsReadable(): Promise<boolean> {
+  /**
+   * Whether the store opens but holds something the SDK's own read throws on —
+   * it reads as `JSON.parse(raw || '{}')[key]`, and nothing else opens.
+   */
+  private async storeIsCorrupt(): Promise<boolean> {
+    let raw: string | null;
     try {
-      const raw = await this.store.getItem(this.coreKit._storageKey);
-      if (!raw) return true;
-      const parsed: unknown = JSON.parse(raw);
-      return typeof parsed === 'object' && parsed !== null;
+      raw = await this.store.getItem(this.coreKit._storageKey);
     } catch {
+      // A store this device cannot reach is not a corrupt one, and purging it
+      // would destroy a session the next attempt could still open.
       return false;
+    }
+    if (!raw) return false;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return typeof parsed !== 'object' || parsed === null;
+    } catch {
+      return true;
     }
   }
 
@@ -145,7 +155,7 @@ export function sealedCoreKitStore(): SealedStore {
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
-  store: SealedStore = sealedCoreKitStore()
+  store: SealedStore
 ): CoreKitSession {
   const { clientId, verifier } = loginEnv(env);
 

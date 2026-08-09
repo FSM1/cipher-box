@@ -746,13 +746,14 @@ describe('the vault browser read path over the streaming pipe', () => {
   /** Whether the browser opens the save the ticket was minted for. */
   let fetched = true;
   /** Set by a test that drives the transfers itself, keyed by ticket url. */
-  let transfers: Map<string, (read: boolean) => void> | null = null;
+  let transfers: Map<string, (outcome: { read: boolean; failure: string | null }) => void> | null =
+    null;
   const streamListeners = new Set<(failure: MediaStreamFailure) => void>();
 
   /** The browser finished reading this ticket. */
   const endTransfer = async (url: string): Promise<void> => {
     await act(async () => {
-      transfers?.get(url)?.(fetched);
+      transfers?.get(url)?.({ read: fetched, failure: null });
       await Promise.resolve();
     });
   };
@@ -793,8 +794,10 @@ describe('the vault browser read path over the streaming pipe', () => {
         },
         whenStreamIdle: (url: string) => {
           const held = transfers;
-          if (held === null) return Promise.resolve(fetched);
-          return new Promise<boolean>((resolve) => held.set(url, resolve));
+          if (held === null) return Promise.resolve({ read: fetched, failure: null });
+          return new Promise<{ read: boolean; failure: string | null }>((resolve) =>
+            held.set(url, resolve)
+          );
         },
         onStreamError: (listener: (failure: MediaStreamFailure) => void) => {
           streamListeners.add(listener);

@@ -50,12 +50,21 @@ interface Pin {
   linger: ReturnType<typeof setTimeout> | null;
 }
 
+/** How a ticket's reading ended, for a holder that waited it out. */
+export interface IdleOutcome {
+  /** Whether a body ever claimed the ticket. */
+  readonly read: boolean;
+  /** Why this broker gave up on the last body, or `null` if it did not. */
+  readonly failure: string | null;
+}
+
 /** A holder waiting for a ticket to stop being read. */
 interface IdleWaiter {
-  readonly resolve: (read: boolean) => void;
+  readonly resolve: (outcome: IdleOutcome) => void;
   readonly startWithinMs: number;
   /** Set once a body claims the ticket, which is what the deadline waits for. */
   read: boolean;
+  failure: string | null;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -132,19 +141,22 @@ export class MediaBroker {
   }
 
   /**
-   * Resolves once no response body is reading `ticket`, with whether one ever
-   * did. A ticket is a bearer capability to plaintext, so its holder needs this
-   * to know when dropping it can no longer cut a transfer short.
+   * Resolves once no response body is reading `ticket`, with how the reading
+   * ended. A ticket is a bearer capability to plaintext, so its holder needs
+   * this to know when dropping it can no longer cut a transfer short — and a
+   * body that died after its first byte still went idle having been read, so
+   * only the failure tells a short transfer from a whole one.
    *
    * @param startWithinMs how long to wait for a body to claim the ticket. A
    * claimed ticket has no deadline — a reader between windows is still reading.
    */
-  whenIdle(ticket: string, startWithinMs: number): Promise<boolean> {
+  whenIdle(ticket: string, startWithinMs: number): Promise<IdleOutcome> {
     return new Promise((resolve) => {
       const waiter: IdleWaiter = {
         resolve,
         startWithinMs,
         read: (this.pins.get(ticket)?.cursors ?? 0) > 0,
+        failure: null,
         timer: null,
       };
       this.arm(ticket, waiter);
@@ -167,7 +179,7 @@ export class MediaBroker {
     const waiters = this.idleWaiters.get(ticket);
     waiters?.delete(waiter);
     if (waiters?.size === 0) this.idleWaiters.delete(ticket);
-    waiter.resolve(waiter.read);
+    settle(waiter);
   }
 
   private settleIdle(ticket: string): void {
@@ -176,7 +188,7 @@ export class MediaBroker {
     this.idleWaiters.delete(ticket);
     for (const waiter of waiters) {
       if (waiter.timer !== null) clearTimeout(waiter.timer);
-      waiter.resolve(waiter.read);
+      settle(waiter);
     }
   }
 
@@ -436,8 +448,10 @@ export class MediaBroker {
 
   private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {
     if (!this.isCurrent(requestId, cursor)) return;
-    this.drop(requestId);
     const message = errorMessage(error);
+    // Recorded before the drop, which is what settles the waiters.
+    for (const waiter of this.idleWaiters.get(cursor.ticket) ?? []) waiter.failure = message;
+    this.drop(requestId);
     post(port, { type: 'cb:media:error', requestId, message });
     this.onFailure?.({
       ticket: cursor.ticket,
@@ -445,6 +459,10 @@ export class MediaBroker {
       recoverable: isRecoverableEngineError(engineErrorCode(error)),
     });
   }
+}
+
+function settle(waiter: IdleWaiter): void {
+  waiter.resolve({ read: waiter.read, failure: waiter.failure });
 }
 
 function post(port: MessagePortLike, response: MediaResponse): void {

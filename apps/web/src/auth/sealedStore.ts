@@ -4,11 +4,14 @@
  * What the SDK keeps under `corekit_store` is a secp256k1 scalar that both
  * addresses and decrypts the Web3Auth record holding the login secret — the
  * root of the hierarchy in `blueprint/core.md`, so no rotation demotes it. This
- * seals it under an AES-GCM key WebCrypto will not export, which takes it away
- * from readers of storage at rest — a copied profile, a backup, forensics. It
- * does not take it away from script on this origin, which can still call the
- * key handle: that the key bytes never exist outside WebCrypto is the whole
- * control, and is why it is minted here rather than derived anywhere else.
+ * seals it under an AES-GCM key WebCrypto will not export.
+ *
+ * What that buys is narrow, and worth stating so nothing is relaxed on the
+ * strength of it: it defeats a reader of `localStorage` alone — a scraping
+ * extension, a partial backup, a grep over a disk image. `extractable: false`
+ * bars export to script, not presence on disk, so a whole-profile copy carries
+ * the IndexedDB key with it; and script on this origin can open that database
+ * and call the handle without going through this module at all.
  */
 
 import type { LockManagerLike } from '@cipherbox/client';
@@ -59,29 +62,44 @@ export class SealedStore {
     }
     // Resolved before the decrypt, so a key store that is merely unreachable
     // fails the read rather than discarding a session it could still open.
-    const wrapping = await this.wrappingKey();
-    try {
-      const opened = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: envelope.iv },
-        wrapping,
-        envelope.sealed
-      );
-      return new TextDecoder().decode(opened);
-    } catch {
-      this.storage.removeItem(key);
-      return null;
+    let opened = await this.unseal(key, envelope, await this.wrappingKey());
+    if (opened === null) {
+      // Another tab can have re-keyed the store since this one resolved its
+      // key, so a memo is not evidence the value is unopenable.
+      this.wrapping = null;
+      opened = await this.unseal(key, envelope, await this.wrappingKey());
     }
+    if (opened === null) this.storage.removeItem(key);
+    return opened;
   }
 
   async setItem(key: string, value: string): Promise<void> {
     const wrapping = await this.wrappingKey();
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv, additionalData: context(key) },
       wrapping,
       new TextEncoder().encode(value)
     );
     this.storage.setItem(key, encodeEnvelope(iv, new Uint8Array(sealed)));
+  }
+
+  /** `null` for anything the key does not authenticate under this envelope. */
+  private async unseal(
+    key: string,
+    envelope: Envelope,
+    wrapping: CryptoKey
+  ): Promise<string | null> {
+    try {
+      const opened = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: envelope.iv, additionalData: context(key) },
+        wrapping,
+        envelope.sealed
+      );
+      return new TextDecoder().decode(opened);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -145,6 +163,9 @@ function openDatabase(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => request.result.createObjectStore(KEY_STORE);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('the wrapping-key database is shut'));
+    // An open that neither succeeds nor errors would strand the wrapping-key
+    // lock, and every tab on the origin queues behind it at login.
+    request.onblocked = () => reject(new Error('the wrapping-key database is held open'));
   });
 }
 
@@ -167,6 +188,16 @@ async function transact<T>(
 interface Envelope {
   iv: Uint8Array<ArrayBuffer>;
   sealed: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * What the ciphertext is authenticated against. The version travels outside the
+ * sealed bytes, so binding it here is what stops a v1 envelope relabelled `v2`
+ * from opening under a future build's semantics; the storage key stops one slot's
+ * ciphertext from being transplanted into another.
+ */
+function context(key: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`cipherbox:sealed-store:v${ENVELOPE_VERSION}:${key}`);
 }
 
 function encodeEnvelope(iv: Uint8Array, sealed: Uint8Array): string {
