@@ -36,5 +36,8 @@ import { RegistryService } from './services/registry.service';
     JwtAuthGuard,
     { provide: PinStore, useClass: KuboPinStore },
   ],
+  // The content slice binds the same instance rather than constructing a second
+  // one, so an unconfigured store is reported once at boot.
+  exports: [PinStore],
 })
 export class RegistryModule {}
