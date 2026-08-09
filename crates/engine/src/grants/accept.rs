@@ -25,9 +25,10 @@ use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
+use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
-use crate::seams::{FloorStore, Mailbox, SeamError, SeamResult};
+use crate::seams::{FloorStore, Mailbox, SeamError};
 
 use super::contact::Contact;
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
@@ -235,7 +236,7 @@ pub(crate) const STORED_LIST_V: u64 = 1;
 /// hostile contact would permanently shrink the vault's upload headroom. Bounded
 /// release-active in both directions like every other repeated collection in a
 /// sealed structure.
-pub(crate) const MAX_RECEIVED_SHARES: usize = 1024;
+pub const MAX_RECEIVED_SHARES: usize = 1024;
 /// The bound on a bookmark's courtesy display label.
 pub(crate) const MAX_DISPLAY_NAME_BYTES: usize = 256;
 /// The bound on a bookmarked scope root's opaque `ipnsName`.
@@ -403,16 +404,23 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
 /// does not extend core's frozen `Malformed` registry, whose names the KAT
 /// manifest pins.
 #[derive(Debug)]
-pub(crate) enum ReceivedSharesCodecError {
+pub enum ReceivedSharesCodecError {
     /// The det-CBOR framing was malformed.
     Codec(CodecError),
+    /// The stored blob did not open under this session's `enc-subkey` as a
+    /// `received-shares` blob — tampered, another identity's, or another
+    /// owner-local store's.
+    DidNotOpen(CodecError),
     /// Two bookmarks named one scope root — a list with no defined authority
     /// for that scope, refused in both directions (AGENTS.md rule 8).
     DuplicateScopeRoot,
     /// A stored body written at a grammar version this build does not read.
     /// Never treated as empty: the bookmarks are there, this build just cannot
     /// interpret them.
-    UnsupportedVersion { version: u64 },
+    UnsupportedVersion {
+        /// The version the stored body declared.
+        version: u64,
+    },
     /// A collection or field past its frozen bound.
     TooLong(TooLong),
 }
@@ -421,6 +429,9 @@ impl fmt::Display for ReceivedSharesCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReceivedSharesCodecError::Codec(e) => write!(f, "received-shares codec: {e}"),
+            ReceivedSharesCodecError::DidNotOpen(e) => {
+                write!(f, "received-shares list did not open: {}", e.check())
+            }
             ReceivedSharesCodecError::DuplicateScopeRoot => {
                 f.write_str("received-shares list names one scope root twice")
             }
@@ -501,9 +512,9 @@ impl Reconciled {
 /// persisted in turn silently erase each other, and the mailbox items behind the
 /// lost bookmarks are already acked.
 pub trait ReceivedShareStore {
-    /// Durably persist the whole received-shares list. A failure returns a
-    /// [`SeamError`] and the accept flow does not ack.
-    async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()>;
+    /// Durably persist the whole received-shares list. A failure means the
+    /// accept flow does not ack.
+    async fn persist(&self, shares: &ReceivedSharesList) -> Result<(), ReceivedShareStoreError>;
 
     /// The persisted list, or an empty one on a backing that holds none.
     ///
@@ -511,7 +522,64 @@ pub trait ReceivedShareStore {
     /// stored list this build cannot open is unrecoverable state, and reporting
     /// it as empty would let the next [`persist`](Self::persist) overwrite every
     /// bookmark behind it.
-    async fn load(&self) -> SeamResult<ReceivedSharesList>;
+    async fn load(&self) -> Result<ReceivedSharesList, ReceivedShareStoreError>;
+}
+
+/// Why a received-shares store operation failed.
+///
+/// The split that matters is [`Seam`](Self::Seam) — the backing could not be
+/// reached, so retry — against [`Unreadable`](Self::Unreadable), a fail-closed
+/// verdict on bytes that *are* there. Retrying that one never converges, and a
+/// host that treats it as an outage hides an attack signal. The owner-local
+/// stores all classify on this shape so one of them cannot drift into reporting
+/// a trust violation as availability (ADR 0006).
+#[derive(Debug)]
+pub enum ReceivedShareStoreError {
+    /// Stored bytes this build cannot read as a received-shares list. Never
+    /// reported as an empty list: the next persist would overwrite bookmarks it
+    /// never saw, and the mailbox items that delivered them are acked and gone.
+    Unreadable(ReceivedSharesCodecError),
+    /// The list to persist holds more than [`MAX_RECEIVED_SHARES`]. The stored
+    /// bytes are fine — the offered list is the one past the bound.
+    Full,
+    /// The offered list is not one this build may store: two bookmarks for one
+    /// scope root, or a field past its bound. A write-path refusal, so never
+    /// [`Unreadable`](Self::Unreadable) — nothing was read.
+    Encode(ReceivedSharesCodecError),
+    /// Entropy acquisition failed, so no list is sealed and none is written.
+    Entropy(EntropyError),
+    /// Sealing the list for storage failed.
+    Seal(CodecError),
+    /// The durable backing failed.
+    Seam(SeamError),
+}
+
+impl fmt::Display for ReceivedShareStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReceivedShareStoreError::Unreadable(e) => {
+                write!(f, "the stored list is unreadable: {e}")
+            }
+            ReceivedShareStoreError::Full => write!(
+                f,
+                "the received-shares list already holds {MAX_RECEIVED_SHARES} bookmarks"
+            ),
+            ReceivedShareStoreError::Encode(e) => write!(f, "the list cannot be stored: {e}"),
+            ReceivedShareStoreError::Entropy(e) => write!(f, "received-shares: {e}"),
+            ReceivedShareStoreError::Seal(e) => {
+                write!(f, "received-shares seal failed: {}", e.check())
+            }
+            ReceivedShareStoreError::Seam(e) => write!(f, "received-shares: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ReceivedShareStoreError {}
+
+impl From<SeamError> for ReceivedShareStoreError {
+    fn from(e: SeamError) -> Self {
+        ReceivedShareStoreError::Seam(e)
+    }
 }
 
 /// One owner-side sent-share record — the denormalized index the owner keeps.
@@ -609,8 +677,9 @@ pub enum AcceptError {
     Gate(GateError),
     /// Durably persisting the updated received-shares list failed — the item is
     /// left un-acked (never acked before durable), so it redelivers and
-    /// re-accepts idempotently. Nothing was lost.
-    Persist(SeamError),
+    /// re-accepts idempotently. Nothing was lost; whether a redelivery can ever
+    /// land is the [`ReceivedShareStoreError`] variant's answer.
+    Persist(ReceivedShareStoreError),
     /// Acking the item failed after the durable persist (the share IS recorded;
     /// the item will redeliver and re-accept idempotently).
     Ack(SeamError),

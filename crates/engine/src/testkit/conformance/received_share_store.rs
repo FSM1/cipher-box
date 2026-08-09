@@ -5,7 +5,10 @@ use cipherbox_core::seal::Permission;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
-use crate::grants::{ReceivedShare, ReceivedShareStore, ReceivedSharesList};
+use crate::grants::{
+    MAX_RECEIVED_SHARES, ReceivedShare, ReceivedShareStore, ReceivedShareStoreError,
+    ReceivedSharesList,
+};
 
 /// A list holding one bookmark per `(scope root, pointer read key)` pair given,
 /// built through the accept flow's own reconcile so the kit never fabricates a
@@ -19,6 +22,21 @@ fn list(entries: &[(&[u8], u8, Permission)]) -> ReceivedSharesList {
             display_name: "Shared Folder".into(),
             permission: *permission,
             pointer_read_key: SecretBytes::new([*key_byte; 32]),
+        });
+    }
+    shares
+}
+
+/// One bookmark past the frozen bound, every scope root distinct.
+fn over_bound() -> ReceivedSharesList {
+    let mut shares = ReceivedSharesList::new();
+    for i in 0..=MAX_RECEIVED_SHARES {
+        shares.reconcile(ReceivedShare {
+            scope_root_name: format!("k51scoperoot-{i}").into_bytes(),
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "Shared Folder".into(),
+            permission: Permission::Read,
+            pointer_read_key: SecretBytes::new([0x5A; 32]),
         });
     }
     shares
@@ -127,5 +145,18 @@ where
     assert!(
         ct_eq(stored.pointer_read_key(), &[0xE1; 32]),
         "the pointer read key round-trips byte-exact"
+    );
+
+    assert!(
+        matches!(
+            store.persist(&over_bound()).await,
+            Err(ReceivedShareStoreError::Full)
+        ),
+        "a list past MAX_RECEIVED_SHARES is a bound the host can act on, not an outage to retry"
+    );
+    assert_eq!(
+        held(&open().await).await,
+        vec![(one.to_vec(), [0xE1; 32], Permission::Read)],
+        "a refused list leaves the stored bookmarks untouched"
     );
 }

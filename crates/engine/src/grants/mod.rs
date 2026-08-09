@@ -16,14 +16,16 @@ pub mod contact;
 pub mod contact_store;
 pub mod create;
 pub mod invite;
+pub mod invite_store;
 pub mod ledger;
 pub mod owner_entry;
 pub mod received_share_store;
 pub mod revocation;
 
 pub use accept::{
-    AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
-    SentShare, SharePointer, TooLong, accept_share,
+    AcceptError, AcceptOutcome, MAX_RECEIVED_SHARES, ReceivedShare, ReceivedShareStore,
+    ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList, SentIndex, SentShare,
+    SharePointer, TooLong, accept_share,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
@@ -42,6 +44,10 @@ pub use invite::{
     ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim, InviteError,
     InviteRevocation, LinkCapability, MintedInvite, OwnerAuthority, RecordedInvite,
     convert_invite_claim, mint_invite_grant, post_invite_claim, revoke_invite_link,
+};
+pub use invite_store::{
+    INVITE_RECORDS_PREFIX, InviteRecordsCodecError, InviteStore, InviteStoreError,
+    MAX_INVITE_RECORDS, StagingInviteStore,
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,

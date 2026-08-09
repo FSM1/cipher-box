@@ -22,6 +22,7 @@
 pub mod contact_store;
 pub mod credential_store;
 pub mod floor_store;
+pub mod invite_store;
 pub mod mailbox;
 pub mod received_share_store;
 pub mod record_transport;

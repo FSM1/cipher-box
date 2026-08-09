@@ -10,13 +10,14 @@
 use core::cell::RefCell;
 
 use crate::entropy::{Entropy, fresh_ephemeral};
-use crate::seams::{SeamError, SeamResult, StagingStore};
+use crate::seams::StagingStore;
 use crate::sync::owner_scoped_key;
 use cipherbox_core::seal::{OwnerLocalKind, open_owner_local, seal_owner_local};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::accept::{
-    ReceivedShareStore, ReceivedSharesList, decode_stored_list, encode_stored_list,
+    MAX_RECEIVED_SHARES, ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError,
+    ReceivedSharesList, decode_stored_list, encode_stored_list,
 };
 
 /// The staging-key prefix the received-shares list is stored under, scoped per
@@ -62,37 +63,35 @@ impl<'a, St: StagingStore, E: Entropy> StagingReceivedShareStore<'a, St, E> {
 }
 
 impl<St: StagingStore, E: Entropy> ReceivedShareStore for StagingReceivedShareStore<'_, St, E> {
-    async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()> {
-        let body = encode_stored_list(shares)
-            .map_err(|e| SeamError::new(format!("received-shares encode failed: {e}")))?;
+    async fn persist(&self, shares: &ReceivedSharesList) -> Result<(), ReceivedShareStoreError> {
+        if shares.len() > MAX_RECEIVED_SHARES {
+            return Err(ReceivedShareStoreError::Full);
+        }
+        let body = encode_stored_list(shares).map_err(ReceivedShareStoreError::Encode)?;
         let ephemeral = fresh_ephemeral(&mut *self.entropy.borrow_mut())
-            .map_err(|e| SeamError::new(e.message().to_string()))?;
+            .map_err(ReceivedShareStoreError::Entropy)?;
         let blob = seal_owner_local(
             self.enc_secret,
             OwnerLocalKind::ReceivedShares,
             &ephemeral,
             &body,
         )
-        .map_err(|e| SeamError::new(format!("received-shares seal failed: {e}")))?;
+        .map_err(ReceivedShareStoreError::Seal)?;
         self.staging
             .put_staged_bytes(self.staging_key(), &blob)
-            .await
+            .await?;
+        Ok(())
     }
 
-    async fn load(&self) -> SeamResult<ReceivedSharesList> {
+    async fn load(&self) -> Result<ReceivedSharesList, ReceivedShareStoreError> {
         let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
             return Ok(ReceivedSharesList::new());
         };
-        // Stored bytes this session cannot read are never reported as an empty
-        // list: the next persist would overwrite bookmarks it never saw, and the
-        // mailbox items that delivered them are acked and gone.
         let body = open_owner_local(self.enc_secret, OwnerLocalKind::ReceivedShares, &blob)
-            .map_err(|_| SeamError::new("received-shares: the stored list did not open"))?;
-        decode_stored_list(&body).map_err(|e| {
-            SeamError::new(format!(
-                "received-shares: the stored list did not decode: {e}"
-            ))
-        })
+            .map_err(|e| {
+                ReceivedShareStoreError::Unreadable(ReceivedSharesCodecError::DidNotOpen(e))
+            })?;
+        decode_stored_list(&body).map_err(ReceivedShareStoreError::Unreadable)
     }
 }
 
@@ -103,11 +102,10 @@ mod tests {
     use cipherbox_core::suite::secret::SecretBytes;
 
     use super::*;
-    use crate::entropy::EntropyError;
     use crate::grants::ReceivedShare;
     use crate::sync::orphan_staging_keys;
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, conformance};
+    use crate::testkit::{FailingEntropy, SeededEntropy, SilentEntropy, block_on, conformance};
 
     const POINTER_KEY: [u8; 32] = [0xE7; 32];
 
@@ -125,24 +123,6 @@ mod tests {
             pointer_read_key: SecretBytes::new(POINTER_KEY),
         });
         shares
-    }
-
-    /// Reports success while writing nothing, so the caller's ephemeral stays
-    /// all-zero — a seam that would silently reuse one HPKE ephemeral forever.
-    struct SilentEntropy;
-
-    impl Entropy for SilentEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Ok(())
-        }
-    }
-
-    struct FailingEntropy;
-
-    impl Entropy for FailingEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Err(EntropyError::new("no entropy"))
-        }
     }
 
     #[test]
@@ -190,8 +170,13 @@ mod tests {
         block_on(staging.put_staged_bytes(store.staging_key(), b"not a sealed list"))
             .expect("clobber");
         assert!(
-            block_on(store.load()).is_err(),
-            "an unreadable stored list is an error, never an empty list"
+            matches!(
+                block_on(store.load()),
+                Err(ReceivedShareStoreError::Unreadable(
+                    ReceivedSharesCodecError::DidNotOpen(_)
+                ))
+            ),
+            "an unreadable stored list is a trust verdict, never a retryable seam failure"
         );
     }
 
@@ -216,8 +201,13 @@ mod tests {
         .expect("seal");
         block_on(staging.put_staged_bytes(store.staging_key(), &sealed)).expect("clobber");
         assert!(
-            block_on(store.load()).is_err(),
-            "a body this build cannot decode is an error, never an empty list"
+            matches!(
+                block_on(store.load()),
+                Err(ReceivedShareStoreError::Unreadable(
+                    ReceivedSharesCodecError::Codec(_)
+                ))
+            ),
+            "a body this build cannot decode is a trust verdict, never an empty list"
         );
     }
 
@@ -237,8 +227,13 @@ mod tests {
             .expect("seal");
         block_on(staging.put_staged_bytes(store.staging_key(), &sealed)).expect("stage");
         assert!(
-            block_on(store.load()).is_err(),
-            "another store's blob is an error, never a list to adopt"
+            matches!(
+                block_on(store.load()),
+                Err(ReceivedShareStoreError::Unreadable(
+                    ReceivedSharesCodecError::DidNotOpen(_)
+                ))
+            ),
+            "another store's blob is a trust verdict, never a list to adopt"
         );
     }
 
@@ -307,7 +302,13 @@ mod tests {
             .expect("the list is stored");
 
         staging.interrupt_staged_write_after(store.staging_key(), 0);
-        assert!(block_on(store.persist(&ReceivedSharesList::new())).is_err());
+        assert!(
+            matches!(
+                block_on(store.persist(&ReceivedSharesList::new())),
+                Err(ReceivedShareStoreError::Seam(_))
+            ),
+            "a backing that dropped the write is the one failure a host may retry"
+        );
         assert_eq!(
             block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged")
@@ -332,7 +333,10 @@ mod tests {
 
         let broken = RefCell::new(FailingEntropy);
         let store = StagingReceivedShareStore::new(&staging, &secret, &broken);
-        assert!(block_on(store.persist(&ReceivedSharesList::new())).is_err());
+        assert!(matches!(
+            block_on(store.persist(&ReceivedSharesList::new())),
+            Err(ReceivedShareStoreError::Entropy(_))
+        ));
         assert_eq!(
             block_on(store.load()).expect("load").len(),
             1,

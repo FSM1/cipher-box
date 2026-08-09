@@ -25,7 +25,7 @@ mod world;
 pub use content::{
     block_store, doomed_version, frame_version, frame_version_with, gateway, requested_cid, serve,
 };
-pub use entropy::SeededEntropy;
+pub use entropy::{FailingEntropy, SeededEntropy, SilentEntropy};
 pub use executor::block_on;
 pub use owner_root::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
