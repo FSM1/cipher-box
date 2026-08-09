@@ -347,10 +347,9 @@ fn decode_records(bytes: &[u8]) -> Result<Vec<RecordedInvite>, InviteRecordsCode
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entropy::EntropyError;
     use crate::sync::orphan_staging_keys;
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, conformance};
+    use crate::testkit::{FailingEntropy, SeededEntropy, SilentEntropy, block_on, conformance};
 
     fn enc(byte: u8) -> X25519Secret {
         X25519Secret::from_scalar([byte; 32])
@@ -372,24 +371,6 @@ mod tests {
     fn sealed_as(secret: &X25519Secret, kind: OwnerLocalKind, seed: u64, body: &[u8]) -> Vec<u8> {
         let ephemeral = fresh_ephemeral(&mut SeededEntropy::new(seed)).expect("ephemeral");
         seal_owner_local(secret, kind, &ephemeral, body).expect("seal")
-    }
-
-    /// Reports success while writing nothing, so the caller's ephemeral stays
-    /// all-zero — a seam that would silently reuse one HPKE ephemeral forever.
-    struct SilentEntropy;
-
-    impl Entropy for SilentEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Ok(())
-        }
-    }
-
-    struct FailingEntropy;
-
-    impl Entropy for FailingEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Err(EntropyError::new("no entropy"))
-        }
     }
 
     /// The HPKE ephemeral public half a stored blob carries.
@@ -740,6 +721,27 @@ mod tests {
         let mut body = Map::new();
         body.insert("extra", Value::Unsigned(1));
         body.insert("links", Value::Array(vec![]));
+        body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
+        assert!(matches!(
+            decode_records(&encode_fixed_depth(&Value::Map(body))),
+            Err(InviteRecordsCodecError::Codec(_))
+        ));
+    }
+
+    /// The set rejects an unknown key at the record too, not only at the top
+    /// level — a record is the authority for one link's permission.
+    #[test]
+    fn a_record_with_an_unknown_key_is_refused() {
+        let mut m = Map::new();
+        m.insert("ephemeralEncPk", Value::Bytes(vec![0x01; SECRET_LEN]));
+        m.insert(
+            "ephemeralIdentityPk",
+            Value::Bytes(vec![0x02; IDENTITY_PUBLIC_LEN]),
+        );
+        m.insert("extra", Value::Unsigned(1));
+        m.insert("tag", Value::Bytes(vec![0x03; 32]));
+        let mut body = Map::new();
+        body.insert("links", Value::Array(vec![Value::Map(m)]));
         body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
         assert!(matches!(
             decode_records(&encode_fixed_depth(&Value::Map(body))),

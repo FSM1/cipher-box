@@ -89,6 +89,28 @@ where
         ),
         "a set past MAX_INVITE_RECORDS is a bound the host can act on, not an outage to retry"
     );
+
+    // The other two write-path refusals are contract, not implementation
+    // detail: both leave a link's authority undefined, so every implementation
+    // owes the same answer.
+    let mut clash = two;
+    clash.ephemeral_enc_pk = [0x01; SECRET_LEN];
+    assert!(
+        matches!(
+            store.persist(&[two, clash]).await,
+            Err(InviteStoreError::Encode(_))
+        ),
+        "two records under one tag leave that link's permission and deadline undefined"
+    );
+    assert!(
+        matches!(
+            store.persist(&[record(0x33, Some(UnixMillis(0)))]).await,
+            Err(InviteStoreError::Encode(_))
+        ),
+        "a zero deadline is not 'no deadline' — the mint refuses one, so storing it would \
+         resurrect a link the mint never made"
+    );
+
     assert_eq!(
         held(&open().await).await,
         vec![one],

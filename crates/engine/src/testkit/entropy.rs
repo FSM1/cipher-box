@@ -45,6 +45,29 @@ impl Entropy for SeededEntropy {
     }
 }
 
+/// A seam that reports success and writes nothing, leaving the caller's buffer
+/// at whatever it held. **Test-only.** It stands for the stuck-entropy class:
+/// `fresh_ephemeral` rejects only an all-zero draw, so a seam stuck on any
+/// constant would reuse one HPKE ephemeral under a constant recipient key and
+/// `info` — key and nonce reuse.
+pub struct SilentEntropy;
+
+impl Entropy for SilentEntropy {
+    fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+        Ok(())
+    }
+}
+
+/// A seam that refuses every draw. **Test-only.** Nothing may be sealed or
+/// written when entropy cannot be had.
+pub struct FailingEntropy;
+
+impl Entropy for FailingEntropy {
+    fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+        Err(EntropyError::new("no entropy"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -350,7 +350,13 @@ fn a_link_minted_in_one_session_converts_and_revokes_in_the_next() {
 fn a_recovered_record_carries_the_deadline_conversion_judges_expiry_on() {
     let staging = InMemoryStagingStore::default();
     let deadline = UnixMillis(1_700_000_000_000);
-    let l = link_until(Permission::Read, Some(deadline));
+    let mut l = link_until(Permission::Read, Some(deadline));
+    // The published deadline is the copy a write-grantee can strip
+    // (`RecordedInvite::expires_at`). Clearing it leaves the recovered record
+    // as the only thing that can still refuse the claim.
+    for entry in &mut l.ledger {
+        entry.expires_at = None;
+    }
     let enc = owner_enc();
     let entropy = RefCell::new(SeededEntropy::new(7));
     block_on(StagingInviteStore::new(&staging, &enc, &entropy).persist(&[l.recorded]))

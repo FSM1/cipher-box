@@ -417,7 +417,7 @@ mod tests {
     use super::super::contact::import_contact;
     use super::*;
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, conformance};
+    use crate::testkit::{FailingEntropy, SeededEntropy, SilentEntropy, block_on, conformance};
 
     fn enc(byte: u8) -> X25519Secret {
         X25519Secret::from_scalar([byte; 32])
@@ -425,24 +425,6 @@ mod tests {
 
     fn seeded(seed: u64) -> RefCell<SeededEntropy> {
         RefCell::new(SeededEntropy::new(seed))
-    }
-
-    /// Reports success while writing nothing, so the caller's ephemeral stays
-    /// all-zero — a seam that would silently reuse one HPKE ephemeral forever.
-    struct SilentEntropy;
-
-    impl Entropy for SilentEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Ok(())
-        }
-    }
-
-    struct FailingEntropy;
-
-    impl Entropy for FailingEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Err(EntropyError::new("no entropy"))
-        }
     }
 
     /// A book body sealed as this build seals one, so a test can put bytes the

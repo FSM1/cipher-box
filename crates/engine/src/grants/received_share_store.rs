@@ -102,11 +102,10 @@ mod tests {
     use cipherbox_core::suite::secret::SecretBytes;
 
     use super::*;
-    use crate::entropy::EntropyError;
     use crate::grants::ReceivedShare;
     use crate::sync::orphan_staging_keys;
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on, conformance};
+    use crate::testkit::{FailingEntropy, SeededEntropy, SilentEntropy, block_on, conformance};
 
     const POINTER_KEY: [u8; 32] = [0xE7; 32];
 
@@ -124,24 +123,6 @@ mod tests {
             pointer_read_key: SecretBytes::new(POINTER_KEY),
         });
         shares
-    }
-
-    /// Reports success while writing nothing, so the caller's ephemeral stays
-    /// all-zero — a seam that would silently reuse one HPKE ephemeral forever.
-    struct SilentEntropy;
-
-    impl Entropy for SilentEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Ok(())
-        }
-    }
-
-    struct FailingEntropy;
-
-    impl Entropy for FailingEntropy {
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Err(EntropyError::new("no entropy"))
-        }
     }
 
     #[test]
