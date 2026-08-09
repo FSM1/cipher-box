@@ -142,6 +142,16 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
     })
 }
 
+/// The 503 `POST /content/upload` answers when its pin store is unreachable — a
+/// refusal the API did answer, unlike [`unreachable_upload`].
+fn pin_store_unavailable() -> SeamResult<HttpResponse> {
+    Ok(HttpResponse {
+        status: 503,
+        headers: Vec::new(),
+        body: br#"{"statusCode":503,"message":"pin store unavailable"}"#.to_vec(),
+    })
+}
+
 /// A 413 from an intermediary that never reached the API: an HTML body, so no
 /// error envelope parses out of it at all.
 fn proxy_413() -> SeamResult<HttpResponse> {
@@ -2785,6 +2795,40 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
             reason: DeadLetterReason::PayloadRefused,
         }),
         "and the dead letter says it will never publish"
+    );
+}
+
+/// A pin store answering 503 every pass has judged *these* bytes, so the attempt
+/// budget escalates it to a terminal failure. Uncharged it would hold the
+/// strict-FIFO head forever: a row that never settles and never errors.
+#[test]
+fn a_standing_server_refusal_dead_letters_instead_of_cycling_forever() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(pin_store_unavailable())));
+    let op_id = write_photo(&mut engine, "photo.bin");
+
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert!(
+        passes > 1,
+        "an unavailable pin store is a charged attempt, not a verdict on sight"
+    );
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted,
+        }]
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "and it has left the queue rather than parking its head"
     );
 }
 
