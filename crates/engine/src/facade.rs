@@ -2387,27 +2387,35 @@ impl<T: SeamTypes> Engine<T> {
                     });
                 }
                 let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-                StagingContactStore::new(&self.seams.staging_store, session.enc_subkey())
-                    .record(&contact_code)
-                    .await
-                    .map(CommandOutcome::ContactImported)
-                    .map_err(|err| match err {
-                        ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
-                            EngineError::MalformedInput { check: e.check() }
-                        }
-                        ContactStoreError::Full => EngineError::MalformedInput {
-                            check: "contact-book-full",
-                        },
-                        ContactStoreError::Seam(e) => EngineError::Seam {
-                            message: e.message().to_owned(),
-                        },
-                        // A rejected binding, and a stored book this build
-                        // cannot read: both are fail-closed trust verdicts, not
-                        // outages a host should retry.
-                        other => EngineError::TrustViolation {
-                            message: other.to_string(),
-                        },
-                    })
+                StagingContactStore::new(
+                    &self.seams.staging_store,
+                    session.enc_subkey(),
+                    &self.entropy,
+                )
+                .record(&contact_code)
+                .await
+                .map(CommandOutcome::ContactImported)
+                .map_err(|err| match err {
+                    ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
+                        EngineError::MalformedInput { check: e.check() }
+                    }
+                    ContactStoreError::Full => EngineError::MalformedInput {
+                        check: "contact-book-full",
+                    },
+                    ContactStoreError::Seam(e) => EngineError::Seam {
+                        message: e.message().to_owned(),
+                    },
+                    ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
+                    ContactStoreError::Seal(e) => EngineError::Seam {
+                        message: e.check().to_owned(),
+                    },
+                    // A rejected binding, and a stored book this build
+                    // cannot read: both are fail-closed trust verdicts, not
+                    // outages a host should retry.
+                    other => EngineError::TrustViolation {
+                        message: other.to_string(),
+                    },
+                })
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SiweLogin { message, signature } => {

@@ -13,25 +13,29 @@
 //! [`Contact`], so a tampered backing can never re-point an identity key at a
 //! subkey its holder did not sign.
 //!
-//! What that does *not* cover, because the book carries no owner attestation
-//! and a contact code carries no counter: a tamperer can insert any validly
-//! signed third-party code, roll an identity back to a subkey its holder signed
-//! **once** but has since rotated away from, or delete an entry and turn a
-//! later revoke into [`ContactStoreError::RecipientNotImported`]. The book is
-//! also plaintext at rest, so it discloses the owner's contact graph to a local
-//! reader; the grant ledger that would otherwise carry those identity keys is
-//! sealed under the scope's write key, so this is a new disclosure rather than
-//! a restatement of a published one. Sealing the book under the `owner-local`
-//! structure closes the disclosure and the third-party insertion; the rollback
-//! and the deletion need a monotone counter that structure does not carry.
+//! The book is sealed HPKE-to-self under the session's `enc-subkey` before it
+//! reaches the host (`owner-local`, kind `contact-book`), so the contact graph
+//! is ciphertext at rest and only the owner can author an entry.
+//!
+//! What that does *not* cover, because a contact code carries no counter and
+//! the structure carries no generation: a host replaying an earlier sealed book
+//! rolls an identity back to a subkey its holder signed **once** but has since
+//! rotated away from, and dropping the stored key entirely reads as an empty
+//! book, turning a later revoke into
+//! [`ContactStoreError::RecipientNotImported`]. Both need a monotone counter
+//! held where the host cannot roll it back.
+
+use core::cell::RefCell;
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::CodecError;
+use cipherbox_core::seal::{OwnerLocalKind, open_owner_local, seal_owner_local};
 use cipherbox_core::suite::contact::import_contact_code;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use core::fmt;
 
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::seams::{SeamError, StagingStore};
 use crate::sync::owner_scoped_key;
 
@@ -72,6 +76,12 @@ pub enum ContactStoreError {
     /// set this import would make is the one past the bound — so a host can
     /// offer [`ContactStore::forget`] rather than report corruption.
     Full,
+    /// Entropy acquisition failed, so no book is sealed and none is written.
+    Entropy(EntropyError),
+    /// Sealing the book for storage failed. A write-path failure, so never
+    /// [`Unreadable`](Self::Unreadable) — nothing was read and nothing stored
+    /// is in doubt.
+    Seal(CodecError),
     /// The durable backing failed.
     Seam(SeamError),
 }
@@ -87,6 +97,8 @@ impl fmt::Display for ContactStoreError {
             ContactStoreError::Full => {
                 write!(f, "the contact book already holds {MAX_CONTACTS} contacts")
             }
+            ContactStoreError::Entropy(e) => write!(f, "contact book: {e}"),
+            ContactStoreError::Seal(e) => write!(f, "contact book seal failed: {}", e.check()),
             ContactStoreError::Seam(e) => write!(f, "contact book: {e}"),
         }
     }
@@ -115,6 +127,11 @@ impl From<BookCodecError> for ContactStoreError {
 pub enum BookCodecError {
     /// The det-CBOR framing was malformed.
     Codec(CodecError),
+    /// The stored blob did not open under this session's `enc-subkey` as a
+    /// `contact-book` blob — tampered, another identity's, another store's, or
+    /// written at a format version this build refuses. Never an empty book: the
+    /// contacts are there and this build cannot reach them.
+    DidNotOpen(CodecError),
     /// A stored code no longer imports — a tampered or truncated book, never a
     /// contact to skip past.
     UnverifiableCode(CodecError),
@@ -139,6 +156,7 @@ impl fmt::Display for BookCodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BookCodecError::Codec(e) => write!(f, "codec: {e}"),
+            BookCodecError::DidNotOpen(e) => write!(f, "did not open: {}", e.check()),
             BookCodecError::UnverifiableCode(e) => {
                 write!(f, "holds a code that no longer imports: {}", e.check())
             }
@@ -225,16 +243,24 @@ fn import_recorded(bytes: &[u8]) -> Result<(Contact, Vec<u8>), CodecError> {
 
 /// The contact book the engine ships over a host's [`StagingStore`], under one
 /// staging key.
-pub struct StagingContactStore<'a, St> {
+///
+/// The book is sealed HPKE-to-self under the session's `enc-subkey` before it
+/// reaches the host, so no contact's identity key or encryption subkey sits in
+/// host storage in the clear.
+pub struct StagingContactStore<'a, St, E> {
     staging: &'a St,
+    enc_secret: &'a X25519Secret,
+    entropy: &'a RefCell<E>,
     staging_key: Vec<u8>,
 }
 
-impl<'a, St: StagingStore> StagingContactStore<'a, St> {
+impl<'a, St: StagingStore, E: Entropy> StagingContactStore<'a, St, E> {
     /// Wraps a staging store as the contact book for one session.
-    pub fn new(staging: &'a St, enc_secret: &'a X25519Secret) -> Self {
+    pub fn new(staging: &'a St, enc_secret: &'a X25519Secret, entropy: &'a RefCell<E>) -> Self {
         Self {
             staging,
+            enc_secret,
+            entropy,
             staging_key: owner_scoped_key(CONTACTS_PREFIX, enc_secret),
         }
     }
@@ -245,23 +271,36 @@ impl<'a, St: StagingStore> StagingContactStore<'a, St> {
     }
 
     async fn recorded(&self) -> Result<Vec<Recorded>, ContactStoreError> {
-        match self.staging.staged_bytes(self.staging_key()).await? {
-            None => Ok(Vec::new()),
-            Some(bytes) => Ok(decode_book(&bytes)?),
-        }
+        let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
+            return Ok(Vec::new());
+        };
+        // A stored book this session cannot open is state, never an empty book:
+        // the next import would overwrite contacts it never saw.
+        let body = open_owner_local(self.enc_secret, OwnerLocalKind::ContactBook, &blob)
+            .map_err(BookCodecError::DidNotOpen)?;
+        Ok(decode_book(&body)?)
     }
 
     /// Replace the whole book.
     async fn put(&self, book: &[Recorded]) -> Result<(), ContactStoreError> {
         let body = encode_book(book)?;
+        let ephemeral =
+            fresh_ephemeral(&mut *self.entropy.borrow_mut()).map_err(ContactStoreError::Entropy)?;
+        let blob = seal_owner_local(
+            self.enc_secret,
+            OwnerLocalKind::ContactBook,
+            &ephemeral,
+            &body,
+        )
+        .map_err(ContactStoreError::Seal)?;
         self.staging
-            .put_staged_bytes(self.staging_key(), &body)
+            .put_staged_bytes(self.staging_key(), &blob)
             .await?;
         Ok(())
     }
 }
 
-impl<St: StagingStore> ContactStore for StagingContactStore<'_, St> {
+impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, E> {
     async fn record(&self, contact_code: &[u8]) -> Result<Contact, ContactStoreError> {
         // Import re-encodes canonically, so what lands is the ~130 frozen bytes
         // of the three keys — never the caller's spelling, which tolerates
@@ -381,10 +420,43 @@ mod tests {
     use super::super::contact::import_contact;
     use super::*;
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{block_on, conformance};
+    use crate::testkit::{SeededEntropy, block_on, conformance};
 
     fn enc(byte: u8) -> X25519Secret {
         X25519Secret::from_scalar([byte; 32])
+    }
+
+    fn seeded(seed: u64) -> RefCell<SeededEntropy> {
+        RefCell::new(SeededEntropy::new(seed))
+    }
+
+    /// Reports success while writing nothing, so the caller's ephemeral stays
+    /// all-zero — a seam that would silently reuse one HPKE ephemeral forever.
+    struct SilentEntropy;
+
+    impl Entropy for SilentEntropy {
+        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+            Ok(())
+        }
+    }
+
+    struct FailingEntropy;
+
+    impl Entropy for FailingEntropy {
+        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+            Err(EntropyError::new("no entropy"))
+        }
+    }
+
+    /// A book body sealed as this build seals one, so a test can put bytes the
+    /// loader will actually open back under the store's key.
+    fn sealed(secret: &X25519Secret, seed: u64, body: &[u8]) -> Vec<u8> {
+        sealed_as(secret, OwnerLocalKind::ContactBook, seed, body)
+    }
+
+    fn sealed_as(secret: &X25519Secret, kind: OwnerLocalKind, seed: u64, body: &[u8]) -> Vec<u8> {
+        let ephemeral = fresh_ephemeral(&mut SeededEntropy::new(seed)).expect("ephemeral");
+        seal_owner_local(secret, kind, &ephemeral, body).expect("seal")
     }
 
     /// A contact code the peer signed itself, as one arrives out of band.
@@ -436,8 +508,9 @@ mod tests {
     fn the_staging_store_passes_the_contact_store_kit() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x11);
+        let entropy = seeded(17);
         block_on(conformance::contact_store::check(async || {
-            StagingContactStore::new(&staging, &secret)
+            StagingContactStore::new(&staging, &secret, &entropy)
         }));
     }
 
@@ -447,10 +520,12 @@ mod tests {
     fn a_recorded_contact_resolves_by_identity_key_after_a_restart() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x21);
-        let imported = block_on(StagingContactStore::new(&staging, &secret).record(&code(0x33)))
-            .expect("import");
+        let entropy = seeded(33);
+        let imported =
+            block_on(StagingContactStore::new(&staging, &secret, &entropy).record(&code(0x33)))
+                .expect("import");
 
-        let restarted = StagingContactStore::new(&staging, &secret);
+        let restarted = StagingContactStore::new(&staging, &secret, &entropy);
         let resolved =
             block_on(resolve_recipient(&restarted, &identity_of(0x33))).expect("resolves");
         assert_eq!(resolved.identity_pk(), imported.identity_pk());
@@ -465,9 +540,11 @@ mod tests {
     fn an_identity_key_no_import_verified_fails_closed() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x31);
-        block_on(StagingContactStore::new(&staging, &secret).record(&code(0x33))).expect("import");
+        let entropy = seeded(49);
+        block_on(StagingContactStore::new(&staging, &secret, &entropy).record(&code(0x33)))
+            .expect("import");
 
-        let store = StagingContactStore::new(&staging, &secret);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         assert!(
             matches!(
                 block_on(resolve_recipient(&store, &identity_of(0x44))),
@@ -483,7 +560,8 @@ mod tests {
     fn a_code_whose_binding_fails_is_never_recorded() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x41);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(65);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         assert!(matches!(
             block_on(store.record(&substituted_code(0x33, 0x44))),
             Err(ContactStoreError::Import(_))
@@ -500,18 +578,20 @@ mod tests {
         );
     }
 
-    /// Why the code is stored rather than the pair: host bytes are re-verified
-    /// on every load, so re-pointing an identity key at a subkey its holder
-    /// never signed is refused rather than served to a grant.
+    /// Why the code is stored rather than the pair: the seal is not the only
+    /// check, so even a body that opens is re-verified before it reaches a
+    /// grant. Sealed under the store's own key so the tamper reaches the
+    /// decoder rather than stopping at the AEAD.
     #[test]
     fn a_tampered_book_never_yields_a_contact() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x51);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(81);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         block_on(store.record(&code(0x33))).expect("import");
         block_on(staging.put_staged_bytes(
             store.staging_key(),
-            &framed(&[substituted_code(0x33, 0x44)]),
+            &sealed(&secret, 51, &framed(&[substituted_code(0x33, 0x44)])),
         ))
         .expect("clobber");
 
@@ -527,15 +607,128 @@ mod tests {
     fn a_book_this_build_cannot_read_fails_closed_rather_than_reading_empty() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x61);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(97);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         block_on(store.record(&code(0x33))).expect("import");
         block_on(staging.put_staged_bytes(store.staging_key(), b"not a contact book"))
             .expect("clobber");
 
         assert!(matches!(
             block_on(store.contacts()),
-            Err(ContactStoreError::Unreadable(_))
+            Err(ContactStoreError::Unreadable(BookCodecError::DidNotOpen(_)))
         ));
+    }
+
+    /// The other arm of the same rule: bytes that open under this session's key
+    /// but carry a body this build does not read are still state, not an empty
+    /// book.
+    #[test]
+    fn a_body_this_build_cannot_decode_fails_closed_rather_than_reading_empty() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x62);
+        let entropy = seeded(98);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record(&code(0x33))).expect("import");
+        block_on(staging.put_staged_bytes(
+            store.staging_key(),
+            &sealed(&secret, 62, b"opens, but is not a contact book"),
+        ))
+        .expect("clobber");
+
+        assert!(matches!(
+            block_on(store.contacts()),
+            Err(ContactStoreError::Unreadable(BookCodecError::Codec(_)))
+        ));
+    }
+
+    /// The store names its owner-local kind, so a sibling store's blob is
+    /// unreadable state even when its body is a book this build decodes
+    /// perfectly — separation is the kind, not the body grammar.
+    #[test]
+    fn a_blob_from_another_owner_local_store_fails_closed() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x63);
+        let entropy = seeded(99);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(staging.put_staged_bytes(
+            store.staging_key(),
+            &sealed_as(
+                &secret,
+                OwnerLocalKind::ReceivedShares,
+                63,
+                &framed(&[code(0x33)]),
+            ),
+        ))
+        .expect("stage");
+
+        assert!(
+            matches!(
+                block_on(store.contacts()),
+                Err(ContactStoreError::Unreadable(BookCodecError::DidNotOpen(_)))
+            ),
+            "another store's blob is an error, never a book to adopt"
+        );
+    }
+
+    /// The disclosure this store's seal closes: a local reader of host storage
+    /// must not learn who the owner has imported.
+    #[test]
+    fn the_persisted_book_never_holds_a_contact_key_in_the_clear() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x64);
+        let entropy = seeded(100);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let imported = block_on(store.record(&code(0x33))).expect("import");
+
+        let stored = block_on(staging.staged_bytes(store.staging_key()))
+            .expect("staged")
+            .expect("the book is stored");
+        let identity = imported.identity_pk().to_sec1();
+        let subkey = imported.enc_subkey().to_bytes();
+        assert!(
+            !stored.windows(identity.len()).any(|w| w == identity),
+            "a contact's identity key must never sit in host storage in the clear"
+        );
+        assert!(
+            !stored.windows(subkey.len()).any(|w| w == subkey),
+            "a contact's encryption subkey is sealed too"
+        );
+    }
+
+    #[test]
+    fn an_all_zero_ephemeral_fails_closed_before_the_seal() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x65);
+        let entropy = RefCell::new(SilentEntropy);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        assert!(matches!(
+            block_on(store.record(&code(0x33))),
+            Err(ContactStoreError::Entropy(_))
+        ));
+        assert!(
+            block_on(staging.staged_bytes(store.staging_key()))
+                .expect("staged")
+                .is_none(),
+            "a refused seal writes nothing"
+        );
+    }
+
+    #[test]
+    fn an_entropy_failure_leaves_the_recorded_book_untouched() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x66);
+        let good = seeded(102);
+        block_on(StagingContactStore::new(&staging, &secret, &good).record(&code(0x33)))
+            .expect("import");
+
+        let broken = RefCell::new(FailingEntropy);
+        let store = StagingContactStore::new(&staging, &secret, &broken);
+        assert!(block_on(store.record(&code(0x44))).is_err());
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            1,
+            "a failed import never clears the book it could not replace"
+        );
     }
 
     #[test]
@@ -543,10 +736,12 @@ mod tests {
         let staging = InMemoryStagingStore::default();
         let alice = enc(0x71);
         let bob = enc(0x72);
-        block_on(StagingContactStore::new(&staging, &alice).record(&code(0x33))).expect("import");
+        let entropy = seeded(0x71);
+        block_on(StagingContactStore::new(&staging, &alice, &entropy).record(&code(0x33)))
+            .expect("import");
 
         assert!(
-            block_on(StagingContactStore::new(&staging, &bob).contacts())
+            block_on(StagingContactStore::new(&staging, &bob, &entropy).contacts())
                 .expect("load")
                 .is_empty(),
             "one store is shared across accounts; a contact must not cross identities"
@@ -601,7 +796,8 @@ mod tests {
     fn re_importing_an_identity_replaces_the_subkey_it_resolves_to() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x81);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(129);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         block_on(store.record(&code(0x33))).expect("first import");
         block_on(store.record(&bound_code(0x33, 0x99))).expect("rotated import");
 
@@ -628,7 +824,8 @@ mod tests {
 
         let staging = InMemoryStagingStore::default();
         let secret = enc(0xB1);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(177);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         let book: Vec<Recorded> = (0..MAX_CONTACTS)
             .map(|i| {
                 let (contact, code) =
@@ -659,7 +856,8 @@ mod tests {
 
         let staging = InMemoryStagingStore::default();
         let secret = enc(0xC1);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(193);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         let padded = {
             let mut map = cbor_decode(&code(0x33)).unwrap().as_map().unwrap().clone();
             map.insert("padding", Value::Bytes(vec![0x5A; 512]));
@@ -670,8 +868,11 @@ mod tests {
         let stored = block_on(staging.staged_bytes(store.staging_key()))
             .expect("staged")
             .expect("the book is stored");
+        // Read past the seal: the claim is about the body this store authored,
+        // and asserting on ciphertext would hold however the code was spelled.
+        let body = open_owner_local(&secret, OwnerLocalKind::ContactBook, &stored).expect("opens");
         assert!(
-            !stored.windows(16).any(|w| w == [0x5A; 16]),
+            !body.windows(16).any(|w| w == [0x5A; 16]),
             "the offered padding never reached the durable book"
         );
         assert_eq!(block_on(store.contacts()).expect("load").len(), 1);
@@ -681,7 +882,8 @@ mod tests {
     fn a_lost_write_never_destroys_the_recorded_book() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x91);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(145);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         block_on(store.record(&code(0x33))).expect("import");
 
         staging.interrupt_staged_write_after(store.staging_key(), 0);
@@ -699,7 +901,8 @@ mod tests {
     fn the_books_staging_key_sits_under_the_swept_prefix() {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0xA1);
-        let store = StagingContactStore::new(&staging, &secret);
+        let entropy = seeded(161);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
         block_on(store.record(&code(0x33))).expect("import");
 
         assert!(
@@ -708,6 +911,47 @@ mod tests {
                 .iter()
                 .all(|key| key.starts_with(CONTACTS_PREFIX)),
             "the book writes nothing outside the prefix orphan GC spares"
+        );
+    }
+
+    /// The freshness invariant the seal rests on: two persists must not share an
+    /// HPKE ephemeral. `fresh_ephemeral` only rejects an all-zero draw, so a seam
+    /// stuck on any other constant is caught here or nowhere.
+    #[test]
+    fn two_persists_never_share_an_hpke_ephemeral() {
+        fn enc_of(blob: &[u8]) -> Vec<u8> {
+            decode(blob)
+                .expect("frame")
+                .as_map()
+                .expect("map")
+                .get("enc")
+                .expect("enc")
+                .as_bytes()
+                .expect("bytes")
+                .to_vec()
+        }
+
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0xD1);
+        let entropy = seeded(209);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+
+        block_on(store.record(&code(0x33))).expect("first import");
+        let first = enc_of(
+            &block_on(staging.staged_bytes(store.staging_key()))
+                .expect("staged")
+                .expect("stored"),
+        );
+        block_on(store.record(&code(0x44))).expect("second import");
+        let second = enc_of(
+            &block_on(staging.staged_bytes(store.staging_key()))
+                .expect("staged")
+                .expect("stored"),
+        );
+
+        assert_ne!(
+            first, second,
+            "an ephemeral reused across two seals under one key and info is a confidentiality break"
         );
     }
 }

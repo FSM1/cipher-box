@@ -1,6 +1,8 @@
 //! Facade skeleton surface: lifecycle law, typed unimplemented commands,
 //! and event-stream plumbing over a fully faked seam set.
 
+use core::cell::RefCell;
+
 use cipherbox_core::kdf;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -230,7 +232,8 @@ fn an_imported_contact_survives_a_session_restart() {
     drop(engine);
 
     let enc_subkey = kdf::enc_subkey(&SECRET);
-    let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&device.staging_store, &enc_subkey, &entropy);
     let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
     let resolved = block_on(resolve_recipient(
         &book,
@@ -255,7 +258,8 @@ fn an_import_the_book_cannot_take_is_not_reported_as_imported() {
     block_on(engine.start(secret())).unwrap();
 
     let enc_subkey = kdf::enc_subkey(&SECRET);
-    let book = StagingContactStore::new(&device.staging_store, &enc_subkey);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&device.staging_store, &enc_subkey, &entropy);
     device
         .staging_store
         .interrupt_staged_write_after(book.staging_key(), 0);
