@@ -73,6 +73,22 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
 }
 
 /**
+ * An `ArrayBuffer`'s length, or `null` for anything that is not one. Branding
+ * by the `byteLength` getter rather than `instanceof`, which answers false for
+ * a buffer minted in another realm — a worker's, a frame's — leaving a secret
+ * that reached this list from there unscrubbed.
+ */
+const byteLengthOf = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get;
+
+function bufferLength(item: Transferable): number | null {
+  try {
+    return (byteLengthOf?.call(item) as number | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Scrubs the buffers a send would have transferred. A request that rejects
  * before its send leaves this frame their terminal owner — nothing detaches
  * them and no callee can reach them — so the plaintext is cleared here
@@ -81,7 +97,8 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
  */
 function wipeTransfer(transfer: Transferable[] | undefined): void {
   for (const item of transfer ?? []) {
-    if (item instanceof ArrayBuffer && item.byteLength > 0) new Uint8Array(item).fill(0);
+    const length = bufferLength(item);
+    if (length !== null && length > 0) new Uint8Array(item as ArrayBuffer).fill(0);
   }
 }
 

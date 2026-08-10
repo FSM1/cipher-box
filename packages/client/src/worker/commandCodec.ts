@@ -77,7 +77,13 @@ export function count(value: unknown, field: string): number {
   return value;
 }
 
-function opId(value: unknown, field: string): bigint {
+/**
+ * A value the engine minted and a peer is handing back — an op id, or a write
+ * or stream handle. The bigint ABI throws on a non-bigint where the number one
+ * would coerce, so the refusal is spelled here in the same words as its
+ * neighbours rather than left to wasm-bindgen.
+ */
+export function minted(value: unknown, field: string): bigint {
   if (typeof value !== 'bigint') throw invalidField(field, value);
   return value;
 }
@@ -108,6 +114,10 @@ function unknownCommand(descriptor: never): Error {
 }
 
 export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
+  // The envelope is a field like any other: read `kind` off a non-object and
+  // the refusal is a TypeError, or an unknown-kind error naming `undefined`,
+  // rather than the invalid-field answer every other malformed input gets.
+  text(record(descriptor, 'command').kind, 'command.kind');
   switch (descriptor.kind) {
     case 'create':
       return wasm.Command.create(
@@ -128,7 +138,7 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         nodeId(wasm, descriptor.newParent, 'newParent')
       );
     case 'cancelUpload':
-      return wasm.Command.cancelUpload(opId(descriptor.opId, 'opId'));
+      return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')

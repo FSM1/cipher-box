@@ -18,6 +18,7 @@ import {
   buffer,
   buildCommand,
   count,
+  minted,
   nodeId,
   readEvent,
   readSnapshot,
@@ -136,15 +137,16 @@ export class EngineHost implements EngineHostLike {
   }
 
   async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    return this.scrubbing(buffer(chunk, 'chunk'), (view) => this.handle.pushChunk(handle, view));
+    const write = minted(handle, 'handle');
+    return this.scrubbing(buffer(chunk, 'chunk'), (view) => this.handle.pushChunk(write, view));
   }
 
-  commitWrite(handle: WriteHandle): Promise<bigint> {
-    return this.handle.commitWrite(handle);
+  async commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.handle.commitWrite(minted(handle, 'handle'));
   }
 
   async abortWrite(handle: WriteHandle): Promise<void> {
-    await this.handle.abortWrite(handle);
+    await this.handle.abortWrite(minted(handle, 'handle'));
   }
 
   async snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
@@ -168,12 +170,16 @@ export class EngineHost implements EngineHostLike {
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
     return ownedBuffer(
-      await this.handle.readStream(handle, count(offset, 'offset'), count(length, 'length'))
+      await this.handle.readStream(
+        minted(handle, 'handle'),
+        count(offset, 'offset'),
+        count(length, 'length')
+      )
     );
   }
 
   async closeStream(handle: StreamHandle): Promise<void> {
-    await this.handle.closeStream(handle);
+    await this.handle.closeStream(minted(handle, 'handle'));
   }
 
   async nextEvent(): Promise<EventDescriptor | null> {

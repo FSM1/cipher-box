@@ -149,6 +149,23 @@ describe('CorrelatedTransport chunk ownership', () => {
     await expect(probe.pushChunk(1n, chunk.buffer as ArrayBuffer)).rejects.toThrow('port is dead');
     expect(chunk).toEqual(new Uint8Array(4));
   });
+
+  it('wipes a chunk minted in another realm, which instanceof does not answer for', async () => {
+    // A buffer from a worker or a frame is an ArrayBuffer that `instanceof`
+    // calls false, and a secret that arrived from there needs the same scrub.
+    const { runInNewContext } = await import('node:vm');
+    const foreign = runInNewContext(
+      'const b = new ArrayBuffer(4); new Uint8Array(b).set([9, 9, 9, 9]); ({ b, v: new Uint8Array(b) })'
+    ) as { b: ArrayBuffer; v: Uint8Array };
+    expect(foreign.b instanceof ArrayBuffer).toBe(false);
+
+    const probe = new ProbeTransport();
+    probe.open();
+    probe.breakDown(new Error('engine transport closed'));
+
+    await expect(probe.pushChunk(1n, foreign.b)).rejects.toThrow('closed');
+    expect([...foreign.v]).toEqual([0, 0, 0, 0]);
+  });
 });
 
 describe('engineErrorCode', () => {

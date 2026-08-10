@@ -213,6 +213,21 @@ describe('EngineHost request fields', () => {
     expect(calls).toEqual([]);
   });
 
+  it.each([
+    ['pushChunk', (host: EngineHost) => host.pushChunk('7' as never, new ArrayBuffer(2))],
+    ['commitWrite', (host: EngineHost) => host.commitWrite(7 as never)],
+    ['abortWrite', (host: EngineHost) => host.abortWrite(null as never)],
+    ['readStream', (host: EngineHost) => host.readStream('7' as never, 0, 8)],
+    ['closeStream', (host: EngineHost) => host.closeStream(undefined as never)],
+  ])('refuses a %s carrying a handle the engine never minted', async (_case, call) => {
+    const { host, calls } = permissiveHost();
+
+    // A handle is a bigint the engine minted. The number ABI would coerce one
+    // of another type into a plausible table index rather than refuse it.
+    await expect(call(host)).rejects.toThrow('invalid request field handle');
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a transferred payload that is not a buffer', async () => {
     const { host, calls } = permissiveHost();
 
