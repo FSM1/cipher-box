@@ -94,12 +94,19 @@ export class FilesPage {
     });
   }
 
-  /** Reads a listed file back through the preview, and returns what it shows. */
+  /**
+   * Reads a listed file back through the preview, and returns what it shows.
+   * Dismisses the dialog before returning: its backdrop swallows every click
+   * meant for a row, so leaving it open strands the next step on the listing.
+   */
   async preview(name: string): Promise<string> {
     await this.act(name, 'preview');
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
-    return (await shown.textContent()) ?? '';
+    const text = (await shown.textContent()) ?? '';
+    await this.page.getByRole('button', { name: 'close', exact: true }).click();
+    await expect(this.page.getByTestId('file-preview-dialog')).toHaveCount(0);
+    return text;
   }
 
   /**
