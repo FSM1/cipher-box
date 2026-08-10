@@ -7923,6 +7923,15 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
     let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
     let head = published_versions(&world.record_store, &blocks, file).remove(0);
     let unserved = compute_cid(DAG_ROOT_CODEC, b"a root block no source ever stored");
+    let planted_versions = vec![
+        head,
+        CoreVersion::new(
+            unserved,
+            [0u8; 32],
+            ContentProfile::CI.chunk_size() as u64,
+            0,
+        ),
+    ];
     plant_record(
         &world.record_store,
         &blocks,
@@ -7934,15 +7943,7 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
             body: &ReadBody::File {
                 created_at: 0,
                 modified_at: 0,
-                versions: vec![
-                    head,
-                    CoreVersion::new(
-                        unserved,
-                        [0u8; 32],
-                        ContentProfile::CI.chunk_size() as u64,
-                        0,
-                    ),
-                ],
+                versions: planted_versions.clone(),
                 unknown: PreservedFields::new(),
             },
         },
@@ -7967,8 +7968,8 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0, "and journals no debt");
     assert_eq!(
-        published_versions(&world.record_store, &blocks, file).len(),
-        2,
-        "and leaves the history it could not expand standing"
+        published_versions(&world.record_store, &blocks, file),
+        planted_versions,
+        "and leaves the history it could not expand standing, entry for entry"
     );
 }

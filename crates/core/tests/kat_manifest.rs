@@ -1476,10 +1476,9 @@ fn vector_names_are_unique_within_each_file() {
 }
 
 /// Which vector files carry HPKE ephemerals, and how many each pins — the
-/// anti-vacuity anchor for the freshness check below, in the same shape as the
-/// other named domains here. A family that stopped emitting `ephemeralScalar`
-/// would silently drop out of a bare total; naming the files makes it a failure
-/// that says which one went dark.
+/// anti-vacuity anchor for the freshness check below. A family that stopped
+/// emitting `ephemeralScalar` would drop out of a bare total silently; naming
+/// the files makes it a failure that says which one went dark.
 const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
     ("vectors/content_key/content_key_accept.json", 2),
     ("vectors/grant/ascent_link_accept.json", 1),
@@ -1493,35 +1492,37 @@ const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
     ("vectors/settings_record/settings_record_accept.json", 2),
 ];
 
-/// Every `(vector name, ephemeral scalar)` a vector file pins, scalars folded to
-/// lowercase so a generator that switched hex case could not hide a byte-level
-/// repeat behind a string comparison.
-fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, String)> {
+/// Every `(vector name, ephemeral scalar)` a vector file pins, decoded, so the
+/// repeat check compares scalars rather than their spelling. A vector carrying
+/// no `ephemeralScalar` is skipped — that absence is how a file with no HPKE
+/// ephemerals is recognised — but one that carries the field owes a 32-byte
+/// scalar, which [`unhex32`] enforces along with the lowercase-hex contract.
+fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, [u8; 32])> {
     let parsed: serde_json::Value =
         serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: not JSON ({e})"));
     parsed
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|vector| {
-            let scalar = vector.get("ephemeralScalar")?.as_str()?;
+        .filter(|vector| vector.get("ephemeralScalar").is_some())
+        .map(|vector| {
             let name = vector.get("name").and_then(|n| n.as_str()).unwrap_or(path);
-            Some((name.to_owned(), scalar.to_ascii_lowercase()))
+            let scalar = vector["ephemeralScalar"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{path}: vector {name} spells no ephemeralScalar"));
+            (name.to_owned(), unhex32(name, scalar))
         })
         .collect()
 }
 
 /// HPKE ephemeral reuse under one recipient key and one `info` is a
 /// confidentiality break (`seal::seal_owner_local`). A vector file is a superset
-/// of each `(recipient, info)` group inside it — `owner_local_accept` alone
-/// spans four `info` values and pins two vectors under one — so per-file
-/// uniqueness forbids every real repeat, plus some harmless ones.
+/// of each `(recipient, info)` group inside it, so per-file uniqueness forbids
+/// every real repeat, plus some harmless ones.
 ///
-/// It is deliberately not pinned corpus-wide: separate families do reuse a
-/// scalar under one recipient and *different* `info` values, which the key
-/// schedule separates — `content_key_accept` and `settings_record_accept` share
-/// both their recipient and both their scalars today. Only a regenerated corpus
-/// could introduce a real repeat, which is exactly when it would go unnoticed.
+/// Deliberately not corpus-wide: separate families may reuse a scalar under one
+/// recipient and *different* `info` values, which the key schedule separates.
+/// Only a regenerated corpus could introduce a real repeat.
 #[test]
 fn ephemeral_scalars_are_fresh_within_each_vector_file() {
     let mut pinned = BTreeMap::new();
