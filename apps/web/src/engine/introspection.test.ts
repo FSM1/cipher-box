@@ -74,6 +74,18 @@ describe('installIntrospection', () => {
       expect((await pending)?.settled).toBe(false);
     });
 
+    it('reads a node named in hex and hands its plaintext back the same way', async () => {
+      const engine = fakeEngine();
+      const download = vi.fn().mockResolvedValue(Uint8Array.of(0xde, 0xad, 0xbe, 0xef).buffer);
+      (engine.client.facade as unknown as { download: unknown }).download = download;
+      installIntrospection(engine.client);
+
+      const plaintext = await window.__CIPHERBOX_ENGINE__?.download('0102030405060708');
+
+      expect(download).toHaveBeenCalledWith(Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8));
+      expect(plaintext).toBe('deadbeef');
+    });
+
     it('records the event stream in emission order', () => {
       const engine = fakeEngine();
       installIntrospection(engine.client);

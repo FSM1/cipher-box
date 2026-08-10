@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import type { IntrospectedView, Plain } from '@web/engine/introspection';
-import type { EventDescriptor } from '@cipherbox/client';
+import { fromHex, type EventDescriptor } from '@cipherbox/client';
 
 /**
  * One browser tab over one vault, driven through the introspection hook
@@ -62,6 +62,20 @@ export class VaultPage {
   async settledNow(): Promise<IntrospectedView> {
     await this.page.getByTestId('status-indicator').click();
     return this.settled();
+  }
+
+  /**
+   * The plaintext the engine reads back for one child of the root, straight off
+   * the network. The preview decodes as UTF-8 — only these bytes can tell a byte
+   * the round trip changed from one the decoder folded away.
+   */
+  async read(name: string): Promise<Uint8Array> {
+    const { view } = await this.settled();
+    const child = view.children.find((entry) => entry.name === name);
+    expect(child, `the root lists no ${name}`).toBeDefined();
+    return fromHex(
+      await this.page.evaluate((node) => window.__CIPHERBOX_ENGINE__!.download(node), child!.id)
+    );
   }
 
   /** Every engine event the tab has seen so far. */

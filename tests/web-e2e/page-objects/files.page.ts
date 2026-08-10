@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-
 import { expect, type Locator, type Page } from '@playwright/test';
 
 /** The vault browser route and the chrome around it. */
@@ -100,18 +98,6 @@ export class FilesPage {
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
     return (await shown.textContent()) ?? '';
-  }
-
-  /**
-   * Saves the file the open preview is showing, and returns the bytes that
-   * reached disk. Driven from the dialog's own control: the modal backdrop
-   * takes any click aimed at the listing behind it.
-   */
-  async downloadShown(): Promise<Uint8Array> {
-    const saved = this.page.waitForEvent('download');
-    await this.page.getByTestId('preview-download').click();
-    const download = await saved;
-    return new Uint8Array(await readFile(await download.path()));
   }
 
   /** Raises a row's action menu and picks one item off it. */
