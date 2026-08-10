@@ -653,6 +653,30 @@ describe('MediaBroker.whenIdle', () => {
     expect(retried()).toEqual({ read: true, failure: null });
   });
 
+  it('keeps the failure of one shared-ticket cursor when the last one ends clean', async () => {
+    // Two bodies on one ticket: the failed one truncated what it was reading,
+    // and the survivor ending tidily does not make those bytes whole. Naming
+    // the outcome saved here is the confusion `failure` exists to prevent.
+    const h = harness(20, { lingerMs: 10_000 });
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'the first head');
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 2, 'the second head');
+
+    h.reader.failure = new Error('the record is gone');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 3, 'the first cursor to fail');
+    expect(idle()).toBeNull();
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:close', requestId: 2 });
+    await waitFor(() => idle() !== null, 'the last cursor to settle the ticket');
+
+    expect(idle()).toEqual({ read: true, failure: 'the record is gone' });
+  });
+
   it('re-arms rather than settling when the port is replaced mid-save', async () => {
     // A killed worker re-brokers and re-opens; retiring the ticket here would
     // 404 the retry the pipe is about to make. Fake timers, because a real one
