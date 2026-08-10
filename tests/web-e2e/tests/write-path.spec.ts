@@ -104,5 +104,5 @@ test('an uploaded file reads back byte for byte', async ({ page }) => {
   // The preview proves the read path renders; only the saved bytes prove the
   // round trip preserved them, since decoding folds a BOM and normalises.
   expect(await files.preview('notes.txt')).toBe(PAYLOAD);
-  expect(await files.download('notes.txt')).toEqual(bytes);
+  expect(await files.downloadShown()).toEqual(bytes);
 });

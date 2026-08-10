@@ -94,32 +94,24 @@ export class FilesPage {
     });
   }
 
-  /**
-   * Reads a listed file back through the preview, and returns what it shows.
-   * Dismisses the dialog before returning: its backdrop swallows every click
-   * meant for a row, so leaving it open strands the next step on the listing.
-   */
+  /** Reads a listed file back through the preview, and returns what it shows. */
   async preview(name: string): Promise<string> {
     await this.act(name, 'preview');
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
-    const text = (await shown.textContent()) ?? '';
-    await this.page.getByRole('button', { name: 'close', exact: true }).click();
-    await expect(this.page.getByTestId('file-preview-dialog')).toHaveCount(0);
-    return text;
+    return (await shown.textContent()) ?? '';
   }
 
   /**
-   * Saves a listed file the way a member would and returns exactly the bytes
-   * that reached disk. The preview decodes as UTF-8, so it cannot tell a byte
-   * the round trip changed from one the decoder folded away.
+   * Saves the file the open preview is showing, and returns the bytes that
+   * reached disk. Driven from the dialog's own control: the modal backdrop
+   * takes any click aimed at the listing behind it.
    */
-  async download(name: string): Promise<Uint8Array> {
+  async downloadShown(): Promise<Uint8Array> {
     const saved = this.page.waitForEvent('download');
-    await this.act(name, 'download');
+    await this.page.getByTestId('preview-download').click();
     const download = await saved;
-    const path = await download.path();
-    return new Uint8Array(await readFile(path));
+    return new Uint8Array(await readFile(await download.path()));
   }
 
   /** Raises a row's action menu and picks one item off it. */
