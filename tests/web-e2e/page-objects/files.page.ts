@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { expect, type Locator, type Page } from '@playwright/test';
 
 /** The vault browser route and the chrome around it. */
@@ -82,10 +84,14 @@ export class FilesPage {
   }
 
   /** Hands the picker one file, as a drop would. */
-  async upload(name: string, bytes: Buffer): Promise<void> {
-    await this.page
-      .getByLabel('Choose files to upload')
-      .setInputFiles({ name, mimeType: 'application/octet-stream', buffer: bytes });
+  async upload(name: string, bytes: Uint8Array): Promise<void> {
+    await this.page.getByLabel('Choose files to upload').setInputFiles({
+      name,
+      mimeType: 'application/octet-stream',
+      // Playwright's own payload type; the boundary is the only place a Buffer
+      // is wanted, so callers stay on Uint8Array.
+      buffer: Buffer.from(bytes),
+    });
   }
 
   /** Reads a listed file back through the preview, and returns what it shows. */
@@ -94,6 +100,19 @@ export class FilesPage {
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
     return (await shown.textContent()) ?? '';
+  }
+
+  /**
+   * Saves a listed file the way a member would and returns exactly the bytes
+   * that reached disk. The preview decodes as UTF-8, so it cannot tell a byte
+   * the round trip changed from one the decoder folded away.
+   */
+  async download(name: string): Promise<Uint8Array> {
+    const saved = this.page.waitForEvent('download');
+    await this.act(name, 'download');
+    const download = await saved;
+    const path = await download.path();
+    return new Uint8Array(await readFile(path));
   }
 
   /** Raises a row's action menu and picks one item off it. */
