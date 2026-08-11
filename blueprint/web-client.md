@@ -197,8 +197,18 @@ all living in `packages/client` and running inside the engine worker realm:
   entry.
 - **The engine owns the token lifecycle** (FSM1/cipher-box-next#28 D5): challenge-signature login
   through its API client; access JWT in engine memory; refresh cookie rides
-  the Http seam. SIWE stays secondary — wagmi collects the wallet signature
-  on the UI thread and the facade forwards it (engine.md).
+  the Http seam. This is a distinct authentication from unlocking the Core Kit,
+  and only the latter involves an identity provider ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)).
+- **The login orchestration is shared, the credential collection is not**
+  (ADR 0008 D3). One host-agnostic package sequences provider credential → API
+  exchange → Core Kit login → secret export → `start(secret)`; both hosts import
+  it and inject their own collector. On web that collector is the Google popup
+  and wagmi; desktop's is its own (desktop.md). The boundary is credential
+  collection, not the bearer token — v1 drew it at the token and the two hosts
+  drifted.
+- **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
+  the UI thread, the API verifies it and mints the identity token, and the Core
+  Kit login proceeds as for any other method. Web only.
 - **Cold start**: facade `start(secret)` → vault-pointer resolve, floor
   cold-seed, root adoption (the engine's non-circular cold-start sequence) →
   first snapshot event. The UI shows exactly two cold-start states: an
