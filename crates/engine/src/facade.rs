@@ -67,7 +67,7 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::provision::{
-    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionPlan, ProvisionedVault, provision_vault,
+    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, provision_vault,
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use cipherbox_core::hex::lower as hex_lower;
@@ -1771,39 +1771,10 @@ impl<T: SeamTypes> Engine<T> {
         // degrades to the anchored root with no error.
         let root = self.snapshot.borrow().root;
         let root_scope_id = root.0;
-        let cold_start = {
-            let session = self.session.as_ref().expect("session set above");
-            let owner_identity = session.owner_identity();
-            let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
-            let adopter = RootAdopter::new(
-                &self.gateway,
-                &self.seams.http,
-                &self.seams.floor_store,
-                session.enc_subkey(),
-                &owner_identity,
-                root_scope_id,
-            );
-            self.cold_start_data_path(
-                &pointer_fetch,
-                &adopter,
-                &owner_identity,
-                root_scope_id,
-                POINTER_PAYLOAD_VERSION,
-                root,
-            )
-            .await
-        };
-        let mut outcome = match cold_start {
+        let mut outcome = match self.run_cold_start(root).await {
             Ok(outcome) => outcome,
             Err(err) => {
-                // Fail-closed symmetry with the login path: clear the derived
-                // session and the placement decision beside it, so no key material
-                // stays resident and the engine reports unstarted. The access
-                // token login already stored outlives the dropped client in the
-                // shared bearer cell, so it is dropped here by name.
-                self.session = None;
-                *self.placement.borrow_mut() = None;
-                self.accelerator_bearer.clear();
+                self.clear_failed_start();
                 return Err(EngineError::from_cold_start(err));
             }
         };
@@ -1814,7 +1785,21 @@ impl<T: SeamTypes> Engine<T> {
         let provisioned =
             if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
                 match self.provision_first_run_vault(&api, root_scope_id).await {
-                    Ok(provisioned) => Some(provisioned),
+                    Ok(ProvisionOutcome::Minted(vault)) => Some(*vault),
+                    // The account published between this run's pointer walk and
+                    // its mint. Nothing of this run's is live, so the whole
+                    // cold-start chain re-runs against the re-point that is —
+                    // floors, gate and seeds all from the account's own record.
+                    Ok(ProvisionOutcome::MovedOn) => {
+                        match self.run_cold_start(root).await {
+                            Ok(rerun) => outcome = rerun,
+                            Err(err) => {
+                                self.clear_failed_start();
+                                return Err(EngineError::from_cold_start(err));
+                            }
+                        }
+                        None
+                    }
                     // Non-fatal, on the same terms as the empty chain this ran
                     // for: cold start already paints an unprovisioned vault and
                     // queues ops against it, so a mint that did not land leaves
@@ -2047,6 +2032,44 @@ impl<T: SeamTypes> Engine<T> {
         .await
     }
 
+    /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
+    /// record plane, off the session `start` has already derived. Called a
+    /// second time when a mint discovers the account moved on, so the chain that
+    /// reaches a live vault is one chain rather than two spellings of it.
+    async fn run_cold_start(&self, root: NodeId) -> Result<ColdStartOutcome, ColdStartError> {
+        let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
+        let owner_identity = session.owner_identity();
+        let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
+        let adopter = RootAdopter::new(
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            session.enc_subkey(),
+            &owner_identity,
+            root.0,
+        );
+        self.cold_start_data_path(
+            &pointer_fetch,
+            &adopter,
+            &owner_identity,
+            root.0,
+            POINTER_PAYLOAD_VERSION,
+            root,
+        )
+        .await
+    }
+
+    /// Fail-closed symmetry with the login path: clear the derived session and
+    /// the placement decision beside it, so no key material stays resident and
+    /// the engine reports unstarted. The access token login already stored
+    /// outlives the dropped client in the shared bearer cell, so it is dropped
+    /// here by name.
+    fn clear_failed_start(&mut self) {
+        self.session = None;
+        *self.placement.borrow_mut() = None;
+        self.accelerator_bearer.clear();
+    }
+
     /// Mint this account's first vault: the genesis scope root and the vault
     /// pointer naming it ([`provision_vault`]). Called from
     /// [`start`](Self::start) on an empty pointer chain only, before the seed
@@ -2059,14 +2082,23 @@ impl<T: SeamTypes> Engine<T> {
         &self,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         root_scope_id: [u8; 16],
-    ) -> Result<ProvisionedVault, ProvisionError>
+    ) -> Result<ProvisionOutcome, ProvisionError>
     where
         T::RecordTransport: Clone + 'static,
         T::Scheduler: Clone + 'static,
     {
         let session = self.session.as_ref().expect("session set by start");
+        let owner_identity = session.owner_identity();
         let publisher = VaultProvisionNet {
             transport: &self.seams.record_transport,
+            adopter: &RootAdopter::new(
+                &self.gateway,
+                &self.seams.http,
+                &self.seams.floor_store,
+                session.enc_subkey(),
+                &owner_identity,
+                root_scope_id,
+            ),
             api,
             floors: &self.seams.floor_store,
             scheduler: &self.seams.scheduler,
@@ -2083,6 +2115,8 @@ impl<T: SeamTypes> Engine<T> {
                 owner_identity: session.identity(),
                 owner_enc_secret: session.enc_subkey(),
                 vault_pointer_signer: &session.vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX),
+                genesis_read_scope_seed: &session.genesis_read_scope_seed(),
+                genesis_write_scope_seed: &session.genesis_write_scope_seed(),
                 created_at: self.seams.scheduler.now().0,
             },
         )

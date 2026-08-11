@@ -1025,6 +1025,14 @@ struct UnknownVector {
 struct KdfEdgesFile {
     probe: ProbeJson,
     edges: Vec<EdgeVector>,
+    genesis_root_name: GenesisRootNameVector,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenesisRootNameVector {
+    scope_id: String,
+    ipns_name: String,
 }
 
 #[derive(Deserialize)]
@@ -2273,7 +2281,7 @@ fn envelope_reject_vectors_fire_the_named_check() {
 }
 
 // ---------------------------------------------------------------------------
-// KDF edge catalog: the sixteen frozen edges, their contexts + layouts, the
+// KDF edge catalog: the eighteen frozen edges, their contexts + layouts, the
 // per-edge output freeze, and the mechanical separation KAT.
 // ---------------------------------------------------------------------------
 
@@ -2298,6 +2306,8 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "pointer-read-key",
     "vault-pointer-index",
     "settings-ipns-keypair",
+    "genesis-read-scope-seed",
+    "genesis-write-scope-seed",
 ];
 
 #[test]
@@ -2376,6 +2386,36 @@ fn kdf_edge_outputs_are_frozen_and_pairwise_separated() {
         outputs.len(),
         file.edges.len(),
         "two KDF edges froze to the same output"
+    );
+}
+
+/// ADR 0007's whole property, frozen as a name: one login secret mints one
+/// genesis root, so the login secret → `genesis-write-scope-seed` → `write-seed`
+/// → `ipns-keypair` chain must produce this exact `ipnsName`. A change anywhere
+/// along it re-points every account's genesis root and fails here first.
+#[test]
+fn the_derived_genesis_root_name_is_frozen() {
+    let file = kdf_edges_file(&manifest());
+    let secret = unhex32("probe.seed", &file.probe.seed);
+    let scope_id: [u8; 16] = unhex("genesisRootName.scopeId", &file.genesis_root_name.scope_id)
+        .try_into()
+        .expect("scope id is 16 bytes");
+
+    let write_scope_seed = kdf::genesis_write_scope_seed(&secret);
+    let name = IpnsName::from_public_key(
+        &kdf::ipns_keypair(kdf::write_seed(write_scope_seed.as_bytes(), &scope_id).as_bytes())
+            .verifying_key(),
+    );
+    assert_eq!(
+        name.as_str(),
+        file.genesis_root_name.ipns_name,
+        "the derived genesis root name drifted",
+    );
+    // Twice from one secret, the same name — stated on the values, since it is
+    // the reason a crashed mint's record is re-derivable rather than orphaned.
+    assert_eq!(
+        kdf::genesis_write_scope_seed(&secret).as_bytes(),
+        write_scope_seed.as_bytes(),
     );
 }
 

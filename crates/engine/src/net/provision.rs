@@ -7,21 +7,28 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use crate::api::{ApiClient, ApiError};
 use crate::net::MAX_RECORD_BYTES;
+use crate::net::fanout::fanout_get_verify;
+use crate::net::pointer_fetch::RecordPointerFetch;
 use crate::net::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
 };
 use crate::net::record_publish::{
     PreflightedHead, RecordPublishError, RecordPublishRequest, publish_record,
 };
+use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::WritePublishError;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
-use crate::sync::provision::{VaultPointerProbe, VaultProvisionPublisher};
+use crate::sync::pointer::PointerFetch;
+use crate::sync::provision::{RootStep, VaultPointerProbe, VaultProvisionPublisher};
 
 /// The provisioning publish seams over the live net plane.
-pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch> {
+pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
     /// The record-plane transport the CAS PUT fans out over.
     pub transport: &'a T,
+    /// The adoption gate a record at the derived root name is put through, so
+    /// the root step confirms by adopt rather than by this run's own PUT.
+    pub adopter: &'a Ad,
     /// The API client: register-first and the head-block upload.
     pub api: &'a ApiClient<H, C>,
     /// The durable floors the publish pipeline reads its CAS sequence from.
@@ -58,13 +65,38 @@ fn landed(outcome: PublishOutcome) -> Result<(), WritePublishError> {
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch> VaultProvisionPublisher
-    for VaultProvisionNet<'_, T, H, C, F, Sch>
+impl<T, H: Http, C: CredentialStore, F, Sch, Ad> VaultProvisionPublisher
+    for VaultProvisionNet<'_, T, H, C, F, Sch, Ad>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
+    Ad: Adopter,
 {
+    async fn genesis_root_step(&self, name: &IpnsName) -> RootStep {
+        // The gate is the whole answer: only a record this session's own read key
+        // opens and the gate admits completes the root step. A gate rejection and
+        // an unreachable record plane are one arm — publish, and let CAS decide —
+        // because neither is a record this run may treat as its own.
+        let Some((_verified, bytes)) = fanout_get_verify(self.transport, name).await else {
+            return RootStep::MustPublish;
+        };
+        match self.adopter.adopt(name, &bytes).await {
+            Ok(_) => RootStep::AlreadyAdopted,
+            Err(_) => RootStep::MustPublish,
+        }
+    }
+
+    async fn fetch_vault_pointer(&self, name: &IpnsName) -> Option<Vec<u8>> {
+        // The same fan-out + core verify the cold-start walk resolves pointers
+        // through; the inner unseal and owner verify are the caller's.
+        RecordPointerFetch::new(self.transport)
+            .fetch(name)
+            .await
+            .ok()
+            .flatten()
+    }
+
     async fn require_vacant_vault_pointer(&self, name: &IpnsName) -> Result<(), VaultPointerProbe> {
         // The API's record cache outlives an IPNS EOL lapse, so it still answers
         // for a vault whose record has aged out of the routing tables. It is an
@@ -186,10 +218,52 @@ mod tests {
     use super::*;
 
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::{PreservedFields, ReadBody};
 
+    use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
+    use crate::net::resolve::AdoptOutcome;
     use crate::profile::SyncTimingProfile;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::testkit::{FakeDevice, FakeWorld, block_on};
+
+    /// An adopter that answers one fixed verdict — the gate itself is tested at
+    /// its own site; what matters here is which verdict reaches [`RootStep`].
+    struct StubAdopter {
+        admits: bool,
+    }
+
+    impl Adopter for StubAdopter {
+        async fn adopt(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<AdoptOutcome, GateError> {
+            if !self.admits {
+                return Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: 9,
+                        sequence: 1,
+                    },
+                }));
+            }
+            Ok(AdoptOutcome {
+                adopted: crate::gate::Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 1,
+                    epoch: 1,
+                },
+                write_scope_seed: None,
+                node_id: [0u8; 16],
+                read_scope_seed: None,
+            })
+        }
+    }
 
     /// The vault-pointer name a first run would mint at.
     fn pointer_name() -> IpnsName {
@@ -227,12 +301,104 @@ mod tests {
         );
         let net = VaultProvisionNet {
             transport: &device.record_store,
+            adopter: &StubAdopter { admits: true },
             api: &api,
             floors: &device.floor_store,
             scheduler: &device.scheduler,
             profile,
         };
         block_on(net.require_vacant_vault_pointer(&pointer_name()))
+    }
+
+    /// Seed a verifiable record at the probed name — the account's own, as an
+    /// endpoint holds it.
+    fn seed_record(device: &FakeDevice) {
+        device.record_store.seed_record(
+            &EndpointId::new("fake:someguy"),
+            pointer_name().as_str(),
+            published_pointer(),
+        );
+    }
+
+    /// The root step the production arm reports, over an adopter that admits or
+    /// rejects whatever it is handed.
+    fn root_step(device: &FakeDevice, admits: bool) -> RootStep {
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let net = VaultProvisionNet {
+            transport: &device.record_store,
+            adopter: &StubAdopter { admits },
+            api: &api,
+            floors: &device.floor_store,
+            scheduler: &device.scheduler,
+            profile: &SyncTimingProfile::CI,
+        };
+        block_on(net.genesis_root_step(&pointer_name()))
+    }
+
+    /// What the production arm serves as the vault pointer's value.
+    fn pointer_value(device: &FakeDevice) -> Option<Vec<u8>> {
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let net = VaultProvisionNet {
+            transport: &device.record_store,
+            adopter: &StubAdopter { admits: true },
+            api: &api,
+            floors: &device.floor_store,
+            scheduler: &device.scheduler,
+            profile: &SyncTimingProfile::CI,
+        };
+        block_on(net.fetch_vault_pointer(&pointer_name()))
+    }
+
+    /// The root step is the gate's verdict, not the transport's: a record the
+    /// gate admits completes it, so a retry publishes nothing.
+    #[test]
+    fn a_gate_passing_record_completes_the_root_step() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        seed_record(&device);
+        assert_eq!(root_step(&device, true), RootStep::AlreadyAdopted);
+    }
+
+    /// A record the gate refuses is not this run's root, and neither is an
+    /// unreachable record plane: both must publish and let CAS settle the name.
+    #[test]
+    fn nothing_adoptable_leaves_the_root_step_to_publish() {
+        let world = FakeWorld::new();
+        let rejected = world.device(b"alice");
+        seed_record(&rejected);
+        assert_eq!(root_step(&rejected, false), RootStep::MustPublish);
+
+        // A separate world: `FakeWorld` shares one record plane across devices.
+        let empty = FakeWorld::new();
+        let unresolvable = empty.device(b"bob");
+        assert_eq!(root_step(&unresolvable, true), RootStep::MustPublish);
+    }
+
+    /// The mint's success condition reads the pointer through the same fan-out
+    /// verify as any boot: an authenticated value, or nothing.
+    #[test]
+    fn the_pointer_fetch_yields_the_authenticated_value_or_nothing() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        assert_eq!(
+            pointer_value(&device),
+            None,
+            "an unresolvable pointer name answers nothing",
+        );
+
+        seed_record(&device);
+        assert_eq!(
+            pointer_value(&device),
+            Some(b"sealed-repoint-block".to_vec()),
+        );
     }
 
     /// The partial outage: the endpoint holding the account's vault pointer is
@@ -370,6 +536,7 @@ mod tests {
         );
         let net = VaultProvisionNet {
             transport: &NoEndpoints,
+            adopter: &StubAdopter { admits: true },
             api: &api,
             floors: &device.floor_store,
             scheduler: &device.scheduler,

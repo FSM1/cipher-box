@@ -1575,11 +1575,22 @@ mod tests {
         })
         .expect("the retry completes on a freshly minted seed");
 
+        let minted = SeededEntropy::first_draw(42);
         assert_eq!(
             outcome.new_root_name,
-            derive_write_name(&SeededEntropy::first_draw(42), &SCOPE),
+            derive_write_name(&minted, &SCOPE),
             "the retry minted its own seed"
         );
+        // ADR 0007 D1 confines the derived pair to genesis. A rotation that
+        // reproduced `genesis-write-scope-seed` would rotate to the key the login
+        // secret already names, undoing the rotation it just performed.
+        for secret in [b"login-secret".as_slice(), &[0x33; 32]] {
+            assert_ne!(
+                minted,
+                *cipherbox_core::kdf::genesis_write_scope_seed(secret).as_bytes(),
+                "a rotation draws its seed, it never derives one",
+            );
+        }
         for name in &orphaned {
             assert!(
                 !state.retired.borrow().contains(name),

@@ -102,6 +102,22 @@
       "context": "cipherbox/v2/settings-ipns-keypair",
       "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
       "output": "2e696a4097ec1bb360623faa4373cd27cdd7f3ea223ffa867e611549d03de98d"
+    },
+    {
+      "name": "genesis-read-scope-seed",
+      "context": "cipherbox/v2/genesis-read-scope-seed",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "363ffecfabc40e41be5d9666c22c05c55c9dad096e82d30cb6fe044d6bf6c73f"
+    },
+    {
+      "name": "genesis-write-scope-seed",
+      "context": "cipherbox/v2/genesis-write-scope-seed",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "d6632e3ba84f61f9cd686ab420a51f93b0b668838233f041b1f5762c3b5e0cd8"
     }
-  ]
+  ],
+  "genesisRootName": {
+    "scopeId": "404142434445464748494a4b4c4d4e4f",
+    "ipnsName": "k51qzi5uqu5dhutvl3f6hpcwm4kuyzu3c019kxjz1j55n8ii9qefyvgsjv6mwg"
+  }
 }

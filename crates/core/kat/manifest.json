@@ -62,7 +62,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 16,
+    "count": 18,
     "edges": [
       {
         "name": "node-seed",
@@ -143,6 +143,16 @@
         "name": "settings-ipns-keypair",
         "context": "cipherbox/v2/settings-ipns-keypair",
         "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))"
+      },
+      {
+        "name": "genesis-read-scope-seed",
+        "context": "cipherbox/v2/genesis-read-scope-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "genesis-write-scope-seed",
+        "context": "cipherbox/v2/genesis-write-scope-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
       }
     ]
   },

@@ -287,27 +287,33 @@ are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
 in the KAT manifest.
 
-| Edge                  | Inputs                                                          | Output                                    |
-| --------------------- | --------------------------------------------------------------- | ----------------------------------------- |
-| node-seed             | scopeSeed, node id                                              | nodeSeed (flat within scope)              |
-| read-key              | nodeSeed                                                        | readKey                                   |
-| structure-key         | nodeSeed or scope seed, structTag                               | per-structure sealing keys                |
-| write-seed            | writeScopeSeed, node id                                         | writeSeed (flat)                          |
-| write-key             | writeSeed                                                       | writeKey                                  |
-| ipns-keypair          | writeSeed                                                       | Ed25519 keypair → ipnsName                |
-| ascent-keypair        | parent nodeSeed                                                 | X25519 keypair for the ascent link        |
-| enc-subkey            | login secret                                                    | X25519 encryption subkey                  |
-| blinded-tag           | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName                | grant-blob tag                            |
-| owner-pseudonym-seed  | login secret                                                    | ownerPseudonymSeed                        |
-| pseudonym-sign        | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: ownerPseudonymSeed) | Ed25519 pseudonym keypair                 |
-| owner-pointer-seed    | login secret                                                    | ownerPointerSeed                          |
-| scope-pointer         | ownerPointerSeed, scope id                                      | per-scope pointer Ed25519 keypair         |
-| pointer-read-key      | ownerPointerSeed, scope id                                      | pointerReadKey                            |
-| vault-pointer-index   | login secret, index i (0 default)                               | pointer Ed25519 keypair chain             |
-| settings-ipns-keypair | login secret                                                    | vault settings Ed25519 keypair → ipnsName |
+| Edge                     | Inputs                                                          | Output                                    |
+| ------------------------ | --------------------------------------------------------------- | ----------------------------------------- |
+| node-seed                | scopeSeed, node id                                              | nodeSeed (flat within scope)              |
+| read-key                 | nodeSeed                                                        | readKey                                   |
+| structure-key            | nodeSeed or scope seed, structTag                               | per-structure sealing keys                |
+| write-seed               | writeScopeSeed, node id                                         | writeSeed (flat)                          |
+| write-key                | writeSeed                                                       | writeKey                                  |
+| ipns-keypair             | writeSeed                                                       | Ed25519 keypair → ipnsName                |
+| ascent-keypair           | parent nodeSeed                                                 | X25519 keypair for the ascent link        |
+| enc-subkey               | login secret                                                    | X25519 encryption subkey                  |
+| blinded-tag              | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName                | grant-blob tag                            |
+| owner-pseudonym-seed     | login secret                                                    | ownerPseudonymSeed                        |
+| pseudonym-sign           | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: ownerPseudonymSeed) | Ed25519 pseudonym keypair                 |
+| owner-pointer-seed       | login secret                                                    | ownerPointerSeed                          |
+| scope-pointer            | ownerPointerSeed, scope id                                      | per-scope pointer Ed25519 keypair         |
+| pointer-read-key         | ownerPointerSeed, scope id                                      | pointerReadKey                            |
+| vault-pointer-index      | login secret, index i (0 default)                               | pointer Ed25519 keypair chain             |
+| settings-ipns-keypair    | login secret                                                    | vault settings Ed25519 keypair → ipnsName |
+| genesis-read-scope-seed  | login secret                                                    | the genesis scope's read (override) seed  |
+| genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                |
 
-Non-edges, stated to stay non-edges: content keys (random per version), scope
-override seeds (random at rotation), scope seeds at grant cuts (random).
+Non-edges, stated to stay non-edges: content keys (random per version), and
+every scope seed a rotation or a grant cut mints (random). The genesis pair is
+the one exception, because genesis alone has no predecessor to be idempotent
+against: deriving it is what makes two mint attempts by one account reproduce
+one vault rather than fork two (ADR 0007). A KAT pins the derived genesis root
+name, so that property cannot drift silently.
 
 ## IPNS records
 

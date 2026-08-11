@@ -9,26 +9,33 @@
 //! through [`OwnerScopeKeys`], and both publish edges through
 //! [`VaultProvisionPublisher`].
 //!
-//! # Straight-line, and what a failure leaves behind
+//! # Idempotent, and stateless about it (ADR 0007)
 //!
-//! There is no resume and no cross-device coordination: every failure returns
-//! `Err`, and the caller must not deposit seeds or spawn the tick loop on one.
-//! What a failure can leave on the network, by stage:
+//! Both genesis scope seeds are **derived from the login secret**, so every
+//! attempt by one account reproduces one root name, one set of keys and one
+//! re-point object. Resume needs no journal and no checkpoint: a retry re-derives
+//! what a crashed attempt held, adopts the record that attempt published, and
+//! publishes no second one.
 //!
-//! - before the root publish — nothing;
-//! - at the root publish — a registered name and a pinned head block, and
-//!   possibly a root record, none of which any pointer names. Unreachable, never
-//!   authoritative; the next boot provisions afresh under new seeds and the
-//!   orphan is a pin leak, not a fork;
-//! - at the pointer publish — the same, plus a pointer that may be durable: an
-//!   `Unconfirmed` verdict means an endpoint acked. The next boot resolves it and
-//!   cold-starts normally, recovering the write scope seed from the root's
-//!   owner-write blob.
+//! Two consequences shape the sequence below:
+//!
+//! - **the root step confirms by adopt** — a record at the derived name that
+//!   this session's read key opens and the adoption gate admits completes the
+//!   step, whoever published it (D3);
+//! - **the mint's success condition is a re-openable re-point, not a landed
+//!   PUT** — after the pointer publish the pointer is resolved and opened under
+//!   the owner's own pointer read key, and that answer decides (D2). No server
+//!   answer authorises any branch: a withheld or lying one can only reach the
+//!   indeterminate branch, which refuses.
 //!
 //! The floor cold-seed is the one durable local effect, and it runs **before**
 //! any publish: an account whose floors already exceed the genesis epoch is
 //! refused rather than pointed at a root its own floor law rejects. Re-running
 //! seeds the same epochs, so a failed attempt costs nothing.
+//!
+//! The residual a crash can still leave is one unreferenced pinned head block,
+//! between the head upload and the record PUT — the shape every publish has,
+//! and no new mechanism here (D4).
 
 use core::cell::RefCell;
 
@@ -42,7 +49,7 @@ use cipherbox_core::seal::{GrantSetCommitment, PreservedFields, ReadBody, sign_g
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::entropy::{Entropy, EntropyError};
@@ -58,7 +65,7 @@ use crate::rotation::reseal::{
 use crate::rotation::rotate_write::{WritePublishError, derive_write_name};
 use crate::seams::{FloorStore, SeamError};
 use crate::session::SessionIdentity;
-use crate::sync::pointer::{PointerError, SessionRole, seal_repoint};
+use crate::sync::pointer::{PointerError, SessionRole, open_repoint, seal_repoint};
 
 /// The read and write epoch a genesis root publishes at. Both planes start at
 /// the first epoch rather than zero: a rotation advances past its predecessor
@@ -98,6 +105,19 @@ impl core::fmt::Display for VaultPointerProbe {
     }
 }
 
+/// Whether the genesis root record already stands at its derived name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootStep {
+    /// A record there passed this session's adoption gate: the root step is
+    /// complete, whether this run published it or a crashed earlier attempt did
+    /// (D3). Nothing further is authored, published or uploaded.
+    AlreadyAdopted,
+    /// Nothing adoptable answers — author and publish. Bytes that are there but
+    /// fail the gate reach this arm too: at a name only this account's derived
+    /// seed can sign for, the recovery is to publish, and CAS decides.
+    MustPublish,
+}
+
 /// The network effects provisioning makes, behind one seam so a deterministic
 /// simulation can drive the whole composition without a transport (the shape
 /// [`WriteWavePublisher`](crate::rotation::WriteWavePublisher) has for the same
@@ -106,6 +126,15 @@ impl core::fmt::Display for VaultPointerProbe {
 /// Both publish implementations MUST register the name they publish, first and
 /// fail-closed — the never-orphan ordering law (`net/publish.rs`, #28 D5).
 pub trait VaultProvisionPublisher {
+    /// Whether a record at the derived root `name` passes this session's
+    /// adoption gate — the root step's confirm-by-adopt (D3).
+    async fn genesis_root_step(&self, name: &IpnsName) -> RootStep;
+
+    /// The sealed re-point block the vault pointer at `name` carries, or `None`
+    /// when nothing resolvable answers. An outage and a vacant name are one
+    /// answer here: neither completes a mint, and the caller refuses on both.
+    async fn fetch_vault_pointer(&self, name: &IpnsName) -> Option<Vec<u8>>;
+
     /// Fail-closed proof that `name` has never carried a vault pointer — the
     /// mint's one precondition.
     ///
@@ -152,13 +181,36 @@ pub struct ProvisionPlan<'a> {
     /// edge). Its verifying key is the pointer name, so the name cannot be
     /// mis-paired with the key that signs at it.
     pub vault_pointer_signer: &'a Ed25519Signer,
+    /// The genesis read (override) seed — the `genesis-read-scope-seed` edge,
+    /// read from the live session like every other owner derivation here.
+    pub genesis_read_scope_seed: &'a SecretBytes,
+    /// The genesis `writeScopeSeed` (`genesis-write-scope-seed` edge). Deriving
+    /// it is what makes this mint idempotent: a retry re-derives the same root
+    /// name and the same keys, so a crashed attempt's record is this account's
+    /// own genesis root rather than an orphan (D1).
+    pub genesis_write_scope_seed: &'a SecretBytes,
     /// The journaled creation time of the root folder's read body (injected;
     /// this module reads no clock).
     pub created_at: u64,
 }
 
+/// What a provisioning run settled on, decided by the re-point the pointer name
+/// serves once the mint has published (D2).
+#[derive(Debug)]
+pub enum ProvisionOutcome {
+    /// The pointer names this run's derived root: the vault is live and the
+    /// caller may deposit its seeds. Boxed, so passing the outcome around moves
+    /// a pointer rather than copying both seeds.
+    Minted(Box<ProvisionedVault>),
+    /// The pointer names a root this mint did not derive — the account has
+    /// published and moved on since the vacancy probe. The mint publishes
+    /// nothing further; the caller cold-starts from the account's own re-point
+    /// instead, resolving it through the same authenticated walk as any boot.
+    MovedOn,
+}
+
 /// A provisioned vault: what the account now has published, and the two scope
-/// seeds only this run holds.
+/// seeds this run derived.
 ///
 /// `Debug` is hand-written: both seeds are key material and must never reach a
 /// log site (security rule 2).
@@ -170,8 +222,9 @@ pub struct ProvisionedVault {
     pub repoint: RepointObject,
     /// The root scope's read (override) seed.
     pub read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
-    /// The root scope's write seed — the one the owner cannot re-derive, and
-    /// which every later session recovers from the owner-write blob.
+    /// The root scope's write seed. Derived at genesis and recovered from the
+    /// owner-write blob at every later session; the first rotation replaces it
+    /// with a drawn one and the login secret stops being a route to it.
     pub write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
 }
 
@@ -205,6 +258,14 @@ pub enum ProvisionError {
     Preflight(PreflightError),
     /// The re-point object could not be sealed.
     Repoint(PointerError),
+    /// Nothing resolvable answers at the vault-pointer name once the mint has
+    /// published, so no branch of the success condition is decidable (D2).
+    /// Indeterminate, never a verdict: nothing was deposited.
+    PointerUnresolved,
+    /// A block at this account's own pointer name that this account's own
+    /// pointer read key and owner identity will not open — tamper or a wrong
+    /// owner, fail-closed (surfaced from the walk verbatim).
+    RepointUnopenable(PointerError),
     /// A publish did not durably land. Names the stage, since the two differ in
     /// what they leave behind (module docs).
     Publish {
@@ -231,6 +292,12 @@ impl core::fmt::Display for ProvisionError {
             Self::Author(e) => write!(f, "genesis root envelope: {e}"),
             Self::Preflight(e) => write!(f, "genesis root dry run: {e}"),
             Self::Repoint(e) => write!(f, "genesis re-point seal failed: {e:?}"),
+            Self::PointerUnresolved => {
+                f.write_str("the vault-pointer name served no re-point after the mint published")
+            }
+            Self::RepointUnopenable(e) => {
+                write!(f, "the vault pointer's re-point will not open: {e:?}")
+            }
             Self::Publish { stage, error } => write!(f, "{stage} publish failed: {error}"),
             Self::FloorRegression(r) => write!(f, "{r}"),
             Self::Seam(e) => write!(f, "{e}"),
@@ -248,33 +315,36 @@ impl ProvisionError {
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::NotAFirstRun(probe) => *probe == VaultPointerProbe::Indeterminate,
-            Self::Entropy(_) | Self::Seam(_) => true,
+            Self::Entropy(_) | Self::Seam(_) | Self::PointerUnresolved => true,
             Self::Publish { error, .. } => *error != WritePublishError::Rejected,
             Self::Commitment(_)
             | Self::Reseal(_)
             | Self::Author(_)
             | Self::Preflight(_)
             | Self::Repoint(_)
+            | Self::RepointUnopenable(_)
             | Self::FloorRegression(_) => false,
         }
     }
 }
 
-/// Provision an account's first vault: mint both scope seeds, seed the floors
-/// the genesis re-point vouches, then author and publish the scope root and the
-/// vault pointer naming it.
+/// Provision an account's first vault: re-derive both scope seeds, seed the
+/// floors the genesis re-point vouches, then bring the scope root and the vault
+/// pointer naming it to their published state.
 ///
 /// Ordering is the safety property: the floor law refuses before anything is
 /// published, and the root is published **before** the pointer, so the pointer
-/// never names a record that is not there. Everything the caller needs to run a
-/// live session comes back in [`ProvisionedVault`]; nothing is deposited here.
+/// never names a record that is not there. Idempotence is the other: each step
+/// is skipped when what it would publish already stands. Everything the caller
+/// needs to run a live session comes back in [`ProvisionOutcome`]; nothing is
+/// deposited here.
 pub async fn provision_vault<E, K, P, Fl>(
     entropy: &RefCell<E>,
     scope_keys: &K,
     publisher: &P,
     floors: &Fl,
     plan: &ProvisionPlan<'_>,
-) -> Result<ProvisionedVault, ProvisionError>
+) -> Result<ProvisionOutcome, ProvisionError>
 where
     E: Entropy,
     K: OwnerScopeKeys,
@@ -294,14 +364,15 @@ where
         .await
         .map_err(ProvisionError::NotAFirstRun)?;
 
-    // 2-3) Both scope seeds are RANDOM, never KDF-derived: the write scope seed
-    //      is the one input the owner cannot re-derive, and the read seed is an
-    //      override seed a rotation replaces in kind.
-    let read_scope_seed = draw_seed(entropy)?;
-    let write_scope_seed = draw_seed(entropy)?;
+    // 2-3) Both genesis scope seeds are DERIVED (D1), so a retry reproduces this
+    //      run's vault rather than forking a second one. The rotation and
+    //      grant-cut seeds they neighbour stay drawn.
+    let read_scope_seed = Zeroizing::new(*plan.genesis_read_scope_seed.as_bytes());
+    let write_scope_seed = Zeroizing::new(*plan.genesis_write_scope_seed.as_bytes());
 
     // 4) The root's write-plane name — a pure function of the write scope seed,
-    //    so every later write grantee re-derives it with no discovery.
+    //    so every later write grantee re-derives it with no discovery, and so
+    //    every attempt by this account names the same root.
     let root_name = derive_write_name(&write_scope_seed, &scope_id);
 
     // 5) The re-point object the vault pointer will carry, and the floors it
@@ -323,12 +394,125 @@ where
             ColdSeedError::Regression(reg) => ProvisionError::FloorRegression(reg),
         })?;
 
-    // 6) The grant-set commitment: no grantees yet, this name, and the owner's
-    //    writer pseudonym. The commitment is owner-signed and carries no epoch,
-    //    so it is never revised — a pseudonym that is not the one
-    //    `OwnerScopeKeys` derives fails `SignerNotCommitted` on every later
-    //    rotation, permanently. Deriving it here through the same trait the
-    //    re-seal path uses is what keeps the two sides one value.
+    // 6) The stable per-scope pointer read key: the grant section carries it to
+    //    every grantee, and the re-point below is sealed under it.
+    let pointer_read_key = scope_keys.pointer_read_key(&scope_id);
+
+    // 7) The root step, by adopt (D3). A record already at the derived name — a
+    //    crashed attempt's, or a concurrent device's — completes it, and this
+    //    run authors nothing, uploads no head block and publishes no record.
+    let material = GenesisRoot {
+        name: &root_name,
+        read_scope_seed: &read_scope_seed,
+        write_scope_seed: &write_scope_seed,
+        pointer_read_key: &pointer_read_key,
+    };
+    if publisher.genesis_root_step(&root_name).await == RootStep::MustPublish {
+        match publish_genesis_root(entropy, scope_keys, publisher, plan, &material).await {
+            Ok(()) => {}
+            // A PUT that did not land still completes the step if a concurrent
+            // device's record is adoptable now: both derived the same root, so
+            // there is no fork of identity to adjudicate — only bytes at one
+            // name. Every other failure is this build's own refusal.
+            Err(ProvisionError::Publish { stage, error }) => {
+                if publisher.genesis_root_step(&root_name).await == RootStep::MustPublish {
+                    return Err(ProvisionError::Publish { stage, error });
+                }
+            }
+            Err(other) => return Err(other),
+        }
+    }
+
+    // 8) Seal the re-point. `build_repoint_object` cannot mint this one: it takes
+    //    a predecessor name by value and enforces that the new one differs, which
+    //    is the invariant of an advance, not of a first publication.
+    let block = seal_repoint(
+        SessionRole::Owner,
+        &mut *entropy.borrow_mut(),
+        &pointer_read_key,
+        plan.payload_version,
+        plan.owner_identity,
+        &repoint,
+    )
+    .map_err(ProvisionError::Repoint)?;
+
+    // 9) The pointer — the act that makes everything above reachable. Its own
+    //    verdict does not decide the mint (D2), so it is held only to report if
+    //    step 10 then finds nothing to decide over.
+    let publish_refusal = publisher
+        .publish_vault_pointer(&pointer_name, plan.vault_pointer_signer, &block)
+        .await
+        .err();
+
+    // 10) The success condition: the pointer name serves a re-point this owner's
+    //     own read key opens. Nothing here is authorised by a server answer — a
+    //     withheld or lying one reaches the indeterminate arm, which refuses.
+    let Some(served) = publisher.fetch_vault_pointer(&pointer_name).await else {
+        return Err(match publish_refusal {
+            Some(error) => ProvisionError::Publish {
+                stage: "vault-pointer",
+                error,
+            },
+            None => ProvisionError::PointerUnresolved,
+        });
+    };
+    let served = open_repoint(
+        &pointer_read_key,
+        plan.payload_version,
+        &scope_id,
+        &plan.owner_identity.verifying_key(),
+        &served,
+    )
+    .map_err(ProvisionError::RepointUnopenable)?;
+    if served.current_root != root_name {
+        return Ok(ProvisionOutcome::MovedOn);
+    }
+
+    Ok(ProvisionOutcome::Minted(Box::new(ProvisionedVault {
+        root_name,
+        repoint,
+        read_scope_seed,
+        write_scope_seed,
+    })))
+}
+
+/// The derived genesis material one root publish is authored under — the values
+/// [`provision_vault`] computed before the root step, threaded to the publish
+/// arm rather than re-derived there.
+struct GenesisRoot<'a> {
+    name: &'a IpnsName,
+    read_scope_seed: &'a [u8; SECRET_LEN],
+    write_scope_seed: &'a [u8; SECRET_LEN],
+    pointer_read_key: &'a [u8; SECRET_LEN],
+}
+
+/// Author the genesis scope root and publish it register-first: the grant-set
+/// commitment, the grant section, the empty-folder envelope, and the CAS PUT.
+///
+/// Reached only when nothing adoptable stands at the derived name, so a retry
+/// that finds its predecessor's record never runs this and never uploads a
+/// second head block (D3).
+async fn publish_genesis_root<E, K, P>(
+    entropy: &RefCell<E>,
+    scope_keys: &K,
+    publisher: &P,
+    plan: &ProvisionPlan<'_>,
+    root: &GenesisRoot<'_>,
+) -> Result<(), ProvisionError>
+where
+    E: Entropy,
+    K: OwnerScopeKeys,
+    P: VaultProvisionPublisher,
+{
+    let scope_id = plan.scope_id;
+    let root_name = root.name;
+
+    // The grant-set commitment: no grantees yet, this name, and the owner's
+    // writer pseudonym. The commitment is owner-signed and carries no epoch,
+    // so it is never revised — a pseudonym that is not the one
+    // `OwnerScopeKeys` derives fails `SignerNotCommitted` on every later
+    // rotation, permanently. Deriving it here through the same trait the
+    // re-seal path uses is what keeps the two sides one value.
     let pseudonym_signer = scope_keys.writer_pseudonym(&scope_id);
     let commitment = GrantSetCommitment {
         ipns_name: root_name.as_str().as_bytes().to_vec(),
@@ -340,10 +524,9 @@ where
         .map_err(ProvisionError::Commitment)?
         .to_compact();
 
-    // 7) The grant section. A vault root's shape: no parent node seed (so no
-    //    ascent link), no predecessor epoch (so no history link), and a write
-    //    plane that has nothing to carry.
-    let pointer_read_key = scope_keys.pointer_read_key(&scope_id);
+    // The grant section. A vault root's shape: no parent node seed (so no
+    // ascent link), no predecessor epoch (so no history link), and a write
+    // plane that has nothing to carry.
     let owner_enc_pub = plan.owner_enc_secret.public();
     let section = reseal_scope_root(
         &mut *entropy.borrow_mut(),
@@ -358,13 +541,13 @@ where
             pseudonym_signer: &pseudonym_signer,
         },
         &ResealSeeds {
-            override_seed: &read_scope_seed,
+            override_seed: root.read_scope_seed,
             read_epoch: GENESIS_EPOCH,
             prev: None,
-            write_scope_seed: &write_scope_seed,
+            write_scope_seed: root.write_scope_seed,
             write_epoch: GENESIS_EPOCH,
             write_history: WriteHistory::Carried(b""),
-            pointer_read_key: &pointer_read_key,
+            pointer_read_key: root.pointer_read_key,
         },
         &CommittedSet {
             commitment: &commitment,
@@ -376,14 +559,10 @@ where
     )
     .map_err(ProvisionError::Reseal)?;
 
-    // 8) The root envelope: an empty folder at the anchored root node, carrying
-    //    the section as its scope-root marker.
-    let read_key = kdf::read_key(kdf::node_seed(&read_scope_seed, &scope_id).as_bytes());
-    let mut nonce = [0u8; NONCE_LEN];
-    entropy
-        .borrow_mut()
-        .fill(&mut nonce)
-        .map_err(ProvisionError::Entropy)?;
+    // The root envelope: an empty folder at the anchored root node, carrying
+    // the section as its scope-root marker.
+    let read_key = kdf::read_key(kdf::node_seed(root.read_scope_seed, &scope_id).as_bytes());
+    let nonce = fresh_nonce(entropy)?;
     let body = ReadBody::Folder {
         created_at: plan.created_at,
         modified_at: plan.created_at,
@@ -401,14 +580,14 @@ where
             carried_unknown: PreservedFields::new(),
             carried_epoch_tag_unknown: PreservedFields::new(),
         },
-        &root_name,
+        root_name,
         &section,
         &plan.owner_identity.verifying_key(),
     )
     .map_err(ProvisionError::Author)?;
 
-    // 9) Register-first, upload, CAS publish. The name has no durable sequence
-    //    floor, so the pipeline embeds sequence 1.
+    // Register-first, upload, CAS publish. The name has no durable sequence
+    // floor, so the pipeline embeds sequence 1.
     let binding = HeadBinding {
         node_id: scope_id,
         scope_id,
@@ -416,80 +595,49 @@ where
     };
     let preflighted =
         preflight(&binding, read_key.as_bytes(), &head).map_err(ProvisionError::Preflight)?;
-    let root_signer = SessionIdentity::write_name_signer(&write_scope_seed, &scope_id);
+    let root_signer = SessionIdentity::write_name_signer(root.write_scope_seed, &scope_id);
     publisher
-        .publish_root_record(&root_name, &root_signer, &preflighted)
+        .publish_root_record(root_name, &root_signer, &preflighted)
         .await
         .map_err(|error| ProvisionError::Publish {
             stage: "root-record",
             error,
-        })?;
-
-    // 10) Seal the re-point. `build_repoint_object` cannot mint this one: it takes
-    //    a predecessor name by value and enforces that the new one differs, which
-    //    is the invariant of an advance, not of a first publication.
-    let block = seal_repoint(
-        SessionRole::Owner,
-        &mut *entropy.borrow_mut(),
-        &pointer_read_key,
-        plan.payload_version,
-        plan.owner_identity,
-        &repoint,
-    )
-    .map_err(ProvisionError::Repoint)?;
-
-    // 11) The pointer LAST — the act that makes everything above reachable.
-    publisher
-        .publish_vault_pointer(&pointer_name, plan.vault_pointer_signer, &block)
-        .await
-        .map_err(|error| ProvisionError::Publish {
-            stage: "vault-pointer",
-            error,
-        })?;
-
-    Ok(ProvisionedVault {
-        root_name,
-        repoint,
-        read_scope_seed,
-        write_scope_seed,
-    })
+        })
 }
 
-/// Draw one 32-byte scope seed from the entropy seam, fail-closed.
+/// Draw the envelope's AEAD nonce, fail-closed.
 ///
 /// An all-zero draw is refused for the reason
 /// [`fresh_ephemeral`](crate::entropy::fresh_ephemeral) refuses one: a seam that
-/// reports success having written nothing would hand this account's whole vault
-/// a world-known root secret, and it would be published before anything read it
-/// back.
-fn draw_seed<E: Entropy>(
-    entropy: &RefCell<E>,
-) -> Result<Zeroizing<[u8; SECRET_LEN]>, ProvisionError> {
-    let mut seed = Zeroizing::new([0u8; SECRET_LEN]);
+/// reports success having written nothing would seal this account's genesis root
+/// under a fixed nonce, and it would be published before anything read it back.
+fn fresh_nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; NONCE_LEN], ProvisionError> {
+    let mut nonce = [0u8; NONCE_LEN];
     entropy
         .borrow_mut()
-        .fill(seed.as_mut())
+        .fill(&mut nonce)
         .map_err(ProvisionError::Entropy)?;
-    if seed.iter().all(|byte| *byte == 0) {
+    if nonce.iter().all(|byte| *byte == 0) {
         return Err(ProvisionError::Entropy(EntropyError::new(
-            "entropy seam produced an all-zero scope seed",
+            "entropy seam produced an all-zero envelope nonce",
         )));
     }
-    Ok(seed)
+    Ok(nonce)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
 
     use cipherbox_core::hex::lower as hex_lower;
-    use cipherbox_core::seal::{decode_grant_section, grant_section_bytes, verify_grant_set};
+    use cipherbox_core::seal::{
+        decode_envelope, decode_grant_section, grant_section_bytes, open_read_body,
+        verify_grant_set,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     use crate::facade::LoginSecret;
     use crate::owner_keys::OwnerSessionKeys;
-    use crate::sync::pointer::open_repoint;
     use crate::testkit::fakes::InMemoryFloorStore;
     use crate::testkit::{SeededEntropy, block_on};
 
@@ -510,41 +658,114 @@ mod tests {
         Pointer(String),
     }
 
-    /// A publisher over in-memory state, optionally scripted to refuse one leg.
+    /// The published state runs share: the record plane as far as this module
+    /// can see it. A retry and a concurrent device both read one of these, which
+    /// is what makes idempotence testable at all.
     #[derive(Default)]
-    struct FakePublisher {
-        effects: RefCell<Vec<Effect>>,
-        head_block: RefCell<Option<Vec<u8>>>,
+    struct Network {
+        /// Every root record published at the derived name, in order. More than
+        /// one is the concurrent-mint case, not an error.
+        root_records: RefCell<Vec<Vec<u8>>>,
         pointer_block: RefCell<Option<Vec<u8>>>,
-        probe: Option<VaultPointerProbe>,
-        refuse_root: Cell<bool>,
-        refuse_pointer: Option<WritePublishError>,
+        effects: RefCell<Vec<Effect>>,
     }
 
-    impl FakePublisher {
-        fn refusing_root() -> Self {
+    impl Network {
+        /// The head block of the first root record published here.
+        fn first_root(&self) -> Vec<u8> {
+            self.root_records
+                .borrow()
+                .first()
+                .cloned()
+                .expect("a root record was published")
+        }
+
+        fn root_effects(&self) -> usize {
+            self.effects
+                .borrow()
+                .iter()
+                .filter(|e| matches!(e, Effect::Root(_)))
+                .count()
+        }
+    }
+
+    /// What the pointer PUT does. `Unconfirmed` is the shape a same-sequence
+    /// genesis race produces: an endpoint acked, the confirm did not — which no
+    /// longer decides the mint.
+    #[derive(Default, Clone)]
+    enum PointerPublish {
+        #[default]
+        Lands,
+        Refused(WritePublishError),
+        UnconfirmedButLands(WritePublishError),
+        /// Reports success, and the bytes are nowhere to be found afterwards.
+        Swallowed,
+    }
+
+    /// A publisher over a shared [`Network`], optionally scripted to refuse a leg.
+    struct FakePublisher<'a> {
+        net: &'a Network,
+        probe: Option<VaultPointerProbe>,
+        refuse_root: Option<WritePublishError>,
+        pointer: PointerPublish,
+        /// The root probe answers from before this run's peer published —
+        /// the interleaving where two devices both see a vacant name.
+        blind_to_root: bool,
+    }
+
+    impl<'a> FakePublisher<'a> {
+        fn new(net: &'a Network) -> Self {
             Self {
-                refuse_root: Cell::new(true),
-                ..Self::default()
+                net,
+                probe: None,
+                refuse_root: None,
+                pointer: PointerPublish::Lands,
+                blind_to_root: false,
             }
         }
 
-        fn refusing_pointer(error: WritePublishError) -> Self {
+        fn refusing_root(net: &'a Network, error: WritePublishError) -> Self {
             Self {
-                refuse_pointer: Some(error),
-                ..Self::default()
+                refuse_root: Some(error),
+                ..Self::new(net)
             }
         }
 
-        fn probing(probe: VaultPointerProbe) -> Self {
+        fn publishing_pointer(net: &'a Network, pointer: PointerPublish) -> Self {
+            Self {
+                pointer,
+                ..Self::new(net)
+            }
+        }
+
+        fn probing(net: &'a Network, probe: VaultPointerProbe) -> Self {
             Self {
                 probe: Some(probe),
-                ..Self::default()
+                ..Self::new(net)
+            }
+        }
+
+        fn blind_to_root(net: &'a Network) -> Self {
+            Self {
+                blind_to_root: true,
+                ..Self::new(net)
             }
         }
     }
 
-    impl VaultProvisionPublisher for FakePublisher {
+    impl VaultProvisionPublisher for FakePublisher<'_> {
+        async fn genesis_root_step(&self, _name: &IpnsName) -> RootStep {
+            if self.blind_to_root || self.net.root_records.borrow().is_empty() {
+                RootStep::MustPublish
+            } else {
+                RootStep::AlreadyAdopted
+            }
+        }
+
+        async fn fetch_vault_pointer(&self, _name: &IpnsName) -> Option<Vec<u8>> {
+            self.net.pointer_block.borrow().clone()
+        }
+
         async fn require_vacant_vault_pointer(
             &self,
             _name: &IpnsName,
@@ -566,13 +787,17 @@ mod tests {
                 *name,
                 "the root signer must be the root name's key"
             );
-            if self.refuse_root.get() {
-                return Err(WritePublishError::NotLanded);
+            if let Some(error) = self.refuse_root.clone() {
+                return Err(error);
             }
-            self.effects
+            self.net
+                .effects
                 .borrow_mut()
                 .push(Effect::Root(name.as_str().to_owned()));
-            *self.head_block.borrow_mut() = Some(head.block().to_vec());
+            self.net
+                .root_records
+                .borrow_mut()
+                .push(head.block().to_vec());
             Ok(())
         }
 
@@ -587,24 +812,30 @@ mod tests {
                 *name,
                 "the pointer signer must be the pointer name's key"
             );
-            if let Some(error) = self.refuse_pointer.clone() {
-                return Err(error);
+            let (verdict, lands) = match &self.pointer {
+                PointerPublish::Lands => (Ok(()), true),
+                PointerPublish::Refused(error) => (Err(error.clone()), false),
+                PointerPublish::UnconfirmedButLands(error) => (Err(error.clone()), true),
+                PointerPublish::Swallowed => (Ok(()), false),
+            };
+            if lands {
+                self.net
+                    .effects
+                    .borrow_mut()
+                    .push(Effect::Pointer(name.as_str().to_owned()));
+                *self.net.pointer_block.borrow_mut() = Some(block.to_vec());
             }
-            self.effects
-                .borrow_mut()
-                .push(Effect::Pointer(name.as_str().to_owned()));
-            *self.pointer_block.borrow_mut() = Some(block.to_vec());
-            Ok(())
+            verdict
         }
     }
 
     /// Run `provision_vault` for `session` over `publisher` and `floors`.
     fn run(
         session: &SessionIdentity,
-        publisher: &FakePublisher,
+        publisher: &FakePublisher<'_>,
         floors: &InMemoryFloorStore,
         entropy_seed: u64,
-    ) -> Result<ProvisionedVault, ProvisionError> {
+    ) -> Result<ProvisionOutcome, ProvisionError> {
         let entropy = RefCell::new(SeededEntropy::new(entropy_seed));
         let pointer_signer = session.vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX);
         block_on(provision_vault(
@@ -618,23 +849,315 @@ mod tests {
                 owner_identity: session.identity(),
                 owner_enc_secret: session.enc_subkey(),
                 vault_pointer_signer: &pointer_signer,
+                genesis_read_scope_seed: &session.genesis_read_scope_seed(),
+                genesis_write_scope_seed: &session.genesis_write_scope_seed(),
                 created_at: 1_700_000_000_000,
             },
         ))
     }
 
+    /// Run and take the minted vault, failing the test on any other outcome.
+    fn mint(
+        session: &SessionIdentity,
+        publisher: &FakePublisher<'_>,
+        floors: &InMemoryFloorStore,
+        entropy_seed: u64,
+    ) -> ProvisionedVault {
+        match run(session, publisher, floors, entropy_seed).expect("provisioning succeeds") {
+            ProvisionOutcome::Minted(vault) => *vault,
+            ProvisionOutcome::MovedOn => panic!("expected a minted vault"),
+        }
+    }
+
+    /// Mint over a fresh network, the common case.
+    fn mint_fresh(session: &SessionIdentity, net: &Network, entropy_seed: u64) -> ProvisionedVault {
+        mint(
+            session,
+            &FakePublisher::new(net),
+            &InMemoryFloorStore::default(),
+            entropy_seed,
+        )
+    }
+
     /// The grant-set commitment as it was published, read back out of the head
-    /// block the publisher captured.
-    fn published_commitment(publisher: &FakePublisher) -> cipherbox_core::seal::GrantSection {
-        let block = publisher
-            .head_block
-            .borrow()
-            .clone()
-            .expect("a root record was published");
-        let envelope = cipherbox_core::seal::decode_envelope(&block).expect("a decodable head");
+    /// block the network captured.
+    fn published_commitment(net: &Network) -> cipherbox_core::seal::GrantSection {
+        let envelope = decode_envelope(&net.first_root()).expect("a decodable head");
         decode_grant_section(grant_section_bytes(&envelope).expect("a scope-root marker"))
             .expect("a decodable grant section")
     }
+
+    /// Open a published root record's read body under `read_scope_seed` — what a
+    /// session holding that seed can do with the bytes, and nothing else can.
+    fn open_root_body(head_block: &[u8], read_scope_seed: &[u8; SECRET_LEN]) -> ReadBody {
+        let envelope = decode_envelope(head_block).expect("a decodable head");
+        let read_key = kdf::read_key(kdf::node_seed(read_scope_seed, &SCOPE).as_bytes());
+        open_read_body(&envelope, read_key.as_bytes()).expect("the derived read key opens it")
+    }
+
+    /// The one root name this account's derived write seed can name.
+    fn derived_root_name(session: &SessionIdentity) -> IpnsName {
+        derive_write_name(session.genesis_write_scope_seed().as_bytes(), &SCOPE)
+    }
+
+    /// Seal a re-point naming `current_root` under this owner's pointer read key
+    /// — an authentic owner-signed pointer value, for the moved-on cases.
+    fn foreign_repoint(session: &SessionIdentity, current_root: IpnsName) -> Vec<u8> {
+        let mut entropy = SeededEntropy::new(99);
+        seal_repoint(
+            SessionRole::Owner,
+            &mut entropy,
+            &OwnerSessionKeys::new(session).pointer_read_key(&SCOPE),
+            VERSION,
+            session.identity(),
+            &RepointObject {
+                scope_id: SCOPE,
+                current_root,
+                write_epoch: 4,
+                min_read_epoch: 4,
+                prev_root: None,
+            },
+        )
+        .expect("the owner seals its own re-point")
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR 0007's gate.
+    // -----------------------------------------------------------------------
+
+    /// **Gate item 1.** Two runs for one login secret, over independent entropy
+    /// streams, produce the same root name and the same re-point — and each
+    /// opens the record the other published. Asserted on the values, not on the
+    /// derivation code.
+    #[test]
+    fn two_runs_over_independent_entropy_mint_one_vault() {
+        let session = session();
+        let (first_net, second_net) = (Network::default(), Network::default());
+        let first = mint_fresh(&session, &first_net, 1);
+        let second = mint_fresh(&session, &second_net, 999);
+
+        assert_eq!(first.root_name, second.root_name, "one account, one root");
+        assert_eq!(first.repoint, second.repoint, "and one re-point object");
+        assert_eq!(*first.read_scope_seed, *second.read_scope_seed);
+        assert_eq!(*first.write_scope_seed, *second.write_scope_seed);
+        // The property that makes a crashed attempt's record recoverable rather
+        // than orphaned: the other run's keys open it.
+        assert_eq!(
+            open_root_body(&second_net.first_root(), &first.read_scope_seed),
+            open_root_body(&first_net.first_root(), &second.read_scope_seed),
+            "each run's read key opens the other's published root",
+        );
+    }
+
+    /// **Gate item 2.** A run interrupted after its root record lands, re-run:
+    /// it publishes no second root record, uploads no second head block, and
+    /// completes. Exactly one root name is registered for the account.
+    #[test]
+    fn a_retry_adopts_the_crashed_attempts_root_and_publishes_no_second_one() {
+        let session = session();
+        let net = Network::default();
+        let floors = InMemoryFloorStore::default();
+
+        // The crash: the root record lands, the pointer never does.
+        let crashed = run(
+            &session,
+            &FakePublisher::publishing_pointer(
+                &net,
+                PointerPublish::Refused(WritePublishError::NotLanded),
+            ),
+            &floors,
+            1,
+        )
+        .expect_err("a mint whose pointer never landed is not a provisioned vault");
+        assert!(crashed.is_retryable(), "{crashed}");
+        assert_eq!(net.root_effects(), 1, "the root record did land");
+
+        let retried = mint(&session, &FakePublisher::new(&net), &floors, 2);
+        assert_eq!(
+            net.root_effects(),
+            1,
+            "the retry adopts the crashed attempt's root instead of publishing a second",
+        );
+        assert_eq!(
+            net.root_records.borrow().len(),
+            1,
+            "and uploads no second head block",
+        );
+        assert_eq!(
+            retried.root_name,
+            derived_root_name(&session),
+            "at the one derived name",
+        );
+    }
+
+    /// **Gate item 3.** Two concurrent runs against one account both complete.
+    /// One root name and one pointer name exist, and each device's session opens
+    /// the record the other published — the both-`Published` interleaving, where
+    /// no device is told anything went wrong, not only the `Unconfirmed` one.
+    #[test]
+    fn two_concurrent_runs_converge_on_one_vault() {
+        let session = session();
+        let net = Network::default();
+        let first = mint(
+            &session,
+            &FakePublisher::new(&net),
+            &InMemoryFloorStore::default(),
+            1,
+        );
+        // The peer's root probe ran before the first device's record landed, so
+        // it publishes too: two records, one name, both openable by both.
+        let second = mint(
+            &session,
+            &FakePublisher::blind_to_root(&net),
+            &InMemoryFloorStore::default(),
+            2,
+        );
+
+        assert_eq!(first.root_name, second.root_name);
+        assert_eq!(first.repoint, second.repoint);
+        let records = net.root_records.borrow().clone();
+        assert_eq!(records.len(), 2, "the interleaving under test");
+        for record in &records {
+            assert_eq!(
+                open_root_body(record, &first.read_scope_seed),
+                open_root_body(record, &second.read_scope_seed),
+                "both devices open both records",
+            );
+        }
+        let pointers: Vec<_> = net
+            .effects
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Pointer(name) => Some(name.clone()),
+                Effect::Root(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            pointers
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            1,
+            "one pointer name",
+        );
+    }
+
+    /// **Gate item 4, first half.** A pointer publish that comes back
+    /// unconfirmed, at a name that nonetheless serves a re-point naming the
+    /// derived root, completes the mint — the verdict does not decide it, the
+    /// re-point does.
+    #[test]
+    fn an_unconfirmed_pointer_publish_that_serves_its_repoint_completes_the_mint() {
+        for error in [WritePublishError::NotLanded, WritePublishError::LostRace] {
+            let session = session();
+            let net = Network::default();
+            let vault = mint(
+                &session,
+                &FakePublisher::publishing_pointer(
+                    &net,
+                    PointerPublish::UnconfirmedButLands(error.clone()),
+                ),
+                &InMemoryFloorStore::default(),
+                3,
+            );
+            assert_eq!(vault.root_name, derived_root_name(&session), "{error:?}");
+        }
+    }
+
+    /// **Gate item 4, second half.** One that serves nothing resolvable fails
+    /// retryable and deposits nothing — distinct, asserted outcomes.
+    #[test]
+    fn a_pointer_that_serves_nothing_is_indeterminate_and_retryable() {
+        let session = session();
+        let net = Network::default();
+        let err = run(
+            &session,
+            &FakePublisher::publishing_pointer(&net, PointerPublish::Swallowed),
+            &InMemoryFloorStore::default(),
+            4,
+        )
+        .expect_err("an unresolvable pointer is not a provisioned vault");
+        assert_eq!(err, ProvisionError::PointerUnresolved);
+        assert!(
+            err.is_retryable(),
+            "indeterminate is availability, not a verdict"
+        );
+    }
+
+    /// **Gate item 5.** A re-point naming a root this mint did not derive stops
+    /// the mint and hands the caller back to cold start, with no record
+    /// published after the point of discovery.
+    #[test]
+    fn a_foreign_repoint_stops_the_mint() {
+        let session = session();
+        let net = Network::default();
+        let moved_on = foreign_repoint(&session, derive_write_name(&[9u8; 32], &SCOPE));
+        *net.pointer_block.borrow_mut() = Some(moved_on.clone());
+
+        let outcome = run(
+            &session,
+            &FakePublisher::publishing_pointer(
+                &net,
+                PointerPublish::Refused(WritePublishError::LostRace),
+            ),
+            &InMemoryFloorStore::default(),
+            5,
+        )
+        .expect("a moved-on account is not a mint failure");
+        assert!(matches!(outcome, ProvisionOutcome::MovedOn), "{outcome:?}");
+        assert_eq!(
+            *net.pointer_block.borrow(),
+            Some(moved_on),
+            "nothing of this run's was published over the account's own pointer",
+        );
+    }
+
+    /// The other end of gate item 5: a block at this account's own pointer name
+    /// that its own key will not open is a trust violation, fail-closed and
+    /// never retried into a second mint.
+    #[test]
+    fn a_repoint_this_owner_cannot_open_is_fail_closed() {
+        let session = session();
+        let net = Network::default();
+        *net.pointer_block.borrow_mut() = Some(b"not a sealed re-point".to_vec());
+
+        let err = run(
+            &session,
+            &FakePublisher::publishing_pointer(
+                &net,
+                PointerPublish::Refused(WritePublishError::LostRace),
+            ),
+            &InMemoryFloorStore::default(),
+            6,
+        )
+        .expect_err("unopenable bytes at our own pointer name are never a mint");
+        assert!(matches!(err, ProvisionError::RepointUnopenable(_)), "{err}");
+        assert!(!err.is_retryable(), "a retry reaches the same bytes");
+    }
+
+    /// **Gate item 6, engine side.** Both genesis seeds are the catalog
+    /// derivation over this account's login secret, not a draw — asserted on the
+    /// values, so swapping the edge or reinstating the draw fails here.
+    #[test]
+    fn both_genesis_seeds_are_the_catalog_derivation() {
+        let session = session();
+        let vault = mint_fresh(&session, &Network::default(), 10);
+        assert_eq!(
+            vault.read_scope_seed.as_slice(),
+            kdf::genesis_read_scope_seed(&SECRET).as_bytes(),
+        );
+        assert_eq!(
+            vault.write_scope_seed.as_slice(),
+            kdf::genesis_write_scope_seed(&SECRET).as_bytes(),
+        );
+        assert_ne!(*vault.read_scope_seed, *vault.write_scope_seed);
+        assert_ne!(*vault.write_scope_seed, SECRET);
+    }
+
+    // -----------------------------------------------------------------------
+    // The invariants the provisioning slice already carried.
+    // -----------------------------------------------------------------------
 
     /// **The join.** The pseudonym provisioning commits, epoch-free and for ever,
     /// must be the one the production `OwnerScopeKeys` arm derives — the key every
@@ -645,13 +1168,10 @@ mod tests {
     #[test]
     fn the_committed_pseudonym_is_the_one_the_owner_arm_derives() {
         let session = session();
-        let publisher = FakePublisher::default();
-        run(&session, &publisher, &InMemoryFloorStore::default(), 1)
-            .expect("provisioning succeeds");
+        let net = Network::default();
+        mint_fresh(&session, &net, 1);
 
-        let committed = published_commitment(&publisher)
-            .commitment
-            .owner_pseudonym_pk;
+        let committed = published_commitment(&net).commitment.owner_pseudonym_pk;
         assert_eq!(
             committed,
             OwnerSessionKeys::new(&session)
@@ -668,12 +1188,9 @@ mod tests {
     #[test]
     fn the_committed_pseudonym_is_none_of_the_rejected_owner_inputs() {
         let session = session();
-        let publisher = FakePublisher::default();
-        run(&session, &publisher, &InMemoryFloorStore::default(), 2)
-            .expect("provisioning succeeds");
-        let committed = published_commitment(&publisher)
-            .commitment
-            .owner_pseudonym_pk;
+        let net = Network::default();
+        mint_fresh(&session, &net, 2);
+        let committed = published_commitment(&net).commitment.owner_pseudonym_pk;
 
         let enc = kdf::enc_subkey(&SECRET);
         let self_ecdh = enc
@@ -702,14 +1219,13 @@ mod tests {
     #[test]
     fn the_commitment_is_owner_signed_over_the_published_root_name() {
         let session = session();
-        let publisher = FakePublisher::default();
-        let out = run(&session, &publisher, &InMemoryFloorStore::default(), 3)
-            .expect("provisioning succeeds");
+        let net = Network::default();
+        let vault = mint_fresh(&session, &net, 3);
 
-        let section = published_commitment(&publisher);
+        let section = published_commitment(&net);
         assert_eq!(
             section.commitment.ipns_name,
-            out.root_name.as_str().as_bytes(),
+            vault.root_name.as_str().as_bytes(),
             "the commitment anchors the name the record is published under",
         );
         let sig = EcdsaSignature::from_compact(&section.commitment_sig).expect("a compact sig");
@@ -729,11 +1245,10 @@ mod tests {
     #[test]
     fn the_published_pointer_names_the_published_root() {
         let session = session();
-        let publisher = FakePublisher::default();
-        let out = run(&session, &publisher, &InMemoryFloorStore::default(), 4)
-            .expect("provisioning succeeds");
+        let net = Network::default();
+        let vault = mint_fresh(&session, &net, 4);
 
-        let block = publisher
+        let block = net
             .pointer_block
             .borrow()
             .clone()
@@ -746,7 +1261,7 @@ mod tests {
             &block,
         )
         .expect("the owner's own pointer read key opens it");
-        assert_eq!(repoint.current_root, out.root_name);
+        assert_eq!(repoint.current_root, vault.root_name);
         assert_eq!(
             repoint.prev_root, None,
             "a genesis re-point has no predecessor"
@@ -756,8 +1271,8 @@ mod tests {
         // The name the pointer carries is the one the returned write seed derives,
         // or the drain would publish every node under keys nothing can verify.
         assert_eq!(
-            derive_write_name(&out.write_scope_seed, &SCOPE),
-            out.root_name,
+            derive_write_name(&vault.write_scope_seed, &SCOPE),
+            vault.root_name,
         );
     }
 
@@ -766,13 +1281,12 @@ mod tests {
     #[test]
     fn the_root_record_is_published_before_the_pointer() {
         let session = session();
-        let publisher = FakePublisher::default();
-        let out = run(&session, &publisher, &InMemoryFloorStore::default(), 5)
-            .expect("provisioning succeeds");
+        let net = Network::default();
+        let vault = mint_fresh(&session, &net, 5);
         assert_eq!(
-            *publisher.effects.borrow(),
+            *net.effects.borrow(),
             vec![
-                Effect::Root(out.root_name.as_str().to_owned()),
+                Effect::Root(vault.root_name.as_str().to_owned()),
                 Effect::Pointer(
                     IpnsName::from_public_key(
                         &session
@@ -791,37 +1305,19 @@ mod tests {
     #[test]
     fn a_failed_root_publish_leaves_no_pointer() {
         let session = session();
-        let publisher = FakePublisher::refusing_root();
-        let err = run(&session, &publisher, &InMemoryFloorStore::default(), 6)
-            .expect_err("a root that did not land is not a provisioned vault");
+        let net = Network::default();
+        let err = run(
+            &session,
+            &FakePublisher::refusing_root(&net, WritePublishError::NotLanded),
+            &InMemoryFloorStore::default(),
+            6,
+        )
+        .expect_err("a root that did not land is not a provisioned vault");
         assert!(matches!(err, ProvisionError::Publish { .. }), "{err}");
         assert!(
-            publisher.effects.borrow().is_empty(),
+            net.effects.borrow().is_empty(),
             "nothing is published once the root refused",
         );
-    }
-
-    /// Two devices provisioning at once: whatever verdict the loser's pointer PUT
-    /// comes back with, it is a failure and never a silent success — the loser's
-    /// root is orphaned and the winner's pointer is the account's. `LostRace` is
-    /// the verdict when a strictly higher sequence is observed; `Unconfirmed`
-    /// (surfaced as `NotLanded`) is the one a same-sequence fork reaches, which is
-    /// what two genesis pointers at sequence 1 actually produce.
-    #[test]
-    fn a_pointer_publish_that_is_not_published_is_fail_closed() {
-        for error in [WritePublishError::LostRace, WritePublishError::NotLanded] {
-            let session = session();
-            let publisher = FakePublisher::refusing_pointer(error.clone());
-            let err = run(&session, &publisher, &InMemoryFloorStore::default(), 7)
-                .expect_err("only a confirmed publish is a provisioned vault");
-            assert_eq!(
-                err,
-                ProvisionError::Publish {
-                    stage: "vault-pointer",
-                    error,
-                },
-            );
-        }
     }
 
     /// The mint's precondition. `Engine::start` reaches provisioning on any
@@ -832,9 +1328,14 @@ mod tests {
     fn an_indeterminate_pointer_probe_mints_nothing() {
         let session = session();
         let floors = InMemoryFloorStore::default();
-        let publisher = FakePublisher::probing(VaultPointerProbe::Indeterminate);
-        let err = run(&session, &publisher, &floors, 20)
-            .expect_err("a failed read is not evidence of a new account");
+        let net = Network::default();
+        let err = run(
+            &session,
+            &FakePublisher::probing(&net, VaultPointerProbe::Indeterminate),
+            &floors,
+            20,
+        )
+        .expect_err("a failed read is not evidence of a new account");
         assert_eq!(
             err,
             ProvisionError::NotAFirstRun(VaultPointerProbe::Indeterminate)
@@ -843,7 +1344,7 @@ mod tests {
             err.is_retryable(),
             "an outage is availability, not a verdict"
         );
-        assert!(publisher.effects.borrow().is_empty(), "nothing published");
+        assert!(net.effects.borrow().is_empty(), "nothing published");
         assert_eq!(
             block_on(floor::write_epoch_floor(&floors, &SCOPE)).unwrap(),
             None,
@@ -856,15 +1357,20 @@ mod tests {
     #[test]
     fn an_already_published_vault_is_never_re_minted() {
         let session = session();
-        let publisher = FakePublisher::probing(VaultPointerProbe::AlreadyPublished);
-        let err = run(&session, &publisher, &InMemoryFloorStore::default(), 21)
-            .expect_err("a published vault is not a first run");
+        let net = Network::default();
+        let err = run(
+            &session,
+            &FakePublisher::probing(&net, VaultPointerProbe::AlreadyPublished),
+            &InMemoryFloorStore::default(),
+            21,
+        )
+        .expect_err("a published vault is not a first run");
         assert_eq!(
             err,
             ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)
         );
         assert!(!err.is_retryable(), "re-running reaches the same refusal");
-        assert!(publisher.effects.borrow().is_empty(), "nothing published");
+        assert!(net.effects.borrow().is_empty(), "nothing published");
     }
 
     /// Rule 6 on the axis the host sees: `Event::VaultUnprovisioned` carries this
@@ -883,6 +1389,7 @@ mod tests {
                 stage: "root-record",
                 error: WritePublishError::Rejected,
             },
+            ProvisionError::RepointUnopenable(PointerError::NotOwnerSession),
         ] {
             assert!(
                 !refusal.is_retryable(),
@@ -896,13 +1403,14 @@ mod tests {
                 error: WritePublishError::NotLanded,
             },
             ProvisionError::Entropy(EntropyError::new("seam down")),
+            ProvisionError::PointerUnresolved,
         ] {
             assert!(stall.is_retryable(), "{stall} is an outage, not a verdict");
         }
     }
 
-    /// A seam that reports success having written nothing would hand this account
-    /// a world-known root secret, published before anything read it back.
+    /// A seam that reports success having written nothing would seal the genesis
+    /// root under a fixed nonce, published before anything read it back.
     #[test]
     fn a_silent_entropy_seam_mints_nothing() {
         struct Silent;
@@ -912,7 +1420,8 @@ mod tests {
             }
         }
         let session = session();
-        let publisher = FakePublisher::default();
+        let net = Network::default();
+        let publisher = FakePublisher::new(&net);
         let pointer_signer = session.vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX);
         let err = block_on(provision_vault(
             &RefCell::new(Silent),
@@ -925,12 +1434,17 @@ mod tests {
                 owner_identity: session.identity(),
                 owner_enc_secret: session.enc_subkey(),
                 vault_pointer_signer: &pointer_signer,
+                genesis_read_scope_seed: &session.genesis_read_scope_seed(),
+                genesis_write_scope_seed: &session.genesis_write_scope_seed(),
                 created_at: 0,
             },
         ))
-        .expect_err("an all-zero scope seed is never published");
-        assert!(matches!(err, ProvisionError::Entropy(_)), "{err}");
-        assert!(publisher.effects.borrow().is_empty(), "nothing published");
+        .expect_err("a fixed-nonce genesis root is never published");
+        assert!(
+            matches!(err, ProvisionError::Entropy(_) | ProvisionError::Reseal(_)),
+            "{err}"
+        );
+        assert!(net.effects.borrow().is_empty(), "nothing published");
     }
 
     /// The floors the genesis re-point vouches are durable before anything is
@@ -940,8 +1454,8 @@ mod tests {
     fn the_genesis_floors_are_seeded() {
         let session = session();
         let floors = InMemoryFloorStore::default();
-        let publisher = FakePublisher::default();
-        run(&session, &publisher, &floors, 8).expect("provisioning succeeds");
+        let net = Network::default();
+        mint(&session, &FakePublisher::new(&net), &floors, 8);
         assert_eq!(
             block_on(floor::read_epoch_floor(&floors, &SCOPE)).unwrap(),
             Some(GENESIS_EPOCH),
@@ -961,8 +1475,9 @@ mod tests {
         let session = session();
         let floors = InMemoryFloorStore::default();
         block_on(floor::advance_write_epoch_on_sight(&floors, &SCOPE, 9)).expect("floor raise");
-        let publisher = FakePublisher::default();
-        let err = run(&session, &publisher, &floors, 9).expect_err("not a first run");
+        let net = Network::default();
+        let err =
+            run(&session, &FakePublisher::new(&net), &floors, 9).expect_err("not a first run");
         assert_eq!(
             err,
             ProvisionError::FloorRegression(FloorRegression::WriteEpoch {
@@ -970,49 +1485,17 @@ mod tests {
                 vouched: GENESIS_EPOCH,
             }),
         );
-        assert!(publisher.effects.borrow().is_empty(), "nothing published");
-    }
-
-    /// Both seeds are drawn from the entropy seam, never derived from the login
-    /// secret: a seed a second party could re-derive is not a scope secret.
-    #[test]
-    fn both_scope_seeds_are_drawn_not_derived() {
-        let session = session();
-        let out = run(
-            &session,
-            &FakePublisher::default(),
-            &InMemoryFloorStore::default(),
-            10,
-        )
-        .expect("provisioning succeeds");
-        assert_ne!(*out.read_scope_seed, *out.write_scope_seed);
-        assert_ne!(*out.read_scope_seed, SECRET);
-        assert_ne!(*out.write_scope_seed, SECRET);
-        // A different entropy stream mints a different vault for the same secret.
-        let other = run(
-            &session,
-            &FakePublisher::default(),
-            &InMemoryFloorStore::default(),
-            11,
-        )
-        .expect("provisioning succeeds");
-        assert_ne!(out.root_name, other.root_name);
+        assert!(net.effects.borrow().is_empty(), "nothing published");
     }
 
     /// Key material never reaches a log site, including a test-assertion `{:?}`.
     #[test]
     fn debug_redacts_both_seeds() {
         let session = session();
-        let out = run(
-            &session,
-            &FakePublisher::default(),
-            &InMemoryFloorStore::default(),
-            12,
-        )
-        .expect("provisioning succeeds");
-        let rendered = format!("{out:?}");
+        let vault = mint_fresh(&session, &Network::default(), 12);
+        let rendered = format!("{vault:?}");
         assert!(rendered.contains("<redacted>"));
-        assert!(!rendered.contains(&hex_lower(out.write_scope_seed.as_slice())));
-        assert!(!rendered.contains(&hex_lower(out.read_scope_seed.as_slice())));
+        assert!(!rendered.contains(&hex_lower(vault.write_scope_seed.as_slice())));
+        assert!(!rendered.contains(&hex_lower(vault.read_scope_seed.as_slice())));
     }
 }

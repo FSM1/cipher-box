@@ -5,7 +5,7 @@ Glossary only. Design detail lives in `blueprint/`; the as-built v1 spec corpus,
 ## Read-plane key model (seeded derivation)
 
 - **Node seed** — the per-node secret from which a node's keys derive, flat within a scope: `nodeSeed(X) = KDF(scopeSeed, X.id)`. Location-independent, so intra-scope moves are pure relinks; membership is the envelope's epoch tag.
-- **Scope** — a derivation domain: the set of nodes keyed from one random scope seed. The vault root is the initial scope; every grant on an interior folder and every rotation creates or re-seeds one.
+- **Scope** — a derivation domain: the set of nodes keyed from one scope seed — random, except the vault root's first epoch, which derives from the login secret so a first-run mint is idempotent (ADR 0007). The vault root is the initial scope; every grant on an interior folder and every rotation creates or re-seeds one.
 - **Scope root** — the node a scope is anchored at, carrying its grant blobs, owner blob, ascent link, and history links. Granting an interior folder makes it a scope root (with a subtree sweep into the new scope).
 - **Content key** — a random per-version key stored inline in the sealed read-body. Rotation re-wraps it for free via the metadata re-seal and never re-encrypts content bytes; the next version is fresh-keyed. There is no pending-re-key state.
 - **Cross-scope move** — moving a node between scopes re-seals the moved subtree at the destination scope's epoch (and is a scope exit for the source when the source is granted).

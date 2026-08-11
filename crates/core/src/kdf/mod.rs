@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these sixteen edges. Every edge
+//! Nothing in CipherBox derives a key outside these eighteen edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -13,9 +13,10 @@
 //! manifest freezes the context strings, input layouts, and per-edge outputs;
 //! [`edge_probe_outputs`] backs the mechanical separation KAT.
 //!
-//! Non-edges, stated to stay non-edges (blueprint/core.md): content keys,
-//! scope override seeds, and scope seeds at grant cuts — all random, none
-//! derived here.
+//! Non-edges, stated to stay non-edges (blueprint/core.md): content keys, and
+//! every scope seed a rotation or a grant cut mints — all random, none derived
+//! here. The genesis pair below is the one exception, and only because genesis
+//! has no predecessor to be idempotent against (ADR 0007).
 
 use zeroize::Zeroize;
 
@@ -45,6 +46,8 @@ const CTX_SCOPE_POINTER: &str = "cipherbox/v2/scope-pointer";
 const CTX_POINTER_READ_KEY: &str = "cipherbox/v2/pointer-read-key";
 const CTX_VAULT_POINTER_INDEX: &str = "cipherbox/v2/vault-pointer-index";
 const CTX_SETTINGS_IPNS_KEYPAIR: &str = "cipherbox/v2/settings-ipns-keypair";
+const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed";
+const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
 
 /// One catalog edge's frozen, machine-checkable metadata: its stable name, its
 /// `cipherbox/v2/...` context string, and an input-layout descriptor. The KAT
@@ -56,7 +59,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The sixteen edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The eighteen edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -138,6 +141,16 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "settings-ipns-keypair",
         context: CTX_SETTINGS_IPNS_KEYPAIR,
         input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+    },
+    EdgeSpec {
+        name: "genesis-read-scope-seed",
+        context: CTX_GENESIS_READ_SCOPE_SEED,
+        input_layout: "derive_key(ctx, loginSecret[var])",
+    },
+    EdgeSpec {
+        name: "genesis-write-scope-seed",
+        context: CTX_GENESIS_WRITE_SCOPE_SEED,
+        input_layout: "derive_key(ctx, loginSecret[var])",
     },
 ];
 
@@ -237,6 +250,14 @@ fn vault_pointer_index_bytes(login_secret: &[u8], index: u64) -> SecretBytes {
 
 fn settings_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_SETTINGS_IPNS_KEYPAIR, login_secret)
+}
+
+fn genesis_read_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_GENESIS_READ_SCOPE_SEED, login_secret)
+}
+
+fn genesis_write_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_GENESIS_WRITE_SCOPE_SEED, login_secret)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +364,23 @@ pub fn settings_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
     Ed25519Signer::from_seed(*settings_ipns_keypair_bytes(login_secret).as_bytes())
 }
 
+/// `genesis-read-scope-seed`: the vault root scope's read (override) seed at the
+/// genesis epoch, from the login secret.
+///
+/// Genesis alone derives — it has no predecessor to be idempotent against, and
+/// deriving is what makes two mint attempts by one account reproduce one vault
+/// (ADR 0007 D1). Every later read seed is drawn at its rotation.
+pub fn genesis_read_scope_seed(login_secret: &[u8]) -> SecretBytes {
+    genesis_read_scope_seed_bytes(login_secret)
+}
+
+/// `genesis-write-scope-seed`: the vault root scope's `writeScopeSeed` at the
+/// genesis epoch, from the login secret. See [`genesis_read_scope_seed`] for why
+/// genesis is the one derived pair.
+pub fn genesis_write_scope_seed(login_secret: &[u8]) -> SecretBytes {
+    genesis_write_scope_seed_bytes(login_secret)
+}
+
 // ---------------------------------------------------------------------------
 // Separation surface: the whole edge table under one set of probe inputs.
 // ---------------------------------------------------------------------------
@@ -403,7 +441,7 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the sixteen outputs must be pairwise distinct), its property test, and the
+/// (the eighteen outputs must be pairwise distinct), its property test, and the
 /// frozen vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
@@ -478,6 +516,14 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "settings-ipns-keypair",
             output: b(settings_ipns_keypair_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "genesis-read-scope-seed",
+            output: b(genesis_read_scope_seed_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "genesis-write-scope-seed",
+            output: b(genesis_write_scope_seed_bytes(probe.seed)),
         },
     ]
 }
@@ -562,6 +608,42 @@ mod tests {
             Ed25519Signer::from_seed(by("settings-ipns-keypair"))
                 .verifying_key()
                 .to_bytes()
+        );
+        assert_eq!(
+            genesis_read_scope_seed(&seed).as_bytes(),
+            &by("genesis-read-scope-seed")
+        );
+        assert_eq!(
+            genesis_write_scope_seed(&seed).as_bytes(),
+            &by("genesis-write-scope-seed")
+        );
+    }
+
+    /// The genesis pair is the whole of ADR 0007's derived-mint property: the two
+    /// seeds must be a pure function of the login secret and must not be each
+    /// other. Separation from the rest of the catalog is
+    /// [`edges_are_pairwise_separated`]'s job.
+    #[test]
+    fn the_genesis_pair_is_derived_and_separated() {
+        let secret = b"login-secret".as_slice();
+        assert_eq!(
+            genesis_read_scope_seed(secret).as_bytes(),
+            genesis_read_scope_seed(secret).as_bytes(),
+            "a second attempt by one account derives the same read seed",
+        );
+        assert_eq!(
+            genesis_write_scope_seed(secret).as_bytes(),
+            genesis_write_scope_seed(secret).as_bytes(),
+            "and the same write seed, which is what makes the mint idempotent",
+        );
+        assert_ne!(
+            genesis_read_scope_seed(secret).as_bytes(),
+            genesis_write_scope_seed(secret).as_bytes(),
+        );
+        assert_ne!(genesis_write_scope_seed(secret).as_bytes(), &[0u8; 32]);
+        assert_ne!(
+            genesis_write_scope_seed(secret).as_bytes(),
+            genesis_write_scope_seed(b"another-secret").as_bytes(),
         );
     }
 }
