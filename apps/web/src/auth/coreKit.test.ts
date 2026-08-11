@@ -14,6 +14,7 @@ const SESSION = '{"sessionId":"not-a-real-session-id"}';
 // login and logout outcomes a device can actually land in.
 const sdk = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
+  subVerifier: undefined as Record<string, unknown> | undefined,
   status: 'LOGGED_IN',
   statusAfterLogin: 'LOGGED_IN',
   logoutError: undefined as Error | undefined,
@@ -35,7 +36,8 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       init(): Promise<void> {
         return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
-      async loginWithOAuth(): Promise<void> {
+      async loginWithOAuth(params: { subVerifierDetails: Record<string, unknown> }): Promise<void> {
+        sdk.subVerifier = params.subVerifierDetails;
         sdk.status = sdk.statusAfterLogin;
       }
       commitChanges(): Promise<void> {
@@ -50,31 +52,33 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
 });
 
 const ENV = {
-  VITE_WEB3AUTH_CLIENT_ID: 'client-id',
+  VITE_WEB3AUTH_CLIENT_ID: 'web3auth-client-id',
   VITE_WEB3AUTH_VERIFIER: 'verifier',
+  VITE_GOOGLE_CLIENT_ID: 'google-client-id',
 } satisfies Partial<ImportMetaEnv>;
 
 const REFUSED = new Error('the session server is unreachable');
 
+let keys: MemoryKeys;
+let store: SealedStore;
+
+/** A session over a store this test can seed and read back. */
+const session = () => createCoreKitSession(ENV, store);
+
+beforeEach(() => {
+  sdk.options = undefined;
+  sdk.subVerifier = undefined;
+  sdk.status = COREKIT_STATUS.LOGGED_IN;
+  sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
+  sdk.logoutError = undefined;
+  sdk.logoutCalls = 0;
+  sdk.initFailure = undefined;
+  window.localStorage.clear();
+  keys = new MemoryKeys();
+  store = sealedTestStore(keys);
+});
+
 describe('the Core Kit store', () => {
-  let keys: MemoryKeys;
-  let store: SealedStore;
-
-  /** A session over a store this test can seed and read back. */
-  const session = () => createCoreKitSession(ENV, store);
-
-  beforeEach(() => {
-    sdk.options = undefined;
-    sdk.status = COREKIT_STATUS.LOGGED_IN;
-    sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
-    sdk.logoutError = undefined;
-    sdk.logoutCalls = 0;
-    sdk.initFailure = undefined;
-    window.localStorage.clear();
-    keys = new MemoryKeys();
-    store = sealedTestStore(keys);
-  });
-
   it('hands the SDK the sealed store, so nothing it writes lands in the clear', async () => {
     session();
     await store.setItem(STORE_KEY, SESSION);
@@ -156,5 +160,34 @@ describe('the Core Kit store', () => {
 
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+  });
+});
+
+describe('a Core Kit login', () => {
+  it('names the Web3Auth project to the SDK itself', () => {
+    session();
+
+    expect(sdk.options?.web3AuthClientId).toBe('web3auth-client-id');
+  });
+
+  it('sends the Google sub-verifier the Google OAuth client ID', async () => {
+    await session().login('google');
+
+    expect(sdk.subVerifier).toMatchObject({
+      typeOfLogin: 'google',
+      verifier: 'verifier',
+      clientId: 'google-client-id',
+    });
+  });
+
+  it('sends the Torus-hosted email sub-verifier the Web3Auth project client ID', async () => {
+    await session().login('email', 'member@example.test');
+
+    expect(sdk.subVerifier).toMatchObject({
+      typeOfLogin: 'email_passwordless',
+      verifier: 'verifier',
+      clientId: 'web3auth-client-id',
+      jwtParams: { login_hint: 'member@example.test' },
+    });
   });
 });

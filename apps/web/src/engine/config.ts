@@ -28,7 +28,11 @@ const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'product
 const DEPLOYED: readonly Environment[] = ['staging', 'production'];
 
 /** The one list of what a Core Kit session needs, shared with the build gate. */
-const LOGIN_ENV = ['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const;
+const LOGIN_ENV = [
+  'VITE_WEB3AUTH_CLIENT_ID',
+  'VITE_WEB3AUTH_VERIFIER',
+  'VITE_GOOGLE_CLIENT_ID',
+] as const;
 
 /**
  * What a deployed bundle cannot work without. `VITE_API_URL` is here because an
@@ -100,14 +104,19 @@ export function missingLoginEnv(env: Partial<ImportMetaEnv>): string[] {
   return LOGIN_ENV.filter((name) => configured(env[name]) === undefined);
 }
 
-/** The Web3Auth identifiers a Core Kit session is built from; refuses a build missing any. */
-export function loginEnv(env: Partial<ImportMetaEnv>): { clientId: string; verifier: string } {
-  const clientId = configured(env.VITE_WEB3AUTH_CLIENT_ID);
+/** The identifiers a Core Kit session is built from; refuses a build missing any. */
+export function loginEnv(env: Partial<ImportMetaEnv>): {
+  web3AuthClientId: string;
+  googleClientId: string;
+  verifier: string;
+} {
+  const web3AuthClientId = configured(env.VITE_WEB3AUTH_CLIENT_ID);
+  const googleClientId = configured(env.VITE_GOOGLE_CLIENT_ID);
   const verifier = configured(env.VITE_WEB3AUTH_VERIFIER);
-  if (!clientId || !verifier) {
+  if (!web3AuthClientId || !googleClientId || !verifier) {
     throw new Error(`${missingLoginEnv(env).join(' and ')} must be configured`);
   }
-  return { clientId, verifier };
+  return { web3AuthClientId, googleClientId, verifier };
 }
 
 /**

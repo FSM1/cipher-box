@@ -90,6 +90,7 @@ describe('missingDeployEnv', () => {
     VITE_ENVIRONMENT: 'staging',
     VITE_WEB3AUTH_CLIENT_ID: 'client',
     VITE_WEB3AUTH_VERIFIER: 'verifier',
+    VITE_GOOGLE_CLIENT_ID: 'google-client',
     VITE_API_URL: 'https://api.example.test',
   };
 
@@ -97,6 +98,7 @@ describe('missingDeployEnv', () => {
     expect(missingDeployEnv({ VITE_ENVIRONMENT: 'staging' })).toEqual([
       'VITE_WEB3AUTH_CLIENT_ID',
       'VITE_WEB3AUTH_VERIFIER',
+      'VITE_GOOGLE_CLIENT_ID',
       'VITE_API_URL',
     ]);
     // A variable substituted as blank is as unusable as an absent one, and a
@@ -108,6 +110,9 @@ describe('missingDeployEnv', () => {
       ]);
       expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_CLIENT_ID: blank })).toEqual([
         'VITE_WEB3AUTH_CLIENT_ID',
+      ]);
+      expect(missingDeployEnv({ ...deployed, VITE_GOOGLE_CLIENT_ID: blank })).toEqual([
+        'VITE_GOOGLE_CLIENT_ID',
       ]);
     }
   });
@@ -151,27 +156,45 @@ describe('shipsE2eHook', () => {
 });
 
 describe('loginEnv', () => {
-  it('reads the Web3Auth identifiers a session is built from', () => {
-    expect(loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: 'v' })).toEqual({
-      clientId: 'client',
+  const configured = {
+    VITE_WEB3AUTH_CLIENT_ID: 'client',
+    VITE_WEB3AUTH_VERIFIER: 'v',
+    VITE_GOOGLE_CLIENT_ID: 'google-client',
+  };
+
+  it('keeps the two client IDs apart, which name unrelated registrations', () => {
+    expect(loginEnv(configured)).toEqual({
+      web3AuthClientId: 'client',
+      googleClientId: 'google-client',
       verifier: 'v',
     });
   });
 
-  it('trims the identifiers, which are sent to Web3Auth verbatim', () => {
+  it('trims the identifiers, which are sent to the providers verbatim', () => {
     expect(
-      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: ' client\n', VITE_WEB3AUTH_VERIFIER: 'v ' })
-    ).toEqual({ clientId: 'client', verifier: 'v' });
+      loginEnv({
+        VITE_WEB3AUTH_CLIENT_ID: ' client\n',
+        VITE_WEB3AUTH_VERIFIER: 'v ',
+        VITE_GOOGLE_CLIENT_ID: '\tgoogle-client ',
+      })
+    ).toEqual({ web3AuthClientId: 'client', googleClientId: 'google-client', verifier: 'v' });
   });
 
   it('refuses a build missing one, naming it', () => {
-    expect(() => loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client' })).toThrow(
+    expect(() => loginEnv({ ...configured, VITE_WEB3AUTH_VERIFIER: undefined })).toThrow(
       /^VITE_WEB3AUTH_VERIFIER must be configured$/
     );
+    // Otherwise the member meets Google's own `401 invalid_client`, which names
+    // nothing they or an operator can act on.
+    expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: undefined })).toThrow(
+      /^VITE_GOOGLE_CLIENT_ID must be configured$/
+    );
     // Whitespace is missing, not configured.
-    expect(() =>
-      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: '   ' })
-    ).toThrow(/^VITE_WEB3AUTH_VERIFIER must be configured$/);
+    for (const blank of ['', '   ', '\n']) {
+      expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toThrow(
+        /^VITE_GOOGLE_CLIENT_ID must be configured$/
+      );
+    }
   });
 });
 
