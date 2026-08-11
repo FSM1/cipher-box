@@ -185,13 +185,9 @@ describe('loginEnv', () => {
       /^VITE_WEB3AUTH_VERIFIER must be configured$/
     );
     // Otherwise the member meets Google's own `401 invalid_client`, which names
-    // nothing they or an operator can act on.
-    expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: undefined })).toThrow(
-      /^VITE_GOOGLE_CLIENT_ID must be configured$/
-    );
-    // Whitespace is missing, not configured.
-    for (const blank of ['', '   ', '\n']) {
-      expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toThrow(
+    // nothing they or an operator can act on. Whitespace is missing, not configured.
+    for (const unset of [undefined, '', '   ', '\n']) {
+      expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: unset })).toThrow(
         /^VITE_GOOGLE_CLIENT_ID must be configured$/
       );
     }
