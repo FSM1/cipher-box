@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8198883d1ef2",
+  "strategy": "manual-commit",
+  "branch": "docs/blueprint-identity-token-issuer",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/81/98883d1ef2/0/metadata.json",
+      "transcript": "/81/98883d1ef2/0/full.jsonl",
+      "compact_transcript": "/81/98883d1ef2/0/transcript.jsonl",
+      "content_hash": "/81/98883d1ef2/0/content_hash.txt",
+      "prompt": "/81/98883d1ef2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3540,
+    "cache_creation_tokens": 4721566,
+    "cache_read_tokens": 421895455,
+    "output_tokens": 1491663,
+    "api_call_count": 1778
+  }
+}
