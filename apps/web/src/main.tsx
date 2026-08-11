@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { WagmiProvider } from 'wagmi';
 import { App } from './App';
-import { createCoreKitSession } from './auth/coreKit';
+import { createCoreKitSession, sealedCoreKitStore } from './auth/coreKit';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { createEngineClient } from './engine/createEngineClient';
 import { installIntrospection } from './engine/introspection';
@@ -42,7 +42,9 @@ createRoot(rootElement).render(
         <EngineProvider
           createClient={(secrets) => installIntrospection(createEngineClient(secrets))}
         >
-          <CoreKitProvider createSession={() => createCoreKitSession(import.meta.env)}>
+          <CoreKitProvider
+            createSession={() => createCoreKitSession(import.meta.env, sealedCoreKitStore())}
+          >
             <BrowserRouter>
               <App />
             </BrowserRouter>

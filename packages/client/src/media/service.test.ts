@@ -206,8 +206,11 @@ describe('MediaService', () => {
     service.revokeStreamUrl(url);
 
     // A deadline long enough that only an immediate resolve can finish the test.
-    expect(await service.whenStreamIdle(url, 60_000)).toBe(false);
-    expect(await service.whenStreamIdle('https://elsewhere.example/stream/x', 60_000)).toBe(false);
+    const unread = { read: false, failure: null };
+    expect(await service.whenStreamIdle(url, 60_000)).toEqual(unread);
+    expect(await service.whenStreamIdle('https://elsewhere.example/stream/x', 60_000)).toEqual(
+      unread
+    );
   });
 
   it('re-brokers a fresh channel and closes the old one when the worker asks for a port', async () => {

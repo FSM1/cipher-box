@@ -24,16 +24,29 @@ const STREAM_START_MS = 30_000;
 
 const NEVER_FETCHED = 'the browser did not start the download';
 
+/**
+ * How a save ended. `refused` is the save never being attempted, which will hold
+ * for the next file too; `failed` is this one file's read giving out, which says
+ * nothing about the next. `saved` means the broker did not give up on the read,
+ * which is as much as this tab can know once the bytes are the browser's.
+ */
+export type SaveOutcome = 'saved' | 'refused' | 'failed';
+
+/** One file to save. */
+export interface SaveRequest {
+  readonly node: Uint8Array;
+  /** The name the file lands under on disk. */
+  readonly name: string;
+  /** The engine's byte count; `null` forces the buffered read. */
+  readonly size: bigint | null;
+}
+
 export interface FileDownload {
   error: string | null;
-  /**
-   * Resolves once the file's bytes have stopped moving, with whether it reached
-   * the browser at all — false is a refusal, and a caller working through a
-   * selection should stop rather than repeat it per file.
-   *
-   * @param size the engine's byte count; `null` forces the buffered read.
-   */
-  save(node: Uint8Array, name: string, size: bigint | null): Promise<boolean>;
+  /** Resolves once the file's bytes have stopped moving. */
+  save(file: SaveRequest): Promise<SaveOutcome>;
+  /** Saves each file in turn, stopping at a refusal and naming what failed. */
+  saveAll(files: readonly SaveRequest[]): Promise<void>;
   /** Drops a failure the user has moved on from. */
   clearError(): void;
 }
@@ -55,10 +68,10 @@ export function useFileDownload(): FileDownload {
   }, [media]);
 
   const save = useCallback(
-    async (node: Uint8Array, name: string, size: bigint | null): Promise<boolean> => {
+    async ({ node, name, size }: SaveRequest): Promise<SaveOutcome> => {
       if (client === null) {
         setError('the engine is not ready yet');
-        return false;
+        return 'refused';
       }
       setError(null);
 
@@ -66,11 +79,18 @@ export function useFileDownload(): FileDownload {
         const ticket = streamTicket(media, node, size, OPAQUE);
         if (ticket !== null) {
           tickets.current.add(ticket);
-          saveToDisk(ticket, name);
           try {
-            const read = await media.whenStreamIdle(ticket, STREAM_START_MS);
-            if (!read) setError(NEVER_FETCHED);
-            return read;
+            saveToDisk(ticket, name);
+            const idle = await media.whenStreamIdle(ticket, STREAM_START_MS);
+            if (idle.failure !== null) {
+              setError(idle.failure);
+              return 'failed';
+            }
+            if (!idle.read) {
+              setError(NEVER_FETCHED);
+              return 'refused';
+            }
+            return 'saved';
           } finally {
             tickets.current.delete(ticket);
             media.revokeStreamUrl(ticket);
@@ -83,16 +103,34 @@ export function useFileDownload(): FileDownload {
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveToDisk(url, name);
         setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
-        return true;
+        return 'saved';
       } catch (failure: unknown) {
         setError(errorMessage(failure));
-        return false;
+        return 'failed';
       }
     },
     [client, media]
   );
 
-  return { error, save, clearError: useCallback(() => setError(null), []) };
+  const saveAll = useCallback(
+    async (files: readonly SaveRequest[]): Promise<void> => {
+      const failed: string[] = [];
+      for (const file of files) {
+        const outcome = await save(file);
+        // A browser that blocks the second download blocks every one after it.
+        if (outcome === 'refused') break;
+        if (outcome === 'failed') failed.push(file.name);
+      }
+      if (failed.length === 0) return;
+      // Each save clears the banner the one before it set, so the batch reports
+      // here or nowhere; whatever stopped it keeps the last word.
+      const summary = `could not download ${failed.join(', ')}`;
+      setError((stopped) => (stopped === null ? summary : `${summary}; ${stopped}`));
+    },
+    [save]
+  );
+
+  return { error, save, saveAll, clearError: useCallback(() => setError(null), []) };
 }
 
 function saveToDisk(url: string, name: string): void {

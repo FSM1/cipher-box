@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import { useContextMenu } from '../../hooks/useContextMenu';
-import { useFileDownload } from '../../hooks/useFileDownload';
+import { useFileDownload, type SaveRequest } from '../../hooks/useFileDownload';
 import { useVaultActions, type BatchOutcome } from '../../hooks/useVaultActions';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
@@ -21,6 +21,12 @@ import { MoveDialog } from './MoveDialog';
 import { NamePromptDialog } from './NamePromptDialog';
 import { SelectionActionBar } from './SelectionActionBar';
 import { TextEditorDialog } from './TextEditorDialog';
+
+const saveRequest = (row: ListingRow): SaveRequest => ({
+  node: row.id,
+  name: row.name,
+  size: row.bytes,
+});
 
 type Dialog =
   | { kind: 'create' }
@@ -88,12 +94,7 @@ export function FileBrowserActions({
   const downloadSelection = async (): Promise<void> => {
     setDownloading(true);
     try {
-      // One save at a time, and none after a refusal: a browser that blocks the
-      // second download blocks every one after it.
-      for (const row of selection.rows) {
-        if (row.kind !== 'file') continue;
-        if (!(await downloads.save(row.id, row.name, row.bytes))) break;
-      }
+      await downloads.saveAll(selection.rows.filter((row) => row.kind === 'file').map(saveRequest));
     } finally {
       setDownloading(false);
     }
@@ -111,7 +112,7 @@ export function FileBrowserActions({
       }
       items.push({
         label: 'download',
-        onSelect: () => void downloads.save(row.id, row.name, row.bytes),
+        onSelect: () => void downloads.save(saveRequest(row)),
       });
     }
     items.push(
@@ -236,7 +237,7 @@ export function FileBrowserActions({
         <FilePreviewDialog
           row={dialog.row}
           onClose={close}
-          onDownload={() => void downloads.save(dialog.row.id, dialog.row.name, dialog.row.bytes)}
+          onDownload={() => void downloads.save(saveRequest(dialog.row))}
         />
       )}
     </>

@@ -1,8 +1,13 @@
 import { COREKIT_STATUS } from '@web3auth/mpc-core-kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
+import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
 
 const STORE_KEY = 'corekit_store';
+
+/** What the SDK writes under its one key; nothing here is real key material. */
+const SESSION = '{"sessionId":"not-a-real-session-id"}';
 
 // The SDK reaches for the Web3Auth network on construction; the seam is what
 // lets the persistence options it is handed be read back, and what drives the
@@ -13,6 +18,7 @@ const sdk = vi.hoisted(() => ({
   statusAfterLogin: 'LOGGED_IN',
   logoutError: undefined as Error | undefined,
   logoutCalls: 0,
+  initFailure: undefined as Error | undefined,
 }));
 vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@web3auth/mpc-core-kit')>();
@@ -25,6 +31,9 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       get status(): string {
         return sdk.status;
+      }
+      init(): Promise<void> {
+        return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
       async loginWithOAuth(): Promise<void> {
         sdk.status = sdk.statusAfterLogin;
@@ -48,65 +57,102 @@ const ENV = {
 const REFUSED = new Error('the session server is unreachable');
 
 describe('the Core Kit store', () => {
+  let keys: MemoryKeys;
+  let store: SealedStore;
+
+  /** A session over a store this test can seed and read back. */
+  const session = () => createCoreKitSession(ENV, store);
+
   beforeEach(() => {
     sdk.options = undefined;
     sdk.status = COREKIT_STATUS.LOGGED_IN;
     sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
     sdk.logoutError = undefined;
     sdk.logoutCalls = 0;
+    sdk.initFailure = undefined;
     window.localStorage.clear();
+    keys = new MemoryKeys();
+    store = sealedTestStore(keys);
   });
 
-  it('persists origin-wide, so a tab that did not log in can still be promoted to leader', () => {
-    createCoreKitSession(ENV);
+  it('hands the SDK the sealed store, so nothing it writes lands in the clear', async () => {
+    session();
+    await store.setItem(STORE_KEY, SESSION);
 
-    expect(sdk.options?.storage).toBe(window.localStorage);
+    expect(sdk.options?.storage).toBe(store);
+    expect(window.localStorage.getItem(STORE_KEY)).not.toContain('sessionId');
+  });
+
+  it('is left standing when a restore failed only because the key store was unreachable', async () => {
+    // Seeded through a store of its own, so the session's has no key in hand
+    // and has to reach the one that is about to refuse.
+    await sealedTestStore(keys).setItem(STORE_KEY, SESSION);
+    const stored = window.localStorage.getItem(STORE_KEY);
+    keys.refusal = new Error('the wrapping-key database is shut');
+    sdk.initFailure = REFUSED;
+
+    await expect(session().restore()).rejects.toThrow(REFUSED);
+
+    expect(window.localStorage.getItem(STORE_KEY)).toBe(stored);
+    expect(keys.held).not.toBeNull();
+  });
+
+  it('is cleared when a restore found something the SDK could not parse', async () => {
+    const created = session();
+    await store.setItem(STORE_KEY, '{"sessionId":"a-truncated-writ');
+    sdk.initFailure = REFUSED;
+
+    await expect(created.restore()).rejects.toThrow(REFUSED);
+
+    expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
   });
 
   it('caps how long a persisted session stays restorable at eight hours', () => {
-    createCoreKitSession(ENV);
+    session();
 
     expect(sdk.options?.sessionTime).toBe(28_800);
   });
 
   it('is cleared on logout, which the SDK leaves standing', async () => {
-    const session = createCoreKitSession(ENV);
-    window.localStorage.setItem(STORE_KEY, '{"sessionId":"a-session-id"}');
+    const created = session();
+    await store.setItem(STORE_KEY, SESSION);
 
-    await session.logout();
+    await created.logout();
 
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+    expect(keys.held).toBeNull();
   });
 
   it('is cleared when the SDK refuses to log out, and the refusal still surfaces', async () => {
-    const session = createCoreKitSession(ENV);
+    const created = session();
     sdk.logoutError = REFUSED;
-    window.localStorage.setItem(STORE_KEY, '{"sessionId":"a-session-id"}');
+    await store.setItem(STORE_KEY, SESSION);
 
-    await expect(session.logout()).rejects.toThrow(REFUSED);
+    await expect(created.logout()).rejects.toThrow(REFUSED);
 
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+    expect(keys.held).toBeNull();
   });
 
   it('is cleared on a sign-out the SDK has no session to end', async () => {
-    const session = createCoreKitSession(ENV);
+    const created = session();
     sdk.status = COREKIT_STATUS.NOT_INITIALIZED;
-    window.localStorage.setItem(STORE_KEY, '{"sessionId":"a-session-id"}');
+    await store.setItem(STORE_KEY, SESSION);
 
-    await session.logout();
+    await created.logout();
 
     expect(sdk.logoutCalls).toBe(0);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
   });
 
   it('is cleared when a login stops short of a session and the rollback is refused', async () => {
-    const session = createCoreKitSession(ENV);
+    const created = session();
     sdk.statusAfterLogin = COREKIT_STATUS.REQUIRED_SHARE;
     sdk.logoutError = REFUSED;
-    window.localStorage.setItem(STORE_KEY, '{"sessionId":"a-session-id"}');
+    await store.setItem(STORE_KEY, SESSION);
 
-    await expect(session.login('google')).rejects.toThrow(/needs approval or a recovery phrase/);
+    await expect(created.login('google')).rejects.toThrow(/needs approval or a recovery phrase/);
 
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();

@@ -5,7 +5,7 @@
  */
 
 import { fanOut } from '../correlatedTransport.js';
-import { MediaBroker, type MediaFailure, type MediaReader } from './broker.js';
+import { MediaBroker, type IdleOutcome, type MediaFailure, type MediaReader } from './broker.js';
 import {
   MEDIA_PORT_OFFER,
   MEDIA_PORT_REQUEST,
@@ -121,10 +121,10 @@ export class MediaService {
   }
 
   /** {@link MediaBroker.whenIdle} for a ticket named by its URL. */
-  whenStreamIdle(url: string, startWithinMs: number): Promise<boolean> {
+  whenStreamIdle(url: string, startWithinMs: number): Promise<IdleOutcome> {
     const ticket = ticketFromUrl(url, this.origin);
     if (ticket === null || this.registry.lookup(ticket) === undefined)
-      return Promise.resolve(false);
+      return Promise.resolve({ read: false, failure: null });
     return this.broker.whenIdle(ticket, startWithinMs);
   }
 

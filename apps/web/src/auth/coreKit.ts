@@ -9,6 +9,7 @@ import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import { environment, loginEnv } from '../engine/config';
 import type { LoginSecretExporter } from '../engine/loginHandoff';
+import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 
 /** How a session was established; also the `authStore` login method. */
 export type CoreKitLoginMethod = 'google' | 'email';
@@ -34,7 +35,7 @@ export interface CoreKitSession extends LoginSecretExporter {
 class Web3AuthSession implements CoreKitSession {
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
-    private readonly store: Storage,
+    private readonly store: SealedStore,
     private readonly verifier: string,
     private readonly clientId: string
   ) {}
@@ -46,7 +47,7 @@ class Web3AuthSession implements CoreKitSession {
       // Only an unreadable store wedges the next login through that same read.
       // A restore that failed for any other reason — the SDK's feature check
       // has no network — must leave a good store standing.
-      if (!this.storeIsReadable()) this.clearStore();
+      if (await this.storeIsCorrupt()) await this.clearStore();
       throw failure;
     }
   }
@@ -69,7 +70,7 @@ class Web3AuthSession implements CoreKitSession {
       // device approval are not built yet, so fail rather than half-log-in, and
       // end the partial session rather than leave it resident on the device.
       await this.coreKit.logout().catch(() => undefined);
-      this.clearStore();
+      await this.clearStore();
       throw new Error('this device needs approval or a recovery phrase before it can sign in');
     }
     await this.coreKit.commitChanges();
@@ -87,7 +88,7 @@ class Web3AuthSession implements CoreKitSession {
     try {
       if (this.isLoggedIn()) await this.coreKit.logout();
     } finally {
-      this.clearStore();
+      await this.clearStore();
     }
   }
 
@@ -95,21 +96,32 @@ class Web3AuthSession implements CoreKitSession {
    * The SDK's own logout blanks its session id in place and leaves the rest of
    * its store standing — a device factor share among it, once MFA is reachable.
    * So every path that leaves this device without a usable session clears it
-   * here, whether the session ended, was refused, or was never readable.
+   * here, whether the session ended, was refused, or was never readable, and
+   * takes the wrapping key with it.
    */
-  private clearStore(): void {
-    this.store.removeItem(this.coreKit._storageKey);
+  private clearStore(): Promise<void> {
+    return this.store.purge(this.coreKit._storageKey);
   }
 
-  /** The SDK reads its store as `JSON.parse(raw || '{}')[key]`; nothing else opens. */
-  private storeIsReadable(): boolean {
-    const raw = this.store.getItem(this.coreKit._storageKey);
-    if (!raw) return true;
+  /**
+   * Whether the store opens but holds something the SDK's own read throws on —
+   * it reads as `JSON.parse(raw || '{}')[key]`, and nothing else opens.
+   */
+  private async storeIsCorrupt(): Promise<boolean> {
+    let raw: string | null;
+    try {
+      raw = await this.store.getItem(this.coreKit._storageKey);
+    } catch {
+      // A store this device cannot reach is not a corrupt one, and purging it
+      // would destroy a session the next attempt could still open.
+      return false;
+    }
+    if (!raw) return false;
     try {
       const parsed: unknown = JSON.parse(raw);
-      return typeof parsed === 'object' && parsed !== null;
+      return typeof parsed !== 'object' || parsed === null;
     } catch {
-      return false;
+      return true;
     }
   }
 
@@ -127,16 +139,25 @@ class Web3AuthSession implements CoreKitSession {
  */
 const SESSION_SECONDS = 8 * 60 * 60;
 
+/**
+ * This origin's Core Kit store: the ciphertext origin-wide in `localStorage`,
+ * the key that opens it in IndexedDB.
+ *
+ * Origin-wide by decision, not by default: a tab promoted to leader re-exports
+ * the login secret from its own restored Core Kit session
+ * (`EngineClient.promote`), so a per-tab store would strand every tab that did
+ * not itself log in.
+ */
+export function sealedCoreKitStore(): SealedStore {
+  return new SealedStore(window.localStorage, indexedDbWrappingKeys(), navigator.locks);
+}
+
 /** Builds this tab's Core Kit session from the build-time environment. */
-export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSession {
+export function createCoreKitSession(
+  env: Partial<ImportMetaEnv>,
+  store: SealedStore
+): CoreKitSession {
   const { clientId, verifier } = loginEnv(env);
-  // Origin-wide by decision, not by default: a tab promoted to leader re-exports
-  // the login secret from its own restored Core Kit session
-  // (`EngineClient.promote`), so a per-tab store would strand every tab that did
-  // not itself log in. What sits in it is a secp256k1 scalar that both addresses
-  // and decrypts a Web3Auth-held record holding the shares an export needs, so
-  // it is bearer key material and `SESSION_SECONDS` is its only other bound.
-  const store = window.localStorage;
 
   const coreKit = new Web3AuthMPCCoreKit({
     web3AuthClientId: clientId,
