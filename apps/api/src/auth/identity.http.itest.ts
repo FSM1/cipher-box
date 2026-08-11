@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
@@ -137,6 +138,13 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
     return { message, signature: await account.signMessage({ message }) };
   }
 
+  /**
+   * A fresh address per test. `EmailOtpService` caps sends per address over a
+   * 15-minute window and holds that budget in memory for the app's whole life,
+   * so tests sharing a literal address spend one budget between them.
+   */
+  const freshEmail = () => `member-${randomUUID()}@example.com`;
+
   async function emailGrant(address: string) {
     await request(http())
       .post('/auth/identity/email/send-code')
@@ -165,7 +173,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       const jwks = await request(http()).get('/auth/.well-known/jwks.json').expect(200);
       const key = await jose.importJWK(jwks.body.keys[0], 'RS256');
 
-      const grant = await emailGrant('member@example.com');
+      const grant = await emailGrant(freshEmail());
       const { payload } = await jose.jwtVerify(grant.body.token, key, {
         issuer: 'cipherbox',
         audience: 'web3auth',
@@ -191,25 +199,27 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
 
   describe('email', () => {
     it('signs a member in with a CipherBox-issued code', async () => {
-      const grant = await emailGrant('member@example.com');
+      const address = freshEmail();
+      const grant = await emailGrant(address);
 
-      expect(mail.delivered[0].to).toBe('member@example.com');
+      expect(mail.delivered[0].to).toBe(address);
       expect(mail.delivered[0].code).toMatch(/^[0-9]{6}$/);
       expect(grant.body.verifierId).toBeTruthy();
-      expect(grant.body.email).toBe('member@example.com');
+      expect(grant.body.email).toBe(address);
     });
 
     it('refuses a code CipherBox did not issue', async () => {
+      const address = freshEmail();
       await request(http())
         .post('/auth/identity/email/send-code')
-        .send({ email: 'member@example.com' })
+        .send({ email: address })
         .expect(200);
       const issued = mail.delivered[0].code;
       const forged = issued === '000000' ? '111111' : '000000';
 
       await request(http())
         .post('/auth/identity/email/verify-code')
-        .send({ email: 'member@example.com', code: forged })
+        .send({ email: address, code: forged })
         .expect(401);
     });
 
@@ -221,25 +231,27 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
     });
 
     it('refuses to spend the same code twice', async () => {
+      const address = freshEmail();
       await request(http())
         .post('/auth/identity/email/send-code')
-        .send({ email: 'member@example.com' })
+        .send({ email: address })
         .expect(200);
       const { code } = mail.delivered[0];
 
       await request(http())
         .post('/auth/identity/email/verify-code')
-        .send({ email: 'member@example.com', code })
+        .send({ email: address, code })
         .expect(200);
       await request(http())
         .post('/auth/identity/email/verify-code')
-        .send({ email: 'member@example.com', code })
+        .send({ email: address, code })
         .expect(401);
     });
 
     it('reaches one subject from one address however it is spelled', async () => {
-      const first = await emailGrant('member@example.com');
-      const second = await emailGrant('  MEMBER@Example.COM  ');
+      const address = freshEmail();
+      const first = await emailGrant(address);
+      const second = await emailGrant(`  ${address.toUpperCase()}  `);
 
       expect(second.body.verifierId).toBe(first.body.verifierId);
       expect(await subjectCount()).toBe(1);
@@ -334,7 +346,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
 
   describe('the account model', () => {
     it('creates no account row, whichever method vouched', async () => {
-      await emailGrant('member@example.com');
+      await emailGrant(freshEmail());
       await request(http())
         .post('/auth/identity/google')
         .send({ idToken: await googleIdToken('google-subject', 'member@example.com') })
@@ -349,10 +361,11 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
     });
 
     it('does not cross-link methods that share an email', async () => {
-      const viaEmail = await emailGrant('member@example.com');
+      const shared = freshEmail();
+      const viaEmail = await emailGrant(shared);
       const viaGoogle = await request(http())
         .post('/auth/identity/google')
-        .send({ idToken: await googleIdToken('google-subject', 'member@example.com') })
+        .send({ idToken: await googleIdToken('google-subject', shared) })
         .expect(200);
 
       expect(viaEmail.body.verifierId).not.toBe(viaGoogle.body.verifierId);
