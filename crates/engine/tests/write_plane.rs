@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
-    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, GatewaySource, PinMode, RetentionPolicy, SealedChunk,
+    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
     assemble, decode_root,
 };
 use cipherbox_engine::facade::PendingClass;
@@ -578,10 +578,7 @@ fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, 
         // plane, not the auth handshake.
         ApiBaseUrl::offline(),
         GatewayConfig {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: None,
-            }),
+            accelerator: Some("https://gw.test".into()),
             public_fallbacks: Vec::new(),
         },
     )
@@ -602,10 +599,7 @@ fn engine_on_api(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamType
         StoragePolicy::CI,
         ApiBaseUrl::parse("http://api.test").expect("a configured base"),
         GatewayConfig {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: None,
-            }),
+            accelerator: Some("https://gw.test".into()),
             public_fallbacks: Vec::new(),
         },
     )
@@ -3403,13 +3397,10 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
     assert_eq!(parents[0].id, photos);
 
     let gateway = GatewayConfig {
-        accelerator: Some(GatewaySource {
-            base_url: "https://gw.test".into(),
-            bearer: None,
-        }),
+        accelerator: Some("https://gw.test".into()),
         public_fallbacks: Vec::new(),
     }
-    .into_gateway();
+    .into_gateway(SessionBearer::default());
     let adopter = ChildAdopter::new(
         &gateway,
         &bob.http,
@@ -7932,6 +7923,15 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
     let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
     let head = published_versions(&world.record_store, &blocks, file).remove(0);
     let unserved = compute_cid(DAG_ROOT_CODEC, b"a root block no source ever stored");
+    let planted_versions = vec![
+        head,
+        CoreVersion::new(
+            unserved,
+            [0u8; 32],
+            ContentProfile::CI.chunk_size() as u64,
+            0,
+        ),
+    ];
     plant_record(
         &world.record_store,
         &blocks,
@@ -7943,15 +7943,7 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
             body: &ReadBody::File {
                 created_at: 0,
                 modified_at: 0,
-                versions: vec![
-                    head,
-                    CoreVersion::new(
-                        unserved,
-                        [0u8; 32],
-                        ContentProfile::CI.chunk_size() as u64,
-                        0,
-                    ),
-                ],
+                versions: planted_versions.clone(),
                 unknown: PreservedFields::new(),
             },
         },
@@ -7975,4 +7967,9 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
         "a prune that never expanded retires nothing"
     );
     assert_eq!(engine.pending_reclaim_bytes(), 0, "and journals no debt");
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file),
+        planted_versions,
+        "and leaves the history it could not expand standing, entry for entry"
+    );
 }

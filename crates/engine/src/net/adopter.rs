@@ -674,10 +674,7 @@ mod tests {
 
     fn gateway() -> Gateway {
         Gateway {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.test".into(),
-                bearer: None,
-            }),
+            accelerator: Some(GatewaySource::public("https://gw.test")),
             public_fallbacks: Vec::new(),
         }
     }

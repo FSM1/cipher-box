@@ -1182,7 +1182,7 @@ mod published {
     use cipherbox_core::kdf;
     use cipherbox_core::payload::RepointObject;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
-    use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
+    use cipherbox_engine::content::DAG_ROOT_CODEC;
     use cipherbox_engine::seams::{
         BoxedTask, HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult,
     };
@@ -1367,10 +1367,7 @@ mod published {
             StoragePolicy::CI,
             ApiBaseUrl::offline(),
             GatewayConfig {
-                accelerator: Some(GatewaySource {
-                    base_url: "https://gw.test".into(),
-                    bearer: None,
-                }),
+                accelerator: Some("https://gw.test".into()),
                 public_fallbacks: Vec::new(),
             },
         );

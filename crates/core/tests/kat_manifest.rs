@@ -7,7 +7,7 @@
 //! through the committed generator (`examples/kat_gen.rs`); the exact counts
 //! and coverage lists here are the anti-vacuity backstop.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 // On wasm32-unknown-unknown (the browser-shaped KAT leg) there is no libtest
 // harness; wasm-bindgen-test provides one. Shadowing `test` with its attribute
@@ -1473,6 +1473,75 @@ fn vector_names_are_unique_within_each_file() {
             v.name
         );
     }
+}
+
+/// Which vector files carry HPKE ephemerals, and how many each pins — the
+/// anti-vacuity anchor for the freshness check below. A family that stopped
+/// emitting `ephemeralScalar` would drop out of a bare total silently; naming
+/// the files makes it a failure that says which one went dark.
+const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
+    ("vectors/content_key/content_key_accept.json", 2),
+    ("vectors/grant/ascent_link_accept.json", 1),
+    ("vectors/grant/grant_blob_accept.json", 2),
+    ("vectors/grant/owner_blob_accept.json", 1),
+    ("vectors/grant/owner_write_blob_accept.json", 1),
+    ("vectors/hpke/seal.json", 3),
+    ("vectors/op_record/op_record_accept.json", 2),
+    ("vectors/owner_local/owner_local_accept.json", 4),
+    ("vectors/payload/mailbox_accept.json", 2),
+    ("vectors/settings_record/settings_record_accept.json", 2),
+];
+
+/// Every `(vector name, ephemeral scalar)` a vector file pins, decoded, so the
+/// repeat check compares scalars rather than their spelling. A vector carrying
+/// no `ephemeralScalar` is skipped — that absence is how a file with no HPKE
+/// ephemerals is recognised — but one that carries the field owes a 32-byte
+/// scalar, which [`unhex32`] enforces along with the lowercase-hex contract.
+fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, [u8; 32])> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("{path}: not JSON ({e})"));
+    parsed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|vector| vector.get("ephemeralScalar").is_some())
+        .map(|vector| {
+            let name = vector.get("name").and_then(|n| n.as_str()).unwrap_or(path);
+            let scalar = vector["ephemeralScalar"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{path}: vector {name} spells no ephemeralScalar"));
+            (name.to_owned(), unhex32(name, scalar))
+        })
+        .collect()
+}
+
+/// HPKE ephemeral reuse under one recipient key and one `info` is a
+/// confidentiality break (`seal::seal_owner_local`). A vector file is a superset
+/// of each `(recipient, info)` group inside it, so per-file uniqueness forbids
+/// every real repeat, plus some harmless ones.
+///
+/// Deliberately not corpus-wide: separate families may reuse a scalar under one
+/// recipient and *different* `info` values, which the key schedule separates.
+/// Only a regenerated corpus could introduce a real repeat.
+#[test]
+fn ephemeral_scalars_are_fresh_within_each_vector_file() {
+    let mut pinned = BTreeMap::new();
+    for (path, body) in FIXTURES {
+        let found = ephemeral_scalars(body, path);
+        if found.is_empty() {
+            continue;
+        }
+        pinned.insert(*path, found.len());
+        let mut seen = BTreeSet::new();
+        for (name, scalar) in found {
+            assert!(
+                seen.insert(scalar),
+                "{path}: vector {name} repeats another vector's ephemeral scalar"
+            );
+        }
+    }
+    let expected: BTreeMap<&str, usize> = HPKE_EPHEMERAL_FAMILIES.iter().copied().collect();
+    assert_eq!(pinned, expected, "hpke ephemeral family coverage drift");
 }
 
 /// The codec's decode-reachable checks, fixed HERE as the anti-vacuity anchor

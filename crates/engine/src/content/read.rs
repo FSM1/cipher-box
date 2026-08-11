@@ -11,8 +11,10 @@
 //! terminal, because a content-address disagreement is an integrity signal to
 //! surface, not a retryable fetch miss.
 
+use core::cell::RefCell;
 use core::fmt;
 use core::ops::Range;
+use std::rc::Rc;
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, CONTENT_CID_LEN, verify_cid};
 use cipherbox_core::error::{CodecError, TrustViolation};
@@ -56,30 +58,102 @@ impl ContentPlane {
     }
 }
 
-/// One trustless-gateway endpoint. The member accelerator carries a bearer
-/// token; a public fallback carries none. The token is a credential: held in a
-/// zeroizing buffer and redacted from `Debug` (security rule 2).
-#[derive(Clone, PartialEq, Eq)]
+/// The token a [`SessionBearer`] holds, plus the one-way latch that ends its
+/// life. Sealing rather than only clearing matters because a refresh parked on
+/// the network resumes after teardown and would otherwise write a fresh token
+/// into a cell nothing will clear again.
+#[derive(Default)]
+struct BearerCell {
+    token: Option<Zeroizing<String>>,
+    sealed: bool,
+}
+
+/// The credential a gateway leg presents, read at request time rather than
+/// captured. The accelerator's is the live session access token, which rotates
+/// on every refresh and is dropped at logout, so the API client and the gateway
+/// share one cell instead of the token being copied into the gateway once.
+///
+/// Empty is the public-fallback state and the pre-login state alike: a leg with
+/// no token sends no `Authorization` header. The token is a credential — held
+/// in a zeroizing buffer and redacted from `Debug` (security rule 2).
+#[derive(Clone, Default)]
+pub struct SessionBearer(Rc<RefCell<BearerCell>>);
+
+impl SessionBearer {
+    /// Install `token` as the credential every later request presents. A sealed
+    /// cell ignores it.
+    pub(crate) fn set(&self, token: impl Into<String>) {
+        let mut cell = self.0.borrow_mut();
+        if !cell.sealed {
+            cell.token = Some(Zeroizing::new(token.into()));
+        }
+    }
+
+    /// Drop the held token, leaving the cell reusable — logout and a failed
+    /// refresh both end a session the same process may start again.
+    pub(crate) fn clear(&self) {
+        self.0.borrow_mut().token = None;
+    }
+
+    /// Drop the held token for good: nothing may re-arm this cell.
+    pub(crate) fn seal(&self) {
+        let mut cell = self.0.borrow_mut();
+        cell.token = None;
+        cell.sealed = true;
+    }
+
+    /// Whether a token is held — asked without copying it out.
+    pub(crate) fn is_held(&self) -> bool {
+        self.0.borrow().token.is_some()
+    }
+
+    /// The token to present, if this leg holds one.
+    pub(crate) fn peek(&self) -> Option<Zeroizing<String>> {
+        self.0.borrow().token.clone()
+    }
+
+    /// A standalone cell already holding `token`, for fixtures that need a leg
+    /// authenticated without a live session.
+    #[cfg(test)]
+    fn holding(token: impl Into<String>) -> Self {
+        let bearer = Self::default();
+        bearer.set(token);
+        bearer
+    }
+}
+
+impl fmt::Debug for SessionBearer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.is_held() {
+            "<redacted>"
+        } else {
+            "<none>"
+        })
+    }
+}
+
+/// One trustless-gateway endpoint.
+#[derive(Clone, Debug)]
 pub struct GatewaySource {
     /// Gateway base URL (no trailing slash needed; one is tolerated).
     pub base_url: String,
-    /// Bearer token for the token-authed accelerator; `None` for a public
-    /// gateway. Zeroized on drop, never logged.
-    pub bearer: Option<Zeroizing<String>>,
+    /// The credential this leg presents, if any.
+    pub bearer: SessionBearer,
 }
 
-impl fmt::Debug for GatewaySource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GatewaySource")
-            .field("base_url", &self.base_url)
-            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
-            .finish()
+impl GatewaySource {
+    /// A no-auth source: its cell is fresh, so nothing can ever arm it.
+    pub fn public(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            bearer: SessionBearer::default(),
+        }
     }
 }
 
 /// The ordered read source set: the token-authed accelerator is tried first as
 /// a member convenience, then the public no-auth fallbacks in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Gateway {
     /// The member accelerator (token-authed), consulted first when present.
     pub accelerator: Option<GatewaySource>,
@@ -94,19 +168,38 @@ impl Gateway {
     }
 }
 
+/// Whether `base_url` may be handed a credential: TLS, or a loopback host for
+/// local development (`apps/web/.env.example` ships a `http://localhost` Kubo).
+/// The accelerator URL is host configuration, so a stale or mistyped one must
+/// cost the member their acceleration rather than their session token.
+fn carries_credentials_safely(base_url: &str) -> bool {
+    if base_url.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = base_url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Split a `:port` suffix without splitting an IPv6 literal's own colons.
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
 /// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
 /// resolved into a [`Gateway`] once at construction. [`disabled`](Self::disabled)
 /// yields an empty source set whose reads fail closed as
 /// [`ReadError::Unavailable`] (retryable availability, never a trust violation) —
 /// the dormant default until the host supplies real endpoints.
-///
-/// `Debug` derives the redaction from [`GatewaySource`]: the bearer never renders.
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
-    /// The member accelerator (token-authed), consulted first when present.
-    pub accelerator: Option<GatewaySource>,
-    /// Public trustless-gateway fallbacks, tried in order after the accelerator.
-    pub public_fallbacks: Vec<GatewaySource>,
+    /// Base URL of the member accelerator, consulted first when present.
+    pub accelerator: Option<String>,
+    /// Base URLs of the public trustless-gateway fallbacks, tried in order
+    /// after the accelerator.
+    pub public_fallbacks: Vec<String>,
 }
 
 impl GatewayConfig {
@@ -119,11 +212,27 @@ impl GatewayConfig {
         }
     }
 
-    /// Resolve into the read-plane [`Gateway`], preserving accelerator-first order.
-    pub fn into_gateway(self) -> Gateway {
+    /// Resolve into the read-plane [`Gateway`], preserving accelerator-first
+    /// order. `accelerator_bearer` reaches the accelerator leg and no other,
+    /// and only over a transport that can keep it ([`carries_credentials_safely`]);
+    /// a leg denied it still serves reads, just unauthenticated.
+    pub fn into_gateway(self, accelerator_bearer: SessionBearer) -> Gateway {
         Gateway {
-            accelerator: self.accelerator,
-            public_fallbacks: self.public_fallbacks,
+            accelerator: self.accelerator.map(|base_url| {
+                if carries_credentials_safely(&base_url) {
+                    GatewaySource {
+                        base_url,
+                        bearer: accelerator_bearer,
+                    }
+                } else {
+                    GatewaySource::public(base_url)
+                }
+            }),
+            public_fallbacks: self
+                .public_fallbacks
+                .into_iter()
+                .map(GatewaySource::public)
+                .collect(),
         }
     }
 }
@@ -270,7 +379,7 @@ async fn fetch(
 ) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
     let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
-    if let Some(bearer) = &source.bearer {
+    if let Some(bearer) = source.bearer.peek() {
         // A source whose token cannot be a header value is skipped, never
         // contacted unauthenticated: rotation drops to the next source.
         headers.push(bearer_header(bearer.as_str()).map_err(|_| {
@@ -362,12 +471,9 @@ mod tests {
         Gateway {
             accelerator: Some(GatewaySource {
                 base_url: "https://gw.cipherbox.test/".into(),
-                bearer: Some(Zeroizing::new("member-token".to_owned())),
+                bearer: SessionBearer::holding("member-token"),
             }),
-            public_fallbacks: vec![GatewaySource {
-                base_url: "https://public.gw.test".into(),
-                bearer: None,
-            }],
+            public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
         }
     }
 
@@ -563,12 +669,9 @@ mod tests {
         let gateway = Gateway {
             accelerator: Some(GatewaySource {
                 base_url: "https://gw.cipherbox.test".into(),
-                bearer: Some(Zeroizing::new("member\r\nX-Injected: 1".to_owned())),
+                bearer: SessionBearer::holding("member\r\nX-Injected: 1"),
             }),
-            public_fallbacks: vec![GatewaySource {
-                base_url: "https://public.gw.test".into(),
-                bearer: None,
-            }],
+            public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
         };
 
         let out = block_on(read_block(
@@ -716,7 +819,7 @@ mod tests {
     fn gateway_source_debug_redacts_the_bearer_token() {
         let source = GatewaySource {
             base_url: "https://gw.test".into(),
-            bearer: Some(Zeroizing::new("super-secret-token".to_owned())),
+            bearer: SessionBearer::holding("super-secret-token"),
         };
         let debug = format!("{source:?}");
         assert!(
@@ -728,21 +831,15 @@ mod tests {
 
     fn a_config() -> GatewayConfig {
         GatewayConfig {
-            accelerator: Some(GatewaySource {
-                base_url: "https://gw.cipherbox.test/".into(),
-                bearer: Some(Zeroizing::new("member-token".to_owned())),
-            }),
-            public_fallbacks: vec![GatewaySource {
-                base_url: "https://public.gw.test".into(),
-                bearer: None,
-            }],
+            accelerator: Some("https://gw.cipherbox.test/".into()),
+            public_fallbacks: vec!["https://public.gw.test".into()],
         }
     }
 
     #[test]
     fn disabled_gateway_config_yields_an_empty_gateway() {
         // No source: reads fail closed as availability, never a trust violation.
-        let gateway = GatewayConfig::disabled().into_gateway();
+        let gateway = GatewayConfig::disabled().into_gateway(SessionBearer::default());
         let leaf = one_leaf();
         let http = ScriptedHttp::default();
         let err = block_on(read_block(
@@ -762,7 +859,7 @@ mod tests {
 
     #[test]
     fn gateway_config_round_trips_source_ordering() {
-        let gateway = a_config().into_gateway();
+        let gateway = a_config().into_gateway(SessionBearer::default());
         let urls: Vec<_> = gateway.sources().map(|s| s.base_url.as_str()).collect();
         assert_eq!(
             urls,
@@ -772,15 +869,128 @@ mod tests {
     }
 
     #[test]
-    fn gateway_config_debug_never_renders_the_bearer() {
+    fn gateway_debug_never_renders_the_bearer() {
         // Release-active behavioral assert (not a debug_assert): the derived
-        // `Debug` inherits `GatewaySource`'s redaction.
-        let debug = format!("{:?}", a_config());
+        // `Debug` inherits `SessionBearer`'s redaction.
+        let debug = format!(
+            "{:?}",
+            a_config().into_gateway(SessionBearer::holding("member-token"))
+        );
         assert!(
             !debug.contains("member-token"),
-            "bearer must never render in GatewayConfig Debug"
+            "bearer must never render in Gateway Debug"
         );
         assert!(debug.contains("<redacted>"));
+    }
+
+    /// The session cell reaches the accelerator leg and nothing else, so a
+    /// public fallback cannot be handed a member credential by configuration.
+    #[test]
+    fn into_gateway_binds_the_session_bearer_to_the_accelerator_alone() {
+        let gateway = a_config().into_gateway(SessionBearer::holding("member-token"));
+        assert!(gateway.accelerator.expect("accelerator").bearer.is_held());
+        assert!(
+            gateway
+                .public_fallbacks
+                .iter()
+                .all(|source| !source.bearer.is_held()),
+            "a public fallback never carries a credential"
+        );
+    }
+
+    /// The accelerator URL is host configuration and the token it would be
+    /// handed authorizes the whole API, so a stale or mistyped value must cost
+    /// the acceleration, not the session. The leg still serves reads.
+    #[test]
+    fn an_accelerator_that_cannot_keep_a_credential_is_never_handed_one() {
+        for base_url in [
+            "http://gw.cipherbox.test",
+            "http://localhost.evil.test:8080",
+            "http://127.0.0.1.evil.test",
+            "ftp://gw.cipherbox.test",
+            "//gw.cipherbox.test",
+        ] {
+            let gateway = GatewayConfig {
+                accelerator: Some(base_url.to_owned()),
+                public_fallbacks: Vec::new(),
+            }
+            .into_gateway(SessionBearer::holding("member-token"));
+            let accelerator = gateway.accelerator.expect("the source is still consulted");
+            assert_eq!(accelerator.base_url, base_url);
+            assert!(!accelerator.bearer.is_held(), "{base_url} was handed one");
+        }
+    }
+
+    /// TLS anywhere, and plain HTTP only on loopback — the local Kubo
+    /// `apps/web/.env.example` ships must stay usable.
+    #[test]
+    fn a_tls_or_loopback_accelerator_is_handed_the_session_bearer() {
+        for base_url in [
+            "https://gw.cipherbox.test",
+            "http://localhost:8080",
+            "http://localhost",
+            "http://127.0.0.1:8080/",
+            "http://[::1]:8080",
+        ] {
+            let gateway = GatewayConfig {
+                accelerator: Some(base_url.to_owned()),
+                public_fallbacks: Vec::new(),
+            }
+            .into_gateway(SessionBearer::holding("member-token"));
+            assert!(
+                gateway.accelerator.expect("accelerator").bearer.is_held(),
+                "{base_url} was denied one"
+            );
+        }
+    }
+
+    /// Teardown is a one-way latch: a refresh parked on the network when the
+    /// engine went away must not re-arm a cell nothing will clear again.
+    #[test]
+    fn a_sealed_bearer_refuses_a_late_token() {
+        let session = SessionBearer::holding("jwt-1");
+        session.seal();
+        assert!(!session.is_held());
+        session.set("jwt-2");
+        assert!(!session.is_held(), "a sealed cell stays empty");
+    }
+
+    /// The bearer is read per request, so a token stored after the gateway was
+    /// built is presented and a cleared one stops being sent — the login,
+    /// refresh-rotation and logout behaviour the accelerator leg needs.
+    #[test]
+    fn the_accelerator_presents_whatever_the_session_cell_currently_holds() {
+        let leaf = one_leaf();
+        let session = SessionBearer::default();
+        let gateway = a_config().into_gateway(session.clone());
+        let http = ScriptedHttp::default();
+
+        let read = || {
+            http.enqueue_response(raw_response(leaf.sealed.clone()));
+            block_on(read_block(
+                &gateway,
+                &http,
+                &cid_str(),
+                &leaf.cid,
+                ContentPlane::Leaf,
+            ))
+            .unwrap();
+            http.requests()
+                .last()
+                .expect("a request was sent")
+                .headers
+                .iter()
+                .find(|(name, _)| name == AUTHORIZATION)
+                .map(|(_, value)| value.clone())
+        };
+
+        assert_eq!(read(), None, "no session yet: the leg goes out bare");
+        session.set("jwt-1");
+        assert_eq!(read(), Some("Bearer jwt-1".to_owned()));
+        session.set("jwt-2");
+        assert_eq!(read(), Some("Bearer jwt-2".to_owned()), "a rotation lands");
+        session.clear();
+        assert_eq!(read(), None, "logout drops the credential");
     }
 
     #[test]

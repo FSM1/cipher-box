@@ -35,7 +35,7 @@ use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
-    RootManifest, SealError, StagingLedger, open_content_range, open_content_root,
+    RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
@@ -1541,6 +1541,11 @@ pub struct Engine<T: SeamTypes> {
     /// Read by the cold-start [`RootAdopter`] and the resolve-tick driver's
     /// per-pass adopter.
     gateway: Gateway,
+    /// The session access token, shared by the API client [`start`](Self::start)
+    /// builds and the read accelerator's gateway leg — the accelerator is
+    /// CipherBox's own token-authed gateway, so the session is what gates it.
+    /// One cell for both: clearing it de-authenticates the API client too.
+    accelerator_bearer: SessionBearer,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
@@ -1643,6 +1648,7 @@ impl<T: SeamTypes> Engine<T> {
         gateway: GatewayConfig,
     ) -> (Self, EventStream) {
         let (events, receiver) = mpsc::unbounded();
+        let accelerator_bearer = SessionBearer::default();
         (
             Self {
                 seams,
@@ -1655,7 +1661,8 @@ impl<T: SeamTypes> Engine<T> {
                 live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
                 cancels: Rc::new(RefCell::new(UploadCancels::default())),
                 api_base_url,
-                gateway: gateway.into_gateway(),
+                gateway: gateway.into_gateway(accelerator_bearer.clone()),
+                accelerator_bearer,
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
@@ -1719,11 +1726,14 @@ impl<T: SeamTypes> Engine<T> {
         // fail-closed: a rejected login returns before the session is committed
         // or any loop spawns, so the loop never runs unauthenticated (rules 3/6).
         let base_url = self.api_base_url.configured();
-        let api = Rc::new(ApiClient::new(
-            self.seams.http.clone(),
-            self.seams.credential_store.clone(),
-            base_url.unwrap_or_default().to_owned(),
-        ));
+        let api = Rc::new(
+            ApiClient::new(
+                self.seams.http.clone(),
+                self.seams.credential_store.clone(),
+                base_url.unwrap_or_default().to_owned(),
+            )
+            .with_session_bearer(self.accelerator_bearer.clone()),
+        );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
             api.login_identity(&signer)
@@ -1788,9 +1798,12 @@ impl<T: SeamTypes> Engine<T> {
             Err(err) => {
                 // Fail-closed symmetry with the login path: clear the derived
                 // session and the placement decision beside it, so no key material
-                // stays resident and the engine reports unstarted.
+                // stays resident and the engine reports unstarted. The access
+                // token login already stored outlives the dropped client in the
+                // shared bearer cell, so it is dropped here by name.
                 self.session = None;
                 *self.placement.borrow_mut() = None;
+                self.accelerator_bearer.clear();
                 return Err(EngineError::from_cold_start(err));
             }
         };
@@ -1913,6 +1926,10 @@ impl<T: SeamTypes> Engine<T> {
     /// because a panic while dropping aborts the process.
     fn shut_down(&self) {
         self.alive.set(false);
+        // Sealed, not cleared: the gateway clone a parked tick holds shares this
+        // cell, and a refresh still on the wire would re-arm a plain clear
+        // (security rule 7).
+        self.accelerator_bearer.seal();
         // Every parked manual refresh fails now: no pass is left to answer it.
         self.manual_refresh.close();
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
@@ -3854,6 +3871,58 @@ mod tests {
         assert_eq!(login_body["signature"], expected);
     }
 
+    /// The read accelerator is CipherBox's own token-authed gateway, so the
+    /// credential it presents is the session's — bound by login rather than
+    /// configured, and gone with the engine.
+    #[test]
+    fn login_binds_the_session_token_to_the_accelerator_and_shutdown_drops_it() {
+        let device = FakeWorld::new().device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::parse("http://api.test").expect("a configured base"),
+            GatewayConfig {
+                accelerator: Some("https://gw.test".into()),
+                public_fallbacks: Vec::new(),
+            },
+        );
+        let accelerator_bearer = engine.accelerator_bearer.clone();
+        assert!(!accelerator_bearer.is_held(), "no credential before login");
+
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+        serve_provisioning(&device);
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+
+        let held = engine
+            .gateway
+            .accelerator
+            .as_ref()
+            .expect("accelerator")
+            .bearer
+            .peek();
+        assert_eq!(
+            held.as_deref().map(String::as_str),
+            Some("jwt-1"),
+            "the accelerator leg presents the session access token"
+        );
+
+        drop(engine);
+        assert!(
+            !accelerator_bearer.is_held(),
+            "a parked tick's gateway clone outlives the engine; the token must not"
+        );
+    }
+
     #[test]
     fn start_login_failure_is_fail_closed() {
         let (mut engine, _events, device) =
@@ -5316,7 +5385,7 @@ mod tests {
         };
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
-        use crate::content::{DAG_ROOT_CODEC, GatewaySource};
+        use crate::content::DAG_ROOT_CODEC;
         use crate::net::RE_PUT_INTERVAL;
         use crate::seams::{BoxedTask, EndpointId, RecordTransport};
         use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
@@ -5431,10 +5500,7 @@ mod tests {
 
         fn gateway_config() -> GatewayConfig {
             GatewayConfig {
-                accelerator: Some(GatewaySource {
-                    base_url: "https://gw.test".into(),
-                    bearer: None,
-                }),
+                accelerator: Some("https://gw.test".into()),
                 public_fallbacks: Vec::new(),
             }
         }
