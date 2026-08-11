@@ -186,6 +186,65 @@
   opacity: 0.4;
 }
 
+.email-login-sent {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dim);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-login-restart {
+  padding: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+}
+
+.email-login-restart:hover:not(:disabled) {
+  color: var(--color-green-primary);
+}
+
+.email-login-restart:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ==========================================================================
+   Google Login
+   ========================================================================== */
+
+.google-login-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Google owns this button's markup, so the wrapper carries the disabled
+   affordance the component cannot set as an attribute. */
+.google-login-target {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+  color-scheme: light;
+}
+
+.google-login-target.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.google-login-status {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dim);
+  text-align: center;
+}
+
 /* ==========================================================================
    Wallet Login
    ========================================================================== */

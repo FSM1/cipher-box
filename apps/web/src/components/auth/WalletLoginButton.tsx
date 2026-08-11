@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
-import { hexToBytes } from 'viem';
 import { createSiweMessage } from 'viem/siwe';
 import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
 
 interface WalletLoginButtonProps {
-  /** Reads the single-use nonce the EIP-4361 message embeds, from the facade. */
+  /** Reads the single-use nonce the EIP-4361 message embeds. */
   requestNonce: () => Promise<string>;
-  /** Hands the signed EIP-4361 message to the facade. */
-  onLogin: (message: string, signature: Uint8Array) => Promise<void>;
+  /** Hands the signed EIP-4361 message to the login flow. */
+  onLogin: (message: string, signature: string) => Promise<void>;
   disabled?: boolean;
 }
 
@@ -24,9 +23,9 @@ const PHASE_LABEL: Record<Phase, string> = {
 };
 
 /**
- * SIWE, the secondary auth method (blueprint/web-client.md "Login and
- * identity"): wagmi collects the wallet signature here and the facade forwards
- * it.
+ * Wallet login, a first-class first login on web (ADR 0008 D2): wagmi collects
+ * the signature here, and the API verifies it and mints the same identity token
+ * every other method mints — so it reaches the same derived key.
  */
 export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLoginButtonProps) {
   const { connectors, connectAsync } = useConnect();
@@ -81,7 +80,7 @@ export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLog
 
       setPhase('verifying');
       handedOff = true;
-      await onLogin(message, hexToBytes(signature));
+      await onLogin(message, signature);
       setPicking(false);
     } catch (failure) {
       if (!handedOff) setError(rejectionOf(failure));

@@ -1,24 +1,127 @@
+import { useEffect, useRef, useState } from 'react';
+import { errorMessage } from '../../lib/errorMessage';
+import { LoginError } from './LoginError';
+
+/** The slice of Google Identity Services this component drives. */
+interface GoogleIdentityServices {
+  accounts: {
+    id: {
+      initialize(config: {
+        client_id: string;
+        callback: (response: { credential: string }) => void;
+        auto_select: boolean;
+      }): void;
+      renderButton(
+        parent: HTMLElement,
+        options: { theme: string; size: string; text: string; shape: string; width: number }
+      ): void;
+    };
+  };
+}
+
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
+
+/**
+ * One load per document, shared across mounts: React StrictMode mounts twice
+ * and the script installs a global.
+ */
+let gisLoad: Promise<GoogleIdentityServices> | null = null;
+
+function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
+  gisLoad ??= new Promise<GoogleIdentityServices>((resolve, reject) => {
+    const existing = (globalThis as { google?: GoogleIdentityServices }).google;
+    if (existing?.accounts?.id) {
+      resolve(existing);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = GIS_SRC;
+    script.async = true;
+    script.onload = () => {
+      const loaded = (globalThis as { google?: GoogleIdentityServices }).google;
+      if (loaded?.accounts?.id) resolve(loaded);
+      else reject(new Error('google sign-in loaded but did not install'));
+    };
+    script.onerror = () => reject(new Error('google sign-in could not be loaded'));
+    document.head.appendChild(script);
+  }).catch((failure: unknown) => {
+    // A failed load must not be cached as permanent — a reload should retry.
+    gisLoad = null;
+    throw failure;
+  });
+  return gisLoad;
+}
+
 interface GoogleLoginButtonProps {
-  onLogin: () => void;
+  /** The OAuth provider's client ID, not the Web3Auth project's. */
+  clientId: string;
+  /** Receives the Google ID token; the API verifies it. */
+  onCredential: (idToken: string) => void;
   /** True while the tab cannot accept a login at all. */
   disabled?: boolean;
   /** True while some auth transition is in flight. */
   busy?: boolean;
 }
 
-/** Starts Core Kit's Google flow; Web3Auth owns the popup and the OAuth round-trip. */
-export function GoogleLoginButton({ onLogin, disabled, busy }: GoogleLoginButtonProps) {
+/**
+ * Collects a Google ID token with Google's own rendered button — the one path
+ * that always presents, so the affordance cannot be clicked into nothing.
+ */
+export function GoogleLoginButton({
+  clientId,
+  onCredential,
+  disabled,
+  busy,
+}: GoogleLoginButtonProps) {
+  const target = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Read through a ref so a re-rendered parent cannot re-run the one-shot mount.
+  const deliver = useRef(onCredential);
+  deliver.current = onCredential;
+
+  useEffect(() => {
+    let live = true;
+    loadGoogleIdentityServices().then(
+      (google) => {
+        if (!live || !target.current) return;
+        google.accounts.id.initialize({
+          client_id: clientId,
+          callback: (response) => deliver.current(response.credential),
+          auto_select: false,
+        });
+        google.accounts.id.renderButton(target.current, {
+          theme: 'filled_black',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          width: 280,
+        });
+      },
+      (failure: unknown) => {
+        if (live) setError(errorMessage(failure));
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [clientId]);
+
   return (
-    <button
-      type="button"
-      data-testid="google-login-button"
-      className={busy ? 'terminal-btn terminal-btn--loading' : 'terminal-btn'}
-      onClick={onLogin}
-      disabled={disabled || busy}
-      aria-label="Sign in with Google"
-      aria-busy={busy}
-    >
-      {busy ? 'authenticating with google...' : '[GOOGLE]'}
-    </button>
+    <div className="google-login-wrapper" data-testid="google-login">
+      {busy ? (
+        <div className="google-login-status" aria-live="polite">
+          authenticating with google...
+        </div>
+      ) : (
+        // Google owns the button's markup, so the disabled state is a wrapper
+        // that intercepts the click rather than an attribute on it.
+        <div
+          ref={target}
+          className={disabled ? 'google-login-target is-disabled' : 'google-login-target'}
+          aria-disabled={disabled}
+        />
+      )}
+      {error && <LoginError message={error} />}
+    </div>
   );
 }

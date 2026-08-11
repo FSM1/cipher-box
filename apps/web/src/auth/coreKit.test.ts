@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
+import type { IdentityCredential } from './identityExchange';
 
 const STORE_KEY = 'corekit_store';
 
@@ -14,7 +15,8 @@ const SESSION = '{"sessionId":"not-a-real-session-id"}';
 // login and logout outcomes a device can actually land in.
 const sdk = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
-  subVerifier: undefined as Record<string, unknown> | undefined,
+  jwtLogin: undefined as Record<string, unknown> | undefined,
+  userInfo: undefined as Record<string, unknown> | undefined,
   status: 'LOGGED_IN',
   statusAfterLogin: 'LOGGED_IN',
   logoutError: undefined as Error | undefined,
@@ -36,9 +38,13 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       init(): Promise<void> {
         return sdk.initFailure ? Promise.reject(sdk.initFailure) : Promise.resolve();
       }
-      async loginWithOAuth(params: { subVerifierDetails: Record<string, unknown> }): Promise<void> {
-        sdk.subVerifier = params.subVerifierDetails;
+      async loginWithJWT(params: Record<string, unknown>): Promise<void> {
+        sdk.jwtLogin = params;
         sdk.status = sdk.statusAfterLogin;
+      }
+      getUserInfo(): Record<string, unknown> {
+        if (!sdk.userInfo) throw new Error('no user info');
+        return sdk.userInfo;
       }
       commitChanges(): Promise<void> {
         return Promise.resolve();
@@ -65,9 +71,19 @@ let store: SealedStore;
 /** A session over a store this test can seed and read back. */
 const session = () => createCoreKitSession(ENV, store);
 
+/** What the identity exchange hands back, as the Core Kit seam takes it. */
+const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCredential => ({
+  method: 'google',
+  token: 'header.payload.signature',
+  verifierId: 'subject-42',
+  email: null,
+  ...overrides,
+});
+
 beforeEach(() => {
   sdk.options = undefined;
-  sdk.subVerifier = undefined;
+  sdk.jwtLogin = undefined;
+  sdk.userInfo = undefined;
   sdk.status = COREKIT_STATUS.LOGGED_IN;
   sdk.statusAfterLogin = COREKIT_STATUS.LOGGED_IN;
   sdk.logoutError = undefined;
@@ -156,7 +172,9 @@ describe('the Core Kit store', () => {
     sdk.logoutError = REFUSED;
     await store.setItem(STORE_KEY, SESSION);
 
-    await expect(created.login('google')).rejects.toThrow(/needs approval or a recovery phrase/);
+    await expect(created.login(credential())).rejects.toThrow(
+      /needs approval or a recovery phrase/
+    );
 
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
@@ -170,24 +188,49 @@ describe('a Core Kit login', () => {
     expect(sdk.options?.web3AuthClientId).toBe('web3auth-client-id');
   });
 
-  it('sends the Google sub-verifier the Google OAuth client ID', async () => {
-    await session().login('google');
+  // The CipherBox verifier, not a Torus-hosted sub-verifier: the token is
+  // CipherBox's and the Core Kit checks it against CipherBox's own JWKS.
+  it('redeems the CipherBox identity token against the CipherBox verifier', async () => {
+    await session().login(credential({ method: 'wallet', verifierId: 'subject-42' }));
 
-    expect(sdk.subVerifier).toMatchObject({
-      typeOfLogin: 'google',
+    expect(sdk.jwtLogin).toMatchObject({
       verifier: 'verifier',
-      clientId: 'google-client-id',
+      verifierId: 'subject-42',
+      idToken: 'header.payload.signature',
     });
   });
 
-  it('sends the Torus-hosted email sub-verifier the Web3Auth project client ID', async () => {
-    await session().login('email', 'member@example.test');
+  it('reaches one identity from every method, given one subject', async () => {
+    await session().login(credential({ method: 'google', verifierId: 'shared-subject' }));
+    const viaGoogle = sdk.jwtLogin;
+    await session().login(credential({ method: 'wallet', verifierId: 'shared-subject' }));
 
-    expect(sdk.subVerifier).toMatchObject({
-      typeOfLogin: 'email_passwordless',
-      verifier: 'verifier',
-      clientId: 'web3auth-client-id',
-      jwtParams: { login_hint: 'member@example.test' },
-    });
+    expect(sdk.jwtLogin?.verifierId).toBe(viaGoogle?.verifierId);
+    expect(sdk.jwtLogin?.verifier).toBe(viaGoogle?.verifier);
+  });
+
+  it('reports the method off the token claim the SDK parsed, so a restore keeps it', () => {
+    sdk.userInfo = { verifierId: 'subject-42', method: 'wallet' };
+
+    expect(session().method()).toBe('wallet');
+  });
+
+  it('names no method when the session carries nothing it recognizes', () => {
+    sdk.userInfo = { verifierId: 'subject-42', method: 'carrier-pigeon' };
+    expect(session().method()).toBeNull();
+
+    sdk.userInfo = undefined;
+    expect(session().method()).toBeNull();
+  });
+
+  it('reports the address the exchange gave it, and drops it on logout', async () => {
+    const created = session();
+    expect(created.email()).toBeNull();
+
+    await created.login(credential({ method: 'email', email: 'member@example.test' }));
+    expect(created.email()).toBe('member@example.test');
+
+    await created.logout();
+    expect(created.email()).toBeNull();
   });
 });

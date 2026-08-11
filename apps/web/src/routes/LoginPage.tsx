@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useIdentity } from '../auth/IdentityProvider';
 import { useAuth } from '../auth/useAuth';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
@@ -9,8 +10,8 @@ import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
 
 /**
- * The vault's front door: the Core Kit methods plus SIWE
- * (blueprint/web-client.md "Composition").
+ * The vault's front door. Every method here is a first login: each mints a
+ * CipherBox identity token and reaches the same derived key (ADR 0008).
  */
 export function LoginPage() {
   const {
@@ -19,10 +20,12 @@ export function LoginPage() {
     isBusy,
     error,
     loginWithGoogle,
-    loginWithEmail,
-    siweChallenge,
+    sendEmailCode,
+    loginWithEmailCode,
+    walletNonce,
     loginWithWallet,
   } = useAuth();
+  const { googleClientId } = useIdentity();
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
@@ -49,7 +52,8 @@ export function LoginPage() {
 
           <div className="login-methods">
             <GoogleLoginButton
-              onLogin={() => dispatch(loginWithGoogle())}
+              clientId={googleClientId}
+              onCredential={(idToken) => dispatch(loginWithGoogle(idToken))}
               disabled={!isReady}
               busy={isBusy}
             />
@@ -59,7 +63,8 @@ export function LoginPage() {
             </div>
 
             <EmailLoginForm
-              onLogin={(email) => dispatch(loginWithEmail(email))}
+              onSendCode={sendEmailCode}
+              onVerify={loginWithEmailCode}
               disabled={!isReady}
               busy={isBusy}
             />
@@ -69,7 +74,7 @@ export function LoginPage() {
             </div>
 
             <WalletLoginButton
-              requestNonce={siweChallenge}
+              requestNonce={walletNonce}
               onLogin={loginWithWallet}
               disabled={!isReady || isBusy}
             />

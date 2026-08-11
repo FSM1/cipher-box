@@ -55,7 +55,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         await this.readStore();
         if (sdk.initFailure) throw sdk.initFailure;
       }
-      async loginWithOAuth(): Promise<void> {
+      async loginWithJWT(): Promise<void> {
         await this.readStore();
         await this.storage.setItem(STORE_KEY, LOGGED_IN_STORE);
         sdk.status = actual.COREKIT_STATUS.LOGGED_IN;
@@ -116,7 +116,12 @@ describe('CoreKitProvider', () => {
       await waitFor(() => expect(result.current.status).toBe('ready'));
 
       await act(async () => {
-        await result.current.session?.login('google');
+        await result.current.session?.login({
+          method: 'google',
+          token: 'header.payload.signature',
+          verifierId: 'subject-42',
+          email: null,
+        });
       });
 
       expect(result.current.session?.isLoggedIn()).toBe(true);
