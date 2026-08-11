@@ -243,8 +243,8 @@ navigation (FSM1/cipher-box-next#33 D2):
 
 ## Tauri shell
 
-- **Login**: Web3Auth Core Kit in the webview (its DOM/redirect flows, MFA,
-  device approval — all chrome-side); the exported secret crosses to
+- **Login**: Web3Auth Core Kit in the webview (its DOM/redirect flows and MFA
+  enrollment — chrome-side); the exported secret crosses to
   `start(secret)` once and is zeroized. Challenge-signature login, token
   refresh, and session restore are engine-native (engine.md API client);
   the shell's only credential duty is hosting the keychain seam. Dev-key mode
@@ -262,6 +262,12 @@ navigation (FSM1/cipher-box-next#33 D2):
   is genuinely native (ADR 0008).
 - **No wallet method here.** The webview reaches no wallet, so the method is
   absent rather than offered and unable to complete (ADR 0008 D2).
+- **Recovery phrase always works here** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md) D2): a member with a factor
+  policy signs in on this host with the phrase alone, no second device and no
+  rendezvous. Whether the shell also participates in device approval is a scope
+  decision that must be made rather than left open — v1 shipped a requester UI
+  that could never work beside a settings string saying MFA was web-only, and
+  the affordance and the truth have to agree.
 - **Tray** renders the event stream: the staleness ladder maps to
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust
