@@ -86,6 +86,16 @@ describe('installIntrospection', () => {
       expect(plaintext).toBe('deadbeef');
     });
 
+    it.each(['010', 'zz'])('refuses %s as a node id, before the engine is asked', async (bad) => {
+      const engine = fakeEngine();
+      const download = vi.fn();
+      (engine.client.facade as unknown as { download: unknown }).download = download;
+      installIntrospection(engine.client);
+
+      await expect(window.__CIPHERBOX_ENGINE__?.download(bad)).rejects.toThrow(TypeError);
+      expect(download).not.toHaveBeenCalled();
+    });
+
     it('records the event stream in emission order', () => {
       const engine = fakeEngine();
       installIntrospection(engine.client);
