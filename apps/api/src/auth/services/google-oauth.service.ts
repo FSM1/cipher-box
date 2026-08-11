@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 
@@ -28,7 +28,11 @@ export class GoogleOAuthService {
   private readonly audience: string;
   private readonly keys: jose.JWTVerifyGetKey;
 
-  constructor(configService: ConfigService, keys?: jose.JWTVerifyGetKey) {
+  // `keys` is a test seam for a fake JWKS. Nest reads every constructor
+  // position from `design:paramtypes`, where an interface type emits no
+  // injectable token — `@Optional()` is what makes it inject `undefined`
+  // instead of refusing to resolve the provider.
+  constructor(configService: ConfigService, @Optional() keys?: jose.JWTVerifyGetKey) {
     const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
     const clientId = configService.get<string>('GOOGLE_CLIENT_ID')?.trim();
     if (!clientId && nodeEnv !== 'development' && nodeEnv !== 'test') {
