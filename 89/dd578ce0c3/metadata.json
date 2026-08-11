@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "89dd578ce0c3",
+  "strategy": "manual-commit",
+  "branch": "docs/rule-4-webcrypto-carve-out",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/89/dd578ce0c3/0/metadata.json",
+      "transcript": "/89/dd578ce0c3/0/full.jsonl",
+      "compact_transcript": "/89/dd578ce0c3/0/transcript.jsonl",
+      "content_hash": "/89/dd578ce0c3/0/content_hash.txt",
+      "prompt": "/89/dd578ce0c3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3556,
+    "cache_creation_tokens": 4724949,
+    "cache_read_tokens": 426002718,
+    "output_tokens": 1493817,
+    "api_call_count": 1786
+  }
+}
