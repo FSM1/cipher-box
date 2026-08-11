@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "55e6165b54f5",
+  "strategy": "manual-commit",
+  "branch": "docs/blueprint-device-approval",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "blueprint/api.md",
+    "blueprint/desktop.md",
+    "blueprint/web-client.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/55/e6165b54f5/0/metadata.json",
+      "transcript": "/55/e6165b54f5/0/full.jsonl",
+      "compact_transcript": "/55/e6165b54f5/0/transcript.jsonl",
+      "content_hash": "/55/e6165b54f5/0/content_hash.txt",
+      "prompt": "/55/e6165b54f5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 67477,
+    "cache_read_tokens": 25550274,
+    "output_tokens": 46040,
+    "api_call_count": 59
+  }
+}
