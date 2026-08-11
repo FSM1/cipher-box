@@ -250,6 +250,18 @@ navigation (FSM1/cipher-box-next#33 D2):
   the shell's only credential duty is hosting the keychain seam. Dev-key mode
   survives: a debug flag feeds the staging test-login path through the same
   facade, keychain bypassed — the headless agent/e2e seam.
+- **The orchestration is the web client's** (ADR 0008 D3): the shell imports the
+  same host-agnostic login package and supplies its own credential collector. It
+  does **not** take `packages/client` — the worker, leadership and Service Worker
+  machinery has no place here.
+- **Google collection is native, not in-webview.** Google Identity Services does
+  not run in this webview, and the manual OAuth2 flow it falls back to needs a
+  `redirect_uri` a packaged Tauri origin cannot satisfy — `tauri://localhost` is
+  refused as a non-`http(s)` scheme. The shell therefore serves the callback from
+  a loopback listener on a pre-registered port. This is the one login step that
+  is genuinely native (ADR 0008).
+- **No wallet method here.** The webview reaches no wallet, so the method is
+  absent rather than offered and unable to complete (ADR 0008 D2).
 - **Tray** renders the event stream: the staleness ladder maps to
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust

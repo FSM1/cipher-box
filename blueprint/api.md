@@ -37,7 +37,19 @@ What left the API relative to v1 — with the design that removed it:
 ## Identity and auth
 
 - Account = the Web3Auth-derived secp256k1 **identity key**; challenge-signature
-  login; SIWE wallet login stays as a secondary auth method (feature-set decision FSM1/cipher-box-next#5).
+  login. **CipherBox issues the identity token the Core Kit consumes** (FSM1/cipher-box-next#5 as
+  amended by ADR 0008): each verified method mints a CipherBox JWT, and the Core Kit
+  logs in against a CipherBox custom verifier over the API's own JWKS. The account
+  model is unchanged by this — the Core Kit yields the same key whichever provider
+  vouched.
+- **Method set**: Google, passwordless email, and wallet. Passwordless email is
+  CipherBox's own — the API issues and verifies the code and owns its delivery.
+  Wallet is a **first-class first login on web only**: a SIWE signature the API
+  verifies mints the same JWT as any other method, so it reaches the same derived
+  key. It is absent on desktop because that webview reaches no wallet, which is a
+  platform property rather than a deferred feature (ADR 0008).
+- Google's OAuth client ID is the **provider's**, distinct from the Web3Auth project
+  client ID. The two are not interchangeable.
 - Short-lived access JWT + rotating refresh token (HTTP-only cookie on web,
   OS keychain on desktop). Staging-gated test-login endpoint for e2e.
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
