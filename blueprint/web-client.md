@@ -209,7 +209,7 @@ all living in `packages/client` and running inside the engine worker realm:
 - **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
   the UI thread, the API verifies it and mints the identity token, and the Core
   Kit login proceeds as for any other method. Web only.
-- **Device approval is not Core Kit UX** (ADR 0009). The Core Kit has no native
+- **Device approval is not Core Kit UX** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)). The Core Kit has no native
   cross-device share transfer, so approval is a server-mediated rendezvous with
   its own API surface (api.md) — the client's part is minting the ephemeral key,
   displaying the comparison value both devices must match, signing both halves

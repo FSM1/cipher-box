@@ -262,7 +262,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   is genuinely native (ADR 0008).
 - **No wallet method here.** The webview reaches no wallet, so the method is
   absent rather than offered and unable to complete (ADR 0008 D2).
-- **Recovery phrase always works here** (ADR 0009 D2): a member with a factor
+- **Recovery phrase always works here** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md) D2): a member with a factor
   policy signs in on this host with the phrase alone, no second device and no
   rendezvous. Whether the shell also participates in device approval is a scope
   decision that must be made rather than left open — v1 shipped a requester UI

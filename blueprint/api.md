@@ -52,7 +52,7 @@ What left the API relative to v1 — with the design that removed it:
   client ID. The two are not interchangeable.
 - Short-lived access JWT + rotating refresh token (HTTP-only cookie on web,
   OS keychain on desktop). Staging-gated test-login endpoint for e2e.
-- **Device-approval rendezvous** (ADR 0009): request, poll, respond, cancel, and a
+- **Device-approval rendezvous** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): request, poll, respond, cancel, and a
   pending list, under a **scoped, non-refreshable** pre-reconstruction token — a
   device that cannot yet reconstruct its key reaches these routes and nothing else.
   The API is a bulletin board: it relays ciphertext sealed to the requester's

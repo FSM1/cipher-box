@@ -317,7 +317,7 @@ percentage never did.
 - **Web3Auth Core Kit interactive login** — wallet-mock covers SIWE in CI;
   real Core Kit login and MFA enrollment stay a staging-dispatch job with test
   credentials, never a PR gate — an honest, inherited limitation.
-  **Device approval is not covered by that exemption** (ADR 0009): it is a
+  **Device approval is not covered by that exemption** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): it is a
   rendezvous over our own API, and it needs a harness driving two sessions. v1
   skipped every cross-device case for want of a second device, which is how a
   desktop path that could never succeed reached a verified status.
