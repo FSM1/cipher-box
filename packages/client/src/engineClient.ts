@@ -161,13 +161,14 @@ export class EngineClient implements EngineTransport {
   // --- EngineTransport ---
 
   start(secret: ArrayBuffer): Promise<void> {
-    if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
     // This seam is the secret's terminal owner (security rule 7). On the leader
     // path the worker becomes the terminal owner — `LocalTransport.start`
     // transfers the buffer in (neutered), never copied. On the follower path the
-    // keyless transport gets no secret: we scrub the buffer we decided not to use
-    // right here, rather than in a callee that would be zeroing someone else's.
+    // keyless transport gets no secret, and a closed client no transport at all:
+    // we scrub the buffer we decided not to use right here, rather than in a
+    // callee that would be zeroing someone else's.
     if (this.role !== 'leader') new Uint8Array(secret).fill(0);
+    if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
     return this.current.start(secret).then(() => {
       this.started = true;
     });
@@ -187,7 +188,11 @@ export class EngineClient implements EngineTransport {
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
     const inner = this.writes.resolve(handle);
-    if (inner === undefined) return Promise.reject(unknownHandle('write'));
+    if (inner === undefined) {
+      // Refused before any transfer: this seam is the chunk's terminal owner.
+      new Uint8Array(chunk).fill(0);
+      return Promise.reject(unknownHandle('write'));
+    }
     return this.current.pushChunk(inner, chunk);
   }
 

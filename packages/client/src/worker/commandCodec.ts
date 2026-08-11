@@ -28,14 +28,21 @@ import type {
 } from './engineWasm.js';
 
 /**
- * A descriptor crosses a realm boundary as plain data, so its fields arrive
+ * A request crosses a realm boundary as plain data, so its fields arrive
  * untrusted however they are typed here: a version-skewed peer can carry a
  * wrong-typed one, and wasm-bindgen would coerce it — a `12345` newName
- * marshalled as `"12345"` — rather than reject it. Hence the checkers below
- * take `unknown`, and every field a builder reads passes through one.
+ * marshalled as `"12345"`, a 16-character string set into a `Vec<u8>` as
+ * sixteen zero bytes — rather than reject it. Hence the checkers below take
+ * `unknown`, and every field the worker reads off a request passes through one.
  */
 function invalidField(field: string, value: unknown): Error {
-  return new Error(`invalid command field ${field}: ${value === null ? 'null' : typeof value}`);
+  return new Error(`invalid request field ${field}: ${value === null ? 'null' : typeof value}`);
+}
+
+/** An untrusted wire object; a non-object carries no fields at all. */
+export function record(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) throw invalidField(field, value);
+  return value as Record<string, unknown>;
 }
 
 function bytes(value: unknown, field: string): Uint8Array {
@@ -43,17 +50,45 @@ function bytes(value: unknown, field: string): Uint8Array {
   return value;
 }
 
-function text(value: unknown, field: string): string {
+/**
+ * A transferred payload. `new Uint8Array(value)` coerces anything else into a
+ * plausible view — a string of digits becomes that many zero bytes — so the
+ * buffer is checked before a view is taken over it.
+ */
+export function buffer(value: unknown, field: string): ArrayBuffer {
+  if (!(value instanceof ArrayBuffer)) throw invalidField(field, value);
+  return value;
+}
+
+export function text(value: unknown, field: string): string {
   if (typeof value !== 'string') throw invalidField(field, value);
   return value;
 }
 
-function opId(value: unknown, field: string): bigint {
+/**
+ * A byte count or offset. The number ABI coerces rather than rejects — a string
+ * or a `NaN` arrives as a valid-looking integer — so the range the engine can
+ * actually act on is checked here.
+ */
+export function count(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidField(field, value);
+  }
+  return value;
+}
+
+/**
+ * A value the engine minted and a peer is handing back — an op id, or a write
+ * or stream handle. The bigint ABI throws on a non-bigint where the number one
+ * would coerce, so the refusal is spelled here in the same words as its
+ * neighbours rather than left to wasm-bindgen.
+ */
+export function minted(value: unknown, field: string): bigint {
   if (typeof value !== 'bigint') throw invalidField(field, value);
   return value;
 }
 
-function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
+export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes(value, field));
 }
 
@@ -79,6 +114,10 @@ function unknownCommand(descriptor: never): Error {
 }
 
 export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
+  // The envelope is a field like any other: read `kind` off a non-object and
+  // the refusal is a TypeError, or an unknown-kind error naming `undefined`,
+  // rather than the invalid-field answer every other malformed input gets.
+  text(record(descriptor, 'command').kind, 'command.kind');
   switch (descriptor.kind) {
     case 'create':
       return wasm.Command.create(
@@ -99,7 +138,7 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         nodeId(wasm, descriptor.newParent, 'newParent')
       );
     case 'cancelUpload':
-      return wasm.Command.cancelUpload(opId(descriptor.opId, 'opId'));
+      return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')

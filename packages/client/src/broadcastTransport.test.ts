@@ -191,6 +191,19 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.commits).toEqual([handle]);
   });
 
+  it('wipes an upload chunk it never gets onto a port', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    relayOn(bus, new FakeEngineTransport(), ports.courier('leader'));
+    // No port to move the plaintext out over, so this tab stays its owner.
+    const follower = followerOn(bus, 'follower-1', unavailableCourier);
+    const plaintext = Uint8Array.of(4, 3, 2, 1);
+
+    await expect(follower.pushChunk(1n, plaintext.buffer as ArrayBuffer)).rejects.toThrow();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
   it('keeps upload plaintext and command arguments off the channel', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();

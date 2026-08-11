@@ -237,6 +237,19 @@ describe('LocalTransport', () => {
     expect(posted.transfer).toEqual([secret]);
   });
 
+  it.each([
+    ['the secret', (t: LocalTransport, buffer: ArrayBuffer) => t.start(buffer)],
+    ['an upload chunk', (t: LocalTransport, buffer: ArrayBuffer) => t.pushChunk(1n, buffer)],
+  ])('wipes %s a torn-down worker never took', async (_case, send) => {
+    const transport = new LocalTransport(new FakeWorker());
+    transport.close();
+    const plaintext = Uint8Array.of(1, 2, 3, 4);
+
+    await expect(send(transport, plaintext.buffer as ArrayBuffer)).rejects.toThrow('closed');
+
+    expect(plaintext).toEqual(new Uint8Array(4));
+  });
+
   it('transfers the chunk buffer on pushChunk and resolves the write handle and op id', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);

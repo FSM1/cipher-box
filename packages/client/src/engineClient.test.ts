@@ -186,6 +186,17 @@ describe('EngineClient leadership + transport swap', () => {
     await leader.dispose();
   });
 
+  it('scrubs the login secret a closed client refuses', async () => {
+    const { tab } = origin();
+    const client = tab();
+    await client.dispose();
+    const secret = Uint8Array.of(1, 2, 3, 4);
+
+    await expect(client.start(secret.buffer as ArrayBuffer)).rejects.toThrow('closed');
+
+    expect(secret).toEqual(new Uint8Array(4));
+  });
+
   it('refuses a write handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {
@@ -214,9 +225,11 @@ describe('EngineClient leadership + transport swap', () => {
       expect.objectContaining({ type: 'pushChunk', handle: 1n })
     );
 
-    await expect(follower.pushChunk(stale, Uint8Array.of(9).buffer)).rejects.toMatchObject({
+    const refused = Uint8Array.of(9, 9, 9, 9);
+    await expect(follower.pushChunk(stale, refused.buffer as ArrayBuffer)).rejects.toMatchObject({
       code: 'unknownWriteHandle',
     });
+    expect(refused).toEqual(new Uint8Array(4));
     await expect(follower.commitWrite(stale)).rejects.toMatchObject({
       code: 'unknownWriteHandle',
     });
