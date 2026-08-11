@@ -38,7 +38,7 @@ What left the API relative to v1 — with the design that removed it:
 
 - Account = the Web3Auth-derived secp256k1 **identity key**; challenge-signature
   login. **CipherBox issues the identity token the Core Kit consumes** (FSM1/cipher-box-next#5 as
-  amended by ADR 0008): each verified method mints a CipherBox JWT, and the Core Kit
+  amended by [ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)): each verified method mints a CipherBox JWT, and the Core Kit
   logs in against a CipherBox custom verifier over the API's own JWKS. The account
   model is unchanged by this — the Core Kit yields the same key whichever provider
   vouched.

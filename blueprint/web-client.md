@@ -198,7 +198,7 @@ all living in `packages/client` and running inside the engine worker realm:
 - **The engine owns the token lifecycle** (FSM1/cipher-box-next#28 D5): challenge-signature login
   through its API client; access JWT in engine memory; refresh cookie rides
   the Http seam. This is a distinct authentication from unlocking the Core Kit,
-  and only the latter involves an identity provider (ADR 0008).
+  and only the latter involves an identity provider ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)).
 - **The login orchestration is shared, the credential collection is not**
   (ADR 0008 D3). One host-agnostic package sequences provider credential → API
   exchange → Core Kit login → secret export → `start(secret)`; both hosts import
