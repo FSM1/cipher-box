@@ -181,9 +181,9 @@ the same backend, or the republisher re-PUTs into a store the client never reads
 The API's write path is live end to end: authenticate and `POST /content/upload`
 returns 201 with bytes pinned in the local Kubo.
 
-Interactive login through the web UI needs `VITE_WEB3AUTH_CLIENT_ID` and
-`VITE_WEB3AUTH_VERIFIER`, which a clean checkout does not carry — the UI boots and
-renders without them, but a Core Kit session cannot be created. The suites that need an
+Interactive login through the web UI needs `VITE_WEB3AUTH_CLIENT_ID`,
+`VITE_WEB3AUTH_VERIFIER` and `VITE_GOOGLE_CLIENT_ID`, which a clean checkout does not
+carry — the UI boots and renders without them, but a Core Kit session cannot be created. The suites that need an
 authenticated session use the build-time introspection hook instead; see
 [`tests/web-e2e/README.md`](tests/web-e2e/README.md).
 

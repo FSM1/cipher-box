@@ -15,6 +15,13 @@ import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 export type CoreKitLoginMethod = 'google' | 'email';
 
 /**
+ * The client ID each sub-verifier is registered under: a Google Cloud OAuth
+ * client ID for the Google connection, the Web3Auth project's own for the
+ * Torus-hosted email one. Google rejects the wrong one before Web3Auth sees it.
+ */
+type SubVerifierClientIds = Record<CoreKitLoginMethod, string>;
+
+/**
  * The Core Kit surface the login flow drives. Narrow by construction: the hook
  * never sees a Web3Auth parameter shape, and a test substitutes a plain object.
  */
@@ -37,7 +44,7 @@ class Web3AuthSession implements CoreKitSession {
     private readonly coreKit: Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
     private readonly verifier: string,
-    private readonly clientId: string
+    private readonly clientIds: SubVerifierClientIds
   ) {}
 
   async restore(): Promise<void> {
@@ -61,7 +68,7 @@ class Web3AuthSession implements CoreKitSession {
       subVerifierDetails: {
         typeOfLogin: method === 'google' ? 'google' : 'email_passwordless',
         verifier: this.verifier,
-        clientId: this.clientId,
+        clientId: this.clientIds[method],
         ...(email ? { jwtParams: { login_hint: email } } : {}),
       },
     });
@@ -157,10 +164,10 @@ export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
   store: SealedStore
 ): CoreKitSession {
-  const { clientId, verifier } = loginEnv(env);
+  const { web3AuthClientId, googleClientId, verifier } = loginEnv(env);
 
   const coreKit = new Web3AuthMPCCoreKit({
-    web3AuthClientId: clientId,
+    web3AuthClientId,
     web3AuthNetwork:
       environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
     storage: store,
@@ -168,5 +175,8 @@ export function createCoreKitSession(
     manualSync: true,
     tssLib,
   });
-  return new Web3AuthSession(coreKit, store, verifier, clientId);
+  return new Web3AuthSession(coreKit, store, verifier, {
+    google: googleClientId,
+    email: web3AuthClientId,
+  });
 }

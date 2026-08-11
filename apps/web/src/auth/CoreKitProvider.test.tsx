@@ -70,6 +70,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
 const ENV = {
   VITE_WEB3AUTH_CLIENT_ID: 'client-id',
   VITE_WEB3AUTH_VERIFIER: 'verifier',
+  VITE_GOOGLE_CLIENT_ID: 'google-client-id',
 } satisfies Partial<ImportMetaEnv>;
 
 describe('CoreKitProvider', () => {
