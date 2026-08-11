@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsEmail, IsString, Matches, MaxLength } from 'class-validator';
 
 /** Three dot-separated base64url segments; anything else is not a JWT. */
@@ -15,6 +16,10 @@ export class GoogleIdentityRequestDto {
 
 export class EmailCodeRequestDto {
   @ApiProperty({ description: 'Address the verification code is sent to' })
+  // The edge must accept what EmailOtpService canonicalizes: it trims before
+  // keying an address, so validating the untrimmed spelling would reject a
+  // typed trailing space with an error the member cannot act on.
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsEmail({}, { message: 'email must be an email address' })
   @MaxLength(254)
   email!: string;
