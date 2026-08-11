@@ -189,8 +189,8 @@ all living in `packages/client` and running inside the engine worker realm:
 ## Login and identity
 
 - **Web3Auth Core Kit runs on the UI thread** (it owns its DOM/redirect
-  flows, MFA enrollment, and device approval — all UI-side, outside the
-  engine's sight). Login or session restore exports the login secret; the
+  flows and MFA enrollment — UI-side, outside the engine's sight). Login or
+  session restore exports the login secret; the
   client passes it through the facade to the engine **once**, as a
   transferred buffer, and zeroes its own copy. Everything derives in-engine
   via the KDF catalog: identity key, encryption subkey, pointer chain, vault
@@ -209,6 +209,12 @@ all living in `packages/client` and running inside the engine worker realm:
 - **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
   the UI thread, the API verifies it and mints the identity token, and the Core
   Kit login proceeds as for any other method. Web only.
+- **Device approval is not Core Kit UX** (ADR 0009). The Core Kit has no native
+  cross-device share transfer, so approval is a server-mediated rendezvous with
+  its own API surface (api.md) — the client's part is minting the ephemeral key,
+  displaying the comparison value both devices must match, signing both halves
+  with the device identity key, and sealing a **fresh** factor to the requester.
+  The recovery phrase is the guaranteed path and needs none of this.
 - **Cold start**: facade `start(secret)` → vault-pointer resolve, floor
   cold-seed, root adoption (the engine's non-circular cold-start sequence) →
   first snapshot event. The UI shows exactly two cold-start states: an
@@ -251,14 +257,14 @@ all living in `packages/client` and running inside the engine worker realm:
 
 ## Composition (apps/web)
 
-| Route             | View                                                                                                             |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                            |
-| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                         |
-| `/shared`         | Received shares; browsing shared scopes is the same browser over the same snapshot                               |
-| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                      |
-| `/settings`       | Auth methods, MFA/devices (Core Kit UX), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export |
-| `/invite/:…`      | Invite claim — fragment secret handed to the facade unread                                                       |
+| Route             | View                                                                                                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                                                                                               |
+| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                            |
+| `/shared`         | Received shares; browsing shared scopes is the same browser over the same snapshot                                                                                                  |
+| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                         |
+| `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export |
+| `/invite/:…`      | Invite claim — fragment secret handed to the facade unread                                                                                                                          |
 
 Cross-cutting chrome renders event-stream state only: sync/staleness
 indicator, quota (advisory-aware for BYO), dead-letter and escalation
