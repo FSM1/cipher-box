@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { AuthMethod } from '../auth/entities/auth-method.entity';
+import { IdentitySubject } from '../auth/entities/identity-subject.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
+import { AddIdentitySubjects1784800000000 } from '../migrations/1784800000000-AddIdentitySubjects';
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
 import { AddMailboxReceivedAtIndex1784692000000 } from '../migrations/1784692000000-AddMailboxReceivedAtIndex';
 import { AddNameInventoryAndPinnedCids1784566605863 } from '../migrations/1784566605863-AddNameInventoryAndPinnedCids';
@@ -35,6 +37,7 @@ const ENTITIES = [
   PinnedCid,
   MailboxMessage,
   RecordCache,
+  IdentitySubject,
 ];
 const MIGRATIONS = [
   InitAuthSchema1784513040045,
@@ -42,6 +45,7 @@ const MIGRATIONS = [
   AddNameInventoryAndPinnedCids1784566605863,
   AddRecordCache1784600557946,
   AddMailboxReceivedAtIndex1784692000000,
+  AddIdentitySubjects1784800000000,
 ];
 
 export interface IntegrationDatabase {

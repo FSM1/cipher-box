@@ -291,6 +291,156 @@
         ]
       }
     },
+    "/auth/.well-known/jwks.json": {
+      "get": {
+        "operationId": "IdentityController_jwks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JwksResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Verification keys for CipherBox-issued identity tokens",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/auth/identity/google": {
+      "post": {
+        "operationId": "IdentityController_google",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleIdentityRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Exchange a Google ID token for a CipherBox identity token",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/auth/identity/email/send-code": {
+      "post": {
+        "operationId": "IdentityController_sendEmailCode",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCodeSentResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a CipherBox-issued verification code to an email address",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/auth/identity/email/verify-code": {
+      "post": {
+        "operationId": "IdentityController_verifyEmailCode",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeVerifyRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Exchange a verification code for a CipherBox identity token",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/auth/identity/wallet": {
+      "post": {
+        "operationId": "IdentityController_wallet",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiweLoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Exchange a SIWE signature for a CipherBox identity token (first-class first login)",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
     "/mailbox/messages": {
       "post": {
         "operationId": "MailboxController_post",
@@ -1001,6 +1151,102 @@
           "refreshToken",
           "publicKey",
           "privateKey"
+        ]
+      },
+      "JwksResponseDto": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "description": "The public half of the identity-token signing key, as JWKs",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "GoogleIdentityRequestDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "The Google ID token collected by Google Identity Services"
+          }
+        },
+        "required": [
+          "idToken"
+        ]
+      },
+      "IdentityTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "CipherBox identity token; the Core Kit logs in with it"
+          },
+          "verifierId": {
+            "type": "string",
+            "description": "The Core Kit verifierId this token is bound to — pass it to loginWithJWT"
+          },
+          "email": {
+            "type": "string",
+            "description": "The signed-in email, when the method carries one; null for wallet",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Token expiry, ISO 8601"
+          }
+        },
+        "required": [
+          "token",
+          "verifierId",
+          "email",
+          "expiresAt"
+        ]
+      },
+      "EmailCodeRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address the verification code is sent to"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "EmailCodeSentResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "EmailCodeVerifyRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address the verification code is sent to"
+          },
+          "code": {
+            "type": "string",
+            "description": "The six-digit code CipherBox delivered"
+          }
+        },
+        "required": [
+          "email",
+          "code"
         ]
       },
       "PostMessageDto": {
