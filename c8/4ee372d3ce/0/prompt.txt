@@ -5556,3 +5556,273 @@ ok can you start the full local dev stack?
 set these in the .env:
 clientId: REDACTED
 verifier name: cipherbox-identity
+
+---
+
+service worker is registered and is showing :5173 as a client. login was unsuccessful though (wallet) as I received a message that `engine not started`
+
+---
+
+why would wallet not work for first login? this layer was working perfectly in V1 and passwordless email is also broken as it is using the web3auth passwordless auth rather than having cipherbox api handle passwordless auth via the API (and sendgrid).
+
+---
+
+yes file the issue please
+
+---
+
+google also throws an error [Image #5]
+
+---
+
+no need - I will kick off the fix for #1253 now. One thing I was thinking of is that a lot of these orchestration issues should probably be handled by the engine as far as I can understand. So the full fix for this issue will span API, Engine, web and tauri webview.
+
+---
+
+ok before we go drafting the ADR, I think that the proposal needs to be analyzed in light of the existing V1 implementation and package split, as well as taking in to account the possibility of sharing JS code between the tauri webview and the web app.
+
+---
+
+<task-notification>
+<task-id>aee030d36ed2a67b5</task-id>
+<tool-use-id>toolu_0174usauKuHV6V6fH9t97wny</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/984d1348-d0d1-4d42-9b60-189d14a7b32a/tasks/aee030d36ed2a67b5.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze v1 auth architecture and package split" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## v1 auth ground truth
+
+### 1. Where each concern lived
+
+| Concern | Web (`apps/web`) | Desktop (`apps/desktop`) | Shared? |
+|---|---|---|---|
+| Core Kit init | `src/lib/web3auth/core-kit.ts:19-43` (singleton + provider `core-kit-provider.tsx`) | `src/auth.ts:75-88` (module-level singleton) | **Duplicated.** Same config shape; *drifted*: web maps `production → MAINNET` (`core-kit.ts:10`), desktop maps `production → DEVNET` (`auth.ts:58`) |
+| Google | `components/auth/GoogleLoginButton.tsx:70-172` — Google Identity Services One Tap + `renderButton` fallback, **no redirect_uri** | `src/auth.ts:107-127` + `getGoogleCredential` `auth.ts:707-800` — manual OAuth2 implicit flow, Rust localhost callback server | **Genuinely different** (see §3) |
+| Email OTP | `components/auth/EmailLoginForm.tsx` → `authApi.identityEmailSendOtp/Verify` (`lib/api/auth.ts:118-127`) | `src/auth.ts:133-174` — raw `fetch` to the same two endpoints | **Duplicated**, hand-rewritten with `fetch` instead of the api-client |
+| Wallet / SIWE | `components/auth/WalletLoginButton.tsx:27-141` — wagmi EIP-6963 + `viem/siwe` `createSiweMessage` | `src/auth.ts:192-252` — raw `window.ethereum`, **hand-concatenated EIP-4361 string** (`auth.ts:219-230`) | **Duplicated — and dead.** `loginWithWallet` is never imported by `main.ts` (`main.ts:18-30`); no desktop UI |
+| Core Kit `loginWithJWT` + `commitChanges` + TSS export | `lib/web3auth/hooks.ts:145-237` (`doLoginWithCoreKit`) | `src/auth.ts:263-329` (`loginWithCoreKit`) | **Duplicated.** Same verifier `'cipherbox-identity'`. Web has an extra localStorage device-factor auto-recovery branch (`hooks.ts:204-234`) that desktop lacks |
+| Backend `/auth/login` + vault init | `hooks/useAuth.ts:404-441` (`completeBackendAuth`) → `initializeOrLoadVault` `useAuth.ts:116-396` | `src-tauri/src/commands/auth.rs:22-88` + `complete_auth_setup:94-157`, vault work in `commands/vault.rs` | **Duplicated across languages** — TS in web, Rust in desktop |
+| Session restore | `useAuth.ts:667-717` — effect: cookie `authApi.refresh()` then vault load | `commands/auth.rs:379-450` (`try_silent_refresh`, Keychain) + `commands/auth.rs:320-368` (`handle_session_restore`) + `src/auth.ts:363-378` | **Duplicated, different mechanism** |
+| Token refresh | `lib/api/auth.ts:39-70` — dedup'd in-flight promise, HTTP-only cookie | Rust `crates/api-client/src/auth.rs:35-52`; token held in `ApiClient` `client.rs:20`; refresh token in macOS Keychain | **Different by API contract**: `apps/api/src/auth/auth.controller.ts:77-91` branches on `x-client-type: desktop` — body vs cookie |
+| MFA: REQUIRED_SHARE, recovery phrase, device approval | `hooks/useMfa.ts` (320), `hooks/useDeviceApproval.ts` (461), `services/device-approval.service.ts`, 9 `components/mfa/*` | `src/auth.ts:456-679` (`inputRecoveryPhrase`, `requestDeviceApproval`, `pollApprovalStatus`, `cancelApprovalRequest`) + hand-rolled DOM UI in `main.ts:378-531` | **Duplicated** |
+| Device identity | `lib/device/identity.ts` — Ed25519 keypair in IndexedDB, AES-GCM-wrapped under HKDF(vault priv key) | `src/auth.ts:412-423` — random 32 bytes → SHA-256 hex in `localStorage`; `platform: 'macos'` hardcoded (`auth.ts:485`, `auth.ts:587`) | **Duplicated, semantically divergent** |
+| Method linking (link/unlink) | `components/auth/LinkedMethods.tsx` (392) + `hooks/useLinkedMethods.ts` | **Absent** | Web-only |
+| Logout | `useAuth.ts:624-657` | `src/auth.ts:386-401` → `commands/auth.rs:454-511` (unmount, Keychain delete, journal purge, zeroize) | Duplicated + desktop-specific teardown |
+
+Volume: **web ≈ 3,614 lines across 16 files**; **desktop ≈ 2,371 lines across 4 files** (`src/auth.ts` 800, `src/main.ts` 662, `commands/auth.rs` 511, `commands/oauth.rs` 398).
+
+### 2. Sharing verdict: v1 shared **zero** login code
+
+No package under `packages/` contains any auth logic. `git grep` for `authApi|useAuth|CoreKit|linkMethod` across `packages/sdk`, `sdk-core`, `core`, `crypto` returns only five incidental comment references. What *was* shared is strictly below identity:
+
+- **`@cipherbox/api-client`** — orval-generated HTTP bindings only (`src/generated/auth/auth.ts`, `generated/identity/identity.ts`). Transport, no orchestration. Web wraps it in `apps/web/src/lib/api/auth.ts`; desktop ignores it and uses raw `fetch`.
+- **`@cipherbox/crypto`** — `wrapKey`/`unwrapKey`/`hexToBytes`/`bytesToHex` (both apps import these), plus `device/keygen.ts` (web only).
+
+**The boundary was deliberate and it was drawn at the bearer token.** `packages/sdk` takes `getAccessToken: async () =&gt; token` (README; `src/client.ts:112,117`) and `packages/sdk-core` takes `SdkContext { apiUrl, getAccessToken }` (`sdk-core/src/types.ts:3` — "Replaces the Zustand store access pattern"). Both are pure token *consumers*. Everything that produces the token — provider SDKs, Core Kit, TSS export, vault bootstrap — was above the shared runtime and therefore per-host.
+
+What specifically prevented sharing:
+
+1. **React-shaped web code.** `useAuth.ts` is a 732-line hook coupled to Zustand stores, `react-router`'s `navigate`, and five other stores. Desktop's webview is vanilla TS (`main.ts` builds DOM by hand) with no React and no stores.
+2. **The Rust handoff.** Desktop's terminal step is `invoke('handle_auth_complete', { idToken, privateKey })` (`src/auth.ts:345-348`); web's is `setVaultKeys()` into a Zustand store. Post-auth on desktop means FUSE mount + sync daemon + tray (`commands/auth.rs:165-311`), which has no web analogue.
+3. **Different transports for the same endpoints** (cookie vs body refresh token), forced by the API's `x-client-type` branch.
+4. **Different provider entry points for Google** (§3).
+
+None of these are Core Kit limitations. Core Kit itself ran fine in the Tauri webview — same SDK, same verifier `'cipherbox-identity'`, same `window.localStorage` storage, same `_UNSAFE_exportTssKey`, MFA/REQUIRED_SHARE/device-approval all functional.
+
+The cost of the split is documented: `.planning/debug/resolved/desktop-email-otp-verification-failed.md` records that email OTP worked in web and broke in release desktop builds because the JS half read `import.meta.env.VITE_API_URL` (Vite compile-time) while the Rust half read `std::env::var("VITE_API_URL")` (runtime, absent in a DMG) and silently fell back to `http://localhost:3000`. Two halves of one login flow pointed at two different API hosts. Fixed with `option_env!` in `main.rs`.
+
+### 3. The redirect problem
+
+From `.planning/debug/resolved/google-oauth-tauri-redirect.md` plus `commands/oauth.rs`:
+
+- **What broke.** Desktop cannot use GIS One Tap — the doc's own evidence entry states "GIS doesn't work in Tauri webview" (no Google session, unregistered origin), so desktop fell back to a manual OAuth2 implicit flow, which *requires* a `redirect_uri`. `getGoogleCredential()` built it from `window.location.origin`. In production Tauri builds that origin is `tauri://localhost` on macOS (`https://tauri.localhost` on Windows — `oauth.rs:75-77`), so the request carried `redirect_uri=tauri://localhost/google-callback.html`. Google validates `redirect_uri` server-side and rejects any non-`http(s)` scheme → `Error 400: invalid_request`. Dev mode worked (origin was `http://localhost:1420`), so this only manifested in packaged builds.
+- **The solution.** `start_oauth_server` (`oauth.rs:91-134`) binds a short-lived Tokio TCP listener on `127.0.0.1`, trying fixed pre-registered ports `[14200, 14201, 14202]` (`oauth.rs:62`) and failing fast rather than falling back to a random port (RFC 8252 allows `http://localhost` with dynamic ports for native clients, but a random port can't be pre-registered in Google Console). It serves a callback HTML page carrying a random 16-byte nonce (`oauth.rs:119-124, 142-181`); Google's implicit-flow fragment is unreadable server-side, so that page extracts `#id_token=` in JS and POSTs it to `/token`; the server validates the nonce (`oauth.rs:320-324`), emits a port-scoped Tauri event `oauth-callback-{port}`, and shuts down. Absolute 120 s deadline (`oauth.rs:219`). The frontend listens for that event and validates OAuth `state` before accepting (`src/auth.ts:750-755`).
+- **A second, separate Tauri problem** is also solved there: `open_oauth_popup` (`oauth.rs:19-51`) creates the popup as a Tauri `WebviewWindow` from Rust because `window.open()` is unreliable on Windows WebView2. It host-allowlists `accounts.google.com` over HTTPS only (`oauth.rs:28-35`).
+
+### 4. What of v1's split is worth keeping
+
+**Worth keeping (evidence-backed):**
+
+- **The token seam.** `getAccessToken: () =&gt; Promise&lt;string&gt;` as the *only* identity-facing input to the shared runtime is the one boundary that held up with zero churn across both hosts and never appears in any debug doc. Both `packages/sdk` and `packages/sdk-core` stayed identity-free for the whole of v1.
+- **Rust owning the post-auth secret lifecycle on desktop.** Keychain storage, `Zeroizing` on the private key, and `state.clear_keys()` on logout (`commands/auth.rs:99, 504`) are structurally better than the web's `Uint8Array.fill(0)` in a Zustand store (`auth.store.ts:72-81`).
+- **Provider-agnostic backend contract.** The CipherBox API acting as its own identity provider — `/auth/identity/{google,email,wallet}` mints a CipherBox JWT, then Core Kit `loginWithJWT` with a single verifier `'cipherbox-identity'` — meant all three methods converged on one code path immediately after credential collection. Both hosts adopted it identically. This is the natural join point.
+
+**Incidental / accidental:**
+
+- The web/desktop split of Core Kit orchestration itself. It produced two implementations of one algorithm that measurably drifted: network map (MAINNET vs DEVNET), the device-factor auto-recovery branch present only in web (`hooks.ts:204-234`), hand-concatenated SIWE on desktop vs `viem/siwe` on web, and the API-URL mismatch bug above.
+- Desktop's `loginWithWallet` and `approveDevice` — written, never wired, never exercised. `approveDevice`'s own docstring (`src/auth.ts:632-639`) admits "no UI trigger."
+- Desktop's device-identity scheme (random localStorage value, `platform: 'macos'` hardcoded) — divergence with no design rationale visible in the code.
+- The cookie-vs-body refresh-token fork. Driven by the browser XSS threat model, not by anything about desktop; it forced an `x-client-type` header branch in the API and two separate refresh implementations.
+
+**Not established** (no evidence found either way):
+
+- Whether the desktop wallet path was ever removed deliberately or just abandoned mid-phase — the only signal is a code comment deferring WalletConnect to "Phase 11" (`src/auth.ts:190`).
+- Whether GIS was ever actually attempted in the Tauri webview and observed failing, versus assumed to fail. The debug doc asserts it as evidence but cites no reproduction.
+- Any explicit ADR justifying "auth stays in the app, not a package." `.planning/adr/002-web3auth-mfa.md` exists but I did not find a package-boundary decision; the boundary appears to be emergent rather than decided.</result>
+<usage><subagent_tokens>115868</subagent_tokens><tool_uses>32</tool_uses><duration_ms>213176</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acd9a701cbb504d24</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/984d1348-d0d1-4d42-9b60-189d14a7b32a/tasks/acd9a701cbb504d24.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze v2 sharing surface for web and Tauri" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># v2 identity/login plane — current facts
+
+## 1. `apps/desktop/frontend` today
+
+**It is a static HTML stub. Zero JavaScript, zero build step, zero dependencies.**
+
+The entire `apps/desktop` non-Rust surface is two files:
+
+- `/Users/myankelev/Code/random/cipher-box/apps/desktop/frontend/index.html` — 43 lines, all of it inline `&lt;style&gt;` plus a `&lt;main&gt;` containing `&lt;h1&gt;CipherBox&lt;/h1&gt;` and `&lt;p&gt;The desktop shell is running from the menu bar.&lt;/p&gt;` (lines 38-41). No `&lt;script&gt;` tag.
+- `/Users/myankelev/Code/random/cipher-box/apps/desktop/package.json` — 13 lines. Scripts: `tauri`, `dev: tauri dev`. **devDependencies: `@tauri-apps/cli` only.** No `dependencies` block at all.
+
+There is **no vite config, no tsconfig, no `src/`, no `.ts`/`.tsx` file** anywhere under `apps/desktop` (`ls -a apps/desktop` → `frontend`, `node_modules`, `package.json`, `src-tauri`). `tauri.conf.json:6-8` sets `"build": { "frontendDist": "../frontend" }` — no `beforeDevCommand`/`beforeBuildCommand`, i.e. the HTML is served as-is with no bundler in the loop.
+
+**Dependency edges: none.** It does not import `packages/client`, does not import `apps/web`, and `apps/web` does not import it. Grepping `@cipherbox/web` / `apps/web` inside `apps/desktop` returns nothing; the only "desktop" hit in `apps/web` is a CSS comment (`apps/web/src/styles/file-browser.css:141`).
+
+**Login/auth code on desktop: none.** The Rust shell says so explicitly — `/Users/myankelev/Code/random/cipher-box/apps/desktop/src-tauri/src/main.rs:3`:
+
+&gt; `//! Scaffold only: no engine wiring, no login, no mount, no vault semantics.`
+
+`main.rs` is 107 lines of tray + hidden-window chrome (`build_tray`, `tray_icon`, `show_main_window`); the tray status item is hardcoded `"Not signed in"` and disabled (`main.rs:56-58`). `src-tauri/Cargo.toml:18-19` has exactly one dependency, `tauri` — **it does not link `crates/engine`**, and the header comment says so (`Cargo.toml:2-3`).
+
+The CSP is `default-src 'self'` (`tauri.conf.json:22`).
+
+## 2. What `packages/client` exposes
+
+`packages/client/package.json:8-17` exports two entry points: `.` → `./dist/index.js` and `./sw` → `./dist/sw/serviceWorker.js`. **Built output only** — consumers resolve `dist`, not source (there is no `@cipherbox/client` alias in `apps/web/vite.config.ts`; types flow via a TS project reference to `packages/client/tsconfig.build.json`).
+
+79 files in `packages/client/src`. The barrel (`src/index.ts`) is explicit about its purpose at lines 1-10: *"WASM engine hosting and browser seams for the v2 web client"*.
+
+Categorising the public surface:
+
+| Export | Host assumption |
+|---|---|
+| `fromHex`/`toHex` (`index.ts:44`) | **host-agnostic** — pure |
+| Wire types `CommandDescriptor`, `EventDescriptor`, `SnapshotDescriptor`, … (`index.ts:47-63`) | **host-agnostic** — types only |
+| `EngineFacade`, `EngineRequestError` (`index.ts:16-17`) | agnostic *shape*, but it wraps a transport |
+| `LocalTransport` / `EngineTransport` / `EngineWorkerLike` (`index.ts:18-19`) | **Web Worker** `postMessage` + transferables |
+| `spawnEngineWorker`, `EngineHostConfig` (`index.ts:25-26`) | **`new Worker(new URL('./worker/engineWorker.js', import.meta.url), { type: 'module' })`** — `spawnEngineWorker.ts:36` |
+| `LeaderElection`, `LockManagerLike` (`index.ts:27-28`) | **`navigator.locks`** — `leadership.ts:22-23` |
+| `BroadcastTransport`, `BROADCAST_CHANNEL_NAME`, `BroadcastChannelLike` (`index.ts:29-32`) | **`BroadcastChannel`** — `engineClient.ts:394-395` `new BroadcastChannel(...)` |
+| `EngineClient` (`index.ts:23`) | requires `locks: LockManagerLike` (`engineClient.ts:49-50`) + a channel factory (`:52`) |
+| `LeaderRelay` (`index.ts:30`) | BroadcastChannel + locks (`leaderRelay.ts:170-173`) |
+| `ServiceWorkerCourier`, `defaultCourier` (`index.ts:33`) | **`navigator.serviceWorker`** — `portCourier.ts:23` |
+| `MediaService` (`index.ts:38`) | **`navigator.serviceWorker`** container — `media/service.ts:34-35` |
+| `@cipherbox/client/sw` subpath | **Service Worker global realm** (`caches.open/keys/delete` — `sw/precache.ts:49,76-77`) |
+
+The seam implementations behind the worker realm are equally browser-bound: `seams/idb.ts:40,46,76,80` (`indexedDB`), `seams/stagingStore.ts:79-80` (**OPFS**, `navigator.storage.getDirectory()`), `seams/http.ts:62,71` (`fetch`, with `credentials: 'include'` on the API origin — `http.ts:6-7,27`), `worker/storageHeadroom.ts:34` (`navigator.storage.estimate`), `storagePersistence.ts:19-25` (`StorageManager.persist()`, noted as `[Exposed=Window]` at `storagePersistence.ts:11`).
+
+**Verdict:** every DOM/browser dependency is behind an injectable `*Like` interface (`LockManagerLike`, `BroadcastChannelLike`, `CourierContainerLike`, `ServiceWorkerContainerLike`) — that is a testability seam, not a portability one, since the *defaults* and the concrete seam implementations are unconditionally browser APIs. **Whether Tauri's webview (WKWebView/WebView2/WebKitGTK) supports `navigator.locks`, OPFS, and Service Workers on a custom protocol origin is not established by anything in this repo** — nothing here tests or claims it. What *is* established is that the blueprint says desktop does not use any of this machinery (see §4).
+
+## 3. Identity/session code in v2 today
+
+**All app-local to `apps/web`. Nothing shared, nothing duplicated on desktop.**
+
+`apps/web/src/auth/` is 3 source files + 3 test files, 880 lines total:
+- `coreKit.ts` (151) — `CoreKitSession` interface + `Web3AuthSession` adapter. Uses `window.localStorage` (`coreKit.ts:139`), reads the SDK-private `coreKit._storageKey` (`:101`), `_UNSAFE_exportTssKey()` (`:116-118`). Deps: `@web3auth/mpc-core-kit`, `@toruslabs/tss-dkls-lib`.
+- `CoreKitProvider.tsx` (95) — React context, mount-time `restore()` with a 10s deadline. React-only; no browser API beyond `setTimeout`.
+- `useAuth.ts` (171) — **the orchestration**: a module-scoped `inFlight` mutex and `restoredFor` latch (`useAuth.ts:43-44`), `exclusively()` (`:60-74`), `handOff()` ordering (`:82-98`), `Promise.allSettled` logout (`:135-144`), restore-on-mount effect (`:151-157`). **Touches no browser API at all**; imports only `react`.
+
+Supporting app-local identity code: `src/engine/loginHandoff.ts` (hex-decode + 32-byte check + transferred `ArrayBuffer` into `facade.start`, zeroes its copy), `src/stores/auth.store.ts` (memory-only chrome state), `src/providers/EngineProvider.tsx`, `src/engine/config.ts` (`VITE_WEB3AUTH_*`), `src/lib/wagmi.ts`, `src/components/auth/WalletLoginButton.tsx` (SIWE via `viem/siwe`, reads `window.location.host/origin` at `:72-74`), `src/polyfills.ts` (`process`/`Buffer` shims Web3Auth needs), `src/engine/introspection.ts` (e2e `window.__CIPHERBOX_ENGINE__.signIn`).
+
+Web3Auth/wallet npm deps live **only** in `apps/web/package.json`: `@web3auth/mpc-core-kit`, `@toruslabs/tss-dkls-lib`, `wagmi`, `viem`, `@tanstack/react-query`, `buffer`, `process`.
+
+**The Rust engine already owns most of the auth surface.** `crates/engine/src/api/client.rs` header (`:4-8`): *"It owns the token lifecycle… Refresh is single-flight with one retry-then-fail on 401."* Concretely, the engine can already do:
+
+| Method | Endpoint | `client.rs` |
+|---|---|---|
+| `login_identity(signer)` — challenge → sign → exchange, implicit account creation via `is_new_user` | `POST /auth/challenge`, `POST /auth/login` | `:129-167` |
+| `siwe_challenge()` — issue EIP-4361 nonce, validated fail-closed | `GET /auth/siwe/challenge` | `:170-188` |
+| `siwe_login(message, signature)` | `POST /auth/siwe/login` | `:193-207` |
+| `siwe_link(message, signature)` — link wallet to authed account | `POST /auth/siwe/link` | `:210-219` |
+| `test_login(handle, secret)` — staging-gated e2e path | `POST /auth/test-login` | `:224-243` |
+| `refresh()` — single-flight rotation, coalesced waiters, tears down session on failure | refresh endpoint | `:247-283` |
+| `logout()` — server-side revoke + `clear_session()` | `POST /auth/logout` | `:285-296` |
+| `is_authenticated()` | — | `:120-122` |
+
+Facade level: `Engine::start(secret: LoginSecret)` at `crates/engine/src/facade.rs:1699` derives `SessionIdentity` purely from the secret (`:1716`), then calls `api.login_identity(&amp;signer)` fail-closed before committing the session (`:1727-1731`), then drops/zeroizes the secret at its terminal owner (`:1750`). `LoginSecret` (`facade.rs:315-340`) is `Zeroizing`, no `Clone`, `Debug` prints `LoginSecret(redacted)`, and `expose()` is `pub(crate)`. `ApiBaseUrl::parse` refuses a blank origin so a shipped host cannot start unauthenticated (`facade.rs:381`). `Engine::siwe_challenge()` is a facade method at `facade.rs:2983`; `Command::SiweLogin { message, signature }` and `Command::Logout` at `facade.rs:522-530`. WASM exposes both (`crates/wasm/src/lib.rs:694-700`).
+
+Desktop seams for auth already exist in Rust: `crates/desktop-seams/src/credential_store.rs` — `KeyringCredentialStore` (OS keyring, refresh token + last-account id only, `lib.rs:11-12`).
+
+**What is left in TypeScript is:** the Core Kit SDK adapter, wagmi/viem signature collection, and the `useAuth` state machine that sequences them.
+
+## 4. What the blueprints say
+
+`blueprint/desktop.md` (313 lines). Critical negative results: **`packages/client` appears 0 times; `react` 0 times; `wasm` 0 times; `apps/web` 0 times.**
+
+`desktop.md:91-96` — the load-bearing passage:
+
+&gt; The facade is called directly (in-process async Rust) — no RPC layer, no worker, no tab leadership; the single-writer invariant is free on desktop because there is exactly one engine per running app. The Tauri webview is login-and-settings chrome only: it renders facade state forwarded over Tauri events and never holds tokens or keys (the v1 `handle_auth_complete` handoff survives, but the secret goes straight to `start(secret)` and is zeroized).
+
+`desktop.md:246-252` — the login split:
+
+&gt; **Login**: Web3Auth Core Kit in the webview (its DOM/redirect flows, MFA, device approval — all chrome-side); the exported secret crosses to `start(secret)` once and is zeroized. Challenge-signature login, token refresh, and session restore are engine-native (engine.md API client); the shell's only credential duty is hosting the keychain seam. Dev-key mode survives: a debug flag feeds the staging test-login path through the same facade, keychain bypassed — the headless agent/e2e seam.
+
+`desktop.md:21-24` — native linking, not WASM:
+
+&gt; The desktop app is the engine's **native host**: `apps/desktop` links `crates/engine` directly in the Tauri process and owns login, lifecycle, tray, and updater
+
+`desktop.md:192-194` — vault UI is delegated to the web app:
+
+&gt; The bin is not projected into the mount in v2.0; restore/purge live in the web UI and the tray's "Open CipherBox".
+
+The only TS mention in the whole file is a deletion (`desktop.md:36`: *"The desktop twin engine … and its TS divergence table | #28 D1 — one Rust engine, linked natively"*). SIWE/wagmi appear **nowhere** in desktop.md.
+
+`blueprint/web-client.md` (284 lines). **`desktop` appears 0 times.**
+
+`web-client.md:11-15` scopes it to *"the three **web-side** units … `crates/wasm`, `packages/client`, `apps/web`"*. `web-client.md:50-54` defines the package:
+
+&gt; **`packages/client`** — everything between the WASM boundary and React: engine worker lifecycle, tab leadership, the two facade transports, every browser seam implementation (IndexedDB, OPFS, `fetch`), the login handoff, and the Service Worker brokerage. It wraps the facade, never extends it; it holds no vault semantics.
+
+`web-client.md:189-201` states the same TS/Rust split as desktop:
+
+&gt; **Web3Auth Core Kit runs on the UI thread** (it owns its DOM/redirect flows, MFA enrollment, and device approval — all UI-side, outside the engine's sight)… **The engine owns the token lifecycle** (#28 D5): challenge-signature login through its API client; access JWT in engine memory; refresh cookie rides the Http seam. SIWE stays secondary — wagmi collects the wallet signature on the UI thread and the facade forwards it.
+
+Note the one place where the hosts genuinely diverge in the same seam: web's `CredentialStore` is a **no-op** because the refresh token is an HTTP-only cookie carried by `credentials: 'include'` (`web-client.md:153,158`), while desktop's is the OS keyring (`desktop.md:89`).
+
+## 5. Practical sharing verdict (facts only)
+
+If login orchestration stayed in TypeScript, **there is nothing to share it *with* today.** `apps/desktop/frontend` is a 43-line static HTML file with no bundler, no TypeScript, no `dependencies`, and no engine binding. Sharing would require first *creating* a desktop frontend app — and then a place to put the shared code, since `apps/web/src/auth/**` is app-local and there is no second JS consumer in the repo.
+
+Concrete obstacles, evidenced:
+
+1. **No desktop JS app exists.** No vite config, no tsconfig, no `src/`, no `dependencies` in `apps/desktop/package.json`; `tauri.conf.json` has no `beforeBuildCommand`. This would be new build config, not a refactor.
+2. **No engine binding on desktop.** `src-tauri/Cargo.toml` does not depend on `crates/engine`; `main.rs:3` says "no engine wiring, no login". The `useAuth` orchestration calls `client.facade.{start,siweChallenge,siweLogin,logout}` — on desktop those would be Tauri IPC commands that do not exist yet. **The transport under the orchestration is not the same object on both hosts**, so the shared unit would have to be parameterised over it.
+3. **`packages/client` is not the vehicle.** It is defined as one of the *three web-side units* (`web-client.md:11-15`) and its entire non-type surface assumes Workers, `navigator.locks`, `BroadcastChannel`, `navigator.serviceWorker`, IndexedDB, OPFS. `desktop.md:91-93` explicitly rules its machinery out on desktop: *"no RPC layer, no worker, no tab leadership."*
+4. **CSP.** `tauri.conf.json:22` is `default-src 'self'` — Web3Auth's popup/redirect flows and its network calls are not permitted under it today.
+5. **Web3Auth needs Node globals.** `apps/web/src/polyfills.ts:1-12` shims `process` and `Buffer`; `vite.config.ts:119` sets `define: { global: 'globalThis' }`. Any desktop webview host needs the same bundler treatment.
+6. **The popup handoff is origin-sensitive.** `vite.config.ts:120-127` sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` in dev specifically so the Web3Auth popup can post back to its opener. Whether a Tauri custom-protocol origin behaves equivalently is **not established** in this repo.
+7. **The blueprints do not describe this sharing.** `packages/client` is never mentioned in `desktop.md`; `desktop` is never mentioned in `web-client.md`. There is no documented shared-JS story.
+
+What already makes it cheaper than it looks:
+
+- `useAuth.ts` — the actual orchestration — **touches zero browser APIs** and imports only `react`. Its state (mutex, restore latch) is already module-scoped `let`s outside React (`useAuth.ts:43-44`).
+- The SDK is already behind a seam: `CoreKitSession` (`coreKit.ts:20-31`) is SDK-free, and tests substitute a plain object (`src/test/authFakes.tsx:86-105`). `Web3AuthSession` is the only SDK-coupled class.
+- The secret handoff is already narrow and typed: `LoginSecretExporter` → `exportLoginSecret` → transferred `ArrayBuffer` → `facade.start` (`src/engine/loginHandoff.ts`), matching `LoginSecret::new`'s contract at `facade.rs:318-321`.
+- pnpm workspace globs are `apps/*`, `packages/*`, `tests/*` — a new package needs no workspace edit.
+- The Rust side is already ahead: the engine performs challenge-signature login, SIWE challenge/login/link, refresh, and logout (`api/client.rs:129-296`), and `KeyringCredentialStore` for desktop already exists (`crates/desktop-seams/src/credential_store.rs`).</result>
+<usage><subagent_tokens>77497</subagent_tokens><tool_uses>17</tool_uses><duration_ms>369289</duration_ms></usage>
+</task-notification>
+
+---
+
+I think that this was something I completely missed when scoping the initial blueprint docs.
+
+---
+
+I think that this was something I completely missed when scoping the initial blueprint docs.
+
+in terms of wallet auth being a mandatory first class citizen, this is only possible on web, since tauri webview has no ability to communicate with a wallet.
+
+v1 google + passwordless was working perfectly. sharing some of the JS code to handle common auth would decrease chances of drift between the solutions.
+
+---
+
+please draft the ADR. it will probably be a few linked issues to implement, but happy with the shape you've defined
