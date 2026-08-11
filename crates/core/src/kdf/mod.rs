@@ -640,10 +640,12 @@ mod tests {
             genesis_read_scope_seed(secret).as_bytes(),
             genesis_write_scope_seed(secret).as_bytes(),
         );
-        assert_ne!(genesis_write_scope_seed(secret).as_bytes(), &[0u8; 32]);
-        assert_ne!(
-            genesis_write_scope_seed(secret).as_bytes(),
-            genesis_write_scope_seed(b"another-secret").as_bytes(),
-        );
+        for edge in [
+            genesis_read_scope_seed as fn(&[u8]) -> SecretBytes,
+            genesis_write_scope_seed,
+        ] {
+            assert_ne!(edge(secret).as_bytes(), &[0u8; 32]);
+            assert_ne!(edge(secret).as_bytes(), edge(b"another-secret").as_bytes());
+        }
     }
 }

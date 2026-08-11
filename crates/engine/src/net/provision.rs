@@ -4,11 +4,11 @@
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 
 use crate::api::{ApiClient, ApiError};
 use crate::net::MAX_RECORD_BYTES;
 use crate::net::fanout::fanout_get_verify;
-use crate::net::pointer_fetch::RecordPointerFetch;
 use crate::net::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
 };
@@ -19,8 +19,7 @@ use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::WritePublishError;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
-use crate::sync::pointer::PointerFetch;
-use crate::sync::provision::{RootStep, VaultPointerProbe, VaultProvisionPublisher};
+use crate::sync::provision::{GenesisRoot, VaultPointerProbe, VaultProvisionPublisher};
 
 /// The provisioning publish seams over the live net plane.
 pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
@@ -73,28 +72,25 @@ where
     Sch: Scheduler + Clone + 'static,
     Ad: Adopter,
 {
-    async fn genesis_root_step(&self, name: &IpnsName) -> RootStep {
-        // The gate is the whole answer: only a record this session's own read key
-        // opens and the gate admits completes the root step. A gate rejection and
-        // an unreachable record plane are one arm — publish, and let CAS decide —
-        // because neither is a record this run may treat as its own.
+    async fn genesis_root(
+        &self,
+        name: &IpnsName,
+        read_scope_seed: &[u8; SECRET_LEN],
+    ) -> GenesisRoot {
         let Some((_verified, bytes)) = fanout_get_verify(self.transport, name).await else {
-            return RootStep::MustPublish;
+            return GenesisRoot::Unclaimed;
         };
+        // The gate recovers the scope read seed from the record's OWN owner blob,
+        // so a pass proves an owner-readable root stands here — not that it is the
+        // one this run derived. The read rotation that re-keys a scope republishes
+        // at this same name, so the two must be compared.
         match self.adopter.adopt(name, &bytes).await {
-            Ok(_) => RootStep::AlreadyAdopted,
-            Err(_) => RootStep::MustPublish,
+            Ok(outcome) => match outcome.read_scope_seed {
+                Some(recovered) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
+                _ => GenesisRoot::Foreign,
+            },
+            Err(_) => GenesisRoot::Unclaimed,
         }
-    }
-
-    async fn fetch_vault_pointer(&self, name: &IpnsName) -> Option<Vec<u8>> {
-        // The same fan-out + core verify the cold-start walk resolves pointers
-        // through; the inner unseal and owner verify are the caller's.
-        RecordPointerFetch::new(self.transport)
-            .fetch(name)
-            .await
-            .ok()
-            .flatten()
     }
 
     async fn require_vacant_vault_pointer(&self, name: &IpnsName) -> Result<(), VaultPointerProbe> {
@@ -220,16 +216,28 @@ mod tests {
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{PreservedFields, ReadBody};
 
+    use zeroize::Zeroizing;
+
     use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::resolve::AdoptOutcome;
     use crate::profile::SyncTimingProfile;
     use crate::seams::{EndpointId, HttpResponse};
+    use crate::testkit::fakes::{
+        InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
+        VirtualScheduler,
+    };
     use crate::testkit::{FakeDevice, FakeWorld, block_on};
 
     /// An adopter that answers one fixed verdict — the gate itself is tested at
     /// its own site; what matters here is which verdict reaches [`RootStep`].
+    /// The read scope seed the run under test derived — what a record must open
+    /// under to be its own genesis root.
+    const DERIVED_SEED: [u8; 32] = [0x5a; 32];
+
     struct StubAdopter {
         admits: bool,
+        /// The seed the gate recovers from the record's own owner blob.
+        recovered: [u8; 32],
     }
 
     impl Adopter for StubAdopter {
@@ -260,7 +268,7 @@ mod tests {
                 },
                 write_scope_seed: None,
                 node_id: [0u8; 16],
-                read_scope_seed: None,
+                read_scope_seed: Some(Zeroizing::new(self.recovered)),
             })
         }
     }
@@ -292,22 +300,46 @@ mod tests {
         });
     }
 
-    /// Run the production probe over `device`.
-    fn probe(device: &FakeDevice, profile: &SyncTimingProfile) -> Result<(), VaultPointerProbe> {
+    /// The production arm as the tests here assemble it.
+    type ProvisionNetUnderTest<'a> = VaultProvisionNet<
+        'a,
+        InMemoryRecordStore,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        InMemoryFloorStore,
+        VirtualScheduler,
+        StubAdopter,
+    >;
+
+    /// Build the production arm over `device` and hand it to `f`. The net
+    /// borrows the local `ApiClient`, so it cannot be returned.
+    fn with_net<R>(
+        device: &FakeDevice,
+        admits: bool,
+        recovered: [u8; 32],
+        profile: &SyncTimingProfile,
+        f: impl FnOnce(&ProvisionNetUnderTest<'_>) -> R,
+    ) -> R {
         let api = ApiClient::new(
             device.http.clone(),
             device.credential_store.clone(),
             "http://api.test",
         );
-        let net = VaultProvisionNet {
+        f(&VaultProvisionNet {
             transport: &device.record_store,
-            adopter: &StubAdopter { admits: true },
+            adopter: &StubAdopter { admits, recovered },
             api: &api,
             floors: &device.floor_store,
             scheduler: &device.scheduler,
             profile,
-        };
-        block_on(net.require_vacant_vault_pointer(&pointer_name()))
+        })
+    }
+
+    /// Run the production probe over `device`.
+    fn probe(device: &FakeDevice, profile: &SyncTimingProfile) -> Result<(), VaultPointerProbe> {
+        with_net(device, true, DERIVED_SEED, profile, |net| {
+            block_on(net.require_vacant_vault_pointer(&pointer_name()))
+        })
     }
 
     /// Seed a verifiable record at the probed name — the account's own, as an
@@ -320,84 +352,62 @@ mod tests {
         );
     }
 
-    /// The root step the production arm reports, over an adopter that admits or
-    /// rejects whatever it is handed.
-    fn root_step(device: &FakeDevice, admits: bool) -> RootStep {
-        let api = ApiClient::new(
-            device.http.clone(),
-            device.credential_store.clone(),
-            "http://api.test",
-        );
-        let net = VaultProvisionNet {
-            transport: &device.record_store,
-            adopter: &StubAdopter { admits },
-            api: &api,
-            floors: &device.floor_store,
-            scheduler: &device.scheduler,
-            profile: &SyncTimingProfile::CI,
-        };
-        block_on(net.genesis_root_step(&pointer_name()))
+    /// What the production arm sights at the derived root name, over an adopter
+    /// that admits or rejects whatever it is handed and recovers `recovered` as
+    /// the record's own read scope seed.
+    fn genesis_root(device: &FakeDevice, admits: bool, recovered: [u8; 32]) -> GenesisRoot {
+        with_net(device, admits, recovered, &SyncTimingProfile::CI, |net| {
+            block_on(net.genesis_root(&pointer_name(), &DERIVED_SEED))
+        })
     }
 
-    /// What the production arm serves as the vault pointer's value.
-    fn pointer_value(device: &FakeDevice) -> Option<Vec<u8>> {
-        let api = ApiClient::new(
-            device.http.clone(),
-            device.credential_store.clone(),
-            "http://api.test",
-        );
-        let net = VaultProvisionNet {
-            transport: &device.record_store,
-            adopter: &StubAdopter { admits: true },
-            api: &api,
-            floors: &device.floor_store,
-            scheduler: &device.scheduler,
-            profile: &SyncTimingProfile::CI,
-        };
-        block_on(net.fetch_vault_pointer(&pointer_name()))
-    }
-
-    /// The root step is the gate's verdict, not the transport's: a record the
-    /// gate admits completes it, so a retry publishes nothing.
+    /// Both halves of D3: the gate admits it AND it opens under the seed this
+    /// run derived.
     #[test]
-    fn a_gate_passing_record_completes_the_root_step() {
+    fn a_gate_passing_record_under_the_derived_seed_is_the_accounts_own_root() {
         let world = FakeWorld::new();
         let device = world.device(b"alice");
         seed_record(&device);
-        assert_eq!(root_step(&device, true), RootStep::AlreadyAdopted);
+        assert_eq!(
+            genesis_root(&device, true, DERIVED_SEED),
+            GenesisRoot::Adopted
+        );
+    }
+
+    /// The gate recovers the seed from the record's own owner blob, so a pass
+    /// proves only that an owner-readable root stands here. A read rotation
+    /// re-keys the scope at this same name: that record is foreign to this mint,
+    /// and minting over it would sign an epoch rollback.
+    #[test]
+    fn a_gate_passing_record_under_another_seed_is_foreign() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        seed_record(&device);
+        assert_eq!(
+            genesis_root(&device, true, [0x77; 32]),
+            GenesisRoot::Foreign,
+            "a rotated vault at the derived name is never this run's genesis root",
+        );
     }
 
     /// A record the gate refuses is not this run's root, and neither is an
-    /// unreachable record plane: both must publish and let CAS settle the name.
+    /// unreachable record plane: both leave the name unclaimed.
     #[test]
-    fn nothing_adoptable_leaves_the_root_step_to_publish() {
+    fn nothing_adoptable_leaves_the_root_name_unclaimed() {
         let world = FakeWorld::new();
         let rejected = world.device(b"alice");
         seed_record(&rejected);
-        assert_eq!(root_step(&rejected, false), RootStep::MustPublish);
+        assert_eq!(
+            genesis_root(&rejected, false, DERIVED_SEED),
+            GenesisRoot::Unclaimed
+        );
 
         // A separate world: `FakeWorld` shares one record plane across devices.
         let empty = FakeWorld::new();
         let unresolvable = empty.device(b"bob");
-        assert_eq!(root_step(&unresolvable, true), RootStep::MustPublish);
-    }
-
-    /// The mint's success condition reads the pointer through the same fan-out
-    /// verify as any boot: an authenticated value, or nothing.
-    #[test]
-    fn the_pointer_fetch_yields_the_authenticated_value_or_nothing() {
-        let world = FakeWorld::new();
-        let device = world.device(b"alice");
         assert_eq!(
-            pointer_value(&device),
-            None,
-            "an unresolvable pointer name answers nothing",
-        );
-
-        seed_record(&device);
-        assert_eq!(
-            pointer_value(&device),
-            Some(b"sealed-repoint-block".to_vec()),
+            genesis_root(&unresolvable, true, DERIVED_SEED),
+            GenesisRoot::Unclaimed
         );
     }
 
@@ -536,7 +546,10 @@ mod tests {
         );
         let net = VaultProvisionNet {
             transport: &NoEndpoints,
-            adopter: &StubAdopter { admits: true },
+            adopter: &StubAdopter {
+                admits: true,
+                recovered: DERIVED_SEED,
+            },
             api: &api,
             floors: &device.floor_store,
             scheduler: &device.scheduler,

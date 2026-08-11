@@ -9,6 +9,8 @@
 
 use core::fmt;
 
+use cipherbox_core::suite::aead::NONCE_LEN;
+
 use zeroize::Zeroizing;
 
 /// Entropy acquisition failed.
@@ -81,8 +83,22 @@ pub fn fresh_ephemeral<E: Entropy + ?Sized>(
     Ok(ephemeral)
 }
 
+/// A fresh AEAD nonce, or a closed failure.
+///
+/// Same refusal as [`fresh_ephemeral`], for the sharper reason: a seam that
+/// reports success having written nothing seals every body under one fixed
+/// nonce, and two seals under one key at one nonce is a confidentiality break.
+pub fn fresh_nonce<E: Entropy + ?Sized>(entropy: &mut E) -> Result<[u8; NONCE_LEN], EntropyError> {
+    let mut nonce = [0u8; NONCE_LEN];
+    entropy.fill(&mut nonce)?;
+    if nonce.iter().all(|byte| *byte == 0) {
+        return Err(EntropyError::new("entropy seam produced an all-zero nonce"));
+    }
+    Ok(nonce)
+}
+
 #[cfg(test)]
-mod fresh_ephemeral_tests {
+mod fresh_draw_tests {
     use super::*;
 
     struct Silent;
@@ -104,11 +120,13 @@ mod fresh_ephemeral_tests {
     #[test]
     fn a_seam_that_writes_nothing_is_refused() {
         assert!(fresh_ephemeral(&mut Silent).is_err());
+        assert!(fresh_nonce(&mut Silent).is_err());
     }
 
     #[test]
     fn a_failing_seam_propagates() {
         assert!(fresh_ephemeral(&mut Broken).is_err());
+        assert!(fresh_nonce(&mut Broken).is_err());
     }
 
     #[test]
@@ -116,5 +134,11 @@ mod fresh_ephemeral_tests {
         let mut seeded = crate::testkit::SeededEntropy::new(4);
         let ephemeral = fresh_ephemeral(&mut seeded).expect("fresh");
         assert!(ephemeral.iter().any(|byte| *byte != 0));
+        assert!(
+            fresh_nonce(&mut seeded)
+                .expect("fresh")
+                .iter()
+                .any(|b| *b != 0)
+        );
     }
 }

@@ -20,10 +20,9 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_payload};
-use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::seams::{SeamError, SeamResult};
 
 /// A safety bound on the vault-pointer index walk. The chain length is
@@ -169,8 +168,10 @@ pub fn seal_repoint(
     if session != SessionRole::Owner {
         return Err(PointerError::NotOwnerSession);
     }
-    let mut nonce = [0u8; NONCE_LEN];
-    entropy.fill(&mut nonce).map_err(PointerError::Entropy)?;
+    // Two mint attempts by one account seal their re-points under one derived
+    // pointer read key, so the nonce is the only thing separating them: a seam
+    // that writes nothing must refuse, not seal at zero (ADR 0007 D1).
+    let nonce = fresh_nonce(entropy).map_err(PointerError::Entropy)?;
     Ok(seal_pointer_payload(
         pointer_read_key,
         &nonce,
