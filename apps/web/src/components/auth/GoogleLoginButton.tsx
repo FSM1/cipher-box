@@ -27,10 +27,16 @@ const GIS_SRC = 'https://accounts.google.com/gsi/client';
  */
 let gisLoad: Promise<GoogleIdentityServices> | null = null;
 
+/** The SDK once it has installed its global, and `null` until then. */
+function installedGis(): GoogleIdentityServices | null {
+  const installed = (globalThis as { google?: GoogleIdentityServices }).google;
+  return installed?.accounts?.id ? installed : null;
+}
+
 function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
   gisLoad ??= new Promise<GoogleIdentityServices>((resolve, reject) => {
-    const existing = (globalThis as { google?: GoogleIdentityServices }).google;
-    if (existing?.accounts?.id) {
+    const existing = installedGis();
+    if (existing) {
       resolve(existing);
       return;
     }
@@ -38,8 +44,8 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
     script.src = GIS_SRC;
     script.async = true;
     script.onload = () => {
-      const loaded = (globalThis as { google?: GoogleIdentityServices }).google;
-      if (loaded?.accounts?.id) resolve(loaded);
+      const loaded = installedGis();
+      if (loaded) resolve(loaded);
       else reject(new Error('google sign-in loaded but did not install'));
     };
     script.onerror = () => reject(new Error('google sign-in could not be loaded'));
