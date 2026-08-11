@@ -34,7 +34,7 @@ export class IdentityController {
   @ApiOperation({ summary: 'Verification keys for CipherBox-issued identity tokens' })
   @ApiOkResponse({ type: JwksResponseDto })
   jwks(): JwksResponseDto {
-    return this.tokens.jwks() as JwksResponseDto;
+    return this.tokens.jwks();
   }
 
   @Post('identity/google')

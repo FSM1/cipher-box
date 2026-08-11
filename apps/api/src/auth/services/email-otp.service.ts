@@ -96,10 +96,11 @@ export class EmailOtpService {
   }
 
   /**
-   * Consume a code. Single-use, attempt-capped, and expiry-checked — a wrong
-   * guess costs an attempt, and running out voids the code entirely.
+   * Consume a code, returning the normalized address it was issued to.
+   * Single-use, attempt-capped, and expiry-checked — a wrong guess costs an
+   * attempt, and running out voids the code entirely.
    */
-  verify(email: string, code: string): void {
+  verify(email: string, code: string): string {
     const address = normalizeEmail(email);
     this.evictExpired();
 
@@ -122,6 +123,7 @@ export class EmailOtpService {
       throw new UnauthorizedException('Incorrect verification code');
     }
     this.clearCode(address);
+    return address;
   }
 
   /** Uniform over the code space: a biased modulo would thin the keyspace. */
@@ -176,7 +178,7 @@ export class EmailOtpService {
 }
 
 /** One address is one identity: case and surrounding space never distinguish two. */
-export function normalizeEmail(email: string): string {
+function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 

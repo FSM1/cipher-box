@@ -1,9 +1,9 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'node:crypto';
 import { Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { IdentitySubject, IdentitySubjectKind } from '../entities/identity-subject.entity';
+import { IdentityService } from './identity.service';
 
 /**
  * Resolves a verified provider identity to its stable CipherBox subject id.
@@ -16,6 +16,7 @@ export class IdentitySubjectService {
   constructor(
     @InjectRepository(IdentitySubject)
     private readonly subjects: Repository<IdentitySubject>,
+    private readonly identityService: IdentityService,
     private readonly clock: Clock
   ) {}
 
@@ -32,7 +33,7 @@ export class IdentitySubjectService {
     identifier: string,
     identifierDisplay: string | null
   ): Promise<string> {
-    const identifierHash = hashIdentifier(identifier);
+    const identifierHash = this.identityService.hashIdentifier(identifier);
     const now = this.clock.now();
 
     const existing = await this.subjects.findOne({ where: { kind, identifierHash } });
@@ -41,23 +42,22 @@ export class IdentitySubjectService {
       return existing.id;
     }
 
-    await this.subjects
+    const inserted = await this.subjects
       .createQueryBuilder()
       .insert()
       .into(IdentitySubject)
       .values({ kind, identifierHash, identifierDisplay, lastUsedAt: now })
       .orIgnore()
+      .returning('id')
       .execute();
+    const mintedId = (inserted.raw as { id: string }[])[0]?.id;
+    if (mintedId) return mintedId;
 
+    // Lost the insert race, so the winner's row is the one that counts.
     const stored = await this.subjects.findOne({ where: { kind, identifierHash } });
     if (!stored) {
       throw new InternalServerErrorException('Identity subject could not be resolved');
     }
     return stored.id;
   }
-}
-
-/** SHA-256 hex of the canonical identifier; plaintext is never stored. */
-export function hashIdentifier(identifier: string): string {
-  return createHash('sha256').update(identifier).digest('hex');
 }

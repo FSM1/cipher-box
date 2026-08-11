@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { parseSiweMessage } from 'viem/siwe';
 import type { IdentitySubjectKind } from '../entities/identity-subject.entity';
 import { ChallengeService } from './challenge.service';
-import { EmailOtpService, normalizeEmail } from './email-otp.service';
+import { EmailOtpService } from './email-otp.service';
 import { GoogleOAuthService } from './google-oauth.service';
 import { IdentitySubjectService } from './identity-subject.service';
 import { IdentityTokenService } from './identity-token.service';
@@ -47,8 +47,7 @@ export class IdentityExchangeService {
   }
 
   async fromEmailCode(email: string, code: string): Promise<IdentityGrant> {
-    this.emailOtp.verify(email, code);
-    const address = normalizeEmail(email);
+    const address = this.emailOtp.verify(email, code);
     return this.mint('email', address, truncateEmail(address), address);
   }
 
