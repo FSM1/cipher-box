@@ -35,6 +35,20 @@ describe('EmailCodeRequestDto', () => {
     }
   });
 
+  // The pipe is configured to refuse, not silently strip: a caller sending a
+  // field this DTO never declared is told so rather than having it swallowed.
+  it('refuses a payload carrying an undeclared property', async () => {
+    await expect(
+      pipe.transform({ email: 'member@example.com', role: 'admin' }, body(EmailCodeRequestDto))
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      pipe.transform(
+        { email: 'member@example.com', code: '123456', attempts: 0 },
+        body(EmailCodeVerifyRequestDto)
+      )
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('applies the same trim on the verify request', async () => {
     await expect(
       pipe.transform(

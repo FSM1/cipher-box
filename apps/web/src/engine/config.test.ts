@@ -169,39 +169,40 @@ describe('loginEnv', () => {
     VITE_GOOGLE_CLIENT_ID: 'google-client',
   };
 
-  it('keeps the two client IDs apart, which name unrelated registrations', () => {
-    expect(loginEnv(configured)).toEqual({
-      web3AuthClientId: 'client',
-      googleClientId: 'google-client',
-      verifier: 'v',
-    });
+  it('reads the identifiers a Core Kit session is built from', () => {
+    expect(loginEnv(configured)).toEqual({ web3AuthClientId: 'client', verifier: 'v' });
   });
 
   it('trims the identifiers, which are sent to the providers verbatim', () => {
     expect(
-      loginEnv({
-        VITE_WEB3AUTH_CLIENT_ID: ' client\n',
-        VITE_WEB3AUTH_VERIFIER: 'v ',
-        VITE_GOOGLE_CLIENT_ID: '\tgoogle-client ',
-      })
-    ).toEqual({ web3AuthClientId: 'client', googleClientId: 'google-client', verifier: 'v' });
+      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: ' client\n', VITE_WEB3AUTH_VERIFIER: 'v ' })
+    ).toEqual({ web3AuthClientId: 'client', verifier: 'v' });
+  });
+
+  it('builds a session without the Google client ID, which configures one method', () => {
+    // Requiring it here would take email and wallet down with the method it
+    // configures — every login, not just Google's.
+    for (const blank of [undefined, '', '   ', '\n']) {
+      expect(loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toEqual({
+        web3AuthClientId: 'client',
+        verifier: 'v',
+      });
+    }
   });
 
   it('refuses a build missing one, naming it', () => {
     expect(() => loginEnv({ ...configured, VITE_WEB3AUTH_VERIFIER: undefined })).toThrow(
       /^VITE_WEB3AUTH_VERIFIER must be configured$/
     );
-    // Otherwise the member meets Google's own `401 invalid_client`, which names
-    // nothing they or an operator can act on.
-    expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: undefined })).toThrow(
-      /^VITE_GOOGLE_CLIENT_ID must be configured$/
-    );
     // Whitespace is missing, not configured.
     for (const blank of ['', '   ', '\n']) {
-      expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toThrow(
-        /^VITE_GOOGLE_CLIENT_ID must be configured$/
+      expect(() => loginEnv({ ...configured, VITE_WEB3AUTH_CLIENT_ID: blank })).toThrow(
+        /^VITE_WEB3AUTH_CLIENT_ID must be configured$/
       );
     }
+    expect(() =>
+      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: undefined, VITE_WEB3AUTH_VERIFIER: undefined })
+    ).toThrow(/^VITE_WEB3AUTH_CLIENT_ID and VITE_WEB3AUTH_VERIFIER must be configured$/);
   });
 });
 

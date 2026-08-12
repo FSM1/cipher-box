@@ -58,6 +58,37 @@ describe('EmailLoginForm', () => {
     expect(screen.queryByTestId('email-code-input')).toBeNull();
   });
 
+  // The button the member pressed is gone; without this they must hunt for the
+  // field that replaced it.
+  it('puts the cursor in the code field once the code is on its way', async () => {
+    renderForm();
+
+    typeAddress('member@example.test');
+    const code = await screen.findByTestId('email-code-input');
+
+    expect(document.activeElement).toBe(code);
+  });
+
+  // A refused code is the member's most likely mistyping, not a dead end.
+  it('stays on the code step when the code is refused, and takes another', async () => {
+    const { onVerify } = renderForm({
+      onVerify: () => Promise.reject(new Error('that code is not right')),
+    });
+
+    typeAddress('member@example.test');
+    const code = await screen.findByTestId('email-code-input');
+    fireEvent.change(code, { target: { value: '111111' } });
+    fireEvent.click(screen.getByTestId('email-verify-button'));
+
+    await waitFor(() => expect(onVerify).toHaveBeenCalledWith('member@example.test', '111111'));
+    expect(screen.getByTestId('email-code-input')).toBeDefined();
+
+    fireEvent.change(screen.getByTestId('email-code-input'), { target: { value: '222222' } });
+    fireEvent.click(screen.getByTestId('email-verify-button'));
+
+    await waitFor(() => expect(onVerify).toHaveBeenLastCalledWith('member@example.test', '222222'));
+  });
+
   it('holds the code step until six digits are in hand', async () => {
     renderForm();
 

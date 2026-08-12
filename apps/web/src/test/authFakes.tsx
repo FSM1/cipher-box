@@ -92,18 +92,22 @@ export function fakeCoreKitSession(
 ) {
   const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0 };
   let loggedIn = options.loggedIn ?? false;
-  let method: IdentityMethod | null = 'google';
+  // Both read off the redeemed credential, as the real session does: a bare
+  // restore knows neither, and a wallet login carries no address.
+  let method: IdentityMethod | null = null;
+  let email: string | null = null;
   const session: CoreKitSession = {
     restore: options.restore ?? (() => Promise.resolve()),
     isLoggedIn: () => loggedIn,
     login(credential) {
       calls.logins.push(credential);
       method = credential.method;
+      email = credential.email;
       loggedIn = true;
       return Promise.resolve();
     },
     method: () => method,
-    email: options.email ?? (() => 'user@example.test'),
+    email: options.email ?? (() => email),
     logout() {
       calls.logouts += 1;
       loggedIn = false;

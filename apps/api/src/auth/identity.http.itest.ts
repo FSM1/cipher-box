@@ -169,21 +169,39 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       }
     });
 
-    it('verifies a minted token, and refuses one signed by anything else', async () => {
+    it('verifies a minted token through the key set, and refuses one signed by anything else', async () => {
       const jwks = await request(http()).get('/auth/.well-known/jwks.json').expect(200);
-      const key = await jose.importJWK(jwks.body.keys[0], 'RS256');
+      // Through the set rather than a hand-picked key: Web3Auth selects by
+      // `kid`, so a header naming one the JWKS does not publish breaks real
+      // verification while a key picked by index here still passes.
+      const keys = jose.createLocalJWKSet(jwks.body as jose.JSONWebKeySet);
 
       const grant = await emailGrant(freshEmail());
-      const { payload } = await jose.jwtVerify(grant.body.token, key, {
+      const { payload, protectedHeader } = await jose.jwtVerify(grant.body.token, keys, {
         issuer: 'cipherbox',
         audience: 'web3auth',
       });
+      expect(protectedHeader.kid).toBe(jwks.body.keys[0].kid);
       expect(payload.sub).toBe(grant.body.verifierId);
       expect(payload.method).toBe('email');
+      // Long enough for the Core Kit handshake, short enough that a leak is stale.
+      expect(payload.exp! - payload.iat!).toBe(300);
+
+      const unpublished = await new jose.SignJWT({ method: 'email' })
+        .setProtectedHeader({ alg: 'RS256', kid: 'cipherbox-identity-does-not-exist' })
+        .setSubject(payload.sub as string)
+        .setIssuer('cipherbox')
+        .setAudience('web3auth')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign((await jose.generateKeyPair('RS256', { modulusLength: 2048 })).privateKey);
+      await expect(jose.jwtVerify(unpublished, keys)).rejects.toThrow(
+        jose.errors.JWKSNoMatchingKey
+      );
 
       const impostor = await jose.generateKeyPair('RS256', { modulusLength: 2048 });
       const forged = await new jose.SignJWT({ method: 'email' })
-        .setProtectedHeader({ alg: 'RS256' })
+        .setProtectedHeader({ alg: 'RS256', kid: protectedHeader.kid })
         .setSubject(payload.sub as string)
         .setIssuer('cipherbox')
         .setAudience('web3auth')
@@ -191,7 +209,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
         .setExpirationTime('5m')
         .sign(impostor.privateKey);
 
-      await expect(jose.jwtVerify(forged, key)).rejects.toThrow(
+      await expect(jose.jwtVerify(forged, keys)).rejects.toThrow(
         jose.errors.JWSSignatureVerificationFailed
       );
     });

@@ -218,6 +218,7 @@
    ========================================================================== */
 
 .google-login-wrapper {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -237,6 +238,13 @@
   pointer-events: none;
 }
 
+/* The Google-rendered button stays mounted through a sign-in; only the status
+   covering it changes, so it is still there when the transition ends. */
+.google-login-target.is-busy {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* A method this build cannot offer: present, named, and plainly not clickable. */
 .google-login-unavailable {
   padding: var(--spacing-xs) var(--spacing-sm);
@@ -247,7 +255,15 @@
   overflow-wrap: anywhere;
 }
 
+/* Sits over the target it replaces on screen, so the panel does not reflow when
+   a sign-in starts. */
 .google-login-status {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
   padding: var(--spacing-xs) var(--spacing-sm);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);

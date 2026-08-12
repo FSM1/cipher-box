@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeConfig } from '../../testing/fakes';
 import { buildMailProvider, LoggingMailProvider, SendGridMailProvider } from './mail.provider';
 
@@ -50,6 +50,10 @@ describe('buildMailProvider', () => {
 });
 
 describe('SendGridMailProvider', () => {
+  // Unstubbed however the test ended: a failed assertion would otherwise leave
+  // the stub installed for every suite that runs after it.
+  afterEach(() => vi.unstubAllGlobals());
+
   it('addresses the message to the recipient and reports the code', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -65,8 +69,6 @@ describe('SendGridMailProvider', () => {
     expect(body.from.email).toBe('noreply@cipherbox.cc');
     expect(body.content[0].value).toContain('123456');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer sg-key');
-
-    vi.unstubAllGlobals();
   });
 
   it('treats a refused send as a failure rather than reporting success', async () => {
@@ -78,7 +80,5 @@ describe('SendGridMailProvider', () => {
         '123456'
       )
     ).rejects.toThrow(/status 429/);
-
-    vi.unstubAllGlobals();
   });
 });

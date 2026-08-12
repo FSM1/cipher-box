@@ -6,6 +6,9 @@ interface InitConfig {
   callback: (response: { credential: string }) => void;
 }
 
+/** What GIS injects into the target, standing in for the real button markup. */
+const GIS_BUTTON = 'gis-rendered-button';
+
 const gis = {
   initialized: [] as InitConfig[],
   rendered: 0,
@@ -35,7 +38,14 @@ function installGoogleIdentityServices(): void {
       accounts: {
         id: {
           initialize: (config: InitConfig) => gis.initialized.push(config),
-          renderButton: () => (gis.rendered += 1),
+          // GIS builds the button's markup inside the target it is handed, so
+          // a test can tell a live button from an empty div left behind.
+          renderButton: (parent: HTMLElement) => {
+            gis.rendered += 1;
+            const button = document.createElement('div');
+            button.dataset.testid = GIS_BUTTON;
+            parent.appendChild(button);
+          },
         },
       },
     };
@@ -96,12 +106,52 @@ describe('GoogleLoginButton', () => {
     expect(vi.mocked(document.head.appendChild)).not.toHaveBeenCalled();
   });
 
-  it('reports the transition instead of the button while a sign-in is in flight', async () => {
+  it('reports the transition over the button while a sign-in is in flight', async () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
 
     render(<GoogleLoginButton clientId="google-client-id" onCredential={vi.fn()} busy />);
 
     expect(screen.getByText(/authenticating with google/)).toBeDefined();
+    // Covered and taken out of the a11y tree, not unmounted.
+    expect(screen.getByTestId('google-login-button').getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('still offers the button after a sign-in that came back', async () => {
+    installGoogleIdentityServices();
+    const GoogleLoginButton = await freshButton();
+    const onCredential = vi.fn();
+    const { rerender } = render(
+      <GoogleLoginButton clientId="google-client-id" onCredential={onCredential} />
+    );
+    await waitFor(() => expect(gis.rendered).toBe(1));
+
+    rerender(<GoogleLoginButton clientId="google-client-id" onCredential={onCredential} busy />);
+    rerender(<GoogleLoginButton clientId="google-client-id" onCredential={onCredential} />);
+
+    // The markup GIS injected, not merely a div at the same place: the one-shot
+    // mount effect never renders a second time, so a target React emptied out
+    // leaves the member with nothing to click until a reload.
+    expect(screen.getByTestId(GIS_BUTTON)).toBeDefined();
+    expect(gis.rendered).toBe(1);
+    gis.deliver('google.id.token');
+    expect(onCredential).toHaveBeenCalledWith('google.id.token');
+  });
+
+  it('delivers to the callback of the render that committed', async () => {
+    installGoogleIdentityServices();
+    const GoogleLoginButton = await freshButton();
+    const stale = vi.fn();
+    const current = vi.fn();
+    const { rerender } = render(
+      <GoogleLoginButton clientId="google-client-id" onCredential={stale} />
+    );
+    await waitFor(() => expect(gis.rendered).toBe(1));
+
+    rerender(<GoogleLoginButton clientId="google-client-id" onCredential={current} />);
+    gis.deliver('google.id.token');
+
+    expect(current).toHaveBeenCalledWith('google.id.token');
+    expect(stale).not.toHaveBeenCalled();
   });
 });

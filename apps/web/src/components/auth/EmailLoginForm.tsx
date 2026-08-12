@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 interface EmailLoginFormProps {
   /** Asks CipherBox to deliver a code; resolves once it is on its way. */
@@ -19,8 +19,16 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
 
+  const codeInput = useRef<HTMLInputElement>(null);
+
   const trimmed = email.trim().toLowerCase();
   const blocked = disabled || busy;
+
+  // The step swaps the field out from under the focused button, so a member on
+  // a keyboard or a screen reader would otherwise have to go hunting for it.
+  useEffect(() => {
+    if (sentTo !== null) codeInput.current?.focus();
+  }, [sentTo]);
 
   // The page renders the failure; this form only advances on success.
   const submit = (event: FormEvent) => {
@@ -81,6 +89,7 @@ export function EmailLoginForm({ onSendCode, onVerify, disabled, busy }: EmailLo
           </label>
           <input
             id="login-code"
+            ref={codeInput}
             data-testid="email-code-input"
             type="text"
             className="email-login-input"

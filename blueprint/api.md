@@ -254,7 +254,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `refresh_tokens`, `name_inventory (account, ipnsName)`,
+`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`,
+`name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`, `mailbox_messages`,
 `record_cache` (non-canonical). Nothing else. No crypto-bearing rows outlive
 their consumer; revocation-adjacent state is hard-deleted, never soft-flagged.

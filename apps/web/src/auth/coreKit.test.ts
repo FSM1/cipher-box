@@ -200,6 +200,18 @@ describe('a Core Kit login', () => {
     });
   });
 
+  // The Google client ID configures the Google button alone; a build without one
+  // must still seat an email or wallet login rather than refuse every session.
+  it('is built by a bundle carrying no Google client ID', async () => {
+    const withoutGoogle = createCoreKitSession({ ...ENV, VITE_GOOGLE_CLIENT_ID: undefined }, store);
+
+    await withoutGoogle.login(credential({ method: 'email', verifierId: 'subject-42' }));
+    expect(sdk.jwtLogin).toMatchObject({ verifier: 'verifier', verifierId: 'subject-42' });
+
+    await withoutGoogle.login(credential({ method: 'wallet', verifierId: 'subject-42' }));
+    expect(sdk.jwtLogin).toMatchObject({ verifier: 'verifier', verifierId: 'subject-42' });
+  });
+
   it('reaches one identity from every method, given one subject', async () => {
     await session().login(credential({ method: 'google', verifierId: 'shared-subject' }));
     const viaGoogle = sdk.jwtLogin;

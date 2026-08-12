@@ -161,6 +161,9 @@ describe('useAuth', () => {
 
     expect(coreKit.calls.logins).toEqual([]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    // The identity token carries no email claim, so a session restored without
+    // a fresh login has no address to show until the member signs in again.
+    expect(authStore.getState()).toMatchObject({ isAuthenticated: true, email: null });
   });
 
   it('leaves the tab signed out and disarmed when the engine refuses the secret', async () => {

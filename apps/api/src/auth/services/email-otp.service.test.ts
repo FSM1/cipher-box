@@ -80,11 +80,25 @@ describe('EmailOtpService', () => {
     const code = lastCode();
     const wrong = code === '000000' ? '111111' : '000000';
 
+    // The messages are asserted, not just the status: both refusals are a 401,
+    // so a budget that never actually ran out would read the same here.
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      expect(() => service.verify(EMAIL, wrong)).toThrow(UnauthorizedException);
+      expect(() => service.verify(EMAIL, wrong)).toThrow(/Incorrect verification code/);
     }
     // The budget is spent, so even the right code no longer opens it.
-    expect(() => service.verify(EMAIL, code)).toThrow(UnauthorizedException);
+    expect(() => service.verify(EMAIL, code)).toThrow(/Too many attempts/);
+  });
+
+  it('still opens on the right code after a few wrong guesses', async () => {
+    await service.send(EMAIL);
+    const code = lastCode();
+    const wrong = code === '000000' ? '111111' : '000000';
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(() => service.verify(EMAIL, wrong)).toThrow(UnauthorizedException);
+    }
+
+    expect(service.verify(EMAIL, code)).toBe(EMAIL);
   });
 
   it('caps how many codes one address can request in a window', async () => {

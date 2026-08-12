@@ -38,6 +38,7 @@ export interface Auth {
   loginWithEmailCode(email: string, code: string): Promise<void>;
   /** Issues the single-use nonce the wallet's EIP-4361 message embeds. */
   walletNonce(): Promise<string>;
+  /** `signature` is the `0x`-prefixed EIP-191 hex wagmi returns, sent verbatim. */
   loginWithWallet(message: string, signature: string): Promise<void>;
   logout(): Promise<void>;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GOOGLE_CLIENT_ID_ENV } from '../../engine/config';
 import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
@@ -84,8 +84,12 @@ export function GoogleLoginButton({
   const target = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   // Read through a ref so a re-rendered parent cannot re-run the one-shot mount.
+  // GIS calls it from outside React, so it is installed on commit: a render
+  // React discards must not leave its callback reachable.
   const deliver = useRef(onCredential);
-  deliver.current = onCredential;
+  useLayoutEffect(() => {
+    deliver.current = onCredential;
+  }, [onCredential]);
 
   useEffect(() => {
     if (!clientId) return;
@@ -125,23 +129,31 @@ export function GoogleLoginButton({
     );
   }
 
+  // The target outlives every busy cycle: GIS renders into this node once, and
+  // unmounting it would hand the next render an empty div nothing renders into
+  // again. So the transition is an overlay, not a replacement.
   return (
     <div className="google-login-wrapper">
-      {busy ? (
+      <div
+        ref={target}
+        data-testid="google-login-button"
+        className={targetClass(disabled, busy)}
+        aria-disabled={disabled || busy}
+        aria-hidden={busy}
+      />
+      {busy && (
         <div className="google-login-status" aria-live="polite">
           authenticating with google...
         </div>
-      ) : (
-        // Google owns the button's markup, so the disabled state is a wrapper
-        // that intercepts the click rather than an attribute on it.
-        <div
-          ref={target}
-          data-testid="google-login-button"
-          className={disabled ? 'google-login-target is-disabled' : 'google-login-target'}
-          aria-disabled={disabled}
-        />
       )}
       {error && <LoginError message={error} />}
     </div>
   );
+}
+
+function targetClass(disabled?: boolean, busy?: boolean): string {
+  const classes = ['google-login-target'];
+  if (disabled) classes.push('is-disabled');
+  if (busy) classes.push('is-busy');
+  return classes.join(' ');
 }
