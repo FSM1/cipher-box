@@ -1,6 +1,27 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { EmailLoginForm } from './EmailLoginForm';
+
+/**
+ * A promise the test refuses on demand. Asserting the step before the refusal
+ * settles passes whatever the component does with it, so a guard written that
+ * way cannot fail.
+ */
+function deferred(): { promise: Promise<void>; reject: (reason: Error) => Promise<void> } {
+  let refuse!: (reason: Error) => void;
+  const promise = new Promise<void>((_, rejectPromise) => {
+    refuse = rejectPromise;
+  });
+  // The component swallows the rejection; awaiting it here would fail the test.
+  promise.catch(() => undefined);
+  return {
+    promise,
+    reject: async (reason: Error) => {
+      refuse(reason);
+      await act(async () => undefined);
+    },
+  };
+}
 
 function renderForm(
   overrides: Partial<{
@@ -50,11 +71,14 @@ describe('EmailLoginForm', () => {
 
   // Advancing on a send that never happened would ask for a code that is not coming.
   it('stays on the address step when the send is refused', async () => {
-    renderForm({ onSendCode: () => Promise.reject(new Error('too many requests')) });
+    const send = deferred();
+    const { onSendCode } = renderForm({ onSendCode: () => send.promise });
 
     typeAddress('member@example.test');
+    await waitFor(() => expect(onSendCode).toHaveBeenCalledWith('member@example.test'));
+    await send.reject(new Error('too many requests'));
 
-    await waitFor(() => expect(screen.getByTestId('email-input')).toBeDefined());
+    expect(screen.getByTestId('email-input')).toBeDefined();
     expect(screen.queryByTestId('email-code-input')).toBeNull();
   });
 
@@ -71,9 +95,8 @@ describe('EmailLoginForm', () => {
 
   // A refused code is the member's most likely mistyping, not a dead end.
   it('stays on the code step when the code is refused, and takes another', async () => {
-    const { onVerify } = renderForm({
-      onVerify: () => Promise.reject(new Error('that code is not right')),
-    });
+    const firstAttempt = deferred();
+    const { onVerify } = renderForm({ onVerify: () => firstAttempt.promise });
 
     typeAddress('member@example.test');
     const code = await screen.findByTestId('email-code-input');
@@ -81,6 +104,7 @@ describe('EmailLoginForm', () => {
     fireEvent.click(screen.getByTestId('email-verify-button'));
 
     await waitFor(() => expect(onVerify).toHaveBeenCalledWith('member@example.test', '111111'));
+    await firstAttempt.reject(new Error('that code is not right'));
     expect(screen.getByTestId('email-code-input')).toBeDefined();
 
     fireEvent.change(screen.getByTestId('email-code-input'), { target: { value: '222222' } });
