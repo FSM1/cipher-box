@@ -140,6 +140,19 @@ impl SessionIdentity {
         kdf::pointer_read_key(self.owner_pointer_seed.as_bytes(), scope_id)
     }
 
+    /// The genesis scope read (override) seed (`genesis-read-scope-seed` edge).
+    /// Derived, not drawn, so two mint attempts by one account reproduce one
+    /// vault (ADR 0007 D1); every later read seed is drawn at its rotation.
+    pub(crate) fn genesis_read_scope_seed(&self) -> SecretBytes {
+        kdf::genesis_read_scope_seed(&self.login_secret)
+    }
+
+    /// The genesis `writeScopeSeed` (`genesis-write-scope-seed` edge) — see
+    /// [`Self::genesis_read_scope_seed`].
+    pub(crate) fn genesis_write_scope_seed(&self) -> SecretBytes {
+        kdf::genesis_write_scope_seed(&self.login_secret)
+    }
+
     /// The per-name write-plane IPNS signer for a node: `writeSeed(node) =
     /// KDF(writeScopeSeed, node.id)` then the `ipns-keypair` edge. This is the
     /// per-name `Ed25519Signer` the held set stores for its sub-EOL `seq+1`

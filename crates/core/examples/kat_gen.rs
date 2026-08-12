@@ -146,6 +146,17 @@ struct UnknownVector {
 struct KdfEdgesFile {
     probe: ProbeJson,
     edges: Vec<EdgeVector>,
+    genesis_root_name: GenesisRootNameVector,
+}
+
+/// The whole login-secret → genesis root name chain, frozen end to end: the
+/// property ADR 0007 rests on is that two runs of one account mint one name, so
+/// the name itself is the vector, not just the edges under it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenesisRootNameVector {
+    scope_id: String,
+    ipns_name: String,
 }
 
 #[derive(Serialize)]
@@ -3430,7 +3441,18 @@ fn build_kdf_edges() -> KdfEdgesFile {
         })
         .collect();
 
+    // login secret → genesis-write-scope-seed → write-seed → ipns-keypair → name.
+    let genesis_write = kdf::genesis_write_scope_seed(&seed);
+    let genesis_root_name = IpnsName::from_public_key(
+        &kdf::ipns_keypair(kdf::write_seed(genesis_write.as_bytes(), &id).as_bytes())
+            .verifying_key(),
+    );
+
     KdfEdgesFile {
+        genesis_root_name: GenesisRootNameVector {
+            scope_id: hexstr(&id),
+            ipns_name: genesis_root_name.as_str().to_string(),
+        },
         probe: ProbeJson {
             seed: hexstr(&seed),
             id: hexstr(&id),

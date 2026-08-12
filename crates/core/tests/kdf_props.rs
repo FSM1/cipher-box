@@ -1,6 +1,6 @@
 //! Property layer over the KDF edge catalog (blueprint/testing.md
 //! "crates/core — KATs and property tests"): the mechanical separation law
-//! under arbitrary inputs — no two of the sixteen edges ever produce equal
+//! under arbitrary inputs — no two of the eighteen edges ever produce equal
 //! output for equal inputs — plus per-edge determinism. Case counts are bounded
 //! for CI speed; failing seeds persist natively but not under wasm, where the
 //! source tree may be read-only (mirrors tests/codec_props.rs).

@@ -767,8 +767,12 @@ mod tests {
         [byte; 16]
     }
 
+    /// The owner's identity scalar, which in a live session IS the login secret
+    /// (`SessionIdentity::derive` adopts it directly).
+    const OWNER_SCALAR: [u8; 32] = [0x33; 32];
+
     fn owner() -> EcdsaSigner {
-        EcdsaSigner::from_scalar(&[0x33; 32]).unwrap()
+        EcdsaSigner::from_scalar(&OWNER_SCALAR).unwrap()
     }
 
     /// An owner-signed commitment naming `name` as the scope root. The signature
@@ -1575,10 +1579,21 @@ mod tests {
         })
         .expect("the retry completes on a freshly minted seed");
 
+        let minted = SeededEntropy::first_draw(42);
         assert_eq!(
             outcome.new_root_name,
-            derive_write_name(&SeededEntropy::first_draw(42), &SCOPE),
+            derive_write_name(&minted, &SCOPE),
             "the retry minted its own seed"
+        );
+        // ADR 0007 D1 confines the derived pair to genesis. `owner()` adopts the
+        // login secret as its identity scalar (`SessionIdentity::derive`), so the
+        // seed this account's own mint derives is exactly
+        // `genesis_write_scope_seed(OWNER_SCALAR)` — and a rotation that
+        // reproduced it would rotate to the key the login secret already names.
+        assert_ne!(
+            minted,
+            *cipherbox_core::kdf::genesis_write_scope_seed(&OWNER_SCALAR).as_bytes(),
+            "a rotation draws its seed, it never derives one",
         );
         for name in &orphaned {
             assert!(
