@@ -251,7 +251,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   survives: a debug flag feeds the staging test-login path through the same
   facade, keychain bypassed — the headless agent/e2e seam.
 - **The orchestration is the web client's** ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md) D3): the shell imports the
-  same host-agnostic login package and supplies its own credential collector. It
+  same host-agnostic `packages/login` and supplies its own credential collector. It
   does **not** take `packages/client` — the worker, leadership and Service Worker
   machinery has no place here.
 - **Google collection is native, not in-webview.** Google Identity Services does
