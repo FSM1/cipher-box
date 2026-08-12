@@ -2400,6 +2400,13 @@ fn the_derived_genesis_root_name_is_frozen() {
     let scope_id: [u8; 16] = unhex("genesisRootName.scopeId", &file.genesis_root_name.scope_id)
         .try_into()
         .expect("scope id is 16 bytes");
+    // The vector is generated from the probe id. Anchoring it here is what stops
+    // a scopeId and an ipnsName being edited together into a self-consistent
+    // pair that freezes nothing.
+    assert_eq!(
+        file.genesis_root_name.scope_id, file.probe.id,
+        "the genesis root vector must stand on the probe's own scope id",
+    );
 
     let write_scope_seed = kdf::genesis_write_scope_seed(&secret);
     let name = IpnsName::from_public_key(
