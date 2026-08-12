@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../stores/auth.store';
 import {
   authWrapper,
+  FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
   fakeCoreKitSession,
   fakeEngineClient,
+  fakeIdentityExchange,
   SECRET_HEX,
 } from '../test/authFakes';
 import { useLoginSecretSource } from '../providers/EngineProvider';
@@ -13,28 +15,41 @@ import { useAuth } from './useAuth';
 
 const SECRET_BYTES = Uint8Array.from({ length: 32 }, () => 0x0f);
 
+/** Stands in for what Google Identity Services hands the page. */
+const GOOGLE_ID_TOKEN = 'google.id.token';
+
 /** Mounts `useAuth` alongside the secret source the failover path re-exports through. */
 function mount(
   client: ReturnType<typeof fakeEngineClient>,
-  coreKit: ReturnType<typeof fakeCoreKitSession>
+  coreKit: ReturnType<typeof fakeCoreKitSession>,
+  identity: ReturnType<typeof fakeIdentityExchange> = fakeIdentityExchange()
 ) {
   return renderHook(() => ({ auth: useAuth(), secrets: useLoginSecretSource() }), {
-    wrapper: authWrapper(client.client, coreKit.session),
+    wrapper: authWrapper(client.client, coreKit.session, identity.exchange),
   });
 }
 
 describe('useAuth', () => {
   beforeEach(() => authStore.signedOut());
 
-  it('drives the Core Kit google flow and hands the engine the login secret', async () => {
+  it('exchanges the google credential, then hands the engine the login secret', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();
-    const { result } = mount(engine, coreKit);
+    const identity = fakeIdentityExchange();
+    const { result } = mount(engine, coreKit, identity);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
-    await act(() => result.current.auth.loginWithGoogle());
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
 
-    expect(coreKit.calls.logins).toEqual([{ method: 'google', email: undefined }]);
+    expect(identity.calls.google).toEqual([GOOGLE_ID_TOKEN]);
+    expect(coreKit.calls.logins).toEqual([
+      {
+        method: 'google',
+        token: FAKE_IDENTITY_TOKEN,
+        verifierId: 'subject-for-google',
+        email: 'user@example.test',
+      },
+    ]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     expect(authStore.getState()).toMatchObject({
       isAuthenticated: true,
@@ -43,41 +58,52 @@ describe('useAuth', () => {
     });
   });
 
-  it('passes the typed address to the Core Kit email flow before the handoff', async () => {
+  it('asks CipherBox for the code, then redeems it for the login secret', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();
-    const { result } = mount(engine, coreKit);
+    const identity = fakeIdentityExchange();
+    const { result } = mount(engine, coreKit, identity);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
-    await act(() => result.current.auth.loginWithEmail('user@example.test'));
+    await act(() => result.current.auth.sendEmailCode('user@example.test'));
+    await act(() => result.current.auth.loginWithEmailCode('user@example.test', '123456'));
 
-    expect(coreKit.calls.logins).toEqual([{ method: 'email', email: 'user@example.test' }]);
+    expect(identity.calls.sentCodes).toEqual(['user@example.test']);
+    expect(identity.calls.verified).toEqual([{ email: 'user@example.test', code: '123456' }]);
+    expect(coreKit.calls.logins).toHaveLength(1);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
   });
 
-  it('routes a wallet signature to the facade and exports no secret for it', async () => {
+  // The wallet is a first login now, not a secondary method: it lands on the
+  // same mint, the same Core Kit login and the same secret handoff as Google.
+  it('cold-starts a vault from a wallet signature', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();
-    const { result } = mount(engine, coreKit);
+    const identity = fakeIdentityExchange();
+    const { result } = mount(engine, coreKit, identity);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
-    const signature = new Uint8Array(65).fill(7);
+    const signature = `0x${'07'.repeat(65)}`;
     await act(() => result.current.auth.loginWithWallet('siwe-message', signature));
 
-    expect(engine.calls.siwe).toEqual([{ message: 'siwe-message', signature }]);
-    expect(engine.calls.started).toEqual([]);
-    expect(coreKit.calls.exports).toBe(0);
+    expect(identity.calls.wallet).toEqual([{ message: 'siwe-message', signature }]);
+    expect(coreKit.calls.logins).toHaveLength(1);
+    expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    // The engine's own SIWE login is not what a first wallet login travels.
+    expect(engine.calls.siwe).toEqual([]);
     expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: 'wallet' });
   });
 
-  it('reads the SIWE nonce from the facade, never from the API', async () => {
+  it('reads the SIWE nonce from the API, which the engine cannot answer pre-start', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();
-    const { result } = mount(engine, coreKit);
+    const identity = fakeIdentityExchange();
+    const { result } = mount(engine, coreKit, identity);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
-    await expect(result.current.auth.siweChallenge()).resolves.toBe(FAKE_NONCE);
-    expect(engine.calls.siweChallenges).toBe(1);
+    await expect(result.current.auth.walletNonce()).resolves.toBe(FAKE_NONCE);
+    expect(identity.calls.nonces).toBe(1);
+    expect(engine.calls.siweChallenges).toBe(0);
   });
 
   it('tears down the engine and the Core Kit session on logout', async () => {
@@ -85,7 +111,7 @@ describe('useAuth', () => {
     const coreKit = fakeCoreKitSession();
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
-    await act(() => result.current.auth.loginWithGoogle());
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
     const secrets = result.current.secrets!;
 
     await act(() => result.current.auth.logout());
@@ -135,6 +161,9 @@ describe('useAuth', () => {
 
     expect(coreKit.calls.logins).toEqual([]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    // The identity token carries no email claim, so a session restored without
+    // a fresh login has no address to show until the member signs in again.
+    expect(authStore.getState()).toMatchObject({ isAuthenticated: true, email: null });
   });
 
   it('leaves the tab signed out and disarmed when the engine refuses the secret', async () => {
@@ -145,7 +174,7 @@ describe('useAuth', () => {
     const secrets = result.current.secrets!;
 
     await act(async () => {
-      await result.current.auth.loginWithGoogle().catch(() => undefined);
+      await result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN).catch(() => undefined);
     });
 
     expect(authStore.getState().isAuthenticated).toBe(false);
@@ -169,7 +198,7 @@ describe('useAuth', () => {
     const secrets = result.current.secrets!;
 
     await act(async () => {
-      await result.current.auth.loginWithGoogle().catch(() => undefined);
+      await result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN).catch(() => undefined);
     });
 
     expect(authStore.getState().isAuthenticated).toBe(false);
@@ -186,11 +215,11 @@ describe('useAuth', () => {
 
     let first!: Promise<void>;
     act(() => {
-      first = result.current.auth.loginWithGoogle();
+      first = result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN);
     });
     await waitFor(() => expect(engine.calls.started).toHaveLength(1));
 
-    await expect(result.current.auth.loginWithGoogle()).rejects.toThrow(
+    await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow(
       /another sign-in is already in progress/
     );
     expect(coreKit.calls.logins).toHaveLength(1);
@@ -207,7 +236,7 @@ describe('useAuth', () => {
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
-    await act(() => result.current.auth.loginWithGoogle());
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
 
     const rendered = JSON.stringify({ auth: result.current.auth, store: authStore.getState() });
     expect(rendered).not.toContain(SECRET_HEX);

@@ -27,8 +27,19 @@ const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'product
 /** Deployments whose bundle is shipped to users, and so must be able to log in. */
 const DEPLOYED: readonly Environment[] = ['staging', 'production'];
 
-/** The one list of what a Core Kit session needs, shared with the build gate. */
-const LOGIN_ENV = ['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const;
+/** Named once so the method's unavailable notice cannot drift from this list. */
+export const GOOGLE_CLIENT_ID_ENV = 'VITE_GOOGLE_CLIENT_ID';
+
+/** The one list of what building a Core Kit session reads. */
+const SESSION_ENV = ['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const;
+
+/**
+ * What a deployed bundle's login surface needs. The Google client ID is here
+ * but not in `SESSION_ENV`: it configures one method of three, so a build
+ * without it still logs in by email and wallet — a *deployment* missing it is
+ * an operator mistake worth a red build, not a reason to refuse every session.
+ */
+const LOGIN_ENV = [...SESSION_ENV, GOOGLE_CLIENT_ID_ENV] as const;
 
 /**
  * What a deployed bundle cannot work without. `VITE_API_URL` is here because an
@@ -95,19 +106,31 @@ export function engineHostConfig(
   };
 }
 
-/** Of the variables Core Kit login needs, those `env` does not supply. */
-export function missingLoginEnv(env: Partial<ImportMetaEnv>): string[] {
-  return LOGIN_ENV.filter((name) => configured(env[name]) === undefined);
+/** Of the variables a Core Kit session is built from, those `env` lacks. */
+function missingSessionEnv(env: Partial<ImportMetaEnv>): string[] {
+  return SESSION_ENV.filter((name) => configured(env[name]) === undefined);
 }
 
-/** The Web3Auth identifiers a Core Kit session is built from; refuses a build missing any. */
-export function loginEnv(env: Partial<ImportMetaEnv>): { clientId: string; verifier: string } {
-  const clientId = configured(env.VITE_WEB3AUTH_CLIENT_ID);
+/**
+ * The Google OAuth client ID, or `undefined` when this build carries none —
+ * absence disables that one method rather than failing the app, which is what
+ * keeps a build without login configuration a working page.
+ */
+export function googleClientId(env: Partial<ImportMetaEnv>): string | undefined {
+  return configured(env[GOOGLE_CLIENT_ID_ENV]);
+}
+
+/** The identifiers a Core Kit session is built from; refuses a build missing any. */
+export function loginEnv(env: Partial<ImportMetaEnv>): {
+  web3AuthClientId: string;
+  verifier: string;
+} {
+  const web3AuthClientId = configured(env.VITE_WEB3AUTH_CLIENT_ID);
   const verifier = configured(env.VITE_WEB3AUTH_VERIFIER);
-  if (!clientId || !verifier) {
-    throw new Error(`${missingLoginEnv(env).join(' and ')} must be configured`);
+  if (!web3AuthClientId || !verifier) {
+    throw new Error(`${missingSessionEnv(env).join(' and ')} must be configured`);
   }
-  return { clientId, verifier };
+  return { web3AuthClientId, verifier };
 }
 
 /**

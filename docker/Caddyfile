@@ -17,10 +17,13 @@ app-staging.cipherbox.cc {
 	root * /srv/web
 
 	# 'wasm-unsafe-eval' is required: Chromium blocks all WebAssembly compilation
-	# without it, killing the engine worker and the Core Kit tssLib. default-src is
-	# omitted so login and API calls to third-party origins stay unrestricted.
+	# without it, killing the engine worker and the Core Kit tssLib. Google
+	# Identity Services serves the sign-in button's script from its own origin,
+	# so 'self' alone would leave that method unable to load. default-src is
+	# omitted so login frames and API calls to third-party origins stay
+	# unrestricted.
 	header {
-		Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+		Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 		X-Content-Type-Options nosniff
 	}
 

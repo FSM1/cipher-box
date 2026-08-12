@@ -9,10 +9,8 @@ import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import { environment, loginEnv } from '../engine/config';
 import type { LoginSecretExporter } from '../engine/loginHandoff';
+import { type IdentityCredential, type IdentityMethod, isIdentityMethod } from './identityExchange';
 import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
-
-/** How a session was established; also the `authStore` login method. */
-export type CoreKitLoginMethod = 'google' | 'email';
 
 /**
  * The Core Kit surface the login flow drives. Narrow by construction: the hook
@@ -23,9 +21,10 @@ export interface CoreKitSession extends LoginSecretExporter {
   restore(): Promise<void>;
   /** True once a login (or a restore) has completed on this device. */
   isLoggedIn(): boolean;
-  login(method: CoreKitLoginMethod, email?: string): Promise<void>;
-  /** How the live session was established, as Core Kit reports it. */
-  method(): CoreKitLoginMethod;
+  /** Redeems a CipherBox identity token for this device's share of the key. */
+  login(credential: IdentityCredential): Promise<void>;
+  /** How the live session was established; unknown after a bare restore. */
+  method(): IdentityMethod | null;
   /** The signed-in user's email, when the method carries one. */
   email(): string | null;
   logout(): Promise<void>;
@@ -33,11 +32,13 @@ export interface CoreKitSession extends LoginSecretExporter {
 
 /** Adapts the Web3Auth SDK to the narrow session seam above. */
 class Web3AuthSession implements CoreKitSession {
+  /** The address the exchange reported; the token deliberately carries no PII. */
+  private signedInEmail: string | null = null;
+
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
-    private readonly verifier: string,
-    private readonly clientId: string
+    private readonly verifier: string
   ) {}
 
   async restore(): Promise<void> {
@@ -56,14 +57,11 @@ class Web3AuthSession implements CoreKitSession {
     return this.coreKit.status === COREKIT_STATUS.LOGGED_IN;
   }
 
-  async login(method: CoreKitLoginMethod, email?: string): Promise<void> {
-    await this.coreKit.loginWithOAuth({
-      subVerifierDetails: {
-        typeOfLogin: method === 'google' ? 'google' : 'email_passwordless',
-        verifier: this.verifier,
-        clientId: this.clientId,
-        ...(email ? { jwtParams: { login_hint: email } } : {}),
-      },
+  async login(credential: IdentityCredential): Promise<void> {
+    await this.coreKit.loginWithJWT({
+      verifier: this.verifier,
+      verifierId: credential.verifierId,
+      idToken: credential.token,
     });
     if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
       // REQUIRED_SHARE: MFA is on and this device holds no factor. Recovery and
@@ -74,20 +72,32 @@ class Web3AuthSession implements CoreKitSession {
       throw new Error('this device needs approval or a recovery phrase before it can sign in');
     }
     await this.coreKit.commitChanges();
+    this.signedInEmail = credential.email;
   }
 
-  method(): CoreKitLoginMethod {
-    return this.coreKit.getUserInfo().typeOfLogin === 'google' ? 'google' : 'email';
+  /**
+   * Read back off the token's own `method` claim, which the SDK parses into
+   * its user info and keeps across a session restore.
+   */
+  method(): IdentityMethod | null {
+    let claimed: unknown;
+    try {
+      claimed = (this.coreKit.getUserInfo() as { method?: unknown }).method;
+    } catch {
+      return null;
+    }
+    return isIdentityMethod(claimed) ? claimed : null;
   }
 
   email(): string | null {
-    return this.coreKit.getUserInfo().email ?? null;
+    return this.signedInEmail;
   }
 
   async logout(): Promise<void> {
     try {
       if (this.isLoggedIn()) await this.coreKit.logout();
     } finally {
+      this.signedInEmail = null;
       await this.clearStore();
     }
   }
@@ -157,10 +167,10 @@ export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
   store: SealedStore
 ): CoreKitSession {
-  const { clientId, verifier } = loginEnv(env);
+  const { web3AuthClientId, verifier } = loginEnv(env);
 
   const coreKit = new Web3AuthMPCCoreKit({
-    web3AuthClientId: clientId,
+    web3AuthClientId,
     web3AuthNetwork:
       environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
     storage: store,
@@ -168,5 +178,5 @@ export function createCoreKitSession(
     manualSync: true,
     tssLib,
   });
-  return new Web3AuthSession(coreKit, store, verifier, clientId);
+  return new Web3AuthSession(coreKit, store, verifier);
 }

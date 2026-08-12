@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { engineHostConfig, environment, loginEnv, missingDeployEnv, shipsE2eHook } from './config';
+import {
+  engineHostConfig,
+  environment,
+  googleClientId,
+  loginEnv,
+  missingDeployEnv,
+  shipsE2eHook,
+} from './config';
 
 const artifact = {
   wasmModuleUrl: '/assets/cipherbox_wasm-deadbeef.js',
@@ -90,6 +97,7 @@ describe('missingDeployEnv', () => {
     VITE_ENVIRONMENT: 'staging',
     VITE_WEB3AUTH_CLIENT_ID: 'client',
     VITE_WEB3AUTH_VERIFIER: 'verifier',
+    VITE_GOOGLE_CLIENT_ID: 'google-client',
     VITE_API_URL: 'https://api.example.test',
   };
 
@@ -97,6 +105,7 @@ describe('missingDeployEnv', () => {
     expect(missingDeployEnv({ VITE_ENVIRONMENT: 'staging' })).toEqual([
       'VITE_WEB3AUTH_CLIENT_ID',
       'VITE_WEB3AUTH_VERIFIER',
+      'VITE_GOOGLE_CLIENT_ID',
       'VITE_API_URL',
     ]);
     // A variable substituted as blank is as unusable as an absent one, and a
@@ -108,6 +117,9 @@ describe('missingDeployEnv', () => {
       ]);
       expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_CLIENT_ID: blank })).toEqual([
         'VITE_WEB3AUTH_CLIENT_ID',
+      ]);
+      expect(missingDeployEnv({ ...deployed, VITE_GOOGLE_CLIENT_ID: blank })).toEqual([
+        'VITE_GOOGLE_CLIENT_ID',
       ]);
     }
   });
@@ -151,27 +163,60 @@ describe('shipsE2eHook', () => {
 });
 
 describe('loginEnv', () => {
-  it('reads the Web3Auth identifiers a session is built from', () => {
-    expect(loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: 'v' })).toEqual({
-      clientId: 'client',
-      verifier: 'v',
-    });
+  const configured = {
+    VITE_WEB3AUTH_CLIENT_ID: 'client',
+    VITE_WEB3AUTH_VERIFIER: 'v',
+    VITE_GOOGLE_CLIENT_ID: 'google-client',
+  };
+
+  it('reads the identifiers a Core Kit session is built from', () => {
+    expect(loginEnv(configured)).toEqual({ web3AuthClientId: 'client', verifier: 'v' });
   });
 
-  it('trims the identifiers, which are sent to Web3Auth verbatim', () => {
+  it('trims the identifiers, which are sent to the providers verbatim', () => {
     expect(
       loginEnv({ VITE_WEB3AUTH_CLIENT_ID: ' client\n', VITE_WEB3AUTH_VERIFIER: 'v ' })
-    ).toEqual({ clientId: 'client', verifier: 'v' });
+    ).toEqual({ web3AuthClientId: 'client', verifier: 'v' });
+  });
+
+  it('builds a session without the Google client ID, which configures one method', () => {
+    // Requiring it here would take email and wallet down with the method it
+    // configures — every login, not just Google's.
+    for (const blank of [undefined, '', '   ', '\n']) {
+      expect(loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toEqual({
+        web3AuthClientId: 'client',
+        verifier: 'v',
+      });
+    }
   });
 
   it('refuses a build missing one, naming it', () => {
-    expect(() => loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client' })).toThrow(
+    expect(() => loginEnv({ ...configured, VITE_WEB3AUTH_VERIFIER: undefined })).toThrow(
       /^VITE_WEB3AUTH_VERIFIER must be configured$/
     );
     // Whitespace is missing, not configured.
+    for (const blank of ['', '   ', '\n']) {
+      expect(() => loginEnv({ ...configured, VITE_WEB3AUTH_CLIENT_ID: blank })).toThrow(
+        /^VITE_WEB3AUTH_CLIENT_ID must be configured$/
+      );
+    }
     expect(() =>
-      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: '   ' })
-    ).toThrow(/^VITE_WEB3AUTH_VERIFIER must be configured$/);
+      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: undefined, VITE_WEB3AUTH_VERIFIER: undefined })
+    ).toThrow(/^VITE_WEB3AUTH_CLIENT_ID and VITE_WEB3AUTH_VERIFIER must be configured$/);
+  });
+});
+
+describe('googleClientId', () => {
+  it('reads the OAuth client ID a rendered Google button needs', () => {
+    expect(googleClientId({ VITE_GOOGLE_CLIENT_ID: ' google-client\n' })).toBe('google-client');
+  });
+
+  // The method it configures is one of several, so an absent one leaves the app
+  // standing with that method unavailable rather than failing the page.
+  it('reads absent and blank alike as unconfigured', () => {
+    for (const blank of [undefined, '', '   ', '\n']) {
+      expect(googleClientId({ VITE_GOOGLE_CLIENT_ID: blank })).toBeUndefined();
+    }
   });
 });
 

@@ -23,6 +23,9 @@ import { TokenService } from '../src/auth/services/token.service';
 import { ContentController } from '../src/content/content.controller';
 import { ContentService } from '../src/content/content.service';
 import { HealthController } from '../src/health/health.controller';
+import { IdentityController } from '../src/auth/identity.controller';
+import { IdentityExchangeService } from '../src/auth/services/identity-exchange.service';
+import { IdentityTokenService } from '../src/auth/services/identity-token.service';
 import { MailboxController } from '../src/mailbox/mailbox.controller';
 import { MailboxService } from '../src/mailbox/services/mailbox.service';
 import { MetricsController } from '../src/ops/metrics.controller';
@@ -39,6 +42,7 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     HealthController,
     MetricsController,
     AuthController,
+    IdentityController,
     MailboxController,
     RegistryController,
     AccountController,
@@ -49,6 +53,8 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     { provide: AuthService, useValue: {} },
     { provide: TestAuthService, useValue: {} },
     { provide: TokenService, useValue: {} },
+    { provide: IdentityExchangeService, useValue: {} },
+    { provide: IdentityTokenService, useValue: {} },
     { provide: MailboxService, useValue: {} },
     { provide: MetricsService, useValue: {} },
     { provide: RegistryService, useValue: {} },

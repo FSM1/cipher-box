@@ -1,8 +1,11 @@
 /**
  * The login flow, rewired onto the facade (blueprint/web-client.md "Login and
- * identity"). Core Kit authenticates the person on the UI thread; the only
- * thing that crosses into the vault is the login secret, transferred once by
- * `handOffLoginSecret`.
+ * identity"). CipherBox verifies the provider credential and mints the token
+ * the Core Kit redeems (ADR 0008 D1); the only thing that crosses into the
+ * vault is the login secret, transferred once by `handOffLoginSecret`.
+ *
+ * Credential collection is per-host and stays outside this hook — it takes
+ * already-collected credentials and drives the sequencing.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -11,7 +14,9 @@ import { errorMessage } from '../lib/errorMessage';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
 import { useCoreKit } from './CoreKitProvider';
-import type { CoreKitLoginMethod, CoreKitSession } from './coreKit';
+import { useIdentity } from './IdentityProvider';
+import type { CoreKitSession } from './coreKit';
+import type { IdentityCredential } from './identityExchange';
 
 export interface Auth {
   isAuthenticated: boolean;
@@ -26,12 +31,15 @@ export interface Auth {
   isBusy: boolean;
   /** The last failure, already stripped of anything secret-shaped. */
   error: string | null;
-  loginWithGoogle(): Promise<void>;
-  loginWithEmail(email: string): Promise<void>;
+  /** Exchanges a Google ID token collected on this host. */
+  loginWithGoogle(idToken: string): Promise<void>;
+  /** Asks CipherBox to deliver a verification code. */
+  sendEmailCode(email: string): Promise<void>;
+  loginWithEmailCode(email: string, code: string): Promise<void>;
   /** Issues the single-use nonce the wallet's EIP-4361 message embeds. */
-  siweChallenge(): Promise<string>;
-  /** Exchanges a wallet-signed SIWE message; secondary to the Core Kit methods. */
-  loginWithWallet(message: string, signature: Uint8Array): Promise<void>;
+  walletNonce(): Promise<string>;
+  /** `signature` is the `0x`-prefixed EIP-191 hex wagmi returns, sent verbatim. */
+  loginWithWallet(message: string, signature: string): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -48,6 +56,7 @@ export function useAuth(): Auth {
   const secrets = useLoginSecretSource();
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
+  const { exchange } = useIdentity();
   const { isAuthenticated } = useAuthState();
 
   const [isBusy, setIsBusy] = useState(false);
@@ -97,34 +106,41 @@ export function useAuth(): Auth {
     }
   }, [client, secrets, session]);
 
+  /**
+   * One sequencing for every method: exchange the collected credential, redeem
+   * it with the Core Kit, then hand the engine its secret.
+   */
   const login = useCallback(
-    (method: CoreKitLoginMethod, email?: string) =>
+    (collect: () => Promise<IdentityCredential>) =>
       exclusively(async () => {
         if (!session) throw new Error('the login provider is not ready');
-        await session.login(method, email);
+        await session.login(await collect());
         await handOff();
       }),
     [exclusively, handOff, session]
   );
 
-  const loginWithGoogle = useCallback(() => login('google'), [login]);
-  const loginWithEmail = useCallback((email: string) => login('email', email), [login]);
+  const loginWithGoogle = useCallback(
+    (idToken: string) => login(() => exchange.fromGoogleToken(idToken)),
+    [exchange, login]
+  );
 
-  const siweChallenge = useCallback(async (): Promise<string> => {
-    if (!client) throw new Error('the engine is not ready to accept a login');
-    return client.facade.siweChallenge();
-  }, [client]);
+  const sendEmailCode = useCallback(
+    (email: string) => exclusively(() => exchange.sendEmailCode(email)),
+    [exchange, exclusively]
+  );
+
+  const loginWithEmailCode = useCallback(
+    (email: string, code: string) => login(() => exchange.fromEmailCode(email, code)),
+    [exchange, login]
+  );
+
+  const walletNonce = useCallback(() => exchange.walletNonce(), [exchange]);
 
   const loginWithWallet = useCallback(
-    (message: string, signature: Uint8Array) =>
-      exclusively(async () => {
-        if (!client) throw new Error('the engine is not ready to accept a login');
-        // Secondary method: this authenticates the account against the API, it
-        // does not cold-start a vault — the engine refuses it before `start`.
-        await client.facade.siweLogin(message, signature);
-        authStore.signedIn('wallet');
-      }),
-    [client, exclusively]
+    (message: string, signature: string) =>
+      login(() => exchange.fromWalletSignature(message, signature)),
+    [exchange, login]
   );
 
   const logout = useCallback(
@@ -163,8 +179,9 @@ export function useAuth(): Auth {
     isBusy,
     error: error ?? coreKitError,
     loginWithGoogle,
-    loginWithEmail,
-    siweChallenge,
+    sendEmailCode,
+    loginWithEmailCode,
+    walletNonce,
     loginWithWallet,
     logout,
   };

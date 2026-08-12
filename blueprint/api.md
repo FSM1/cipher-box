@@ -60,7 +60,13 @@ What left the API relative to v1 — with the design that removed it:
   carry a device-key signature, and a row's life ends at collection or expiry,
   whichever comes first.
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
-  `auth_methods`, `refresh_tokens`, `device_approvals`.
+  `auth_methods`, `refresh_tokens`, `device_approvals`, `identity_subjects`.
+- **`identity_subjects`** maps a verified provider identity — hashed, never
+  stored in the clear — to the stable subject id the identity token's `sub`
+  carries and `loginWithJWT` takes as its `verifierId`. It holds no `user_id`:
+  the account still materializes at `POST /auth/login` against the derived key,
+  so this table cannot fork the account model, and linking a second method later
+  is pointing another provider identity at an existing subject.
 
 ## Pin/name registry
 
@@ -248,7 +254,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `refresh_tokens`, `name_inventory (account, ipnsName)`,
+`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`, `device_approvals`,
+`name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`, `mailbox_messages`,
 `record_cache` (non-canonical). Nothing else. No crypto-bearing rows outlive
 their consumer; revocation-adjacent state is hard-deleted, never soft-flagged.
