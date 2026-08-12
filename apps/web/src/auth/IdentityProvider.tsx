@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
-import type { IdentityExchange } from './identityExchange';
+import type { CredentialCollector, IdentityExchange } from '@cipherbox/login';
+import { webCollector, type WebCollected } from './webCollector';
 
 export interface IdentityContextValue {
   exchange: IdentityExchange;
@@ -8,20 +9,28 @@ export interface IdentityContextValue {
    * when the build carries none, which leaves that method unavailable.
    */
   googleClientId: string | undefined;
+  /** What this host collects; a method absent here is one web does not offer. */
+  collector: CredentialCollector<WebCollected>;
 }
 
 const IdentityContext = createContext<IdentityContextValue | undefined>(undefined);
 
-export interface IdentityProviderProps extends IdentityContextValue {
+export interface IdentityProviderProps {
+  exchange: IdentityExchange;
+  googleClientId: string | undefined;
   children: ReactNode;
 }
 
 /**
- * Holds the identity exchange so the login flow reaches the API without
- * importing a transport — which is what keeps `useAuth` host-agnostic.
+ * Holds the identity exchange and this host's collector so the login flow
+ * reaches the API without importing a transport — which is what keeps the
+ * sequencing host-agnostic.
  */
 export function IdentityProvider({ exchange, googleClientId, children }: IdentityProviderProps) {
-  const value = useMemo(() => ({ exchange, googleClientId }), [exchange, googleClientId]);
+  const value = useMemo(
+    () => ({ exchange, googleClientId, collector: webCollector(googleClientId) }),
+    [exchange, googleClientId]
+  );
   return <IdentityContext.Provider value={value}>{children}</IdentityContext.Provider>;
 }
 
