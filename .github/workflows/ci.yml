@@ -843,10 +843,17 @@ jobs:
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
+      # The production-mode instance refuses to boot without a mail provider, so
+      # it gets a placeholder one. It only serves the test-login rejection
+      # assertion; no contract test asks it to deliver mail.
       - name: Boot the API in test and production modes
         run: |
           node apps/api/dist/main.js > /tmp/api-test.log 2>&1 &
-          NODE_ENV=production PORT=3100 node apps/api/dist/main.js > /tmp/api-prod.log 2>&1 &
+          NODE_ENV=production PORT=3100 \
+            MAIL_PROVIDER=sendgrid \
+            SENDGRID_API_KEY=contract-suite-sendgrid-key \
+            MAIL_FROM_ADDRESS=no-reply@contract-suite.invalid \
+            node apps/api/dist/main.js > /tmp/api-prod.log 2>&1 &
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
             || { echo '--- test-mode API log ---'; cat /tmp/api-test.log; exit 1; }
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3100/health \

@@ -66,6 +66,10 @@ jobs:
       # rather than through an interactive Core Kit session.
       VITE_ENVIRONMENT: ci
       VITE_API_URL: http://localhost:3000
+      # Present but not real: the front-door spec asserts every built method is
+      # offered, and a build without this one offers Google as unavailable. No
+      # test signs in through Google, so the value is never redeemed.
+      VITE_GOOGLE_CLIENT_ID: web-e2e-google-client-id
       # The hermetic record store, in place of the public default — a merge gate
       # must not resolve vault pointers over the internet.
       VITE_ROUTING_ENDPOINTS: http://localhost:3001
