@@ -203,10 +203,10 @@ all living in `packages/client` and running inside the engine worker realm:
   (ADR 0008 D3). `packages/login` (`@cipherbox/login`) is host-agnostic — no
   browser API, no React — and sequences provider credential → API exchange →
   Core Kit login → secret export → `start(secret)`; both hosts import it,
-  parameterise it over their own facade, and inject their own collector. On web that collector is the Google popup
-  and wagmi; desktop's is its own (desktop.md). The boundary is credential
-  collection, not the bearer token — v1 drew it at the token and the two hosts
-  drifted.
+  parameterise it over their own facade, and inject their own collector. On web
+  that collector is the Google popup, the emailed code and wagmi; desktop's is
+  its own (desktop.md). The boundary is credential collection, not the bearer
+  token — v1 drew it at the token and the two hosts drifted.
 - **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
   the UI thread, the API verifies it and mints the identity token, and the Core
   Kit login proceeds as for any other method. Web only.

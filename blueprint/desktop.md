@@ -250,10 +250,11 @@ navigation (FSM1/cipher-box-next#33 D2):
   the shell's only credential duty is hosting the keychain seam. Dev-key mode
   survives: a debug flag feeds the staging test-login path through the same
   facade, keychain bypassed — the headless agent/e2e seam.
-- **The orchestration is the web client's** ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md) D3): the shell imports the
-  same host-agnostic `packages/login` and supplies its own credential collector. It
-  does **not** take `packages/client` — the worker, leadership and Service Worker
-  machinery has no place here.
+- **The orchestration is shared through `packages/login`** ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md) D3): the shell
+  imports the same host-agnostic package and supplies both its own credential
+  collector and its own start facade — `LoginFacade` is `{ start, logout }`, over
+  Tauri IPC here. It does **not** take `packages/client` — the worker, leadership
+  and Service Worker machinery has no place here.
 - **Google collection is native, not in-webview.** Google Identity Services does
   not run in this webview, and the manual OAuth2 flow it falls back to needs a
   `redirect_uri` a packaged Tauri origin cannot satisfy — `tauri://localhost` is
