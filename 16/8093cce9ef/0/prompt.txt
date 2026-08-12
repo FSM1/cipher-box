@@ -1,0 +1,10 @@
+I think that docs branch is merged already
+
+---
+
+For the https://github.com/FSM1/cipher-box/pull/1273 PR to really be complete, I need to set the staging env variables and secrets for the following: IDENTITY_JWT_PRIVATE_KEY, GOOGLE_CLIENT_ID, or MAIL_PROVIDER + the SendGrid pair 
+
+the google client id is `959751863260-j1u1ld7heh23eq1upgve06s889497cs9.apps.googleusercontent.com`
+the MAIL_PROVIDER is `sendgrid`
+the SENDGRID_API_KEY is in the @apps/api/.env
+the IDENTITY_JWT_PRIVATE_KEY should be generated in 1password if not already there, and set on github secrets using the CLI. the key should not touch the disc at all.

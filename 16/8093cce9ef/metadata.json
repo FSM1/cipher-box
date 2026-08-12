@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "168093cce9ef",
+  "strategy": "manual-commit",
+  "branch": "claude/cipher-box-1253-r8ebt6-2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "blueprint/deploy.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/16/8093cce9ef/0/metadata.json",
+      "transcript": "/16/8093cce9ef/0/full.jsonl",
+      "compact_transcript": "/16/8093cce9ef/0/transcript.jsonl",
+      "content_hash": "/16/8093cce9ef/0/content_hash.txt",
+      "prompt": "/16/8093cce9ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 117416,
+    "cache_read_tokens": 3404256,
+    "output_tokens": 30530,
+    "api_call_count": 42
+  }
+}
