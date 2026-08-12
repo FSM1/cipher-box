@@ -321,6 +321,10 @@ impl ProvisionError {
         match self {
             Self::NotAFirstRun(probe) => *probe == VaultPointerProbe::Indeterminate,
             Self::Entropy(_) | Self::Seam(_) | Self::PointerUnresolved => true,
+            // A seam that could not supply a nonce or an HPKE ephemeral is the
+            // same stall whether it fails at this module's own draw or inside
+            // the section re-seal; every other re-seal arm is a refusal.
+            Self::Reseal(ResealError::Entropy(_)) => true,
             Self::Publish { error, .. } => *error != WritePublishError::Rejected,
             Self::Commitment(_)
             | Self::Reseal(_)
@@ -1394,6 +1398,7 @@ mod tests {
                 error: WritePublishError::Rejected,
             },
             ProvisionError::RepointUnopenable(PointerError::NotOwnerSession),
+            ProvisionError::Reseal(ResealError::SignerNotCommitted),
         ] {
             assert!(
                 !refusal.is_retryable(),
@@ -1407,6 +1412,7 @@ mod tests {
                 error: WritePublishError::NotLanded,
             },
             ProvisionError::Entropy(EntropyError::new("seam down")),
+            ProvisionError::Reseal(ResealError::Entropy(EntropyError::new("seam down"))),
             ProvisionError::PointerUnresolved,
         ] {
             assert!(stall.is_retryable(), "{stall} is an outage, not a verdict");
@@ -1446,7 +1452,10 @@ mod tests {
         ))
         .expect_err("a fixed-nonce genesis root is never published");
         assert!(
-            matches!(err, ProvisionError::Entropy(_) | ProvisionError::Reseal(_)),
+            matches!(
+                err,
+                ProvisionError::Entropy(_) | ProvisionError::Reseal(ResealError::Entropy(_))
+            ),
             "{err}"
         );
         assert!(net.effects.borrow().is_empty(), "nothing published");
@@ -1558,7 +1567,15 @@ mod tests {
             },
         ))
         .expect_err("a fixed-nonce genesis root is never published");
-        assert!(matches!(err, ProvisionError::Entropy(_)), "{err}");
+        // Whichever seal draws first refuses; both arms are the same stall.
+        assert!(
+            matches!(
+                err,
+                ProvisionError::Entropy(_) | ProvisionError::Reseal(ResealError::Entropy(_))
+            ),
+            "{err}"
+        );
+        assert!(err.is_retryable(), "an entropy stall is availability");
         assert!(net.effects.borrow().is_empty(), "nothing published");
     }
 

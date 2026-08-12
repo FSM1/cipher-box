@@ -43,13 +43,12 @@ use cipherbox_core::seal::{
     encode_write_body, open_ascent_link, open_history_link, seal, seal_ascent_link,
     seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
 };
-use cipherbox_core::suite::aead;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
@@ -367,17 +366,10 @@ fn mint_history_link<E: Entropy>(
     prev: &PrevEpochSeed<'_>,
 ) -> Result<Vec<u8>, ResealError> {
     let structure_key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
-    let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;
+    let nonce = fresh_nonce(entropy).map_err(ResealError::Entropy)?;
     let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
     let payload = HistoryLinkPayload::new(*prev.seed, prev.epoch);
     seal_history_link(structure_key.as_bytes(), &nonce, &ctx, &payload).map_err(ResealError::Encode)
-}
-
-/// Fill an `N`-byte array from the entropy seam, fail-closed.
-fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealError> {
-    let mut buf = [0u8; N];
-    entropy.fill(&mut buf).map_err(ResealError::Entropy)?;
-    Ok(buf)
 }
 
 /// Assemble one scope root's signed [`GrantSection`] at the epoch and seed the
@@ -639,7 +631,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let mut plaintext = encode_write_body(&wb).map_err(ResealError::Encode)?;
         let write_seed = kdf::write_seed(seeds.write_scope_seed, &scope_id);
         let write_key = kdf::write_key(write_seed.as_bytes());
-        let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;
+        let nonce = fresh_nonce(entropy).map_err(ResealError::Entropy)?;
         let ctx = ctx_for(
             identity.v,
             scope_id,
