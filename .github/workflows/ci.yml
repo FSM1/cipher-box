@@ -843,13 +843,16 @@ jobs:
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
-      # The production-mode instance refuses to boot without a mail provider, so
-      # it gets a placeholder one. It only serves the test-login rejection
-      # assertion; no contract test asks it to deliver mail.
+      # A deployed profile fails closed on every credential it will later need, so
+      # the production-mode instance gets a placeholder for each. None is ever
+      # redeemed: it serves the test-login rejection assertion alone, and the
+      # signing key is generated here so no key material is committed.
       - name: Boot the API in test and production modes
         run: |
           node apps/api/dist/main.js > /tmp/api-test.log 2>&1 &
           NODE_ENV=production PORT=3100 \
+            IDENTITY_JWT_PRIVATE_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0)" \
+            GOOGLE_CLIENT_ID=contract-suite-google-client-id \
             MAIL_PROVIDER=sendgrid \
             SENDGRID_API_KEY=contract-suite-sendgrid-key \
             MAIL_FROM_ADDRESS=no-reply@contract-suite.invalid \
