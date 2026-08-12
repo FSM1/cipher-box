@@ -22,7 +22,7 @@ import { createCoreKitSession, sealedCoreKitStore } from './auth/coreKit';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { IdentityProvider } from './auth/IdentityProvider';
 import { createIdentityExchange } from './auth/identityExchange';
-import { apiBaseUrl, loginEnv } from './engine/config';
+import { apiBaseUrl, googleClientId } from './engine/config';
 import { createEngineClient } from './engine/createEngineClient';
 import { installIntrospection } from './engine/introspection';
 import { wagmiConfig } from './lib/wagmi';
@@ -36,7 +36,6 @@ if (!rootElement) {
 const queryClient = new QueryClient();
 
 const identityExchange = createIdentityExchange(apiBaseUrl(import.meta.env));
-const { googleClientId } = loginEnv(import.meta.env);
 
 createRoot(rootElement).render(
   <StrictMode>
@@ -51,7 +50,10 @@ createRoot(rootElement).render(
           <CoreKitProvider
             createSession={() => createCoreKitSession(import.meta.env, sealedCoreKitStore())}
           >
-            <IdentityProvider exchange={identityExchange} googleClientId={googleClientId}>
+            <IdentityProvider
+              exchange={identityExchange}
+              googleClientId={googleClientId(import.meta.env)}
+            >
               <BrowserRouter>
                 <App />
               </BrowserRouter>

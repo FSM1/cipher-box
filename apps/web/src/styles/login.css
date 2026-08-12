@@ -237,6 +237,16 @@
   pointer-events: none;
 }
 
+/* A method this build cannot offer: present, named, and plainly not clickable. */
+.google-login-unavailable {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dim);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .google-login-status {
   padding: var(--spacing-xs) var(--spacing-sm);
   font-family: var(--font-family-mono);

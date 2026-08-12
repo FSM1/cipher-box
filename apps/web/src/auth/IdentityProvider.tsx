@@ -3,8 +3,11 @@ import type { IdentityExchange } from './identityExchange';
 
 export interface IdentityContextValue {
   exchange: IdentityExchange;
-  /** The OAuth provider's client ID — not the Web3Auth project's. */
-  googleClientId: string;
+  /**
+   * The OAuth provider's client ID — not the Web3Auth project's. `undefined`
+   * when the build carries none, which leaves that method unavailable.
+   */
+  googleClientId: string | undefined;
 }
 
 const IdentityContext = createContext<IdentityContextValue | undefined>(undefined);

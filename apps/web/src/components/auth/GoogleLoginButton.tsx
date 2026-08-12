@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { GOOGLE_CLIENT_ID_ENV } from '../../engine/config';
 import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
 
@@ -60,7 +61,7 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
 
 interface GoogleLoginButtonProps {
   /** The OAuth provider's client ID, not the Web3Auth project's. */
-  clientId: string;
+  clientId: string | undefined;
   /** Receives the Google ID token; the API verifies it. */
   onCredential: (idToken: string) => void;
   /** True while the tab cannot accept a login at all. */
@@ -70,8 +71,9 @@ interface GoogleLoginButtonProps {
 }
 
 /**
- * Collects a Google ID token with Google's own rendered button — the one path
- * that always presents, so the affordance cannot be clicked into nothing.
+ * Collects a Google ID token with Google's own rendered button. A build that
+ * carries no client ID presents the method as unavailable instead, so the
+ * affordance cannot be clicked into nothing.
  */
 export function GoogleLoginButton({
   clientId,
@@ -86,6 +88,7 @@ export function GoogleLoginButton({
   deliver.current = onCredential;
 
   useEffect(() => {
+    if (!clientId) return;
     let live = true;
     loadGoogleIdentityServices().then(
       (google) => {
@@ -112,8 +115,18 @@ export function GoogleLoginButton({
     };
   }, [clientId]);
 
+  if (!clientId) {
+    return (
+      <div className="google-login-wrapper">
+        <div className="google-login-unavailable" data-testid="google-login-unavailable">
+          google sign-in is unavailable — this build is missing {GOOGLE_CLIENT_ID_ENV}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="google-login-wrapper" data-testid="google-login">
+    <div className="google-login-wrapper">
       {busy ? (
         <div className="google-login-status" aria-live="polite">
           authenticating with google...
@@ -123,6 +136,7 @@ export function GoogleLoginButton({
         // that intercepts the click rather than an attribute on it.
         <div
           ref={target}
+          data-testid="google-login-button"
           className={disabled ? 'google-login-target is-disabled' : 'google-login-target'}
           aria-disabled={disabled}
         />

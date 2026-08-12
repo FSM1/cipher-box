@@ -27,11 +27,14 @@ const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'product
 /** Deployments whose bundle is shipped to users, and so must be able to log in. */
 const DEPLOYED: readonly Environment[] = ['staging', 'production'];
 
+/** Named once so the method's unavailable notice cannot drift from this list. */
+export const GOOGLE_CLIENT_ID_ENV = 'VITE_GOOGLE_CLIENT_ID';
+
 /** The one list of what a Core Kit session needs, shared with the build gate. */
 const LOGIN_ENV = [
   'VITE_WEB3AUTH_CLIENT_ID',
   'VITE_WEB3AUTH_VERIFIER',
-  'VITE_GOOGLE_CLIENT_ID',
+  GOOGLE_CLIENT_ID_ENV,
 ] as const;
 
 /**
@@ -102,6 +105,15 @@ export function engineHostConfig(
 /** Of the variables Core Kit login needs, those `env` does not supply. */
 export function missingLoginEnv(env: Partial<ImportMetaEnv>): string[] {
   return LOGIN_ENV.filter((name) => configured(env[name]) === undefined);
+}
+
+/**
+ * The Google OAuth client ID, or `undefined` when this build carries none —
+ * absence disables that one method rather than failing the app, which is what
+ * keeps a build without login configuration a working page.
+ */
+export function googleClientId(env: Partial<ImportMetaEnv>): string | undefined {
+  return configured(env[GOOGLE_CLIENT_ID_ENV]);
 }
 
 /** The identifiers a Core Kit session is built from; refuses a build missing any. */

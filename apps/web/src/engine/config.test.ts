@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { engineHostConfig, environment, loginEnv, missingDeployEnv, shipsE2eHook } from './config';
+import {
+  engineHostConfig,
+  environment,
+  googleClientId,
+  loginEnv,
+  missingDeployEnv,
+  shipsE2eHook,
+} from './config';
 
 const artifact = {
   wasmModuleUrl: '/assets/cipherbox_wasm-deadbeef.js',
@@ -194,6 +201,20 @@ describe('loginEnv', () => {
       expect(() => loginEnv({ ...configured, VITE_GOOGLE_CLIENT_ID: blank })).toThrow(
         /^VITE_GOOGLE_CLIENT_ID must be configured$/
       );
+    }
+  });
+});
+
+describe('googleClientId', () => {
+  it('reads the OAuth client ID a rendered Google button needs', () => {
+    expect(googleClientId({ VITE_GOOGLE_CLIENT_ID: ' google-client\n' })).toBe('google-client');
+  });
+
+  // The method it configures is one of several, so an absent one leaves the app
+  // standing with that method unavailable rather than failing the page.
+  it('reads absent and blank alike as unconfigured', () => {
+    for (const blank of [undefined, '', '   ', '\n']) {
+      expect(googleClientId({ VITE_GOOGLE_CLIENT_ID: blank })).toBeUndefined();
     }
   });
 });

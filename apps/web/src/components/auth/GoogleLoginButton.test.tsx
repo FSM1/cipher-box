@@ -82,6 +82,20 @@ describe('GoogleLoginButton', () => {
     expect(await screen.findByText(/could not be loaded/)).toBeDefined();
   });
 
+  it('names the missing variable instead of offering a method it cannot serve', async () => {
+    installGoogleIdentityServices();
+    const GoogleLoginButton = await freshButton();
+
+    render(<GoogleLoginButton clientId={undefined} onCredential={vi.fn()} />);
+
+    expect(screen.getByTestId('google-login-unavailable').textContent).toContain(
+      'VITE_GOOGLE_CLIENT_ID'
+    );
+    expect(screen.queryByTestId('google-login-button')).toBeNull();
+    // No script, so nothing renders an affordance into the absent target.
+    expect(vi.mocked(document.head.appendChild)).not.toHaveBeenCalled();
+  });
+
   it('reports the transition instead of the button while a sign-in is in flight', async () => {
     installGoogleIdentityServices();
     const GoogleLoginButton = await freshButton();
