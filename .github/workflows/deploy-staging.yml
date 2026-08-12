@@ -395,6 +395,28 @@ jobs:
               ;;
           esac
 
+      # The API refuses to boot in a deployed profile without these, and this job
+      # has no post-deploy health gate, so an unset value lands as a green deploy
+      # over a crash-looping container.
+      - name: Require the identity and mail configuration
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
+          MAIL_PROVIDER: ${{ vars.MAIL_PROVIDER }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          MAIL_FROM_ADDRESS: ${{ vars.MAIL_FROM_ADDRESS }}
+        run: |
+          for name in GOOGLE_CLIENT_ID IDENTITY_JWT_PRIVATE_KEY MAIL_PROVIDER SENDGRID_API_KEY MAIL_FROM_ADDRESS; do
+            if [ -z "${!name}" ]; then
+              echo "::error::the staging environment needs $name set"
+              exit 1
+            fi
+          done
+          if [ "$MAIL_PROVIDER" != "sendgrid" ]; then
+            echo "::error::staging needs MAIL_PROVIDER=sendgrid; 'log' delivers no mail and the API refuses it outside development"
+            exit 1
+          fi
+
       - name: Generate .env.staging
         run: |
           cat > .env.staging << 'ENVEOF'
@@ -420,6 +442,9 @@ jobs:
           GRAFANA_PROMETHEUS_API_KEY=${{ secrets.GRAFANA_PROMETHEUS_API_KEY }}
           GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
+          MAIL_PROVIDER=${{ vars.MAIL_PROVIDER }}
+          SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+          MAIL_FROM_ADDRESS=${{ vars.MAIL_FROM_ADDRESS }}
           ENVEOF
           # Append image tag, lowercase owner, and component versions (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"
