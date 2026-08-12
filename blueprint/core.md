@@ -168,11 +168,14 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   walk can cover; a node past it is not lost, since the sweep re-seals it
   forward from the scope's _current_ seed.
 - **Owner-write-blob** (`structTag` `owner-write-blob`): the write-plane mirror
-  of the owner blob — the scope's random `writeScopeSeed` (a KDF non-edge, not
-  derivable from the login secret) HPKE-sealed to the owner's **own** enc subkey,
-  payload det-CBOR `{writeEpoch, writeScopeSeed}`. It hands an owner
-  cold-starting on a fresh device the one write-plane input they cannot
-  re-derive, so they can source `write_name_signer` and renew their own records
+  of the owner blob — the scope's `writeScopeSeed` HPKE-sealed to the owner's
+  **own** enc subkey, payload det-CBOR `{writeEpoch, writeScopeSeed}`. The seed
+  is random and a KDF non-edge at every scope and epoch but one: the vault root's
+  genesis epoch derives it from the login secret (`genesis-write-scope-seed`,
+  ADR 0007), and the first write rotation draws its replacement like every
+  rotation after it. It hands an owner cold-starting on a fresh device a
+  write-plane input they otherwise cannot re-derive, so they can source
+  `write_name_signer` and renew their own records
   (the read/consume wiring lands later, on the facade slice). It carries a
   deliberate dual-epoch binding: its HPKE **AAD** binds the **writeEpoch** (the
   write plane's own clock), while its **structure signature** binds the

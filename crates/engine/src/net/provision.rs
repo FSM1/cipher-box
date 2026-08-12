@@ -236,8 +236,10 @@ mod tests {
 
     struct StubAdopter {
         admits: bool,
-        /// The seed the gate recovers from the record's own owner blob.
-        recovered: [u8; 32],
+        /// The seed the gate recovers from the record's own owner blob. `None`
+        /// models an adopter that recovers none — a gate pass that proves no
+        /// ownership, which must be foreign rather than unclaimed.
+        recovered: Option<[u8; 32]>,
     }
 
     impl Adopter for StubAdopter {
@@ -268,7 +270,7 @@ mod tests {
                 },
                 write_scope_seed: None,
                 node_id: [0u8; 16],
-                read_scope_seed: Some(Zeroizing::new(self.recovered)),
+                read_scope_seed: self.recovered.map(Zeroizing::new),
             })
         }
     }
@@ -316,7 +318,7 @@ mod tests {
     fn with_net<R>(
         device: &FakeDevice,
         admits: bool,
-        recovered: [u8; 32],
+        recovered: Option<[u8; 32]>,
         profile: &SyncTimingProfile,
         f: impl FnOnce(&ProvisionNetUnderTest<'_>) -> R,
     ) -> R {
@@ -337,7 +339,7 @@ mod tests {
 
     /// Run the production probe over `device`.
     fn probe(device: &FakeDevice, profile: &SyncTimingProfile) -> Result<(), VaultPointerProbe> {
-        with_net(device, true, DERIVED_SEED, profile, |net| {
+        with_net(device, true, Some(DERIVED_SEED), profile, |net| {
             block_on(net.require_vacant_vault_pointer(&pointer_name()))
         })
     }
@@ -355,7 +357,7 @@ mod tests {
     /// What the production arm sights at the derived root name, over an adopter
     /// that admits or rejects whatever it is handed and recovers `recovered` as
     /// the record's own read scope seed.
-    fn genesis_root(device: &FakeDevice, admits: bool, recovered: [u8; 32]) -> GenesisRoot {
+    fn genesis_root(device: &FakeDevice, admits: bool, recovered: Option<[u8; 32]>) -> GenesisRoot {
         with_net(device, admits, recovered, &SyncTimingProfile::CI, |net| {
             block_on(net.genesis_root(&pointer_name(), &DERIVED_SEED))
         })
@@ -369,7 +371,7 @@ mod tests {
         let device = world.device(b"alice");
         seed_record(&device);
         assert_eq!(
-            genesis_root(&device, true, DERIVED_SEED),
+            genesis_root(&device, true, Some(DERIVED_SEED)),
             GenesisRoot::Adopted
         );
     }
@@ -384,10 +386,22 @@ mod tests {
         let device = world.device(b"alice");
         seed_record(&device);
         assert_eq!(
-            genesis_root(&device, true, [0x77; 32]),
+            genesis_root(&device, true, Some([0x77; 32])),
             GenesisRoot::Foreign,
             "a rotated vault at the derived name is never this run's genesis root",
         );
+    }
+
+    /// The other half of the `Foreign` arm: an adopt that recovers no seed
+    /// proves no ownership either, so it must not be read as a vacant name. If
+    /// this collapsed to `Unclaimed` the mint would publish over a gate-admitted
+    /// root — the exact rollback the seed binding exists to stop.
+    #[test]
+    fn a_gate_pass_that_recovers_no_seed_is_foreign() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        seed_record(&device);
+        assert_eq!(genesis_root(&device, true, None), GenesisRoot::Foreign);
     }
 
     /// A record the gate refuses is not this run's root, and neither is an
@@ -398,7 +412,7 @@ mod tests {
         let rejected = world.device(b"alice");
         seed_record(&rejected);
         assert_eq!(
-            genesis_root(&rejected, false, DERIVED_SEED),
+            genesis_root(&rejected, false, Some(DERIVED_SEED)),
             GenesisRoot::Unclaimed
         );
 
@@ -406,7 +420,7 @@ mod tests {
         let empty = FakeWorld::new();
         let unresolvable = empty.device(b"bob");
         assert_eq!(
-            genesis_root(&unresolvable, true, DERIVED_SEED),
+            genesis_root(&unresolvable, true, Some(DERIVED_SEED)),
             GenesisRoot::Unclaimed
         );
     }
@@ -548,7 +562,7 @@ mod tests {
             transport: &NoEndpoints,
             adopter: &StubAdopter {
                 admits: true,
-                recovered: DERIVED_SEED,
+                recovered: Some(DERIVED_SEED),
             },
             api: &api,
             floors: &device.floor_store,

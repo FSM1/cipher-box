@@ -125,8 +125,20 @@ mod fresh_draw_tests {
 
     #[test]
     fn a_failing_seam_propagates() {
-        assert!(fresh_ephemeral(&mut Broken).is_err());
-        assert!(fresh_nonce(&mut Broken).is_err());
+        // The seam's own message, not merely an error: a local rejection would
+        // pass an `is_err()` while swallowing what the seam actually said.
+        assert_eq!(
+            fresh_ephemeral(&mut Broken)
+                .expect_err("the seam failure propagates")
+                .message(),
+            "no entropy",
+        );
+        assert_eq!(
+            fresh_nonce(&mut Broken)
+                .expect_err("the seam failure propagates")
+                .message(),
+            "no entropy",
+        );
     }
 
     #[test]
