@@ -20,8 +20,10 @@ describe('web credential collection', () => {
   it('passes the material the page already collected straight through', async () => {
     const collector = webCollector('google-client-id');
     const proof = { message: 'siwe-message', signature: '0xabc' };
+    const answer = { email: 'user@example.com', code: '123456' };
 
     await expect(collector.google?.('google.id.token')).resolves.toBe('google.id.token');
+    await expect(collector.email?.(answer)).resolves.toBe(answer);
     await expect(collector.wallet?.(proof)).resolves.toBe(proof);
   });
 });

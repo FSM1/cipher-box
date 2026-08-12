@@ -44,8 +44,18 @@ describe('exportLoginSecret', () => {
     );
   });
 
+  it('decodes uppercase hex to the same bytes', async () => {
+    expect(new Uint8Array(await exportLoginSecret(exporter(SECRET_HEX.toUpperCase())))).toEqual(
+      SECRET_BYTES
+    );
+  });
+
   it('rejects a malformed export without echoing it', async () => {
     await expect(exportLoginSecret(exporter('nothex'))).rejects.toThrow(
+      /^login secret export is not hex$/
+    );
+    // An odd length is a hex failure, not a short scalar.
+    await expect(exportLoginSecret(exporter(SECRET_HEX.slice(1)))).rejects.toThrow(
       /^login secret export is not hex$/
     );
     await expect(exportLoginSecret(exporter(''))).rejects.toThrow(/32-byte scalar/);
