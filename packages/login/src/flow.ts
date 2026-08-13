@@ -48,10 +48,12 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
 /**
  * There is one engine per host and one cold start per page, so these guards are
  * module-scoped: every consumer drives the same transitions, and a second one
- * must not start a second login.
+ * must not start a second login. The restore latch keys on the session *and* the
+ * facade, because a host replaces either independently: a facade that never
+ * received the secret must still get it, however old the session is.
  */
 let inFlight = false;
-let restoredFor: CoreKitSession | null = null;
+let restoredFor: { session: CoreKitSession; facade: LoginFacade | null } | null = null;
 
 export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>(
   host: LoginHost<C>
@@ -171,8 +173,10 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     resume() {
-      if (!session || restoredFor === session || !session.isLoggedIn()) return Promise.resolve();
-      restoredFor = session;
+      const restored =
+        restoredFor !== null && restoredFor.session === session && restoredFor.facade === facade;
+      if (!session || restored || !session.isLoggedIn()) return Promise.resolve();
+      restoredFor = { session, facade };
       return exclusively(handOff).catch(() => {
         restoredFor = null;
       });

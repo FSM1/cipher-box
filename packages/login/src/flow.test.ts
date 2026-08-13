@@ -138,6 +138,21 @@ describe('the login flow', () => {
     expect(loggedIn(parts)).toEqual([{ method: null, email: null }]);
   });
 
+  // The host rebuilds the flow whenever it replaces the engine facade, and a
+  // replacement facade holds no secret however old the Core Kit session is.
+  it('hands the secret to a replacement facade for an unchanged session', async () => {
+    const session = fakeSession({ loggedIn: true });
+    const before = build({ session });
+    await before.flow.resume();
+
+    const after = build({ session, facade: fakeFacade() });
+    await after.flow.resume();
+
+    expect(before.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(after.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(after.progress.failures).toEqual([]);
+  });
+
   it('disarms the re-export and ends the session when the engine refuses the secret', async () => {
     const facade = fakeFacade({ start: () => Promise.reject(new Error('trust violation')) });
     const parts = build({ facade });
