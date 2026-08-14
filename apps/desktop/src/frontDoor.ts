@@ -1,0 +1,152 @@
+/**
+ * The shell's login chrome. Framework-free: this window is the front door and a
+ * status line, and the vault UI lives on the web app.
+ *
+ * Which methods appear is read off the flow, never branched on here, so a
+ * method this host cannot collect renders no affordance at all (ADR 0008 D2).
+ */
+
+import type { IdentityMethod } from '@cipherbox/login';
+
+export interface ShellModel {
+  phase: 'starting' | 'signedOut' | 'signedIn';
+  /** True while a restore, login, or logout is in flight. */
+  busy: boolean;
+  /** The methods the login flow offers, in the order to show them. */
+  methods: readonly IdentityMethod[];
+  /** The signed-in address, when the method carried one. */
+  email: string | null;
+  error: string | null;
+  /** True once CipherBox has sent a code to the address in the form. */
+  codeSent: boolean;
+  /** The address the form holds, kept across a re-render. */
+  address: string;
+}
+
+export interface ShellActions {
+  google(): void;
+  sendEmailCode(email: string): void;
+  submitEmailCode(email: string, code: string): void;
+  logout(): void;
+}
+
+type Renderer = (model: ShellModel, actions: ShellActions) => HTMLElement;
+
+/** One renderer per method the shell can collect. */
+const RENDERERS: Partial<Record<IdentityMethod, Renderer>> = {
+  google: googleButton,
+  email: emailForm,
+};
+
+export function renderShell(root: HTMLElement, model: ShellModel, actions: ShellActions): void {
+  const view = element('div', { class: 'shell' });
+  view.append(text('h1', 'CipherBox'));
+
+  if (model.phase === 'starting') view.append(note('Starting…'));
+  else if (model.phase === 'signedIn') view.append(signedIn(model, actions));
+  else view.append(frontDoor(model, actions));
+
+  if (model.error !== null) {
+    const failure = text('p', model.error, { class: 'error', role: 'alert' });
+    view.append(failure);
+  }
+  root.replaceChildren(view);
+}
+
+function frontDoor(model: ShellModel, actions: ShellActions): HTMLElement {
+  const section = element('section', { class: 'front-door' });
+  section.append(note('Sign in to connect this device to your vault.'));
+
+  const offered = model.methods.flatMap((method) => {
+    const render = RENDERERS[method];
+    return render ? [render(model, actions)] : [];
+  });
+  if (offered.length === 0) {
+    section.append(note('This build has no sign-in method configured.'));
+  }
+  section.append(...offered);
+  return section;
+}
+
+function googleButton(model: ShellModel, actions: ShellActions): HTMLElement {
+  const button = text('button', 'Continue with Google', {
+    'data-method': 'google',
+    type: 'button',
+  }) as HTMLButtonElement;
+  button.disabled = model.busy;
+  button.addEventListener('click', () => actions.google());
+  return button;
+}
+
+function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
+  const form = element('form', { 'data-method': 'email' }) as HTMLFormElement;
+
+  const address = element('input', {
+    name: 'email',
+    type: 'email',
+    placeholder: 'you@example.com',
+    required: 'required',
+    autocomplete: 'email',
+  }) as HTMLInputElement;
+  address.value = model.address;
+  address.disabled = model.busy;
+  form.append(address);
+
+  const code = element('input', {
+    name: 'code',
+    type: 'text',
+    placeholder: 'Verification code',
+    inputmode: 'numeric',
+    autocomplete: 'one-time-code',
+  }) as HTMLInputElement;
+  code.disabled = model.busy;
+
+  const submit = text('button', model.codeSent ? 'Sign in' : 'Email me a code', {
+    type: 'submit',
+  }) as HTMLButtonElement;
+  submit.disabled = model.busy;
+
+  if (model.codeSent) form.append(code);
+  form.append(submit);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (model.codeSent) actions.submitEmailCode(address.value, code.value);
+    else actions.sendEmailCode(address.value);
+  });
+  return form;
+}
+
+function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
+  const section = element('section', { class: 'signed-in' });
+  section.append(text('p', model.email ?? 'Signed in'));
+  // The shell does not link the engine yet, so say so rather than render a
+  // vault the member does not have.
+  section.append(note('No vault on this device yet — the engine is not wired to this shell.'));
+
+  const out = text('button', 'Sign out', {
+    'data-action': 'logout',
+    type: 'button',
+  }) as HTMLButtonElement;
+  out.disabled = model.busy;
+  out.addEventListener('click', () => actions.logout());
+  section.append(out);
+  return section;
+}
+
+function note(message: string): HTMLElement {
+  return text('p', message, { class: 'muted' });
+}
+
+function element(tag: string, attributes: Record<string, string> = {}): HTMLElement {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  return node;
+}
+
+/** Text goes in as `textContent`, so nothing the API or a provider said is markup. */
+function text(tag: string, content: string, attributes: Record<string, string> = {}): HTMLElement {
+  const node = element(tag, attributes);
+  node.textContent = content;
+  return node;
+}
