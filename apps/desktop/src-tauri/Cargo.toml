@@ -1,7 +1,9 @@
-# CipherBox desktop shell — Tauri v2 tray + window chrome only.
-# No engine wiring yet: the shell links crates/engine natively in a later
-# slice (blueprint/desktop.md, "Tauri shell"). Version-frozen at 0.0.0 like
-# every workspace crate; the product version lives in tauri.conf.json.
+# CipherBox desktop shell — Tauri v2 tray, window chrome, and the two native
+# login steps (loopback OAuth callback, the facade over IPC).
+# No engine wiring yet: the shell links crates/engine and the seam set in
+# crates/desktop-seams in a later slice (blueprint/desktop.md, "Engine
+# wiring"). Version-frozen at 0.0.0 like every workspace crate; the product
+# version lives in tauri.conf.json.
 
 [package]
 name = "cipherbox-desktop"
@@ -17,3 +19,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
+# The loopback OAuth callback: a listener, its request decode, and the
+# deadlines that bound it. Tauri's own async runtime is Tokio.
+tokio = { version = "1", features = ["io-util", "net", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+# Nonces for the OAuth exchange. The engine's injected-entropy law is about
+# engine logic; this is host-side and never derives a key.
+getrandom = "0.3"
+zeroize.workspace = true

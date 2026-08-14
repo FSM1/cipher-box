@@ -649,8 +649,13 @@ dependencies = [
 name = "cipherbox-desktop"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
