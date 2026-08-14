@@ -6,8 +6,8 @@
  * runs its own consent flow and has nothing in hand when the flow calls.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import type { CollectedMaterial, CredentialCollector } from '@cipherbox/login';
-import { collectGoogleIdToken } from './googleOAuth';
 
 /**
  * What each of the shell's collectors is handed. `wallet` is `never` because
@@ -19,6 +19,15 @@ export interface DesktopCollected extends CollectedMaterial {
   google: void;
   email: { email: string; code: string };
   wallet: never;
+}
+
+/**
+ * Google is collected natively by the shell rather than in this webview; why,
+ * and how the loopback callback is bounded, is in `src-tauri/src/oauth.rs`.
+ * Rejects if the member closes the window or the exchange passes its deadline.
+ */
+function collectGoogleIdToken(clientId: string): Promise<string> {
+  return invoke<string>('collect_google_id_token', { clientId });
 }
 
 /**

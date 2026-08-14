@@ -1,9 +1,7 @@
 # CipherBox desktop shell — Tauri v2 tray, window chrome, and the two native
 # login steps (loopback OAuth callback, the facade over IPC).
-# No engine wiring yet: the shell links crates/engine and the seam set in
-# crates/desktop-seams in a later slice (blueprint/desktop.md, "Engine
-# wiring"). Version-frozen at 0.0.0 like every workspace crate; the product
-# version lives in tauri.conf.json.
+# Version-frozen at 0.0.0 like every workspace crate; the product version
+# lives in tauri.conf.json.
 
 [package]
 name = "cipherbox-desktop"

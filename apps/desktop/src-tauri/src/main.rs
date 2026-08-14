@@ -3,8 +3,7 @@
 //! Hosts the login front door (`../src`, driving `@cipherbox/login`) and the
 //! two native steps that front door cannot take itself: Google collection over
 //! a loopback callback ([`oauth`]) and the facade the sequence starts
-//! ([`session`]). No mount and no vault semantics yet — the shell does not link
-//! `crates/engine` (blueprint/desktop.md, "Engine wiring").
+//! ([`session`]).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

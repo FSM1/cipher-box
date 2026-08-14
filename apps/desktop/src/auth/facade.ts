@@ -3,9 +3,8 @@ import type { LoginFacade } from '@cipherbox/login';
 
 /**
  * The facade the login sequence starts, over Tauri IPC (blueprint/desktop.md,
- * "Tauri shell"). The shell does not link `crates/engine` yet, so what stands
- * behind these two commands is `src-tauri/src/session.rs` — it takes the login
- * secret and zeroizes it, and there is no vault behind it.
+ * "Tauri shell"). What stands behind these two commands is
+ * `src-tauri/src/session.rs`.
  */
 export const shellFacade: LoginFacade = {
   // The buffer goes over IPC raw. Serialized as a JSON number array it would

@@ -47,8 +47,7 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   else view.append(frontDoor(model, actions));
 
   if (model.error !== null) {
-    const failure = text('p', model.error, { class: 'error', role: 'alert' });
-    view.append(failure);
+    view.append(text('p', model.error, { class: 'error', role: 'alert' }));
   }
   root.replaceChildren(view);
 }
@@ -120,8 +119,6 @@ function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
   section.append(text('p', model.email ?? 'Signed in'));
-  // The shell does not link the engine yet, so say so rather than render a
-  // vault the member does not have.
   section.append(note('No vault on this device yet — the engine is not wired to this shell.'));
 
   const out = text('button', 'Sign out', {

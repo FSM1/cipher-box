@@ -25,8 +25,8 @@ const SESSION_SECONDS = 8 * 60 * 60;
  *
  * What the SDK keeps there is a secp256k1 scalar that both addresses and
  * decrypts the Web3Auth record holding the login secret. Nothing on this host
- * may hold that at rest until the shell has its keychain-backed CredentialStore
- * seam (blueprint/desktop.md, "Engine wiring"), so a restart is a fresh sign-in
+ * may hold that at rest without a keychain-backed CredentialStore seam
+ * (blueprint/desktop.md, "Engine wiring"), so a restart is a fresh sign-in
  * rather than a scalar left on disk.
  */
 class MemoryStore {

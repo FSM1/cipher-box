@@ -6,11 +6,14 @@
 //! therefore serves the callback itself, from a loopback listener on a port
 //! pre-registered with the provider.
 //!
-//! The exchange is bounded on every axis: the listener binds `127.0.0.1` only,
-//! a page nonce the callback document carries is required on the POST that
-//! delivers the token, `state` binds the redirect to this request, and both the
-//! whole exchange and each connection have absolute deadlines.
+//! The exchange is bounded on every axis: the redirect names the `127.0.0.1`
+//! literal and the listener binds it, never the `localhost` name (RFC 8252
+//! §8.3), a page nonce the callback document carries is required on the POST
+//! that delivers the token, `state` binds the redirect to this request, and
+//! both the whole exchange and each connection have absolute deadlines.
 
+use std::io::ErrorKind;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -21,9 +24,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// Callback ports, tried in order.
 ///
-/// Each must be registered as an authorized redirect URI with the provider, so
-/// an exhausted list fails fast rather than falling back to a random port that
-/// the provider would refuse.
+/// Each must be registered with the provider as an authorized redirect URI in
+/// its `http://127.0.0.1:{port}/callback` form, so an exhausted list fails fast
+/// rather than falling back to a random port that the provider would refuse.
 const CALLBACK_PORTS: &[u16] = &[14200, 14201, 14202];
 
 const CALLBACK_PATH: &str = "/callback";
@@ -42,14 +45,12 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
 const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-/// The only hosts this shell will open a window on.
-const ALLOWED_HOSTS: &[&str] = &["accounts.google.com"];
+/// The only host this shell will open a window on.
+const PROVIDER_HOST: &str = "accounts.google.com";
 
 /// Window labels must be unique for the app's lifetime, and a label is reused
 /// the moment a member retries a sign-in.
 static CONSENT_WINDOWS: AtomicU64 = AtomicU64::new(0);
-
-const CONSENT_WINDOW: &str = "google-consent";
 
 /// The secrets that bind one exchange: `state` travels through the provider and
 /// comes back on the redirect, and `page_nonce` never leaves this machine and
@@ -74,7 +75,7 @@ impl Exchange {
 /// Collects a Google ID token for the login flow to exchange with CipherBox.
 #[tauri::command]
 pub async fn collect_google_id_token(app: AppHandle, client_id: String) -> Result<String, String> {
-    let listener = bind_callback_listener().await?;
+    let (listener, _v6_guard) = bind_callback_listener().await?;
     let port = listener
         .local_addr()
         .map_err(|error| format!("the callback listener has no address: {error}"))?
@@ -90,12 +91,25 @@ pub async fn collect_google_id_token(app: AppHandle, client_id: String) -> Resul
     outcome.unwrap_or_else(|_| Err("the sign-in window timed out".to_string()))
 }
 
-/// Binds the first free pre-registered port, or reports that none was free.
-async fn bind_callback_listener() -> Result<TcpListener, String> {
+/// Binds the first free pre-registered port on both loopback families.
+///
+/// The IPv6 bind is held for the exchange as defence in depth: the redirect
+/// names the IPv4 literal, so a squatter on `[::1]` cannot be reached, but a
+/// port answered by another process is refused rather than left in place. A
+/// host with no IPv6 loopback at all has nothing to squat, so only a taken one
+/// is fatal.
+async fn bind_callback_listener() -> Result<(TcpListener, Option<TcpListener>), String> {
     for port in CALLBACK_PORTS {
-        if let Ok(listener) = TcpListener::bind(("127.0.0.1", *port)).await {
-            return Ok(listener);
-        }
+        let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, *port)).await else {
+            continue;
+        };
+        return match TcpListener::bind((Ipv6Addr::LOCALHOST, *port)).await {
+            Ok(guard) => Ok((listener, Some(guard))),
+            Err(error) if error.kind() == ErrorKind::AddrInUse => Err(format!(
+                "another process holds [::1]:{port}; close it and try again"
+            )),
+            Err(_) => Ok((listener, None)),
+        };
     }
     Err(format!(
         "sign-in needs one of the ports {CALLBACK_PORTS:?}; close any other copy of CipherBox and try again"
@@ -120,25 +134,28 @@ fn authorize_url(client_id: &str, port: u16, exchange: &Exchange) -> Result<Url,
     Ok(url)
 }
 
+/// The IP literal, never the `localhost` name: that name also resolves to
+/// `::1`, which address-selection prefers and a separate bind can hold
+/// (RFC 8252 §8.3).
 fn redirect_uri(port: u16) -> String {
-    format!("http://localhost:{port}{CALLBACK_PATH}")
+    format!("http://{}:{port}{CALLBACK_PATH}", Ipv4Addr::LOCALHOST)
 }
 
 /// Opens the consent screen in its own window.
 ///
 /// Opened from here rather than `window.open()`, which is unreliable on Windows
-/// WebView2. The allowlist is the guard on what this shell will ever navigate a
-/// window to.
+/// WebView2. The scheme and host checks are the guard on what this shell will
+/// ever navigate a window to.
 fn open_provider_window(app: &AppHandle, url: Url) -> Result<WebviewWindow, String> {
     if url.scheme() != "https" {
         return Err("a sign-in window must be opened over https".to_string());
     }
-    if !ALLOWED_HOSTS.contains(&url.host_str().unwrap_or_default()) {
+    if url.host_str() != Some(PROVIDER_HOST) {
         return Err("that host is not a sign-in provider".to_string());
     }
 
     let label = format!(
-        "{CONSENT_WINDOW}-{}",
+        "google-consent-{}",
         CONSENT_WINDOWS.fetch_add(1, Ordering::Relaxed)
     );
     WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
@@ -245,6 +262,10 @@ async fn serve(listener: TcpListener, exchange: &Exchange) -> Result<String, Str
 async fn read(stream: &mut TcpStream) -> Option<String> {
     let mut raw: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
+    // Compared in bytes, which is what Content-Length declares; a lossy decode
+    // widens every invalid sequence to three and would disagree with it.
+    let mut body_starts_at = None;
+    let mut declared = 0;
 
     loop {
         let read = stream.read(&mut chunk).await.ok()?;
@@ -255,9 +276,14 @@ async fn read(stream: &mut TcpStream) -> Option<String> {
         if raw.len() > MAX_REQUEST_BYTES {
             return None;
         }
-        let text = String::from_utf8_lossy(&raw);
-        if let Some(end) = text.find("\r\n\r\n") {
-            if text.len() - (end + 4) >= content_length(&text[..end]) {
+        if body_starts_at.is_none() {
+            if let Some(end) = raw.windows(4).position(|four| four == b"\r\n\r\n") {
+                declared = content_length(&String::from_utf8_lossy(&raw[..end]));
+                body_starts_at = Some(end + 4);
+            }
+        }
+        if let Some(start) = body_starts_at {
+            if raw.len() - start >= declared {
                 break;
             }
         }
@@ -408,8 +434,22 @@ mod tests {
         assert!(query.contains(&("state".into(), "state-value".into())));
         assert!(query.contains(&(
             "redirect_uri".into(),
-            "http://localhost:14200/callback".into()
+            "http://127.0.0.1:14200/callback".into()
         )));
+    }
+
+    /// RFC 8252 §8.3: a host name would also resolve to `::1`, which another
+    /// process can hold and address selection prefers.
+    #[test]
+    fn the_redirect_names_a_literal_address_and_no_host_name() {
+        let uri = redirect_uri(14200);
+        assert_eq!(uri, "http://127.0.0.1:14200/callback");
+        let parsed = Url::parse(&uri).unwrap();
+        let host = parsed.host_str().unwrap();
+        assert!(
+            host.parse::<std::net::IpAddr>().is_ok(),
+            "redirect_uri must carry an IP literal, got {host}"
+        );
     }
 
     #[test]
@@ -423,7 +463,7 @@ mod tests {
             .collect();
         assert_eq!(
             redirects,
-            vec!["http://localhost:14200/callback".to_string()]
+            vec!["http://127.0.0.1:14200/callback".to_string()]
         );
     }
 
