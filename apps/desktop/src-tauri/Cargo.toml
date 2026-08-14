@@ -17,12 +17,20 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
-# The loopback OAuth callback: a listener, its request decode, and the
-# deadlines that bound it. Tauri's own async runtime is Tokio.
-tokio = { version = "1", features = ["io-util", "net", "time"] }
+# The loopback OAuth callback: a listener, a task per connection so no peer can
+# starve the exchange, its request decode, and the deadlines that bound it.
+# Tauri's own async runtime is Tokio.
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 serde.workspace = true
 serde_json.workspace = true
+# Decodes the ID token payload to read its `nonce` claim. The API verifies the
+# token's signature; this shell only binds it to the exchange it answers.
+base64.workspace = true
 # Nonces for the OAuth exchange. The engine's injected-entropy law is about
 # engine logic; this is host-side and never derives a key.
 getrandom = "0.3"
 zeroize.workspace = true
+
+[dev-dependencies]
+# The callback listener is exercised over a real loopback socket.
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }

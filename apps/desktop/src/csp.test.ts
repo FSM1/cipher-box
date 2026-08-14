@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { contentSecurityPolicy, DEFAULT_API_URL as CSP_DEFAULT_API_URL } from '../scripts/csp.mjs';
 import { DEFAULT_API_URL, desktopConfig } from './config';
+import tauriConf from '../src-tauri/tauri.conf.json';
 
 const BUILD = {
   VITE_WEB3AUTH_CLIENT_ID: 'a-client',
@@ -51,5 +52,24 @@ describe('the shell content security policy', () => {
 
   it('refuses to build a policy for an API URL that is not one', () => {
     expect(() => contentSecurityPolicy({ ...BUILD, VITE_API_URL: 'not a url' })).toThrow();
+  });
+});
+
+/**
+ * A build that does not go through `scripts/tauri.mjs` still gets a policy that
+ * admits the IPC endpoint, because `invoke` otherwise falls back to
+ * `postMessage` and the login secret crosses as a JSON number array.
+ */
+describe('the committed shell policy', () => {
+  const csp = tauriConf.app.security.csp;
+
+  it('admits the Tauri IPC endpoint the raw-bytes secret transport needs', () => {
+    expect(connectSrc(csp)).toContain('ipc:');
+    expect(connectSrc(csp)).toContain('http://ipc.localhost');
+  });
+
+  it('admits nothing else', () => {
+    expect(csp).toContain("default-src 'self'");
+    expect(connectSrc(csp)).toBe("connect-src 'self' ipc: http://ipc.localhost");
   });
 });

@@ -2,11 +2,12 @@
  * The shell's Content-Security-Policy, built from the same environment that
  * decides which API this build talks to.
  *
- * `default-src 'self'` alone refuses the login the shell exists to run, so the
- * policy is widened by exactly two things and nothing else: the Web3Auth Core
- * Kit's own hosts, and the configured API origin the identity exchange posts
- * to. Google is deliberately not here — its consent screen is opened natively
- * in a separate window, so the shell's own document never reaches it.
+ * The committed `tauri.conf.json` policy refuses the login the shell exists to
+ * run, so the policy is widened here by exactly two things and nothing else:
+ * the Web3Auth Core Kit's own hosts, and the configured API origin the identity
+ * exchange posts to. Google is deliberately not here — its consent screen is
+ * opened natively in a separate window, so the shell's own document never
+ * reaches it.
  */
 
 /** Must match `src/config.ts`; `csp.test.ts` holds the two together. */
@@ -20,7 +21,14 @@ export const DEFAULT_API_URL = 'http://localhost:3000';
  */
 const WEB3AUTH_HOSTS = ['https://*.web3auth.io', 'https://*.tor.us'];
 
-/** Tauri's own IPC endpoint, which every `invoke` posts to. */
+/**
+ * Tauri's own IPC endpoint, which every `invoke` posts to. Load-bearing for
+ * secret hygiene rather than for connectivity: blocked, `invoke` falls back to
+ * `postMessage`, which JSON-stringifies the login secret's buffer into a number
+ * array no frame can scrub (`src/auth/facade.ts`). The committed
+ * `tauri.conf.json` names it too, so a build that bypasses this script keeps
+ * the raw-bytes transport.
+ */
 const TAURI_IPC = ['ipc:', 'http://ipc.localhost'];
 
 /** The origin of `url`, or `null` when it does not parse as one. */

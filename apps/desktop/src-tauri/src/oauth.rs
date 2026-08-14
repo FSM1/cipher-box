@@ -9,18 +9,23 @@
 //! The exchange is bounded on every axis: the redirect names the `127.0.0.1`
 //! literal and the listener binds it, never the `localhost` name (RFC 8252
 //! §8.3), a page nonce the callback document carries is required on the POST
-//! that delivers the token, `state` binds the redirect to this request, and
-//! both the whole exchange and each connection have absolute deadlines.
+//! that delivers the token, `state` binds the redirect to this request, the ID
+//! token's own `nonce` claim binds it to this exchange, and both the whole
+//! exchange and each connection have absolute deadlines.
 
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
 /// Callback ports, tried in order.
 ///
@@ -58,7 +63,8 @@ static CONSENT_WINDOWS: AtomicU64 = AtomicU64::new(0);
 struct Exchange {
     state: String,
     page_nonce: String,
-    /// Required by the provider for an `id_token` response.
+    /// Travels to the provider and comes back as the ID token's `nonce` claim,
+    /// which is the implicit flow's only replay defence (OIDC Core §3.2.2.11).
     oidc_nonce: String,
 }
 
@@ -81,11 +87,11 @@ pub async fn collect_google_id_token(app: AppHandle, client_id: String) -> Resul
         .map_err(|error| format!("the callback listener has no address: {error}"))?
         .port();
 
-    let exchange = Exchange::new()?;
+    let exchange = Arc::new(Exchange::new()?);
     let url = authorize_url(&client_id, port, &exchange)?;
     let window = open_provider_window(&app, url)?;
 
-    let outcome = tokio::time::timeout(EXCHANGE_DEADLINE, serve(listener, &exchange)).await;
+    let outcome = tokio::time::timeout(EXCHANGE_DEADLINE, serve(listener, exchange, port)).await;
     let _ = window.close();
 
     outcome.unwrap_or_else(|_| Err("the sign-in window timed out".to_string()))
@@ -190,6 +196,13 @@ struct Callback {
     nonce: Option<String>,
 }
 
+/// The claims this shell reads out of an ID token; see [`claimed_nonce`].
+#[derive(Deserialize)]
+struct Claims {
+    #[serde(default)]
+    nonce: Option<String>,
+}
+
 /// Judges one POST body against the exchange it claims to belong to.
 fn verdict(body: &str, exchange: &Exchange) -> Verdict {
     let Ok(callback) = serde_json::from_str::<Callback>(body) else {
@@ -207,9 +220,30 @@ fn verdict(body: &str, exchange: &Exchange) -> Verdict {
         return Verdict::Refused(refusal(&error));
     }
     match callback.id_token {
-        Some(token) if !token.is_empty() => Verdict::Accepted(token),
+        Some(token) if !token.is_empty() => {
+            if claimed_nonce(&token).as_deref() != Some(exchange.oidc_nonce.as_str()) {
+                return Verdict::Refused(
+                    "the identity token does not answer this sign-in".to_string(),
+                );
+            }
+            Verdict::Accepted(token)
+        }
         _ => Verdict::Refused("the provider returned no identity token".to_string()),
     }
+}
+
+/// The `nonce` claim of a JWT payload, or none when the token is malformed or
+/// carries no such claim.
+///
+/// Decodes the payload; it does not verify the token — the API remains the
+/// signature verifier, and this binds the token to the exchange it answers.
+fn claimed_nonce(token: &str) -> Option<String> {
+    let segments: Vec<&str> = token.split('.').collect();
+    let [_header, payload, _signature] = segments[..] else {
+        return None;
+    };
+    let claims = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    serde_json::from_slice::<Claims>(&claims).ok()?.nonce
 }
 
 /// The provider's own error code, rendered for the member.
@@ -220,41 +254,91 @@ fn refusal(code: &str) -> String {
     }
 }
 
+/// What every connection of one exchange shares.
+#[derive(Clone)]
+struct Served {
+    exchange: Arc<Exchange>,
+    page: Arc<String>,
+    /// The callback page is served once per exchange; see [`handle`].
+    page_taken: Arc<AtomicBool>,
+    port: u16,
+}
+
 /// Serves the callback until the exchange settles.
-async fn serve(listener: TcpListener, exchange: &Exchange) -> Result<String, String> {
-    let page = callback_page(&exchange.page_nonce);
+///
+/// Each connection is handled on its own task, so a peer that opens and then
+/// says nothing spends its own connection deadline rather than the exchange's.
+async fn serve(
+    listener: TcpListener,
+    exchange: Arc<Exchange>,
+    port: u16,
+) -> Result<String, String> {
+    let served = Served {
+        page: Arc::new(callback_page(&exchange.page_nonce)),
+        exchange,
+        page_taken: Arc::new(AtomicBool::new(false)),
+        port,
+    };
+    let (settle, mut settled) = mpsc::channel::<Result<String, String>>(1);
 
     loop {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            continue;
-        };
-        let Ok(Some(request)) = tokio::time::timeout(CONNECTION_DEADLINE, read(&mut stream)).await
-        else {
-            continue;
-        };
-
-        let Some((line, body)) = split(&request) else {
-            respond(&mut stream, "400 Bad Request", "Bad request").await;
-            continue;
-        };
-
-        if line.starts_with("GET ") && line.contains(CALLBACK_PATH) {
-            respond(&mut stream, "200 OK", &page).await;
-        } else if line.starts_with("POST ") && line.contains(TOKEN_PATH) {
-            match verdict(body, exchange) {
-                Verdict::Ignored => respond(&mut stream, "403 Forbidden", "Not this sign-in").await,
-                Verdict::Accepted(token) => {
-                    respond(&mut stream, "200 OK", DONE_PAGE).await;
-                    return Ok(token);
-                }
-                Verdict::Refused(why) => {
-                    respond(&mut stream, "200 OK", DONE_PAGE).await;
-                    return Err(why);
-                }
+        tokio::select! {
+            outcome = settled.recv() => {
+                return outcome
+                    .unwrap_or_else(|| Err("the sign-in callback stopped".to_string()));
             }
-        } else {
-            respond(&mut stream, "404 Not Found", "Not found").await;
+            accepted = listener.accept() => {
+                let Ok((stream, _)) = accepted else {
+                    continue;
+                };
+                tokio::spawn(handle(stream, served.clone(), settle.clone()));
+            }
         }
+    }
+}
+
+/// Answers one connection, settling the exchange if it carried the verdict.
+async fn handle(
+    mut stream: TcpStream,
+    served: Served,
+    settle: mpsc::Sender<Result<String, String>>,
+) {
+    let Ok(Some(request)) = tokio::time::timeout(CONNECTION_DEADLINE, read(&mut stream)).await
+    else {
+        return;
+    };
+    let Some((head, body)) = request.split_once("\r\n\r\n") else {
+        respond(&mut stream, "400 Bad Request", "Bad request").await;
+        return;
+    };
+    if !addressed_to_us(head, served.port) {
+        respond(&mut stream, "400 Bad Request", "Bad request").await;
+        return;
+    }
+
+    match request_target(head.lines().next().unwrap_or_default()) {
+        Some(("GET", CALLBACK_PATH)) => {
+            // The page carries the nonce that gates the token POST, so a local
+            // reader that fetched it could refuse this member's sign-in with a
+            // wrong `state`. One redirect needs it once.
+            if served.page_taken.swap(true, Ordering::SeqCst) {
+                respond(&mut stream, "410 Gone", "This sign-in has already begun").await;
+            } else {
+                respond(&mut stream, "200 OK", &served.page).await;
+            }
+        }
+        Some(("POST", TOKEN_PATH)) => match verdict(body, &served.exchange) {
+            Verdict::Ignored => respond(&mut stream, "403 Forbidden", "Not this sign-in").await,
+            Verdict::Accepted(token) => {
+                respond(&mut stream, "200 OK", DONE_PAGE).await;
+                let _ = settle.send(Ok(token)).await;
+            }
+            Verdict::Refused(why) => {
+                respond(&mut stream, "200 OK", DONE_PAGE).await;
+                let _ = settle.send(Err(why)).await;
+            }
+        },
+        _ => respond(&mut stream, "404 Not Found", "Not found").await,
     }
 }
 
@@ -291,21 +375,38 @@ async fn read(stream: &mut TcpStream) -> Option<String> {
     Some(String::from_utf8_lossy(&raw).into_owned())
 }
 
-/// Splits a request into its start line and its body.
-fn split(request: &str) -> Option<(&str, &str)> {
-    let (head, body) = request.split_once("\r\n\r\n")?;
-    Some((head.lines().next().unwrap_or_default(), body))
+/// The method and path of a request line, with any query or fragment dropped.
+fn request_target(line: &str) -> Option<(&str, &str)> {
+    let mut fields = line.split(' ');
+    let method = fields.next()?;
+    let target = fields.next()?;
+    Some((method, target.split(['?', '#']).next().unwrap_or(target)))
+}
+
+/// The value of a header, whatever case the sender wrote its name in.
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().find_map(|line| {
+        let (field, value) = line.split_once(':')?;
+        field.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+/// Whether a request names this listener rather than a rebound host name.
+///
+/// A page whose domain resolves to `127.0.0.1` is same-origin with this
+/// listener and could otherwise read the callback page out of it; a `Host`
+/// check is what keeps that page a stranger.
+fn addressed_to_us(head: &str, port: u16) -> bool {
+    let Some((name, declared)) = header(head, "host").and_then(|host| host.rsplit_once(':')) else {
+        return false;
+    };
+    matches!(name, "127.0.0.1" | "localhost") && declared.parse() == Ok(port)
 }
 
 /// The declared body length, or none declared.
-fn content_length(headers: &str) -> usize {
-    headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse().ok())?
-        })
+fn content_length(head: &str) -> usize {
+    header(head, "content-length")
+        .and_then(|value| value.parse().ok())
         .unwrap_or(0)
 }
 
@@ -373,21 +474,82 @@ mod tests {
         format!("{{{fields}}}")
     }
 
+    /// A JWT whose payload carries `claims`, signed by nobody: this shell reads
+    /// the payload and the API verifies the signature.
+    fn token(claims: &str) -> String {
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#),
+            URL_SAFE_NO_PAD.encode(claims),
+            URL_SAFE_NO_PAD.encode("not-a-signature"),
+        )
+    }
+
+    /// A POST body carrying `id_token` with this exchange's page nonce and state.
+    fn posted(id_token: &str) -> String {
+        body(&format!(
+            r#""id_token":{id_token:?},"state":"state-value","nonce":"page-nonce""#
+        ))
+    }
+
     #[test]
     fn accepts_a_token_carrying_this_exchange_nonce_and_state() {
-        let posted = body(r#""id_token":"a.b.c","state":"state-value","nonce":"page-nonce""#);
+        let token = token(r#"{"nonce":"oidc-nonce"}"#);
         assert_eq!(
-            verdict(&posted, &exchange()),
-            Verdict::Accepted("a.b.c".to_string())
+            verdict(&posted(&token), &exchange()),
+            Verdict::Accepted(token)
         );
+    }
+
+    /// OIDC Core §3.2.2.11: the implicit flow's only replay defence is that the
+    /// token answers the nonce this exchange sent.
+    #[test]
+    fn refuses_a_token_minted_for_another_exchange() {
+        let replayed = posted(&token(r#"{"nonce":"another-exchange"}"#));
+        assert!(matches!(
+            verdict(&replayed, &exchange()),
+            Verdict::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn refuses_a_token_that_answers_no_nonce_at_all() {
+        let unbound = posted(&token(r#"{"sub":"a-subject"}"#));
+        assert!(matches!(
+            verdict(&unbound, &exchange()),
+            Verdict::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn refuses_a_malformed_token_rather_than_panicking() {
+        for malformed in [
+            "not-a-jwt",
+            "only.two",
+            "a.b.c.d",
+            "a.!!!.c",
+            &format!("a.{}.c", URL_SAFE_NO_PAD.encode("not json")),
+            &format!("a.{}.c", URL_SAFE_NO_PAD.encode(r#"{"nonce":7}"#)),
+        ] {
+            assert!(
+                matches!(
+                    verdict(&posted(malformed), &exchange()),
+                    Verdict::Refused(_)
+                ),
+                "{malformed} was not refused"
+            );
+        }
     }
 
     #[test]
     fn ignores_a_post_that_does_not_carry_the_page_nonce() {
-        let posted = body(r#""id_token":"a.b.c","state":"state-value","nonce":"guessed""#);
-        assert_eq!(verdict(&posted, &exchange()), Verdict::Ignored);
+        let token = token(r#"{"nonce":"oidc-nonce"}"#);
+        let guessed = body(&format!(
+            r#""id_token":{token:?},"state":"state-value","nonce":"guessed""#
+        ));
+        assert_eq!(verdict(&guessed, &exchange()), Verdict::Ignored);
 
-        let anonymous = body(r#""id_token":"a.b.c","state":"state-value""#);
+        let anonymous = body(&format!(r#""id_token":{token:?},"state":"state-value""#));
         assert_eq!(verdict(&anonymous, &exchange()), Verdict::Ignored);
     }
 
@@ -473,10 +635,39 @@ mod tests {
     }
 
     #[test]
-    fn splits_a_request_into_its_line_and_body() {
-        let request = "POST /token HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}";
-        assert_eq!(split(request), Some(("POST /token HTTP/1.1", "{}")));
-        assert_eq!(split("GET /callback HTTP/1.1\r\n"), None);
+    fn routes_on_the_path_and_not_on_the_whole_request_line() {
+        assert_eq!(
+            request_target("GET /callback HTTP/1.1"),
+            Some(("GET", "/callback"))
+        );
+        assert_eq!(
+            request_target("POST /callback?x=/token HTTP/1.1"),
+            Some(("POST", "/callback"))
+        );
+        assert_eq!(request_target("GET"), None);
+    }
+
+    #[test]
+    fn answers_only_requests_addressed_to_this_listener() {
+        assert!(addressed_to_us(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:14200",
+            14200
+        ));
+        assert!(addressed_to_us(
+            "GET / HTTP/1.1\r\nhost: localhost:14200",
+            14200
+        ));
+        // A name rebound to loopback, and the same listener on another port.
+        assert!(!addressed_to_us(
+            "GET / HTTP/1.1\r\nHost: rebound.test:14200",
+            14200
+        ));
+        assert!(!addressed_to_us(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:14201",
+            14200
+        ));
+        assert!(!addressed_to_us("GET / HTTP/1.1\r\nHost: 127.0.0.1", 14200));
+        assert!(!addressed_to_us("GET / HTTP/1.1\r\nAccept: */*", 14200));
     }
 
     #[test]
@@ -485,6 +676,97 @@ mod tests {
         assert_eq!(content_length("POST / HTTP/1.1\r\nContent-Length:  7 "), 7);
         assert_eq!(content_length("POST / HTTP/1.1\r\nHost: localhost"), 0);
         assert_eq!(content_length("POST / HTTP/1.1\r\nContent-Length: many"), 0);
+    }
+
+    /// A listener on a free port, and the exchange it serves.
+    async fn listening() -> (TcpListener, u16, Arc<Exchange>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port, Arc::new(exchange()))
+    }
+
+    /// Sends `request` to the loopback listener and returns what came back.
+    async fn ask(port: u16, request: &str) -> String {
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut answer)
+            .await
+            .unwrap();
+        answer
+    }
+
+    fn get_callback(port: u16) -> String {
+        format!("GET /callback HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+    }
+
+    fn post_token(port: u16, body: &str) -> String {
+        format!(
+            "POST /token HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn serves_the_callback_page_once_per_exchange() {
+        let (listener, port, exchange) = listening().await;
+        let serving = tokio::spawn(serve(listener, exchange, port));
+
+        let first = ask(port, &get_callback(port)).await;
+        assert!(first.contains("200 OK"));
+        assert!(first.contains("page-nonce"));
+
+        let second = ask(port, &get_callback(port)).await;
+        assert!(second.contains("410 Gone"));
+        assert!(!second.contains("page-nonce"));
+
+        serving.abort();
+    }
+
+    #[tokio::test]
+    async fn refuses_a_request_addressed_to_a_rebound_host() {
+        let (listener, port, exchange) = listening().await;
+        let serving = tokio::spawn(serve(listener, exchange, port));
+
+        let answer = ask(port, "GET /callback HTTP/1.1\r\nHost: rebound.test\r\n\r\n").await;
+        assert!(answer.contains("400 Bad Request"));
+        assert!(!answer.contains("page-nonce"));
+
+        serving.abort();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_peer_does_not_hold_up_the_real_callback() {
+        let (listener, port, exchange) = listening().await;
+        let serving = tokio::spawn(serve(listener, exchange, port));
+
+        // Opened and never spoken on. Enough of them to outlast the exchange
+        // deadline if each held the listener for its own connection deadline.
+        let mut stalled = Vec::new();
+        while stalled.len() * CONNECTION_DEADLINE.as_secs() as usize
+            <= EXCHANGE_DEADLINE.as_secs() as usize
+        {
+            stalled.push(
+                TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let token = token(r#"{"nonce":"oidc-nonce"}"#);
+        let settling = tokio::time::timeout(Duration::from_secs(10), async {
+            let answer = ask(port, &post_token(port, &posted(&token))).await;
+            assert!(answer.contains("200 OK"));
+            serving.await.unwrap()
+        });
+        assert_eq!(
+            settling
+                .await
+                .expect("the stalled peers starved the callback"),
+            Ok(token)
+        );
     }
 
     #[test]
