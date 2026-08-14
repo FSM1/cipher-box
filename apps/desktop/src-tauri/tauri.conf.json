@@ -4,7 +4,10 @@
   "identifier": "com.cipherbox.desktop",
   "version": "0.45.2",
   "build": {
-    "frontendDist": "../frontend"
+    "beforeDevCommand": "pnpm dev:frontend",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:5174",
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
@@ -15,7 +18,7 @@
         "height": 640,
         "minWidth": 480,
         "minHeight": 360,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {
