@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { errorMessage } from '../lib/errorMessage';
-import type { CoreKitSession } from './coreKit';
+import type { CoreKitSession } from '@cipherbox/login';
 
 /** Whether this tab knows if it has a session. */
 export type CoreKitStatus = 'checking' | 'ready' | 'unavailable';

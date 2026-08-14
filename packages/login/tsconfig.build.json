@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Referenced by apps/web, which builds this project to get its declarations.
+    "composite": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "exclude": ["src/**/*.test.ts", "src/testFakes.ts"]
+}

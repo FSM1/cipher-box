@@ -55,6 +55,7 @@ jobs:
             web:
               - 'apps/web/**'
               - 'packages/client/**'
+              - 'packages/login/**'
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'

@@ -2,35 +2,21 @@
  * Web3Auth Core Kit on the UI thread: it owns its own popup and redirect flows,
  * so it cannot live in the engine worker (blueprint/web-client.md "Login and
  * identity"). The one thing it produces that the vault cares about is the login
- * secret, which `engine/loginHandoff` transfers to the engine.
+ * secret, which the login flow transfers to the engine.
  */
 
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
+import {
+  isIdentityMethod,
+  type CoreKitSession,
+  type IdentityCredential,
+  type IdentityMethod,
+} from '@cipherbox/login';
 import { environment, loginEnv } from '../engine/config';
-import type { LoginSecretExporter } from '../engine/loginHandoff';
-import { type IdentityCredential, type IdentityMethod, isIdentityMethod } from './identityExchange';
 import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 
-/**
- * The Core Kit surface the login flow drives. Narrow by construction: the hook
- * never sees a Web3Auth parameter shape, and a test substitutes a plain object.
- */
-export interface CoreKitSession extends LoginSecretExporter {
-  /** Restores a prior session, if the SDK has one on this device. */
-  restore(): Promise<void>;
-  /** True once a login (or a restore) has completed on this device. */
-  isLoggedIn(): boolean;
-  /** Redeems a CipherBox identity token for this device's share of the key. */
-  login(credential: IdentityCredential): Promise<void>;
-  /** How the live session was established; unknown after a bare restore. */
-  method(): IdentityMethod | null;
-  /** The signed-in user's email, when the method carries one. */
-  email(): string | null;
-  logout(): Promise<void>;
-}
-
-/** Adapts the Web3Auth SDK to the narrow session seam above. */
+/** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
 class Web3AuthSession implements CoreKitSession {
   /** The address the exchange reported; the token deliberately carries no PII. */
   private signedInEmail: string | null = null;

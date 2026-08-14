@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    // No `DOM`: this package is host-agnostic (ADR 0008 D3), so a browser API
+    // must not typecheck here. `node` carries the fetch the exchange speaks.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

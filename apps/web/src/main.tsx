@@ -21,7 +21,7 @@ import { App } from './App';
 import { createCoreKitSession, sealedCoreKitStore } from './auth/coreKit';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { IdentityProvider } from './auth/IdentityProvider';
-import { createIdentityExchange } from './auth/identityExchange';
+import { createIdentityExchange } from '@cipherbox/login';
 import { apiBaseUrl, googleClientId } from './engine/config';
 import { createEngineClient } from './engine/createEngineClient';
 import { installIntrospection } from './engine/introspection';

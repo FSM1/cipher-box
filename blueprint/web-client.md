@@ -200,12 +200,13 @@ all living in `packages/client` and running inside the engine worker realm:
   the Http seam. This is a distinct authentication from unlocking the Core Kit,
   and only the latter involves an identity provider ([ADR 0008](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0008-cipherbox-issues-the-identity-token.md)).
 - **The login orchestration is shared, the credential collection is not**
-  (ADR 0008 D3). One host-agnostic package sequences provider credential → API
-  exchange → Core Kit login → secret export → `start(secret)`; both hosts import
-  it and inject their own collector. On web that collector is the Google popup
-  and wagmi; desktop's is its own (desktop.md). The boundary is credential
-  collection, not the bearer token — v1 drew it at the token and the two hosts
-  drifted.
+  (ADR 0008 D3). `packages/login` (`@cipherbox/login`) is host-agnostic — no
+  browser API, no React — and sequences provider credential → API exchange →
+  Core Kit login → secret export → `start(secret)`; both hosts import it,
+  parameterise it over their own facade, and inject their own collector. On web
+  that collector is the Google popup, the emailed code and wagmi; desktop's is
+  its own (desktop.md). The boundary is credential collection, not the bearer
+  token — v1 drew it at the token and the two hosts drifted.
 - **Wallet is a first login here** (ADR 0008 D2): wagmi collects the signature on
   the UI thread, the API verifies it and mints the identity token, and the Core
   Kit login proceeds as for any other method. Web only.

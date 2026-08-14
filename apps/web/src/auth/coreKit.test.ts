@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
-import type { IdentityCredential } from './identityExchange';
+import type { IdentityCredential } from '@cipherbox/login';
 
 const STORE_KEY = 'corekit_store';
 

@@ -8,13 +8,14 @@ import type { EngineClient } from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
-import type { CoreKitSession } from '../auth/coreKit';
+
 import { IdentityProvider } from '../auth/IdentityProvider';
 import type {
+  CoreKitSession,
   IdentityCredential,
   IdentityExchange,
   IdentityMethod,
-} from '../auth/identityExchange';
+} from '@cipherbox/login';
 import { wagmiConfig } from '../lib/wagmi';
 import { EngineProvider } from '../providers/EngineProvider';
 

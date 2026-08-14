@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createIdentityExchange, isIdentityMethod } from './identityExchange';
+import { createIdentityExchange, isIdentityMethod } from './identity';
 
 const BASE = 'https://api.example.test';
 
