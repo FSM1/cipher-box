@@ -981,6 +981,12 @@ jobs:
       - name: Cargo clippy (desktop shell)
         run: cargo clippy -p cipherbox-desktop --all-targets -- -D warnings
 
+      # The workspace-wide `cargo test` excludes this crate (webkit2gtk deps),
+      # so the loopback OAuth callback's suite blocks a merge here or nowhere.
+      - name: Cargo test (desktop shell)
+        run: cargo test -p cipherbox-desktop
+
+      # Builds the frontend too, through `beforeBuildCommand`.
       - name: Tauri build (unsigned, no bundle)
         run: pnpm --filter @cipherbox/desktop tauri build --no-bundle
 
