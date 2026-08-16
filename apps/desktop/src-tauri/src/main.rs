@@ -1,10 +1,14 @@
-//! CipherBox desktop shell — Tauri v2 menu-bar/tray skeleton.
+//! CipherBox desktop shell — Tauri v2 menu-bar app.
 //!
-//! Scaffold only: no engine wiring, no login, no mount, no vault semantics.
-//! The tray and the hidden main window are the lifecycle chrome the engine
-//! host attaches to in a later slice (blueprint/desktop.md, "Tauri shell").
+//! Hosts the login front door (`../src`, driving `@cipherbox/login`) and the
+//! two native steps that front door cannot take itself: Google collection over
+//! a loopback callback ([`oauth`]) and the facade the sequence starts
+//! ([`session`]).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod oauth;
+mod session;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -18,6 +22,12 @@ const MAIN_WINDOW: &str = "main";
 
 fn main() {
     tauri::Builder::default()
+        .manage(session::Session::default())
+        .invoke_handler(tauri::generate_handler![
+            oauth::collect_google_id_token,
+            session::session_start,
+            session::session_logout
+        ])
         .setup(|app| {
             // Menu-bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]

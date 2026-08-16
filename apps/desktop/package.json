@@ -4,10 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev"
+    "tauri": "node scripts/tauri.mjs",
+    "dev": "node scripts/tauri.mjs dev",
+    "dev:frontend": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "test": "tsc -b && vitest run"
+  },
+  "dependencies": {
+    "@cipherbox/login": "workspace:*",
+    "@tauri-apps/api": "^2.9.0",
+    "@toruslabs/tss-dkls-lib": "^4.1.0",
+    "@web3auth/mpc-core-kit": "^3.5.0",
+    "buffer": "^6.0.3",
+    "process": "^0.11.10"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4"
+    "@tauri-apps/cli": "^2.11.4",
+    "jsdom": "^28.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }
