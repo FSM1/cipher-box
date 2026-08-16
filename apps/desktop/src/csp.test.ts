@@ -55,11 +55,6 @@ describe('the shell content security policy', () => {
   });
 });
 
-/**
- * A build that does not go through `scripts/tauri.mjs` still gets a policy that
- * admits the IPC endpoint, because `invoke` otherwise falls back to
- * `postMessage` and the login secret crosses as a JSON number array.
- */
 describe('the committed shell policy', () => {
   const csp = tauriConf.app.security.csp;
 

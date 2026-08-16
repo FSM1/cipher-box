@@ -38,7 +38,7 @@ export function desktopCollector(
   googleClientId: string | undefined
 ): CredentialCollector<DesktopCollected> {
   return {
-    google: googleClientId ? () => collectGoogleIdToken(googleClientId) : undefined,
+    ...(googleClientId ? { google: () => collectGoogleIdToken(googleClientId) } : {}),
     email: (answer) => Promise.resolve(answer),
   };
 }

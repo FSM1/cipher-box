@@ -66,7 +66,27 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   if (model.error !== null) {
     view.append(text('p', model.error, { class: 'error', role: 'alert' }));
   }
+  const focused = focusedName(root);
   root.replaceChildren(view);
+  refocus(view, focused);
+}
+
+/** The `name` of the focused control inside `root`, so a redraw can restore it. */
+function focusedName(root: HTMLElement): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
+  return active.getAttribute('name');
+}
+
+/** A redraw replaces every node, which would otherwise drop a typist to the body. */
+function refocus(view: HTMLElement, name: string | null): void {
+  if (name === null) return;
+  for (const node of view.querySelectorAll<HTMLElement>('[name]')) {
+    if (node.getAttribute('name') === name) {
+      node.focus();
+      return;
+    }
+  }
 }
 
 function frontDoor(model: ShellModel, actions: ShellActions): HTMLElement {
@@ -112,6 +132,7 @@ function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
     name: 'code',
     type: 'text',
     placeholder: 'Verification code',
+    required: 'required',
     inputmode: 'numeric',
     autocomplete: 'one-time-code',
   }) as HTMLInputElement;

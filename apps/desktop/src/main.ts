@@ -98,12 +98,15 @@ function start(root: HTMLElement): void {
   draw();
 
   run('restore', async () => {
+    model.busy = true;
+    draw();
     try {
       await session.restore();
     } finally {
       // A restore that found nothing, and one that could not run at all, both
       // leave this window at the front door rather than blank.
       if (model.phase === 'starting') model.phase = 'signedOut';
+      model.busy = false;
     }
     await flow.resume();
   });

@@ -11,15 +11,8 @@ declare global {
 globalThis.process = processShim;
 globalThis.Buffer = BufferShim;
 
-/**
- * The web stores a Tauri webview persists to the app data dir.
- *
- * The Core Kit scalar both addresses and decrypts the Web3Auth record holding
- * the login secret, and nothing on this host may hold it at rest until a
- * keychain-backed CredentialStore seam exists (blueprint/desktop.md, "Engine
- * wiring"). Stubbed to throw so a dependency that reaches for one fails where a
- * member can see it, rather than writing a factor share to disk.
- */
+// Stubbed to throw so the Core Kit scalar cannot rest on disk before a
+// keychain-backed CredentialStore seam exists (blueprint/desktop.md, "Engine wiring").
 const AT_REST = ['localStorage', 'sessionStorage', 'indexedDB'] as const;
 
 for (const store of AT_REST) {

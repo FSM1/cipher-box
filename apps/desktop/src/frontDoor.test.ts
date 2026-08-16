@@ -39,6 +39,30 @@ describe('the front door', () => {
     expect(root.querySelector('[data-method="email"]')).not.toBeNull();
   });
 
+  it('says so when this build offers nothing to sign in with', () => {
+    renderShell(root, model({ methods: [] }), actions());
+    expect(root.textContent).toContain('no sign-in method configured');
+  });
+
+  it('says the shell is still starting', () => {
+    renderShell(root, model({ phase: 'starting' }), actions());
+    expect(root.textContent).toContain('Starting…');
+  });
+
+  it('starts the Google consent flow when its affordance is clicked', () => {
+    const acted = actions();
+    renderShell(root, model(), acted);
+    root.querySelector<HTMLButtonElement>('[data-method="google"]')!.click();
+    expect(acted.google).toHaveBeenCalled();
+  });
+
+  it('signs out when the signed-in affordance is clicked', () => {
+    const acted = actions();
+    renderShell(root, model({ phase: 'signedIn', email: 'member@example.com' }), acted);
+    root.querySelector<HTMLButtonElement>('[data-action="logout"]')!.click();
+    expect(acted.logout).toHaveBeenCalled();
+  });
+
   it('renders no wallet affordance, even when a method list names one', () => {
     const methods = ['google', 'email', 'wallet'] as readonly IdentityMethod[];
     renderShell(root, model({ methods }), actions());
@@ -65,6 +89,30 @@ describe('the front door', () => {
     root.querySelector<HTMLInputElement>('input[name="code"]')!.value = '123456';
     root.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(acted.submitEmailCode).toHaveBeenCalledWith('member@example.com', '123456');
+  });
+
+  it('asks for a code before signing in, so the browser catches an empty one', () => {
+    renderShell(root, model({ codeSent: true }), actions());
+    expect(root.querySelector<HTMLInputElement>('input[name="code"]')!.required).toBe(true);
+  });
+
+  it('asks CipherBox for a code with the address in the form', () => {
+    const acted = actions();
+    renderShell(root, model(), acted);
+    root.querySelector<HTMLInputElement>('input[name="email"]')!.value = 'member@example.com';
+    root.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(acted.sendEmailCode).toHaveBeenCalledWith('member@example.com');
+  });
+
+  it('keeps focus on the control a member was typing in across a redraw', () => {
+    renderShell(root, model(), actions());
+    const address = root.querySelector<HTMLInputElement>('input[name="email"]')!;
+    address.focus();
+
+    renderShell(root, model({ error: 'that address was refused' }), actions());
+    const redrawn = root.querySelector<HTMLInputElement>('input[name="email"]')!;
+    expect(redrawn).not.toBe(address);
+    expect(document.activeElement).toBe(redrawn);
   });
 
   it('disables every control while a transition is in flight', () => {
