@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fe1f11ddddb7",
+  "strategy": "manual-commit",
+  "branch": "claude/cipher-box-1261-desktop-frontend",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "apps/desktop/src/frontDoor.test.ts",
+    "apps/desktop/src/frontDoor.ts",
+    "apps/desktop/src/main.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/1f11ddddb7/0/metadata.json",
+      "transcript": "/fe/1f11ddddb7/0/full.jsonl",
+      "compact_transcript": "/fe/1f11ddddb7/0/transcript.jsonl",
+      "content_hash": "/fe/1f11ddddb7/0/content_hash.txt",
+      "prompt": "/fe/1f11ddddb7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 264,
+    "cache_creation_tokens": 306928,
+    "cache_read_tokens": 16588703,
+    "output_tokens": 80313,
+    "api_call_count": 132
+  }
+}

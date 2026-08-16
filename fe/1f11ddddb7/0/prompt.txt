@@ -1,0 +1,190 @@
+ok https://github.com/FSM1/cipher-box/pull/1277 defines some HITL UAT tests that I would like to confirm. I need the whole back-end spun up (docker containers, api) and a production build of the desktop client built to test myself.
+
+---
+
+the TEE worker should no longer be part of the local docker stack
+
+---
+
+<task-notification>
+<task-id>a814ac28a6083caec</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/ff3a17b8-94b6-4c1b-94ab-5253b0600f57/tasks/a814ac28a6083caec.output</output-file>
+<status>completed</status>
+<summary>Agent "Find stack + desktop build steps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## 1. Full local back-end for manual testing
+
+**Compose file:** `/Users/myankelev/Code/random/cipher-box/docker/docker-compose.yml` — project name `cipherbox-infrastructure` (line 1). Four services:
+
+| Service | Image | Host ports | Citation |
+|---|---|---|---|
+| `postgres` | `postgres:16-alpine` | `${DB_PORT:-5432}:5432` | docker-compose.yml:3-19 |
+| `ipfs` (Kubo) | `ipfs/kubo:v0.42.0` | 4001 tcp/udp swarm, **5001 RPC**, **8080 gateway** | docker-compose.yml:21-58 |
+| `someguy` | `ghcr.io/ipfs/someguy:v0.11.1` | **8190** HTTP `/routing/v1`, 4004 tcp/udp | docker-compose.yml:60-88 |
+| `mock-ipns-routing` | built from `tools/mock-ipns-routing` | **127.0.0.1:3001** | docker-compose.yml:90-106 |
+
+Postgres defaults: user/pass `postgres`, db `cipherbox` (docker-compose.yml:8-10).
+
+**Exact commands** (README.md:116-121 is the single normative recipe; `docs/DEVELOPMENT.md:3` explicitly defers to it):
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 180
+pnpm install
+```
+
+`--wait` blocks until all healthchecks pass so migrations can't race Postgres (README.md:127-128).
+
+There is **no Makefile and no npm script** that wraps compose — root `package.json:10-21` has only `dev`, `build`, `lint*`, `typecheck`, `test`, `prepare`. `scripts/` holds only `baseline-benchmark.sh` and `check-tracker-refs.mjs`.
+
+Narrower variant used by the web e2e suite (only Postgres + record store): `tests/web-e2e/README.md:44-48`.
+
+### Env vars (`apps/api/.env.example`, checked in; copy to `apps/api/.env`)
+
+Live values, verbatim from the template: `NODE_ENV=development`, `PORT=3000`, `CORS_ALLOWED_ORIGINS=http://localhost:5173`, `DB_HOST=localhost`, `DB_PORT=5432`, `DB_USERNAME=postgres`, `DB_PASSWORD=REDACTED, `DB_DATABASE=cipherbox`, `JWT_SECRET=local-dev-jwt-secret`, `TEST_LOGIN_SECRET=local-dev-test-secret`, `KUBO_API_URL=http://localhost:5001`, `ROUTING_V1_URL=http://localhost:3001`, `MAIL_PROVIDER=log`.
+
+Commented-out / optional in the same template:
+- `IDENTITY_JWT_PRIVATE_KEY` — base64 PKCS8 PEM signing the CipherBox identity token the Core Kit consumes. Unset, dev/test mint an ephemeral keypair; every deployed profile refuses to boot. Generate: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0`.
+- `GOOGLE_CLIENT_ID` — the **Google** OAuth client ID (not the Web3Auth one); must equal the client's `VITE_GOOGLE_CLIENT_ID`.
+- `SENDGRID_API_KEY` + `MAIL_FROM_ADDRESS` — only needed if you switch `MAIL_PROVIDER=sendgrid`; `log` prints the email OTP to the server log and is refused outside development/test.
+
+Extra knobs catalogued in `/Users/myankelev/Code/random/cipher-box/docs/CONFIGURATION.md:28-73` (`THROTTLE_BYPASS_SECRET`, `RECYCLE_BIN_RETENTION_DAYS`, …) — note that doc's header (line 5) marks it v1-partially-superseded and its **Desktop section (lines 94-100) is stale** (claims the shell has no TS sources; this branch added them).
+
+Web template `apps/web/.env.example`: `VITE_API_URL=http://localhost:3000`, `VITE_ENVIRONMENT=local`, `VITE_ROUTING_ENDPOINTS=http://localhost:3001`; commented: `VITE_READ_ACCELERATOR_URL`, `VITE_PUBLIC_GATEWAYS`, `VITE_WEB3AUTH_CLIENT_ID`, `VITE_WEB3AUTH_VERIFIER`, `VITE_GOOGLE_CLIENT_ID`.
+
+**Record-store rule:** `ROUTING_V1_URL` (API) and `VITE_ROUTING_ENDPOINTS` (clients) must name the *same* backend — 3001 (hermetic mock, the default) or 8190 (someguy, real DHT). README.md:165-177.
+
+## 2. Running the NestJS API locally
+
+```bash
+cp apps/api/.env.example apps/api/.env
+pnpm --filter @cipherbox/api migration:run
+pnpm --filter @cipherbox/api dev
+```
+
+README.md:130-141. `--filter` sets the package dir as cwd, which is where both the server and the TypeORM CLI read `.env` from.
+
+- Migration script: `apps/api/package.json:15` → `pnpm typeorm migration:run -d src/data-source.ts` (revert/generate at :16-17). Migrations live in `apps/api/src/migrations/`.
+- Port: **3000**, `Number(process.env.PORT ?? 3000)` — `apps/api/src/main.ts:21-23`. OpenAPI at `/api-docs` (`apps/api/src/main.ts:19`, README.md:157).
+- Production-style run: `pnpm --filter @cipherbox/api build &amp;&amp; node apps/api/dist/main.js` (`apps/api/package.json:8-9`; used in `tests/web-e2e/README.md:57`).
+- Web app (optional, second shell): `cp apps/web/.env.example apps/web/.env &amp;&amp; pnpm --filter @cipherbox/web dev` → http://localhost:5173 (README.md:147-158). Root `pnpm dev` runs api+web concurrently (package.json:11).
+
+## 3. Production Tauri build on macOS
+
+**App path:** `/Users/myankelev/Code/random/cipher-box/apps/desktop` (TS frontend) + `/Users/myankelev/Code/random/cipher-box/apps/desktop/src-tauri` (crate `cipherbox-desktop`, `apps/desktop/src-tauri/Cargo.toml:7`), a member of the root workspace (`Cargo.toml:15`).
+
+**Command (from repo root):**
+
+```bash
+pnpm install
+pnpm --filter @cipherbox/desktop tauri build
+```
+
+`tauri` is **not** `cargo tauri` / `tauri-cli` directly — `apps/desktop/package.json:7` maps it to `node scripts/tauri.mjs`, a wrapper that computes the CSP from the build env and passes it as `--config` before the CLI reads its config (`apps/desktop/scripts/tauri.mjs:13-19`, rationale at :4-11). **Running `cargo tauri build` directly bypasses the CSP widening and produces a shell whose webview cannot reach your API or Web3Auth** (`apps/desktop/scripts/csp.mjs:1-11, 47-67`).
+
+CI's variant, if you only want the binary: `pnpm --filter @cipherbox/desktop tauri build --no-bundle` (`.github/workflows/ci.yml:990-991`).
+
+**Prerequisites:**
+- Node 22 + pnpm 10 (`package.json:5-9`), Rust 1.88 pinned by `rust-toolchain.toml`.
+- **FUSE-T is NOT required for today's build.** `apps/desktop/src-tauri/Cargo.toml:18-32` depends only on tauri, tokio, serde, serde_json, base64, getrandom, zeroize — it does not link `crates/fuse` (which is a 33-line stub, `crates/fuse/src/lib.rs`). The macOS CI desktop gate installs **no** FUSE-T (`.github/workflows/ci.yml:940-991`). The FUSE-T install recipe exists only in the two **DORMANT v1 workflows** — `.github/workflows/desktop-staging-release.yml:1-4, 29-42` and `.github/workflows/desktop-e2e.yml:1-3, 49-63`:
+  ```bash
+  brew install --cask fuse-t
+  sudo mkdir -p /usr/local/lib/pkgconfig
+  sudo cp "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
+  sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
+  # build with PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+  ```
+  It becomes a prerequisite only once the mount lands (`blueprint/desktop.md:125` — FUSE-T ≥ 1.2.7, SMB backend, mounted `noattrcache`; bundling needs a negotiated commercial licence, `blueprint/desktop.md:314-318`).
+- No updater/signing config is present in `apps/desktop/src-tauri/tauri.conf.json` (no `plugins` block), so `TAURI_SIGNING_PRIVATE_KEY` is not needed for a local prod build — it appears only in the dormant v1 release workflow (desktop-staging-release.yml:74-75).
+
+**Where artifacts land:** the crate is a root-workspace member, so the target dir is the **repo root** `target/`, not `apps/desktop/src-tauri/target/`. Confirmed by the existing artifacts:
+- `/Users/myankelev/Code/random/cipher-box/target/release/bundle/macos/CipherBox.app`
+- `/Users/myankelev/Code/random/cipher-box/target/release/bundle/dmg/CipherBox_&lt;version&gt;_aarch64.dmg` (e.g. `CipherBox_0.41.0_aarch64.dmg`)
+- bare binary `/Users/myankelev/Code/random/cipher-box/target/release/cipherbox-desktop`
+
+Product name `CipherBox`, identifier `com.cipherbox.desktop`, version `0.45.2`, `bundle.targets: "all"` — `apps/desktop/src-tauri/tauri.conf.json:3-5, 28-30`.
+
+## 4. Does the desktop need the web frontend? Which env vars?
+
+**No — `apps/web` is never built for the desktop.** The shell has its own frontend: `apps/desktop/index.html` + `apps/desktop/src/main.ts`, built by `beforeBuildCommand: "pnpm build"` → `tsc -b &amp;&amp; vite build` into `apps/desktop/dist`, consumed as `frontendDist: "../dist"` (`apps/desktop/src-tauri/tauri.conf.json:6-11`, `apps/desktop/package.json:10-11`). Dev URL is port **5174**, deliberately not web's 5173 (`apps/desktop/vite.config.ts:4-5, 18`; `tauri.conf.json:9`).
+
+The one workspace dep that must be compiled is `@cipherbox/login`, and `tsc -b` does it automatically via the project reference at `apps/desktop/tsconfig.json:12` → `packages/login/tsconfig.build.json` (login's entry is `dist/index.js`, `packages/login/package.json:5-12`). `pnpm install` at root is still required. The "Build shared packages" steps in `desktop-staging-release.yml:63-69` reference v1 packages (`@cipherbox/crypto`, `sdk`, …) that no longer exist — ignore them.
+
+**Env vars the desktop production build needs** (read at Vite build time from `apps/desktop/.env` or the shell env; there is **no `apps/desktop/.env.example`** in the tree — `git ls-files` shows only api/web templates):
+
+| Var | Required | Effect | Citation |
+|---|---|---|---|
+| `VITE_WEB3AUTH_CLIENT_ID` | **Yes** | absent → `desktopConfig` throws, shell renders only an error line | `apps/desktop/src/config.ts:45-51`, `src/main.ts:110-119` |
+| `VITE_WEB3AUTH_VERIFIER` | **Yes** | same throw | `apps/desktop/src/config.ts:45-51` |
+| `VITE_API_URL` | No | API origin for the identity exchange; defaults `http://localhost:3000`; also drives the CSP `connect-src` | `apps/desktop/src/config.ts:7, 54`; `scripts/csp.mjs:14, 48-51` |
+| `VITE_GOOGLE_CLIENT_ID` | No | absent → the build simply offers no Google method | `apps/desktop/src/config.ts:20, 57` |
+| `VITE_ENVIRONMENT` | No | `local\|ci\|staging\|production`; defaults `local`, a typo throws | `apps/desktop/src/config.ts:9-42` |
+
+The build fails **loudly at runtime, not at build time** if the two required vars are missing — CI's `tauri build --no-bundle` sets none of them and still passes (`ci.yml:990-991`).
+
+Two gotchas worth flagging for a manual prod-build test against the local stack:
+
+1. **CORS.** A packaged Tauri webview's origin is `tauri://localhost` (`apps/desktop/src-tauri/src/oauth.rs:5`), but `apps/api/.env.example` ships `CORS_ALLOWED_ORIGINS=http://localhost:5173` and `corsOptionsFromEnv` rejects unlisted origins (`apps/api/src/app-setup.ts:107-115`). Add `tauri://localhost` to `CORS_ALLOWED_ORIGINS` or the identity exchange will be blocked. Nothing in the repo documents this.
+2. **Google login** additionally needs the loopback callback ports `14200/14201/14202` registered as `http://127.0.0.1:{port}/callback` authorized redirect URIs on the Google client (`apps/desktop/src-tauri/src/oauth.rs:30-35, 146-147`), and the API side needs `GOOGLE_CLIENT_ID` + `IDENTITY_JWT_PRIVATE_KEY`. Email OTP works with `MAIL_PROVIDER=log` (code printed to the API log); endpoints are `/auth/identity/google`, `/auth/identity/email/send-code`, `/auth/identity/email/verify-code` (`packages/login/src/identity.ts:71-79`).</result>
+<usage><subagent_tokens>88149</subagent_tokens><tool_uses>50</tool_uses><duration_ms>194213</duration_ms></usage>
+</task-notification>
+
+---
+
+ok tried oauth and received a `redirect_uri_mismatch` from google. [Image #1]
+
+---
+
+can you restart the reslease build desktop client ?
+
+---
+
+[Image #2] got the following error details again
+
+---
+
+I had updated google cloud console well before restarting the app and trying again.
+
+---
+
+ok I managed to get through some of the oauth, and the redirect definitely hit the tauri app, but then verification failed: Google token verification failed
+
+---
+
+ok different error this time: undefined Error occurred while verifying params unable to verify jwt token, [failed to verify jws signature: failed to verify message: crypto/rsa: verification error]
+
+---
+
+AFAIK the identity jwt private key was saved to 1password when being generated.
+
+---
+
+can you start the app again. I closed it already
+
+---
+
+flakey internet this side making testing a bit painful
+
+---
+
+please stop all the local infra for now. I am going to deal with a few other things and get to testing this all later.
+
+---
+
+the staging google client id should be set to 164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee.apps.googleusercontent.com
+
+---
+
+ok can you spin everything up again?
+
+---
+
+ok can you please start the desktop app
+
+---
+
+one small fix on email passwordless auth on desktop: there is no loading state once the verification code is submitted
+
+---
+
+ok tested - working well. can you spin up the web ui as well against this local stack so I can test quickly?
