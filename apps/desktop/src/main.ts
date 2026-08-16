@@ -12,6 +12,7 @@ import { createCoreKitSession } from './auth/coreKit';
 import { shellFacade } from './auth/facade';
 import { desktopConfig } from './config';
 import { renderShell, type LoginStep, type ShellActions, type ShellModel } from './frontDoor';
+import { onVaultChanged, readVaultStatus } from './vault';
 
 /** Renders an unknown throw as the one line the shell shows for it. */
 function errorMessage(failure: unknown): string {
@@ -28,7 +29,12 @@ function start(root: HTMLElement): void {
     error: null,
     codeSent: false,
     address: '',
+    vault: null,
+    vaultError: null,
   };
+
+  /** Which engine the window is rendering; every transition retires the last. */
+  let engineSession = 0;
 
   const config = desktopConfig(import.meta.env);
   const session = createCoreKitSession(config);
@@ -46,11 +52,17 @@ function start(root: HTMLElement): void {
         model.email = email;
         model.codeSent = false;
         model.address = '';
+        engineSession += 1;
+        void showVault();
       },
       signedOut: () => {
         model.phase = 'signedOut';
         model.email = null;
         model.codeSent = false;
+        // The engine behind them is gone, so neither outlives the session.
+        engineSession += 1;
+        model.vault = null;
+        model.vaultError = null;
       },
     },
     progress: {
@@ -83,6 +95,26 @@ function start(root: HTMLElement): void {
 
   const draw = (): void => renderShell(root, model, actions);
 
+  /**
+   * Reads the vault the engine now holds. A read is dropped unless the session
+   * it was issued against is still the live one: it otherwise describes an
+   * engine this window has already left.
+   */
+  const showVault = async (): Promise<void> => {
+    const issued = engineSession;
+    try {
+      const status = await readVaultStatus();
+      if (issued !== engineSession) return;
+      model.vault = status;
+      model.vaultError = null;
+    } catch (failure) {
+      if (issued !== engineSession) return;
+      model.vault = null;
+      model.vaultError = errorMessage(failure);
+    }
+    draw();
+  };
+
   /** Every transition ends in a redraw, whether or not the flow refused it. */
   const run = (step: LoginStep, work: () => Promise<void>): void => {
     model.step = step;
@@ -96,6 +128,14 @@ function start(root: HTMLElement): void {
 
   model.methods = flow.methods;
   draw();
+
+  // The engine's own signal that its state moved. A window that only read at
+  // sign-in would show the first snapshot for the life of the session; one that
+  // could not subscribe still renders every read it makes, so a refused
+  // subscription costs the following, not the panel.
+  void onVaultChanged(() => {
+    if (model.phase === 'signedIn') void showVault();
+  }).catch(() => undefined);
 
   run('restore', async () => {
     model.busy = true;

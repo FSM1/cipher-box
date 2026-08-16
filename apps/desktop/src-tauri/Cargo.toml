@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
+# The engine this shell hosts, and the seam set it is constructed over.
+cipherbox-engine.workspace = true
+cipherbox-desktop-seams.workspace = true
 # The loopback OAuth callback: a listener, a task per connection so no peer can
 # starve the exchange, its request decode, and the deadlines that bound it.
 # Tauri's own async runtime is Tokio.
@@ -34,3 +37,5 @@ zeroize.workspace = true
 [dev-dependencies]
 # The callback listener is exercised over a real loopback socket.
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
+# The engine host's tests open its real file stores under a temp root.
+tempfile = "3"

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { engineBuildEnv } from '../scripts/buildEnv.mjs';
 import { contentSecurityPolicy, DEFAULT_API_URL as CSP_DEFAULT_API_URL } from '../scripts/csp.mjs';
 import { DEFAULT_API_URL, desktopConfig } from './config';
 import tauriConf from '../src-tauri/tauri.conf.json';
@@ -52,6 +53,32 @@ describe('the shell content security policy', () => {
 
   it('refuses to build a policy for an API URL that is not one', () => {
     expect(() => contentSecurityPolicy({ ...BUILD, VITE_API_URL: 'not a url' })).toThrow();
+  });
+});
+
+/**
+ * The engine is compiled against `VITE_API_URL` and refuses to start without
+ * one, so the wrapper must hand it the same value the webview resolves — an
+ * identity token minted by one API is worthless at another.
+ */
+describe('the environment handed to the compiled shell', () => {
+  it('names the API the webview will exchange identity with', () => {
+    const configured = { ...BUILD, VITE_API_URL: ' https://api.example.com ' };
+    expect(engineBuildEnv(configured).VITE_API_URL).toBe(desktopConfig(configured).apiBaseUrl);
+  });
+
+  it('resolves the fallback rather than leaving the engine unconfigured', () => {
+    for (const env of [BUILD, { ...BUILD, VITE_API_URL: '' }, { ...BUILD, VITE_API_URL: '  ' }]) {
+      expect(engineBuildEnv(env).VITE_API_URL).toBe(DEFAULT_API_URL);
+      expect(engineBuildEnv(env).VITE_API_URL).toBe(desktopConfig(env).apiBaseUrl);
+    }
+  });
+
+  it('names a routing endpoint, which the engine also refuses to start without', () => {
+    expect(engineBuildEnv(BUILD).VITE_ROUTING_ENDPOINTS).toMatch(/^https:\/\/\S+$/);
+    expect(engineBuildEnv({ ...BUILD, VITE_ROUTING_ENDPOINTS: ' https://someguy.test ' })).toEqual(
+      expect.objectContaining({ VITE_ROUTING_ENDPOINTS: 'https://someguy.test' })
+    );
   });
 });
 

@@ -1,50 +1,20 @@
 //! The `LoginFacade` the shared login sequence starts, over Tauri IPC
-//! (blueprint/desktop.md, "Tauri shell").
+//! (blueprint/desktop.md, "Tauri shell"), and the one read the signed-in window
+//! renders.
 //!
-//! **The engine is not linked into this shell yet.** `crates/desktop-seams`
-//! holds the seam set the native host will inject, but nothing here constructs
-//! an engine, so these commands are where the login stops rather than where it
-//! hands over: `session_start` takes the login secret, checks it is the scalar
-//! the engine will require, and zeroizes it. There is no vault state behind
-//! them, and the shell's window says so.
+//! These commands are the handover: `session_start` takes the login secret and
+//! hands it to the engine ([`crate::engine`]), which is where it stops being
+//! this shell's to hold. The webview never sees a key, a token, or a name — the
+//! only thing that comes back out is [`VaultStatus`].
 
-use std::sync::Mutex;
-
-use tauri::State;
 use tauri::ipc::{InvokeBody, Request};
+use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
-/// The secp256k1 scalar length `crates/engine/src/session.rs` requires.
-const LOGIN_SECRET_LEN: usize = 32;
+use crate::engine::{EngineConfig, EngineHost, LOGIN_SECRET_LEN, SessionEnv, VaultStatus};
 
-const POISONED: &str = "the session state is unreadable; restart CipherBox";
-
-/// Whether a login has completed on this device since the shell started.
-#[derive(Default)]
-pub struct Session {
-    live: Mutex<bool>,
-}
-
-impl Session {
-    /// Takes the secret by value so this is where it is scrubbed: the path that
-    /// carries it ends here until the engine is linked in.
-    fn start(&self, _secret: Zeroizing<Vec<u8>>) -> Result<(), String> {
-        let mut live = self.live.lock().map_err(|_| POISONED)?;
-        // One engine per running app is the desktop single-writer invariant, so
-        // a second start is a bug in the caller rather than a second session.
-        if *live {
-            return Err("a session is already live on this device".to_string());
-        }
-        *live = true;
-        Ok(())
-    }
-
-    /// Idempotent: the flow calls it on paths where no session is live.
-    fn end(&self) -> Result<(), String> {
-        *self.live.lock().map_err(|_| POISONED)? = false;
-        Ok(())
-    }
-}
+/// Fired when the engine emits, so the window re-reads what it renders.
+pub const VAULT_CHANGED: &str = "vault-changed";
 
 /// The login secret an invoke body carries, or why it is not one.
 fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
@@ -60,25 +30,49 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(secret)
 }
 
-/// Accepts the login secret the Core Kit exported.
-#[tauri::command]
-pub fn session_start(request: Request<'_>, session: State<'_, Session>) -> Result<(), String> {
-    session.start(login_secret(request.body())?)
+/// Where this session's stores live and how the window hears about changes.
+fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
+    let app = app.clone();
+    Ok(SessionEnv {
+        config: EngineConfig::compiled()?,
+        data_local_dir: app
+            .path()
+            .local_data_dir()
+            .map_err(|error| format!("this device has no local data directory: {error}"))?,
+        keyring_service: app.config().identifier.clone(),
+        changed: Box::new(move || {
+            let _ = app.emit(VAULT_CHANGED, ());
+        }),
+    })
 }
 
-/// Ends the session.
+/// Accepts the login secret the Core Kit exported and starts the engine on it.
 #[tauri::command]
-pub fn session_logout(session: State<'_, Session>) -> Result<(), String> {
-    session.end()
+pub async fn session_start(
+    app: AppHandle,
+    request: Request<'_>,
+    engine: State<'_, EngineHost>,
+) -> Result<(), String> {
+    let secret = login_secret(request.body())?;
+    engine.start(secret, session_env(&app)?).await
+}
+
+/// Ends the session: the engine stops and drops, and this device's stored
+/// refresh token goes with it.
+#[tauri::command]
+pub fn session_logout(engine: State<'_, EngineHost>) {
+    engine.log_out();
+}
+
+/// The live vault's status, as the signed-in window renders it.
+#[tauri::command]
+pub async fn vault_status(engine: State<'_, EngineHost>) -> Result<VaultStatus, String> {
+    engine.status().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scalar() -> Zeroizing<Vec<u8>> {
-        Zeroizing::new(vec![7u8; LOGIN_SECRET_LEN])
-    }
 
     #[test]
     fn refuses_a_secret_that_did_not_cross_as_raw_bytes() {
@@ -94,21 +88,10 @@ mod tests {
         assert!(login_secret(&InvokeBody::Raw(vec![7u8; LOGIN_SECRET_LEN])).is_ok());
     }
 
+    /// The window keys its listener off this name, so it is part of the IPC
+    /// surface rather than a private label.
     #[test]
-    fn refuses_a_second_start_while_one_is_live() {
-        let session = Session::default();
-        assert!(session.start(scalar()).is_ok());
-        assert!(session.start(scalar()).is_err());
-
-        // …and the device takes a new one once the first has ended.
-        assert!(session.end().is_ok());
-        assert!(session.start(scalar()).is_ok());
-    }
-
-    #[test]
-    fn ends_a_session_that_was_never_live() {
-        let session = Session::default();
-        assert!(session.end().is_ok());
-        assert!(session.end().is_ok());
+    fn the_repaint_event_keeps_its_name() {
+        assert_eq!(VAULT_CHANGED, "vault-changed");
     }
 }

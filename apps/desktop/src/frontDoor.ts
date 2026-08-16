@@ -1,12 +1,13 @@
 /**
  * The shell's login chrome. Framework-free: this window is the front door and a
- * status line, and the vault UI lives on the web app.
+ * status line, and the vault UI lives on the mount and the web app.
  *
  * Which methods appear is read off the flow, never branched on here, so a
  * method this host cannot collect renders no affordance at all (ADR 0008 D2).
  */
 
 import type { IdentityMethod } from '@cipherbox/login';
+import type { Staleness, VaultStatus } from './vault';
 
 /** The transition this host asked for, which `LoginProgress` does not name. */
 export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
@@ -34,6 +35,11 @@ export interface ShellModel {
   codeSent: boolean;
   /** The address the form holds, kept across a re-render. */
   address: string;
+  /** The engine's last reported vault state; `null` until the first read lands. */
+  vault: VaultStatus | null;
+  /** Why the last vault read did not land. Kept apart from `error`, which is
+   * the login's: a vault that cannot be read is not a sign-in that failed. */
+  vaultError: string | null;
 }
 
 export interface ShellActions {
@@ -153,10 +159,18 @@ function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
   return form;
 }
 
+/** The staleness rung as this window says it (blueprint/desktop.md, "Tray"). */
+const STALENESS_LABELS: Record<Staleness, string> = {
+  fresh: 'Synced',
+  reconciling: 'Reconciling',
+  stale: 'Stale',
+  offline: 'Offline',
+};
+
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
   section.append(text('p', model.email ?? 'Signed in'));
-  section.append(note('No vault on this device yet — the engine is not wired to this shell.'));
+  section.append(vault(model));
 
   const out = text('button', 'Sign out', {
     'data-action': 'logout',
@@ -166,6 +180,45 @@ function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   out.addEventListener('click', () => actions.logout());
   section.append(out);
   return section;
+}
+
+/**
+ * The vault this device reached. Counts and a rung, not a listing: the files
+ * themselves are the mount's surface, and a second listing here would be a
+ * second thing to keep in step with the engine.
+ */
+function vault(model: ShellModel): HTMLElement {
+  const panel = element('section', { class: 'vault', 'data-vault': 'status' });
+  if (model.vaultError !== null) {
+    panel.append(text('p', model.vaultError, { class: 'error', role: 'alert' }));
+    return panel;
+  }
+  if (model.vault === null) {
+    panel.append(note('Opening your vault…'));
+    return panel;
+  }
+
+  const { items, staleness, deadLetters } = model.vault;
+  panel.append(
+    text('p', `${items} ${items === 1 ? 'item' : 'items'} in your vault`, {
+      'data-vault': 'items',
+    })
+  );
+  panel.append(
+    text('p', STALENESS_LABELS[staleness], { class: 'muted', 'data-vault': 'staleness' })
+  );
+  // Never silent, and never folded into the staleness line: a parked write is a
+  // different thing from an old view.
+  if (deadLetters > 0) {
+    panel.append(
+      text(
+        'p',
+        `${deadLetters} ${deadLetters === 1 ? 'change' : 'changes'} cannot publish — open CipherBox on the web to resolve`,
+        { class: 'error', role: 'alert', 'data-vault': 'dead-letters' }
+      )
+    );
+  }
+  return panel;
 }
 
 function note(message: string): HTMLElement {

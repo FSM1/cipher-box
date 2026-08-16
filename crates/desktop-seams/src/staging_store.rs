@@ -1,7 +1,7 @@
 //! Desktop [`StagingStore`]: the v1 write journal generalized to every op.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cipherbox_engine::seams::{OpId, SeamResult, StagingStore};
 
@@ -41,12 +41,17 @@ const COUNTER_FILE: &str = "next_op_id";
 /// leave an orphan sidecar (harmless, reclaimed by orphan-sidecar GC via
 /// [`staged_keys`] + [`remove_staged_bytes`]) — never an op record pointing
 /// at a sidecar that is already gone.
+///
+/// `Clone` is the engine's cold-start requirement (`Engine::start` bounds).
+/// Clones share one id counter: two handles each holding their own would hand
+/// the same op id to two ops.
+#[derive(Debug, Clone)]
 pub struct FileStagingStore {
     ops_dir: PathBuf,
     staged_dir: PathBuf,
     counter_path: PathBuf,
     /// Next op id to hand out; persisted to `next_op_id` on each allocation.
-    next_op_id: Mutex<u64>,
+    next_op_id: Arc<Mutex<u64>>,
 }
 
 impl FileStagingStore {
@@ -82,7 +87,7 @@ impl FileStagingStore {
             ops_dir,
             staged_dir,
             counter_path,
-            next_op_id: Mutex::new(next),
+            next_op_id: Arc::new(Mutex::new(next)),
         })
     }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdentityMethod } from '@cipherbox/login';
 import { renderShell, type ShellActions, type ShellModel } from './frontDoor';
+import type { VaultStatus } from './vault';
 
 function model(over: Partial<ShellModel> = {}): ShellModel {
   return {
@@ -12,8 +13,14 @@ function model(over: Partial<ShellModel> = {}): ShellModel {
     error: null,
     codeSent: false,
     address: '',
+    vault: null,
+    vaultError: null,
     ...over,
   };
+}
+
+function vaultStatus(over: Partial<VaultStatus> = {}): VaultStatus {
+  return { items: 0, staleness: 'fresh', deadLetters: 0, retainedRecords: 0, ...over };
 }
 
 function actions(): ShellActions {
@@ -141,11 +148,54 @@ describe('the front door', () => {
     expect(root.querySelector('[role="status"]')).toBeNull();
   });
 
-  it('says there is no vault behind a signed-in session', () => {
+  it('waits for the first vault read rather than reporting an empty vault', () => {
     renderShell(root, model({ phase: 'signedIn', email: 'member@example.com' }), actions());
     expect(root.textContent).toContain('member@example.com');
-    expect(root.textContent).toContain('No vault on this device yet');
+    expect(root.textContent).toContain('Opening your vault…');
+    expect(root.querySelector('[data-vault="items"]')).toBeNull();
     expect(root.querySelector('[data-action="logout"]')).not.toBeNull();
+  });
+
+  it('renders the vault the engine reports', () => {
+    const vault = vaultStatus({ items: 3, staleness: 'reconciling' });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+    expect(root.querySelector('[data-vault="items"]')?.textContent).toBe('3 items in your vault');
+    expect(root.querySelector('[data-vault="staleness"]')?.textContent).toBe('Reconciling');
+  });
+
+  it('says which rung the engine is on, so one state is not read as another', () => {
+    for (const [staleness, label] of [
+      ['fresh', 'Synced'],
+      ['stale', 'Stale'],
+      ['offline', 'Offline'],
+    ] as const) {
+      renderShell(root, model({ phase: 'signedIn', vault: vaultStatus({ staleness }) }), actions());
+      expect(root.querySelector('[data-vault="staleness"]')?.textContent).toBe(label);
+    }
+  });
+
+  /// A parked write is not an old view: it gets its own line, and never
+  /// disappears into the staleness one.
+  it('surfaces dead-lettered work apart from staleness', () => {
+    const vault = vaultStatus({ items: 1, deadLetters: 2, staleness: 'fresh' });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+    const parked = root.querySelector('[data-vault="dead-letters"]');
+    expect(parked?.textContent).toContain('2 changes cannot publish');
+    expect(root.querySelector('[data-vault="staleness"]')?.textContent).toBe('Synced');
+  });
+
+  it('says nothing about parked work when there is none', () => {
+    renderShell(root, model({ phase: 'signedIn', vault: vaultStatus({ items: 1 }) }), actions());
+    expect(root.querySelector('[data-vault="dead-letters"]')).toBeNull();
+    expect(root.querySelector('[data-vault="items"]')?.textContent).toBe('1 item in your vault');
+  });
+
+  it('reports a vault that could not be read instead of an empty one', () => {
+    renderShell(root, model({ phase: 'signedIn', vaultError: 'no session is live' }), actions());
+    expect(root.querySelector('[data-vault="status"] .error')?.textContent).toBe(
+      'no session is live'
+    );
+    expect(root.querySelector('[data-vault="items"]')).toBeNull();
   });
 
   it('reports a failure without offering it as markup', () => {

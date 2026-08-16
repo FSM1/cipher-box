@@ -15,6 +15,7 @@ const shell = vi.hoisted(() => {
     redraws,
     restore: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
     finishRestore: (): void => release(),
+    onVaultChanged: vi.fn(() => Promise.resolve(() => {})),
   };
 });
 
@@ -28,6 +29,10 @@ vi.mock('./config', () => ({
 vi.mock('@cipherbox/login', () => ({
   createIdentityExchange: () => ({}),
   createLoginFlow: () => ({ methods: [], resume: () => Promise.resolve() }),
+}));
+vi.mock('./vault', () => ({
+  onVaultChanged: shell.onVaultChanged,
+  readVaultStatus: () => Promise.reject(new Error('no session is live')),
 }));
 vi.mock('./frontDoor', () => ({
   renderShell: (_root: HTMLElement, model: ShellModel) => {
@@ -51,5 +56,11 @@ describe('the shell bootstrap', () => {
     await vi.waitFor(() =>
       expect(shell.redraws.at(-1)).toEqual({ phase: 'signedOut', busy: false, step: null })
     );
+  });
+
+  /// Without this the window would render the snapshot it read at sign-in for
+  /// the life of the session.
+  it('follows the engine, rather than reading the vault once', () => {
+    expect(shell.onVaultChanged).toHaveBeenCalled();
   });
 });

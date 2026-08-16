@@ -291,6 +291,47 @@ fn staging_store_op_ids_never_reuse_across_a_full_drain() {
     });
 }
 
+/// A clone hands out ids from the same counter. The engine's cold start clones
+/// this seam into its spawned loops, so two handles that each counted for
+/// themselves would give one id to two ops.
+#[test]
+fn staging_store_clones_share_one_id_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        let clone = store.clone();
+        let first = store.enqueue_op(b"a").await.unwrap();
+        let second = clone.enqueue_op(b"b").await.unwrap();
+        assert_ne!(first.0, second.0, "a clone must not re-issue an id");
+
+        let queued = store.queued_ops().await.unwrap();
+        assert_eq!(queued.len(), 2, "both ops must land in the one queue");
+    });
+}
+
+/// A clone raises floors against the same durable store, so a floor one handle
+/// raised is never absent from another (the fail-closed floor law is only as
+/// strong as the handles agreeing on it).
+#[test]
+fn floor_store_clones_share_the_durable_floors() {
+    use cipherbox_engine::seams::FloorStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("floors");
+    block_on(async {
+        let store = FileFloorStore::open(&path).unwrap();
+        let clone = store.clone();
+        store.raise_epoch_floor(b"scope", 7).await.unwrap();
+        assert_eq!(clone.epoch_floor(b"scope").await.unwrap(), Some(7));
+        assert_eq!(
+            clone.raise_epoch_floor(b"scope", 3).await.unwrap(),
+            7,
+            "monotonic-max holds across handles",
+        );
+    });
+}
+
 /// A temp file stranded in the store root by a crash mid-counter-write is
 /// reclaimed on reopen — the `next_op_id` counter lives directly under the
 /// root, so the root must be swept like the ops/staged subdirs.

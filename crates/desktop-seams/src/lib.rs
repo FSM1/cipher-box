@@ -20,10 +20,10 @@
 //! - [`ReqwestHttp`], [`ReqwestRecordTransport`] — `reqwest` over rustls.
 //! - [`TokioScheduler`] — timers, background tasks, wall clock on Tokio.
 //!
-//! `Mailbox` is not implemented here: it is the engine's own API client over
-//! the [`ReqwestHttp`] seam, with nothing desktop-specific about it. This
-//! crate constructs no engine and touches no webview — the desktop shell wires
-//! those in a later slice.
+//! `Mailbox` is not implemented here: it is a transport over the API's mailbox
+//! routes with nothing desktop-specific about it, so the shell supplies it the
+//! way web's client does. This crate constructs no engine and touches no
+//! webview — the desktop shell does both.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

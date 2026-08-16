@@ -650,11 +650,14 @@ name = "cipherbox-desktop"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "cipherbox-desktop-seams",
+ "cipherbox-engine",
  "getrandom 0.3.4",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
  "tokio",
  "zeroize",
 ]
