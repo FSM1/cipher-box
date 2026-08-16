@@ -8,10 +8,23 @@
 
 import type { IdentityMethod } from '@cipherbox/login';
 
+/** The transition this host asked for, which `LoginProgress` does not name. */
+export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
+
+const STEP_LABELS: Record<LoginStep, string> = {
+  google: 'Waiting for Google…',
+  emailCode: 'Sending a code…',
+  signIn: 'Signing in…',
+  logout: 'Signing out…',
+  restore: 'Restoring your session…',
+};
+
 export interface ShellModel {
   phase: 'starting' | 'signedOut' | 'signedIn';
   /** True while a restore, login, or logout is in flight. */
   busy: boolean;
+  /** What that in-flight transition is, so the wait can say so. */
+  step: LoginStep | null;
   /** The methods the login flow offers, in the order to show them. */
   methods: readonly IdentityMethod[];
   /** The signed-in address, when the method carried one. */
@@ -45,6 +58,10 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   if (model.phase === 'starting') view.append(note('Starting…'));
   else if (model.phase === 'signedIn') view.append(signedIn(model, actions));
   else view.append(frontDoor(model, actions));
+
+  if (model.busy && model.step !== null) {
+    view.append(text('p', STEP_LABELS[model.step], { class: 'muted', role: 'status' }));
+  }
 
   if (model.error !== null) {
     view.append(text('p', model.error, { class: 'error', role: 'alert' }));

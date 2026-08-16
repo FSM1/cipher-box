@@ -11,7 +11,7 @@ import { desktopCollector, type DesktopCollected } from './auth/collector';
 import { createCoreKitSession } from './auth/coreKit';
 import { shellFacade } from './auth/facade';
 import { desktopConfig } from './config';
-import { renderShell, type ShellActions, type ShellModel } from './frontDoor';
+import { renderShell, type LoginStep, type ShellActions, type ShellModel } from './frontDoor';
 
 /** Renders an unknown throw as the one line the shell shows for it. */
 function errorMessage(failure: unknown): string {
@@ -22,6 +22,7 @@ function start(root: HTMLElement): void {
   const model: ShellModel = {
     phase: 'starting',
     busy: false,
+    step: null,
     methods: [],
     email: null,
     error: null,
@@ -68,31 +69,35 @@ function start(root: HTMLElement): void {
   });
 
   const actions: ShellActions = {
-    google: () => run(() => flow.loginWithGoogle(undefined)),
+    google: () => run('google', () => flow.loginWithGoogle(undefined)),
     sendEmailCode: (email) => {
       model.address = email;
-      run(async () => {
+      run('emailCode', async () => {
         await flow.sendEmailCode(email);
         model.codeSent = true;
       });
     },
-    submitEmailCode: (email, code) => run(() => flow.loginWithEmailCode({ email, code })),
-    logout: () => run(() => flow.logout()),
+    submitEmailCode: (email, code) => run('signIn', () => flow.loginWithEmailCode({ email, code })),
+    logout: () => run('logout', () => flow.logout()),
   };
 
   const draw = (): void => renderShell(root, model, actions);
 
   /** Every transition ends in a redraw, whether or not the flow refused it. */
-  const run = (step: () => Promise<void>): void => {
-    void step()
+  const run = (step: LoginStep, work: () => Promise<void>): void => {
+    model.step = step;
+    void work()
       .catch(() => undefined)
-      .finally(draw);
+      .finally(() => {
+        model.step = null;
+        draw();
+      });
   };
 
   model.methods = flow.methods;
   draw();
 
-  run(async () => {
+  run('restore', async () => {
     try {
       await session.restore();
     } finally {

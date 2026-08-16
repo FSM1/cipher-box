@@ -6,6 +6,7 @@ function model(over: Partial<ShellModel> = {}): ShellModel {
   return {
     phase: 'signedOut',
     busy: false,
+    step: null,
     methods: ['google', 'email'],
     email: null,
     error: null,
@@ -67,10 +68,29 @@ describe('the front door', () => {
   });
 
   it('disables every control while a transition is in flight', () => {
-    renderShell(root, model({ busy: true, codeSent: true }), actions());
+    renderShell(root, model({ busy: true, step: 'signIn', codeSent: true }), actions());
     for (const control of root.querySelectorAll<HTMLButtonElement>('button, input')) {
       expect(control.disabled).toBe(true);
     }
+  });
+
+  it('says a submitted code is being signed in', () => {
+    renderShell(root, model({ busy: true, step: 'signIn', codeSent: true }), actions());
+    const status = root.querySelector('[role="status"]');
+    expect(status?.textContent).toBe('Signing in…');
+  });
+
+  it('names the step in flight, so one wait is not read as another', () => {
+    renderShell(root, model({ busy: true, step: 'emailCode' }), actions());
+    expect(root.querySelector('[role="status"]')?.textContent).toBe('Sending a code…');
+
+    renderShell(root, model({ busy: true, step: 'google' }), actions());
+    expect(root.querySelector('[role="status"]')?.textContent).toBe('Waiting for Google…');
+  });
+
+  it('shows no wait while the shell is idle', () => {
+    renderShell(root, model({ codeSent: true }), actions());
+    expect(root.querySelector('[role="status"]')).toBeNull();
   });
 
   it('says there is no vault behind a signed-in session', () => {
