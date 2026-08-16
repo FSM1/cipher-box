@@ -71,7 +71,6 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   refocus(view, focused);
 }
 
-/** The `name` of the focused control inside `root`, so a redraw can restore it. */
 function focusedName(root: HTMLElement): string | null {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
