@@ -42,7 +42,6 @@ const COUNTER_FILE: &str = "next_op_id";
 /// [`staged_keys`] + [`remove_staged_bytes`]) — never an op record pointing
 /// at a sidecar that is already gone.
 ///
-/// `Clone` is the engine's cold-start requirement (`Engine::start` bounds).
 /// Clones share one id counter: two handles each holding their own would hand
 /// the same op id to two ops.
 #[derive(Debug, Clone)]

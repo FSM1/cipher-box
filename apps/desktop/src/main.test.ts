@@ -58,8 +58,10 @@ describe('the shell bootstrap', () => {
     );
   });
 
-  /// Without this the window would render the snapshot it read at sign-in for
-  /// the life of the session.
+  /**
+   * Without this the window would render the snapshot it read at sign-in for
+   * the life of the session.
+   */
   it('follows the engine, rather than reading the vault once', () => {
     expect(shell.onVaultChanged).toHaveBeenCalled();
   });

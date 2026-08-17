@@ -11,7 +11,9 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
-use crate::engine::{EngineConfig, EngineHost, LOGIN_SECRET_LEN, SessionEnv, VaultStatus};
+use crate::engine::{
+    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, SessionEnv, VaultStatus,
+};
 
 /// Fired when the engine emits, so the window re-reads what it renders.
 pub const VAULT_CHANGED: &str = "vault-changed";
@@ -25,7 +27,7 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     // buffer belongs to the IPC layer that made it.
     let secret = Zeroizing::new(bytes.clone());
     if secret.len() != LOGIN_SECRET_LEN {
-        return Err("the login secret is not a 32-byte scalar".to_string());
+        return Err(NOT_A_SCALAR.to_string());
     }
     Ok(secret)
 }
@@ -59,7 +61,11 @@ pub async fn session_start(
 
 /// Ends the session: the engine stops and drops, and this device's stored
 /// refresh token goes with it.
-#[tauri::command]
+///
+/// `async` so a sync body runs on the thread pool rather than inline on the
+/// IPC thread: this waits on the engine thread, and the keyring delete inside
+/// it is a blocking OS call.
+#[tauri::command(async)]
 pub fn session_logout(engine: State<'_, EngineHost>) {
     engine.log_out();
 }

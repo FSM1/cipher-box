@@ -1,7 +1,8 @@
 fn main() {
-    // The engine's configuration is compiled in from the same variables the
-    // frontend build and the CSP read (`src/engine/config.rs`), so a changed
-    // value has to be a rebuild rather than a stale constant.
+    // The engine's configuration is compiled in from these variables
+    // (`src/engine/config.rs`), so a changed value has to be a rebuild rather
+    // than a stale constant. `scripts/tauri.mjs` resolves the first two; the
+    // rest reach cargo as this build's own environment.
     for variable in [
         "VITE_API_URL",
         "VITE_ROUTING_ENDPOINTS",

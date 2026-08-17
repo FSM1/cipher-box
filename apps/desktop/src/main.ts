@@ -53,7 +53,7 @@ function start(root: HTMLElement): void {
         model.codeSent = false;
         model.address = '';
         engineSession += 1;
-        void showVault();
+        showVault();
       },
       signedOut: () => {
         model.phase = 'signedOut';
@@ -99,8 +99,15 @@ function start(root: HTMLElement): void {
    * Reads the vault the engine now holds. A read is dropped unless the session
    * it was issued against is still the live one: it otherwise describes an
    * engine this window has already left.
+   *
+   * One read at a time — a burst of engine events would otherwise queue a
+   * snapshot build per event — with a single re-read for whatever arrived while
+   * one was in flight.
    */
-  const showVault = async (): Promise<void> => {
+  let reading: Promise<void> | null = null;
+  let reread = false;
+
+  const readVault = async (): Promise<void> => {
     const issued = engineSession;
     try {
       const status = await readVaultStatus();
@@ -113,6 +120,20 @@ function start(root: HTMLElement): void {
       model.vaultError = errorMessage(failure);
     }
     draw();
+  };
+
+  const showVault = (): void => {
+    if (reading !== null) {
+      reread = true;
+      return;
+    }
+    reading = readVault().finally(() => {
+      reading = null;
+      if (reread) {
+        reread = false;
+        showVault();
+      }
+    });
   };
 
   /** Every transition ends in a redraw, whether or not the flow refused it. */
@@ -129,12 +150,10 @@ function start(root: HTMLElement): void {
   model.methods = flow.methods;
   draw();
 
-  // The engine's own signal that its state moved. A window that only read at
-  // sign-in would show the first snapshot for the life of the session; one that
-  // could not subscribe still renders every read it makes, so a refused
-  // subscription costs the following, not the panel.
+  // Re-read on every engine emit; a window that only read at sign-in would
+  // show one snapshot for the life of the session.
   void onVaultChanged(() => {
-    if (model.phase === 'signedIn') void showVault();
+    if (model.phase === 'signedIn') showVault();
   }).catch(() => undefined);
 
   run('restore', async () => {

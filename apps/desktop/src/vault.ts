@@ -11,17 +11,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 /** Fired by the shell when the engine emits; `src-tauri/src/session.rs`. */
-export const VAULT_CHANGED = 'vault-changed';
+const VAULT_CHANGED = 'vault-changed';
 
 /** The staleness ladder, as the engine's rungs are named. */
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
-/** What the engine raised that no snapshot reports. */
-export type VaultWarningKind =
-  | 'unprovisioned'
-  | 'trustViolation'
-  | 'withheldUpdate'
-  | 'renewalFailed';
+/** What the engine raised that no read reports, under the event's own name. */
+export type VaultWarningKind = 'attributableAbuse' | 'withheldUpdateEscalation' | 'renewalFailed';
 
 export interface VaultWarning {
   kind: VaultWarningKind;
@@ -35,8 +31,8 @@ export interface VaultStatus {
   staleness: Staleness;
   /** Queued changes that will never publish; never conflated with staleness. */
   deadLetters: number;
-  /** Durable queue entries this device holds but cannot read. */
-  retainedRecords: number;
+  /** False means nothing will publish until a later sign-in mints the vault. */
+  provisioned: boolean;
   /** Conditions the engine raised; a trust warning is not a stale view. */
   warnings: VaultWarning[];
 }
@@ -48,5 +44,5 @@ export function readVaultStatus(): Promise<VaultStatus> {
 
 /** Calls `changed` whenever the engine emits, until the returned unlisten runs. */
 export function onVaultChanged(changed: () => void): Promise<UnlistenFn> {
-  return listen(VAULT_CHANGED, () => changed());
+  return listen(VAULT_CHANGED, changed);
 }

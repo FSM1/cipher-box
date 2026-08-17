@@ -172,11 +172,13 @@ const STALENESS_LABELS: Record<Staleness, string> = {
  * update being withheld and a view being old call for different reactions.
  */
 const WARNING_LABELS: Record<VaultWarningKind, string> = {
-  unprovisioned: 'CipherBox could not create your vault, so nothing will publish from this device',
-  trustViolation: 'CipherBox refused an update that failed a trust check',
-  withheldUpdate: 'A shared folder is being served an update that is being withheld',
+  attributableAbuse: 'CipherBox refused an update that failed a trust check',
+  withheldUpdateEscalation: 'A shared folder is being kept from its latest update',
   renewalFailed: 'CipherBox could not renew a record, so it may expire',
 };
+
+/** Shown until a sign-in mints the vault; nothing publishes before then. */
+const UNPROVISIONED = 'CipherBox has not created your vault yet, so nothing will publish';
 
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
@@ -193,11 +195,7 @@ function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   return section;
 }
 
-/**
- * The vault this device reached. Counts and a rung, not a listing: the files
- * themselves are the mount's surface, and a second listing here would be a
- * second thing to keep in step with the engine.
- */
+/** Counts and a rung; the files themselves are the mount's surface. */
 function vault(model: ShellModel): HTMLElement {
   const panel = element('section', { class: 'vault', 'data-vault': 'status' });
   if (model.vaultError !== null) {
@@ -209,7 +207,7 @@ function vault(model: ShellModel): HTMLElement {
     return panel;
   }
 
-  const { items, staleness, deadLetters, warnings } = model.vault;
+  const { items, staleness, deadLetters, provisioned, warnings } = model.vault;
   panel.append(
     text('p', `${items} ${items === 1 ? 'item' : 'items'} in your vault`, {
       'data-vault': 'items',
@@ -218,6 +216,11 @@ function vault(model: ShellModel): HTMLElement {
   panel.append(
     text('p', STALENESS_LABELS[staleness], { class: 'muted', 'data-vault': 'staleness' })
   );
+  if (!provisioned) {
+    panel.append(
+      text('p', UNPROVISIONED, { class: 'error', role: 'alert', 'data-vault': 'unprovisioned' })
+    );
+  }
   panel.append(...warnings.map(warning));
   // Never silent, and never folded into the staleness line: a parked write is a
   // different thing from an old view.
@@ -235,7 +238,7 @@ function vault(model: ShellModel): HTMLElement {
 
 /** One engine warning, with the engine's own words for it where it had any. */
 function warning({ kind, detail }: VaultWarning): HTMLElement {
-  const label = WARNING_LABELS[kind] ?? 'CipherBox raised a warning about your vault';
+  const label = WARNING_LABELS[kind];
   return text('p', detail === null ? label : `${label} — ${detail}`, {
     class: 'error',
     role: 'alert',

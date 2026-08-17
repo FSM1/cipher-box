@@ -74,8 +74,13 @@ describe('the environment handed to the compiled shell', () => {
     }
   });
 
-  it('names a routing endpoint, which the engine also refuses to start without', () => {
-    expect(engineBuildEnv(BUILD).VITE_ROUTING_ENDPOINTS).toMatch(/^https:\/\/\S+$/);
+  /**
+   * Pinned rather than shape-checked: the engine refuses to start without a
+   * routing endpoint, so a silent change to this default is a build that
+   * resolves records somewhere nobody chose.
+   */
+  it('names the routing endpoint web falls back to', () => {
+    expect(engineBuildEnv(BUILD).VITE_ROUTING_ENDPOINTS).toBe('https://delegated-ipfs.dev');
     expect(engineBuildEnv({ ...BUILD, VITE_ROUTING_ENDPOINTS: ' https://someguy.test ' })).toEqual(
       expect.objectContaining({ VITE_ROUTING_ENDPOINTS: 'https://someguy.test' })
     );

@@ -32,7 +32,6 @@ use crate::fs_util::{
 /// overlapping commits neither clobber nor remove one another's recovery
 /// record.
 ///
-/// `Clone` is the engine's cold-start requirement (`Engine::start` bounds).
 /// Clones share one write lock, so the serialization below holds across every
 /// handle rather than only the one that raised.
 #[derive(Debug, Clone)]

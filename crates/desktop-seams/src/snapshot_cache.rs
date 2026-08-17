@@ -19,8 +19,7 @@ use crate::fs_util::{
 /// reopen (cache-first rendering after restart); [`clear`](Self::clear)
 /// ("forget this device") empties the backing durably.
 ///
-/// `Clone` is the engine's cold-start requirement (`Engine::start` bounds): a
-/// clone addresses the same directory, so every handle sees one cache.
+/// A clone addresses the same directory, so every handle sees one cache.
 #[derive(Debug, Clone)]
 pub struct FileSnapshotCache {
     dir: PathBuf,

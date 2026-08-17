@@ -1,11 +1,12 @@
 //! What this build points the engine at.
 //!
-//! The values are the bundle's own build-time variables: `scripts/tauri.mjs`
-//! resolves them once and hands the same set to the frontend build, the CSP,
-//! and this crate's compile, so the identity exchange the webview posts to and
-//! the API the engine logs in against are the same deployment by construction.
-//! Nothing is defaulted here — a missing `VITE_API_URL` is refused by name, so
-//! a build made outside that script cannot silently address localhost.
+//! The values are the bundle's own build-time variables. `scripts/tauri.mjs`
+//! resolves the API origin and the routing endpoints once and hands them to the
+//! frontend build, the CSP, and this crate's compile, so the identity exchange
+//! the webview posts to and the API the engine logs in against are the same
+//! deployment by construction. Nothing is defaulted here — a missing
+//! `VITE_API_URL` is refused by name, so a build made outside that script
+//! cannot silently address localhost.
 
 use cipherbox_engine::facade::ApiBaseUrl;
 use cipherbox_engine::{GatewayConfig, StoragePolicy, SyncTimingProfile};
@@ -42,8 +43,8 @@ impl BuildEnv {
 /// The engine construction arguments this build resolves to.
 #[derive(Debug)]
 pub struct EngineConfig {
-    /// The API the engine authenticates and publishes against, non-blank.
-    pub api_base_url: String,
+    /// The API the engine authenticates and publishes against.
+    pub api_base_url: ApiBaseUrl,
     /// `/routing/v1` endpoints the record transport fans out over.
     pub record_endpoints: Vec<String>,
     /// Content read sources.
@@ -65,11 +66,11 @@ impl EngineConfig {
     /// mirrors the record transport's own empty-set rejection, which is a
     /// panic rather than an error once construction reaches it.
     pub fn parse(env: &BuildEnv) -> Result<Self, String> {
-        let api_base_url = configured(env.api_base_url)
-            .ok_or("this build names no API: set VITE_API_URL, or build through `pnpm tauri`")?;
-        // The engine's own edge check, run here so the refusal names the
-        // variable rather than surfacing as a failed login.
-        ApiBaseUrl::parse(api_base_url).map_err(|error| error.to_string())?;
+        let api_base_url =
+            ApiBaseUrl::parse(configured(env.api_base_url).ok_or(
+                "this build names no API: set VITE_API_URL, or build through `pnpm tauri`",
+            )?)
+            .map_err(|error| error.to_string())?;
 
         let record_endpoints = list(env.routing_endpoints);
         if record_endpoints.is_empty() {
@@ -80,11 +81,10 @@ impl EngineConfig {
 
         let ci = configured(env.environment) == Some("ci");
         Ok(Self {
-            api_base_url: api_base_url.to_owned(),
+            api_base_url,
             record_endpoints,
-            // No default: unset reads nothing rather than reaching for an
-            // endpoint nobody chose, and content reads fail closed as
-            // unavailable until one is configured.
+            // Dormant until configured: reads then fail closed as unavailable
+            // rather than reaching for an endpoint nobody chose.
             gateway: GatewayConfig {
                 accelerator: configured(env.read_accelerator_url).map(str::to_owned),
                 public_fallbacks: list(env.public_gateways),
@@ -94,10 +94,9 @@ impl EngineConfig {
             } else {
                 SyncTimingProfile::PRODUCTION
             },
-            // This shell opens no write handle, so it has measured no headroom
-            // to split; the volume measurement arrives with the mount
-            // (blueprint/desktop.md). Unmeasured is the honest state — a
-            // refusal then says "unknown", never "full".
+            // Unmeasured until the mount measures the volume
+            // (blueprint/desktop.md): a refusal then says "unknown", never
+            // "full".
             storage_policy: if ci {
                 StoragePolicy::CI
             } else {
