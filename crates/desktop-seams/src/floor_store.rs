@@ -2,7 +2,7 @@
 //! write-ahead intent record for cross-key atomic batch commits.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
@@ -31,14 +31,18 @@ use crate::fs_util::{
 /// applied floor. Each commit writes its own uniquely-named intent file, so
 /// overlapping commits neither clobber nor remove one another's recovery
 /// record.
+///
+/// Clones share one write lock, so the serialization below holds across every
+/// handle rather than only the one that raised.
+#[derive(Debug, Clone)]
 pub struct FileFloorStore {
     epoch_dir: PathBuf,
     seq_dir: PathBuf,
     intent_dir: PathBuf,
-    /// Serializes the read-modify-write in [`Self::raise_floor`] within this
-    /// handle: interleaved raises can durably regress a floor, and intent
-    /// replay cannot heal that loss.
-    write_lock: Mutex<()>,
+    /// Serializes the read-modify-write in [`Self::raise_floor`]: interleaved
+    /// raises can durably regress a floor, and intent replay cannot heal that
+    /// loss.
+    write_lock: Arc<Mutex<()>>,
 }
 
 /// Intent-record tag for an epoch-namespace raise.
@@ -63,7 +67,7 @@ impl FileFloorStore {
             epoch_dir,
             seq_dir,
             intent_dir,
-            write_lock: Mutex::new(()),
+            write_lock: Arc::new(Mutex::new(())),
         };
         store.replay_intents()?;
         Ok(store)

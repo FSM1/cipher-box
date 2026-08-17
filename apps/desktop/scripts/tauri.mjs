@@ -11,7 +11,13 @@
  */
 
 import { run } from '@tauri-apps/cli';
+import { engineBuildEnv } from './buildEnv.mjs';
 import { contentSecurityPolicy } from './csp.mjs';
+
+// Resolved into this process's environment, which the CLI's children — cargo
+// and the frontend build — inherit, so the compiled engine and the bundle name
+// the same API as the policy below admits.
+Object.assign(process.env, engineBuildEnv(process.env));
 
 const csp = contentSecurityPolicy(process.env);
 const config = JSON.stringify({ app: { security: { csp } } });

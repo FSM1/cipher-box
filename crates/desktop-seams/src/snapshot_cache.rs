@@ -18,6 +18,9 @@ use crate::fs_util::{
 /// Keys are opaque engine bytes hex-encoded into filenames. Entries survive
 /// reopen (cache-first rendering after restart); [`clear`](Self::clear)
 /// ("forget this device") empties the backing durably.
+///
+/// A clone addresses the same directory, so every handle sees one cache.
+#[derive(Debug, Clone)]
 pub struct FileSnapshotCache {
     dir: PathBuf,
 }

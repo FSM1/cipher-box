@@ -10,11 +10,20 @@ interface Redraw {
 
 const shell = vi.hoisted(() => {
   const redraws: Redraw[] = [];
+  const vaultListeners: (() => void)[] = [];
   let release = (): void => {};
   return {
     redraws,
+    vaultListeners,
     restore: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
     finishRestore: (): void => release(),
+    /** The login flow's host, so a test can drive the account transitions. */
+    host: null as { account: { signedIn(method: null, email: string | null): void } } | null,
+    readVaultStatus: vi.fn(() => Promise.reject(new Error('no session is live'))),
+    onVaultChanged: vi.fn((changed: () => void) => {
+      vaultListeners.push(changed);
+      return Promise.resolve(() => {});
+    }),
   };
 });
 
@@ -27,7 +36,14 @@ vi.mock('./config', () => ({
 }));
 vi.mock('@cipherbox/login', () => ({
   createIdentityExchange: () => ({}),
-  createLoginFlow: () => ({ methods: [], resume: () => Promise.resolve() }),
+  createLoginFlow: (host: never) => {
+    shell.host = host;
+    return { methods: [], resume: () => Promise.resolve() };
+  },
+}));
+vi.mock('./vault', () => ({
+  onVaultChanged: shell.onVaultChanged,
+  readVaultStatus: shell.readVaultStatus,
 }));
 vi.mock('./frontDoor', () => ({
   renderShell: (_root: HTMLElement, model: ShellModel) => {
@@ -51,5 +67,20 @@ describe('the shell bootstrap', () => {
     await vi.waitFor(() =>
       expect(shell.redraws.at(-1)).toEqual({ phase: 'signedOut', busy: false, step: null })
     );
+  });
+
+  /**
+   * Without this the window would render the snapshot it read at sign-in for
+   * the life of the session, so registering the listener is not the property —
+   * the listener reading again is.
+   */
+  it('follows the engine, rather than reading the vault once', async () => {
+    expect(shell.onVaultChanged).toHaveBeenCalled();
+
+    shell.host!.account.signedIn(null, 'member@example.com');
+    await vi.waitFor(() => expect(shell.readVaultStatus).toHaveBeenCalledTimes(1));
+
+    shell.vaultListeners.forEach((emitted) => emitted());
+    await vi.waitFor(() => expect(shell.readVaultStatus).toHaveBeenCalledTimes(2));
   });
 });

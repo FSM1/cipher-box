@@ -1,12 +1,13 @@
 /**
  * The shell's login chrome. Framework-free: this window is the front door and a
- * status line, and the vault UI lives on the web app.
+ * status line, and the vault UI lives on the mount and the web app.
  *
  * Which methods appear is read off the flow, never branched on here, so a
  * method this host cannot collect renders no affordance at all (ADR 0008 D2).
  */
 
 import type { IdentityMethod } from '@cipherbox/login';
+import type { Staleness, VaultStatus, VaultWarning, VaultWarningKind } from './vault';
 
 /** The transition this host asked for, which `LoginProgress` does not name. */
 export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
@@ -34,6 +35,11 @@ export interface ShellModel {
   codeSent: boolean;
   /** The address the form holds, kept across a re-render. */
   address: string;
+  /** The engine's last reported vault state; `null` until the first read lands. */
+  vault: VaultStatus | null;
+  /** Why the last vault read did not land. Kept apart from `error`, which is
+   * the login's: a vault that cannot be read is not a sign-in that failed. */
+  vaultError: string | null;
 }
 
 export interface ShellActions {
@@ -153,10 +159,31 @@ function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
   return form;
 }
 
+/** The staleness rung as this window says it (blueprint/desktop.md, "Tray"). */
+const STALENESS_LABELS: Record<Staleness, string> = {
+  fresh: 'Synced',
+  reconciling: 'Reconciling',
+  stale: 'Stale',
+  offline: 'Offline',
+};
+
+/**
+ * A warning is a state of its own, never a rung on the staleness ladder: an
+ * update being withheld and a view being old call for different reactions.
+ */
+const WARNING_LABELS: Record<VaultWarningKind, string> = {
+  attributableAbuse: 'CipherBox refused an update that failed a trust check',
+  withheldUpdateEscalation: 'A shared folder is being kept from its latest update',
+  renewalFailed: 'CipherBox could not renew a record, so it may expire',
+};
+
+/** Shown until a sign-in mints the vault; nothing publishes before then. */
+const UNPROVISIONED = 'CipherBox has not created your vault yet, so nothing will publish';
+
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
   section.append(text('p', model.email ?? 'Signed in'));
-  section.append(note('No vault on this device yet — the engine is not wired to this shell.'));
+  section.append(vault(model));
 
   const out = text('button', 'Sign out', {
     'data-action': 'logout',
@@ -166,6 +193,65 @@ function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   out.addEventListener('click', () => actions.logout());
   section.append(out);
   return section;
+}
+
+/** Counts and a rung; the files themselves are the mount's surface. */
+function vault(model: ShellModel): HTMLElement {
+  const panel = element('section', { class: 'vault', 'data-vault': 'status' });
+  if (model.vaultError !== null) {
+    panel.append(text('p', model.vaultError, { class: 'error', role: 'alert' }));
+    return panel;
+  }
+  if (model.vault === null) {
+    panel.append(note('Opening your vault…'));
+    return panel;
+  }
+
+  const { items, staleness, deadLetters, provisioned, warnings } = model.vault;
+  panel.append(
+    text('p', `${items} ${items === 1 ? 'item' : 'items'} in your vault`, {
+      'data-vault': 'items',
+    })
+  );
+  panel.append(
+    text('p', STALENESS_LABELS[staleness], { class: 'muted', 'data-vault': 'staleness' })
+  );
+  if (!provisioned) {
+    panel.append(
+      text('p', UNPROVISIONED, { class: 'error', role: 'alert', 'data-vault': 'unprovisioned' })
+    );
+  }
+  panel.append(...warnings.map(warning));
+  // Never silent, and never folded into the staleness line: a parked write is a
+  // different thing from an old view.
+  if (deadLetters > 0) {
+    panel.append(
+      text(
+        'p',
+        `${deadLetters} ${deadLetters === 1 ? 'change' : 'changes'} cannot publish — open CipherBox on the web to resolve`,
+        { class: 'error', role: 'alert', 'data-vault': 'dead-letters' }
+      )
+    );
+  }
+  return panel;
+}
+
+/**
+ * One engine warning, with the engine's own words for it where it had any.
+ *
+ * The fallback is unreachable by the types and kept anyway: a class the engine
+ * gains before this table does must still raise something a member can act on,
+ * which is the whole point of the line. The staleness table needs no such
+ * guard — an unnamed rung is a cosmetic gap, not a silent warning.
+ */
+function warning({ kind, detail }: VaultWarning): HTMLElement {
+  const label = WARNING_LABELS[kind] ?? 'CipherBox raised a condition it could not name';
+  return text('p', detail === null ? label : `${label} — ${detail}`, {
+    class: 'error',
+    role: 'alert',
+    'data-vault': 'warning',
+    'data-warning': kind,
+  });
 }
 
 function note(message: string): HTMLElement {

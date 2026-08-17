@@ -1,12 +1,14 @@
 //! CipherBox desktop shell — Tauri v2 menu-bar app.
 //!
-//! Hosts the login front door (`../src`, driving `@cipherbox/login`) and the
-//! two native steps that front door cannot take itself: Google collection over
-//! a loopback callback ([`oauth`]) and the facade the sequence starts
-//! ([`session`]).
+//! Hosts the login front door (`../src`, driving `@cipherbox/login`), the two
+//! native steps that front door cannot take itself — Google collection over a
+//! loopback callback ([`oauth`]) and the facade the sequence starts
+//! ([`session`]) — and the engine that facade hands the login secret to
+//! ([`engine`]).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod engine;
 mod oauth;
 mod session;
 
@@ -22,11 +24,12 @@ const MAIN_WINDOW: &str = "main";
 
 fn main() {
     tauri::Builder::default()
-        .manage(session::Session::default())
+        .manage(engine::EngineHost::default())
         .invoke_handler(tauri::generate_handler![
             oauth::collect_google_id_token,
             session::session_start,
-            session::session_logout
+            session::session_logout,
+            session::vault_status
         ])
         .setup(|app| {
             // Menu-bar app: no Dock icon on macOS.
@@ -48,15 +51,16 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build the CipherBox desktop shell")
-        .run(|_app, event| {
+        .run(|app, event| match event {
             // Keep running from the tray when every window is hidden; only an
             // explicit exit (tray "Quit") carries an exit code.
-            if let RunEvent::ExitRequested {
+            RunEvent::ExitRequested {
                 code: None, api, ..
-            } = event
-            {
-                api.prevent_exit();
-            }
+            } => api.prevent_exit(),
+            // Quit stops the engine before the process goes, so its loops end
+            // and what it holds is zeroized rather than left to the exit.
+            RunEvent::Exit => app.state::<engine::EngineHost>().stop(),
+            _ => {}
         });
 }
 
