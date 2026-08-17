@@ -7,7 +7,7 @@
  */
 
 import type { IdentityMethod } from '@cipherbox/login';
-import type { Staleness, VaultStatus } from './vault';
+import type { Staleness, VaultStatus, VaultWarning, VaultWarningKind } from './vault';
 
 /** The transition this host asked for, which `LoginProgress` does not name. */
 export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
@@ -167,6 +167,17 @@ const STALENESS_LABELS: Record<Staleness, string> = {
   offline: 'Offline',
 };
 
+/**
+ * A warning is a state of its own, never a rung on the staleness ladder: an
+ * update being withheld and a view being old call for different reactions.
+ */
+const WARNING_LABELS: Record<VaultWarningKind, string> = {
+  unprovisioned: 'CipherBox could not create your vault, so nothing will publish from this device',
+  trustViolation: 'CipherBox refused an update that failed a trust check',
+  withheldUpdate: 'A shared folder is being served an update that is being withheld',
+  renewalFailed: 'CipherBox could not renew a record, so it may expire',
+};
+
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
   section.append(text('p', model.email ?? 'Signed in'));
@@ -198,7 +209,7 @@ function vault(model: ShellModel): HTMLElement {
     return panel;
   }
 
-  const { items, staleness, deadLetters } = model.vault;
+  const { items, staleness, deadLetters, warnings } = model.vault;
   panel.append(
     text('p', `${items} ${items === 1 ? 'item' : 'items'} in your vault`, {
       'data-vault': 'items',
@@ -207,6 +218,7 @@ function vault(model: ShellModel): HTMLElement {
   panel.append(
     text('p', STALENESS_LABELS[staleness], { class: 'muted', 'data-vault': 'staleness' })
   );
+  panel.append(...warnings.map(warning));
   // Never silent, and never folded into the staleness line: a parked write is a
   // different thing from an old view.
   if (deadLetters > 0) {
@@ -219,6 +231,17 @@ function vault(model: ShellModel): HTMLElement {
     );
   }
   return panel;
+}
+
+/** One engine warning, with the engine's own words for it where it had any. */
+function warning({ kind, detail }: VaultWarning): HTMLElement {
+  const label = WARNING_LABELS[kind] ?? 'CipherBox raised a warning about your vault';
+  return text('p', detail === null ? label : `${label} — ${detail}`, {
+    class: 'error',
+    role: 'alert',
+    'data-vault': 'warning',
+    'data-warning': kind,
+  });
 }
 
 function note(message: string): HTMLElement {

@@ -16,6 +16,19 @@ export const VAULT_CHANGED = 'vault-changed';
 /** The staleness ladder, as the engine's rungs are named. */
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
+/** What the engine raised that no snapshot reports. */
+export type VaultWarningKind =
+  | 'unprovisioned'
+  | 'trustViolation'
+  | 'withheldUpdate'
+  | 'renewalFailed';
+
+export interface VaultWarning {
+  kind: VaultWarningKind;
+  /** The engine's own classification, when it carried one. Never a record name. */
+  detail: string | null;
+}
+
 export interface VaultStatus {
   /** Items directly under the vault root. */
   items: number;
@@ -24,6 +37,8 @@ export interface VaultStatus {
   deadLetters: number;
   /** Durable queue entries this device holds but cannot read. */
   retainedRecords: number;
+  /** Conditions the engine raised; a trust warning is not a stale view. */
+  warnings: VaultWarning[];
 }
 
 /** Reads the live vault's status; rejects when no session is live. */

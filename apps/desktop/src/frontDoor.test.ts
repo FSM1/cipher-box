@@ -20,7 +20,14 @@ function model(over: Partial<ShellModel> = {}): ShellModel {
 }
 
 function vaultStatus(over: Partial<VaultStatus> = {}): VaultStatus {
-  return { items: 0, staleness: 'fresh', deadLetters: 0, retainedRecords: 0, ...over };
+  return {
+    items: 0,
+    staleness: 'fresh',
+    deadLetters: 0,
+    retainedRecords: 0,
+    warnings: [],
+    ...over,
+  };
 }
 
 function actions(): ShellActions {
@@ -188,6 +195,36 @@ describe('the front door', () => {
     renderShell(root, model({ phase: 'signedIn', vault: vaultStatus({ items: 1 }) }), actions());
     expect(root.querySelector('[data-vault="dead-letters"]')).toBeNull();
     expect(root.querySelector('[data-vault="items"]')?.textContent).toBe('1 item in your vault');
+  });
+
+  /// A withheld update and an old view call for different reactions, so the
+  /// warning is its own line and the rung still reads as the rung.
+  it('renders an engine warning apart from the staleness rung', () => {
+    const vault = vaultStatus({
+      staleness: 'fresh',
+      warnings: [{ kind: 'withheldUpdate', detail: null }],
+    });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+
+    const raised = root.querySelector('[data-warning="withheldUpdate"]');
+    expect(raised?.getAttribute('role')).toBe('alert');
+    expect(raised?.textContent).toContain('withheld');
+    expect(root.querySelector('[data-vault="staleness"]')?.textContent).toBe('Synced');
+  });
+
+  it('says a vault that was never minted is not an empty one', () => {
+    const vault = vaultStatus({
+      warnings: [{ kind: 'unprovisioned', detail: 'the mint did not land' }],
+    });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+    expect(root.querySelector('[data-warning="unprovisioned"]')?.textContent).toBe(
+      'CipherBox could not create your vault, so nothing will publish from this device — the mint did not land'
+    );
+  });
+
+  it('raises nothing when the engine raised nothing', () => {
+    renderShell(root, model({ phase: 'signedIn', vault: vaultStatus() }), actions());
+    expect(root.querySelector('[data-vault="warning"]')).toBeNull();
   });
 
   it('reports a vault that could not be read instead of an empty one', () => {

@@ -18,12 +18,15 @@ mod config;
 mod mailbox;
 mod seams;
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir};
-use cipherbox_engine::facade::{ApiBaseUrl, Engine, EventStream, LoginSecret};
+use cipherbox_engine::facade::{ApiBaseUrl, Engine, Event, EventStream, LoginSecret};
 use cipherbox_engine::seams::CredentialStore;
 use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
 use serde::Serialize;
@@ -41,8 +44,13 @@ const NO_SESSION: &str = "no session is live on this device";
 const ALREADY_LIVE: &str = "a session is already live on this device";
 const POISONED: &str = "the session state is unreadable; restart CipherBox";
 
-/// What the shell renders of a live vault. Key-free by construction: counts and
-/// a rung, never a name the engine holds keys for.
+/// The most warnings retained at once. A repeating condition dedupes rather
+/// than accumulating, so this bounds distinct classes, not tick count.
+const MAX_WARNINGS: usize = 8;
+
+/// What the shell renders of a live vault. Key-free by construction: counts, a
+/// rung, and the engine's own key-material-free classifications — never a name
+/// the engine holds keys for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultStatus {
@@ -55,6 +63,67 @@ pub struct VaultStatus {
     pub dead_letters: usize,
     /// Durable queue entries this session holds but cannot read.
     pub retained_records: usize,
+    /// Conditions the engine raised that no snapshot carries.
+    pub warnings: Vec<VaultWarning>,
+}
+
+/// A condition the engine emits once and never repeats, retained by the host
+/// because the window renders state and a state nobody kept is a state nobody
+/// sees (blueprint/engine.md: never a silent failure).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultWarning {
+    /// The stable class the window renders its line from.
+    pub kind: &'static str,
+    /// The engine's own key-material-free classification, where the event
+    /// carries one. Record names and routing keys are deliberately left
+    /// behind: the window says what happened, never which record it happened
+    /// to.
+    pub detail: Option<String>,
+}
+
+/// The warnings this session has raised, newest last.
+#[derive(Default)]
+struct Warnings(VecDeque<VaultWarning>);
+
+impl Warnings {
+    /// Classifies one event, retaining the classes a snapshot cannot report.
+    /// Staleness, dead letters, and op progress are absent on purpose — the
+    /// snapshot carries all three, and a warning that duplicated them would be
+    /// the conflation the ladder exists to prevent.
+    fn record(&mut self, event: &Event) {
+        let warning = match event {
+            Event::VaultUnprovisioned { detail, .. } => VaultWarning {
+                kind: "unprovisioned",
+                detail: Some(detail.clone()),
+            },
+            Event::AttributableAbuse { description } => VaultWarning {
+                kind: "trustViolation",
+                detail: Some(description.clone()),
+            },
+            Event::WithheldUpdateEscalation { .. } => VaultWarning {
+                kind: "withheldUpdate",
+                detail: None,
+            },
+            Event::RenewalFailed { detail, .. } => VaultWarning {
+                kind: "renewalFailed",
+                detail: Some(detail.clone()),
+            },
+            _ => return,
+        };
+        // A condition that keeps firing must not evict the others.
+        if self.0.contains(&warning) {
+            return;
+        }
+        if self.0.len() == MAX_WARNINGS {
+            self.0.pop_front();
+        }
+        self.0.push_back(warning);
+    }
+
+    fn list(&self) -> Vec<VaultWarning> {
+        self.0.iter().cloned().collect()
+    }
 }
 
 impl VaultStatus {
@@ -250,8 +319,15 @@ fn host_engine(
         };
         let _ = verdict.send(Ok(()));
 
-        tokio::task::spawn_local(repaint_on_events(events, session.changed));
-        serve(engine, credentials, inbox).await;
+        // Shared with the drain rather than owned by it: both run on this one
+        // thread, and the status read is what carries them to the window.
+        let warnings = Rc::new(RefCell::new(Warnings::default()));
+        tokio::task::spawn_local(repaint_on_events(
+            events,
+            Rc::clone(&warnings),
+            session.changed,
+        ));
+        serve(engine, credentials, warnings, inbox).await;
     });
 }
 
@@ -299,12 +375,13 @@ async fn start_engine(
 async fn serve(
     engine: Engine<DesktopSeamTypes>,
     credentials: KeyringCredentialStore,
+    warnings: Rc<RefCell<Warnings>>,
     mut inbox: mpsc::UnboundedReceiver<Request>,
 ) {
     while let Some(request) = inbox.recv().await {
         match request {
             Request::Status(reply) => {
-                let _ = reply.send(status(&engine).await);
+                let _ = reply.send(status(&engine, &warnings).await);
             }
             // A keyring that refuses the delete is reported to no one: the
             // session is ending either way, and there is no surface left to
@@ -316,7 +393,10 @@ async fn serve(
     }
 }
 
-async fn status(engine: &Engine<DesktopSeamTypes>) -> Result<VaultStatus, String> {
+async fn status(
+    engine: &Engine<DesktopSeamTypes>,
+    warnings: &RefCell<Warnings>,
+) -> Result<VaultStatus, String> {
     let view = engine
         .snapshot(engine.root())
         .await
@@ -326,15 +406,20 @@ async fn status(engine: &Engine<DesktopSeamTypes>) -> Result<VaultStatus, String
         staleness: VaultStatus::rung(view.staleness),
         dead_letters: view.dead_letters.len(),
         retained_records: view.retained_records,
+        warnings: warnings.borrow().list(),
     })
 }
 
-/// Drains the engine's event stream, telling the shell to re-read what it
-/// renders. The shell renders state, not an event log, so every event says the
-/// same thing: read again. Draining is not optional — an unread stream grows
-/// for as long as the session lives.
-async fn repaint_on_events(mut events: EventStream, changed: Box<dyn Fn() + Send>) {
-    while events.next().await.is_some() {
+/// Drains the engine's event stream, retaining what no snapshot reports and
+/// telling the shell to re-read the rest. Draining is not optional — an unread
+/// stream grows for as long as the session lives.
+async fn repaint_on_events(
+    mut events: EventStream,
+    warnings: Rc<RefCell<Warnings>>,
+    changed: Box<dyn Fn() + Send>,
+) {
+    while let Some(event) = events.next().await {
+        warnings.borrow_mut().record(&event);
         changed();
     }
 }
@@ -342,6 +427,9 @@ async fn repaint_on_events(mut events: EventStream, changed: Box<dyn Fn() + Send
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_engine::facade::{NodeId, OpPhase};
+    use cipherbox_engine::seams::OpId;
+    use cipherbox_engine::sync::DeadLetterReason;
     use std::path::Path;
 
     fn account_dir(data_local_dir: &Path, secret: &[u8]) -> Result<PathBuf, String> {
@@ -437,6 +525,122 @@ mod tests {
     async fn status_without_a_session_is_refused() {
         let host = EngineHost::default();
         assert_eq!(host.status().await.err().as_deref(), Some(NO_SESSION));
+    }
+
+    fn warned(events: &[Event]) -> Vec<VaultWarning> {
+        let mut warnings = Warnings::default();
+        for event in events {
+            warnings.record(event);
+        }
+        warnings.list()
+    }
+
+    /// The classes no snapshot carries. Dropping them would render a withheld
+    /// update or a vault that was never minted as an empty, synced vault.
+    #[test]
+    fn the_engines_never_silent_events_are_retained() {
+        let retained = warned(&[
+            Event::VaultUnprovisioned {
+                retryable: true,
+                detail: "the mint did not land".to_owned(),
+            },
+            Event::AttributableAbuse {
+                description: "gate rejection".to_owned(),
+            },
+            Event::WithheldUpdateEscalation {
+                ipns_name: b"a-pinned-name".to_vec(),
+            },
+            Event::RenewalFailed {
+                routing_key: "a-routing-key".to_owned(),
+                detail: "the CAS race was lost".to_owned(),
+            },
+        ]);
+
+        assert_eq!(
+            retained.iter().map(|w| w.kind).collect::<Vec<_>>(),
+            [
+                "unprovisioned",
+                "trustViolation",
+                "withheldUpdate",
+                "renewalFailed"
+            ],
+        );
+    }
+
+    /// A warning says what happened, never which record it happened to: a
+    /// pinned name and a routing key both identify a record to whoever reads
+    /// the window.
+    #[test]
+    fn a_warning_carries_no_record_identifier() {
+        let retained = warned(&[
+            Event::WithheldUpdateEscalation {
+                ipns_name: b"a-pinned-name".to_vec(),
+            },
+            Event::RenewalFailed {
+                routing_key: "a-routing-key".to_owned(),
+                detail: "the CAS race was lost".to_owned(),
+            },
+        ]);
+
+        for warning in &retained {
+            let detail = warning.detail.clone().unwrap_or_default();
+            assert!(!detail.contains("a-pinned-name"), "{detail}");
+            assert!(!detail.contains("a-routing-key"), "{detail}");
+        }
+        assert_eq!(retained[0].detail, None, "an escalation names no record");
+    }
+
+    /// The snapshot already carries these three, and a warning beside them
+    /// would be the conflation the staleness ladder exists to prevent.
+    #[test]
+    fn what_a_snapshot_already_reports_raises_no_warning() {
+        assert!(
+            warned(&[
+                Event::SnapshotUpdated,
+                Event::StalenessChanged {
+                    level: Staleness::Offline,
+                },
+                Event::DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable,
+                },
+                Event::OpProgress {
+                    op_id: None,
+                    node: NodeId([0u8; 16]),
+                    phase: OpPhase::DownloadFailed,
+                    progress: None,
+                    error: Some("unavailable".to_owned()),
+                },
+            ])
+            .is_empty()
+        );
+    }
+
+    /// A condition that keeps firing must not push the others out of a bounded
+    /// list — the oldest *distinct* warning is the one that goes.
+    #[test]
+    fn a_repeating_condition_neither_accumulates_nor_evicts() {
+        let repeated = Event::AttributableAbuse {
+            description: "gate rejection".to_owned(),
+        };
+        let mut warnings = Warnings::default();
+        for _ in 0..MAX_WARNINGS * 2 {
+            warnings.record(&repeated);
+        }
+        assert_eq!(warnings.list().len(), 1);
+
+        for index in 0..MAX_WARNINGS * 2 {
+            warnings.record(&Event::AttributableAbuse {
+                description: format!("rejection {index}"),
+            });
+        }
+        let retained = warnings.list();
+        assert_eq!(retained.len(), MAX_WARNINGS);
+        assert_eq!(
+            retained.last().and_then(|w| w.detail.clone()),
+            Some(format!("rejection {}", MAX_WARNINGS * 2 - 1)),
+            "the newest warning is always retained",
+        );
     }
 
     /// Hosts render the rung, so each one crosses as its stable name.
