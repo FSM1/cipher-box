@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdentityMethod } from '@cipherbox/login';
 import { renderShell, type ShellActions, type ShellModel } from './frontDoor';
-import type { VaultStatus } from './vault';
+import type { VaultStatus, VaultWarningKind } from './vault';
 
 function model(over: Partial<ShellModel> = {}): ShellModel {
   return {
@@ -214,6 +214,26 @@ describe('the front door', () => {
     expect(raised?.getAttribute('role')).toBe('alert');
     expect(raised?.textContent).toContain('kept from its latest update');
     expect(root.querySelector('[data-vault="staleness"]')?.textContent).toBe('Synced');
+  });
+
+  it("says the engine's own words for a warning that carried any", () => {
+    const vault = vaultStatus({
+      warnings: [{ kind: 'renewalFailed', detail: 'the CAS race was lost' }],
+    });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+    expect(root.querySelector('[data-warning="renewalFailed"]')?.textContent).toContain(
+      'the CAS race was lost'
+    );
+  });
+
+  /** A class this table has not learned yet must still raise a readable line. */
+  it('names a warning it has no label for, rather than rendering nothing', () => {
+    const vault = vaultStatus({
+      warnings: [{ kind: 'somethingNewer' as VaultWarningKind, detail: null }],
+    });
+    renderShell(root, model({ phase: 'signedIn', vault }), actions());
+    const raised = root.querySelector('[data-vault="warning"]');
+    expect(raised?.textContent).toBe('CipherBox raised a condition it could not name');
   });
 
   it('says a vault that was never minted is not an empty one', () => {

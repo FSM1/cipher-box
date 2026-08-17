@@ -1,6 +1,7 @@
 //! The seam set the native host injects (blueprint/desktop.md "Engine
 //! wiring"): `crates/desktop-seams` for the seven durable/transport seams, the
-//! host's own [`HttpMailbox`] for the eighth, and the OS CSPRNG for entropy.
+//! OS CSPRNG for entropy, and [`UnwiredMailbox`] for the eighth seam, which
+//! refuses until a host is given a session credential.
 
 use std::path::Path;
 

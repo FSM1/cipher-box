@@ -21,9 +21,10 @@
 //! - [`TokioScheduler`] — timers, background tasks, wall clock on Tokio.
 //!
 //! `Mailbox` is not implemented here: it is a transport over the API's mailbox
-//! routes with nothing desktop-specific about it, so the shell supplies it the
-//! way web's client does. This crate constructs no engine and touches no
-//! webview — the desktop shell does both.
+//! routes with nothing desktop-specific about it, so the shell supplies it —
+//! today with a seam that refuses, the routes being bearer-authenticated and no
+//! host holding the session credential. This crate constructs no engine and
+//! touches no webview — the desktop shell does both.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

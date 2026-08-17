@@ -236,9 +236,16 @@ function vault(model: ShellModel): HTMLElement {
   return panel;
 }
 
-/** One engine warning, with the engine's own words for it where it had any. */
+/**
+ * One engine warning, with the engine's own words for it where it had any.
+ *
+ * The fallback is unreachable by the types and kept anyway: a class the engine
+ * gains before this table does must still raise something a member can act on,
+ * which is the whole point of the line. The staleness table needs no such
+ * guard — an unnamed rung is a cosmetic gap, not a silent warning.
+ */
 function warning({ kind, detail }: VaultWarning): HTMLElement {
-  const label = WARNING_LABELS[kind];
+  const label = WARNING_LABELS[kind] ?? 'CipherBox raised a condition it could not name';
   return text('p', detail === null ? label : `${label} — ${detail}`, {
     class: 'error',
     role: 'alert',

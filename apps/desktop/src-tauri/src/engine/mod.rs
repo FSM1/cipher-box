@@ -48,8 +48,8 @@ const NO_SESSION: &str = "no session is live on this device";
 const ALREADY_LIVE: &str = "a session is already live on this device";
 const POISONED: &str = "the session state is unreadable; restart CipherBox";
 
-/// The most warnings retained at once. A repeating condition dedupes rather
-/// than accumulating, so this bounds distinct classes, not tick count.
+/// The most warnings retained at once. An identical warning dedupes rather than
+/// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
 const MAX_WARNINGS: usize = 8;
 
 /// What the shell renders of a live vault. Key-free by construction: counts, a

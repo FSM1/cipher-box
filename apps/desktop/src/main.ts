@@ -53,6 +53,11 @@ function start(root: HTMLElement): void {
         model.codeSent = false;
         model.address = '';
         engineSession += 1;
+        // This engine is not the last one, and neither is what was read off it:
+        // a read that failed as the previous session ended would otherwise be
+        // the first thing this one renders.
+        model.vault = null;
+        model.vaultError = null;
         showVault();
       },
       signedOut: () => {
