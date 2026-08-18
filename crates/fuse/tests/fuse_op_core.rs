@@ -16,12 +16,12 @@ use cipherbox_engine::seams::StagingStore;
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    ApiBaseUrl, Command, ContentProfile, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind,
-    StoragePolicy, SyncTimingProfile,
+    ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, GatewayConfig, LoginSecret,
+    NodeId, NodeKind, Staleness, StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
     Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
-    NameError, OperationCore, ROOT_INO, SpillArea, VfsError,
+    NameError, OperationCore, OverBudgetCause, ROOT_INO, SpillArea, VfsError,
 };
 
 /// A spill area in a throwaway directory the mount outlives, so the directory
@@ -92,9 +92,20 @@ fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
 /// A started engine plus a handle on its durable op queue, for tests that
 /// inject a staging outage.
 fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
+    started_engine_over_queue(&[])
+}
+
+/// A started engine whose durable queue already held `entries` when cold start
+/// read it — the only way to put a record there that this build cannot decode.
+fn started_engine_over_queue(
+    entries: &[&[u8]],
+) -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let staging = device.staging_store.clone();
+    for entry in entries {
+        block_on(staging.enqueue_op(entry)).expect("the queue takes the bytes");
+    }
     let (mut engine, _events) = Engine::new(
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
@@ -1169,6 +1180,149 @@ fn a_partial_write_over_an_unreadable_base_fails_closed() {
         matches!(outcome, Err(VfsError::Unavailable { .. })),
         "expected an availability verdict, got {outcome:?}"
     );
+}
+
+// --- refusal paths and the surfacing hook ---
+
+/// The plaintext a mount refuses outright: past the platform's staging cap, so
+/// no drain progress and no free space admits it.
+fn past_the_staging_cap() -> Vec<u8> {
+    vec![0x5a; StoragePolicy::CI.staging_cap_bytes as usize + 1]
+}
+
+/// The over-budget cause a release surfaced, or a panic naming what came back.
+fn refused_cause(outcome: Result<(), VfsError>) -> OverBudgetCause {
+    match outcome {
+        Err(VfsError::OverBudget(cause)) => cause,
+        other => panic!("expected an over-budget refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_write_past_the_staging_cap_surfaces_the_ceiling_cause() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core);
+    let after_create = queued(&staging);
+    let plaintext = past_the_staging_cap();
+    block_on(core.write(handle, 0, &plaintext)).expect("the spill takes the bytes");
+
+    let cause = refused_cause(block_on(core.release(handle)));
+
+    assert_eq!(
+        cause,
+        OverBudgetCause::StagingLimit,
+        "a write past the cap is the ceiling, not a backlog"
+    );
+    assert_eq!(
+        queued(&staging),
+        after_create,
+        "a refused write spends no journal entry"
+    );
+}
+
+/// The backlog and the ceiling are different refusals: one clears as the drain
+/// uploads, the other never does.
+#[test]
+fn a_write_the_backlog_cannot_hold_surfaces_a_different_cause() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    // Sealed bytes are what the budget counts, and CI's 16-byte framing inflates
+    // plaintext several-fold, so two of these fit the cap individually and not
+    // together.
+    let half_the_budget = vec![0x11; 40_000];
+
+    let first = writing_handle(&mut core);
+    block_on(core.write(first, 0, &half_the_budget)).expect("the spill takes the bytes");
+    block_on(core.release(first)).expect("the first version fits");
+
+    let (second_attrs, second) =
+        block_on(core.create(ROOT_INO, "g.txt", Access::ReadWrite)).expect("the create");
+    let after_first = queued(&staging);
+    block_on(core.write(second, 0, &half_the_budget)).expect("the spill takes the bytes");
+    let cause = refused_cause(block_on(core.release(second)));
+
+    assert_eq!(cause, OverBudgetCause::StagingBacklog);
+    assert_eq!(
+        queued(&staging),
+        after_first,
+        "the refused version journals nothing"
+    );
+    assert_eq!(
+        block_on(core.getattr(second_attrs.ino))
+            .expect("the node the create already journaled still renders")
+            .size,
+        None,
+        "a refused version leaves no size claim behind"
+    );
+}
+
+#[test]
+fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
+    let (engine, _root, _staging) = started_engine_over_queue(&[b"not an op record"]);
+    let mut core = mount_over(engine);
+
+    let status = block_on(core.status()).expect("the status reads");
+
+    assert_eq!(
+        status
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::Undecodable],
+        "the reason is the whole surface — it is what the tray explains"
+    );
+    // The kernel was acked at journal time, so the compensation channel is the
+    // only place this appears: the read path stays whole.
+    assert!(block_on(core.readdir(ROOT_INO)).is_ok());
+    assert!(
+        block_on(core.status())
+            .expect("the status reads again")
+            .blocked
+            .is_none(),
+        "a dead letter is not a drain hold"
+    );
+}
+
+/// A relocation the engine will not accept is refused before the journal entry
+/// is spent — the one mutation class whose ack waits on more than the fsync,
+/// because an op the kernel already heard success for can never be retro-failed.
+#[test]
+fn a_relocation_the_engine_refuses_spends_no_journal_entry() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let (file, handle) =
+        block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).expect("create");
+    block_on(core.release(handle)).expect("the handle closes");
+    let before = queued(&staging);
+
+    let refusal = block_on(core.engine_mut().command(Command::Relink {
+        node: file.node,
+        new_parent: NodeId([0xee; 16]),
+    }))
+    .expect_err("a destination the render does not hold is refused");
+
+    assert_eq!(
+        VfsError::from(refusal),
+        VfsError::NotFound,
+        "a destination that is simply gone is ENOENT, not a scope verdict"
+    );
+    assert_eq!(queued(&staging), before, "the queue is unchanged");
+}
+
+/// The status hook reads off the same render the listing does, so what the tray
+/// says and what the mount shows cannot disagree.
+#[test]
+fn the_mount_status_reports_a_quiet_mount_as_quiet() {
+    let (core, _adapter) = mount();
+
+    let status = block_on(core.status()).expect("the status reads");
+
+    assert!(status.dead_letters.is_empty());
+    assert!(status.blocked.is_none());
+    assert_eq!(status.retained_records, 0);
+    assert_eq!(status.staleness, Staleness::Fresh);
 }
 
 /// The read path over a real published file, which needs the account fixture

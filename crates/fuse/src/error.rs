@@ -4,10 +4,10 @@
 use core::fmt;
 
 use cipherbox_engine::EngineError;
-/// Which budget a write exceeded, in the engine's own vocabulary. Which errno
-/// each maps to is the adapter's call: `ENOSPC` for a full device, `EDQUOT` for
-/// a full account.
-pub use cipherbox_engine::OverBudgetCause;
+/// Which budget a write exceeded, in the engine's own vocabulary. Choosing the
+/// errno stays the adapter's call, but not a judgement call:
+/// [`OverBudgetCause::budget`] decides it.
+pub use cipherbox_engine::{OverBudgetCause, RefusedBudget};
 
 use crate::name::NameError;
 
@@ -34,6 +34,12 @@ pub enum VfsError {
     BadHandle,
     /// A write exceeded a storage budget.
     OverBudget(OverBudgetCause),
+    /// A journal-time refusal ([`EngineError::ScopeExitRefused`]). Fail-closed
+    /// and never retried; an adapter maps it to its EIO-class code.
+    Refused {
+        /// The refusal classification; never key material.
+        message: String,
+    },
     /// A fail-closed trust verdict below the facade. Never retried, never
     /// rendered, and never conflated with staleness (security rule 6).
     TrustViolation {
@@ -66,6 +72,7 @@ impl From<EngineError> for VfsError {
                 VfsError::TrustViolation { message }
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
+            EngineError::ScopeExitRefused { message } => VfsError::Refused { message },
             EngineError::ContentUnavailable { message }
             | EngineError::RefreshFailed { message } => VfsError::Unavailable { message },
             // Retryable once the vault settings resolve or are saved again, and
@@ -124,6 +131,7 @@ impl fmt::Display for VfsError {
             VfsError::InvalidName(reason) => write!(f, "invalid name: {reason:?}"),
             VfsError::BadHandle => f.write_str("bad file handle"),
             VfsError::OverBudget(cause) => write!(f, "over budget: {cause:?}"),
+            VfsError::Refused { message } => write!(f, "refused: {message}"),
             VfsError::TrustViolation { message } => write!(f, "trust violation: {message}"),
             VfsError::Unavailable { message } => write!(f, "unavailable: {message}"),
             VfsError::Internal { message } => write!(f, "internal: {message}"),
@@ -211,6 +219,38 @@ mod tests {
                 VfsError::OverBudget(cause)
             );
         }
+    }
+
+    /// The whole cause set against the errno axis, so no adapter re-decides it.
+    #[test]
+    fn only_the_account_quota_is_an_account_budget() {
+        for cause in [
+            OverBudgetCause::StagingLimit,
+            OverBudgetCause::DeviceFull,
+            OverBudgetCause::StagingBacklog,
+            OverBudgetCause::StorageUnmeasured,
+            OverBudgetCause::TooManyWrites,
+        ] {
+            assert_eq!(cause.budget(), RefusedBudget::Device, "{cause:?}");
+        }
+        assert_eq!(
+            OverBudgetCause::AccountQuota.budget(),
+            RefusedBudget::Account
+        );
+    }
+
+    /// An adapter that mapped this to [`VfsError::Internal`] would report a
+    /// host fault for a verdict the user must act on.
+    #[test]
+    fn a_journal_time_refusal_is_its_own_class() {
+        assert_eq!(
+            VfsError::from(EngineError::ScopeExitRefused {
+                message: "out of scope".into(),
+            }),
+            VfsError::Refused {
+                message: "out of scope".into(),
+            }
+        );
     }
 
     #[test]

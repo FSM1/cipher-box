@@ -20,8 +20,8 @@ use std::rc::Rc;
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
-    ContentProfile, Entropy, EntropyError, GatewayConfig, SeamSet, SeamTypes, StoragePlatform,
-    StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
+    ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, SeamSet, SeamTypes,
+    StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -88,31 +88,19 @@ impl EngineHandle {
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
-    /// is configured from `acceleratorBaseUrl` and `publicGateways`;
-    /// `acceleratorBearer` is refused (the accelerator's credential is the
-    /// engine's session token, never a host's).
+    /// is configured from `acceleratorBaseUrl` and `publicGateways` — the
+    /// accelerator's credential is the engine's session token, so there is no
+    /// host-supplied bearer to pass.
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,
         profile: Option<String>,
         api_base_url: Option<String>,
         accelerator_base_url: Option<String>,
-        accelerator_bearer: Option<String>,
         public_gateways: Option<Vec<String>>,
         storage_headroom_bytes: Option<f64>,
     ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
-
-        // Wrapped before the first `?`: an early return would otherwise drop the
-        // Rust-owned bearer String unzeroized (security rule 7).
-        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
-        // Refused, not ignored: a credential reaching here came from the public
-        // bundle, and the host must hear that rather than have it dropped.
-        if accelerator_bearer.is_some() {
-            return Err(JsError::new(
-                "acceleratorBearer is refused: the accelerator credential is session-scoped",
-            ));
-        }
 
         let api_base_url = ApiBaseUrl::parse(api_base_url.as_deref().unwrap_or_default())?;
 
@@ -462,7 +450,16 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::MalformedInput { .. } => "malformedInput",
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
-        EngineError::OverBudget { .. } => "overBudget",
+        // One code per cause, because the actions differ and prose is not a
+        // branchable surface.
+        EngineError::OverBudget { cause, .. } => match cause {
+            OverBudgetCause::StagingLimit => "overBudgetStagingLimit",
+            OverBudgetCause::DeviceFull => "overBudgetDeviceFull",
+            OverBudgetCause::StagingBacklog => "overBudgetStagingBacklog",
+            OverBudgetCause::TooManyWrites => "overBudgetTooManyWrites",
+            OverBudgetCause::StorageUnmeasured => "overBudgetStorageUnmeasured",
+            OverBudgetCause::AccountQuota => "overBudgetAccountQuota",
+        },
         EngineError::NoPlacement { .. } => "noPlacement",
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
@@ -477,6 +474,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",
         EngineError::ColdStart { .. } => "coldStart",
+        EngineError::ScopeExitRefused { .. } => "scopeExitRefused",
     };
     let js = js_sys::Error::new(&error.to_string());
     // Setting a plain property on a fresh `Error` cannot fail.
@@ -583,6 +581,31 @@ mod tests {
         }
     }
 
+    /// The wire codes `packages/client` and `apps/web` branch on.
+    #[wasm_bindgen_test]
+    fn each_over_budget_cause_crosses_as_its_own_code() {
+        for (cause, expected) in [
+            (OverBudgetCause::StagingLimit, "overBudgetStagingLimit"),
+            (OverBudgetCause::DeviceFull, "overBudgetDeviceFull"),
+            (OverBudgetCause::StagingBacklog, "overBudgetStagingBacklog"),
+            (OverBudgetCause::TooManyWrites, "overBudgetTooManyWrites"),
+            (
+                OverBudgetCause::StorageUnmeasured,
+                "overBudgetStorageUnmeasured",
+            ),
+            (OverBudgetCause::AccountQuota, "overBudgetAccountQuota"),
+        ] {
+            let rejection = engine_error(EngineError::OverBudget {
+                cause,
+                requested: 900,
+                available: 100,
+            });
+            let code = Reflect::get(&rejection, &JsValue::from_str("code"))
+                .expect("the rejection carries a code");
+            assert_eq!(code, JsValue::from_str(expected), "{cause:?}");
+        }
+    }
+
     #[wasm_bindgen_test]
     fn an_engine_without_an_api_base_url_is_refused() {
         for api_base_url in [None, Some(String::new()), Some("  ".to_owned())] {
@@ -590,7 +613,6 @@ mod tests {
                 js_sys::Object::new().into(),
                 None,
                 api_base_url,
-                None,
                 None,
                 None,
                 None,
@@ -604,34 +626,6 @@ mod tests {
                     .message(),
             );
             assert!(message.contains("apiBaseUrl"), "{message}");
-        }
-    }
-
-    /// A bearer reaching the constructor came from a build-time variable in the
-    /// public bundle, so it is refused rather than dropped — and refused before
-    /// the `apiBaseUrl` check, which the blank base here is what proves.
-    #[wasm_bindgen_test]
-    fn a_host_supplied_accelerator_bearer_is_refused_first() {
-        for api_base_url in [Some("http://api.test".to_owned()), None] {
-            let error = EngineHandle::new(
-                js_sys::Object::new().into(),
-                None,
-                api_base_url,
-                Some("https://gw.test".to_owned()),
-                Some("a-build-time-token".to_owned()),
-                None,
-                None,
-            )
-            .err()
-            .expect("a host-supplied bearer is a construction failure");
-
-            let message = String::from(
-                JsValue::from(error)
-                    .unchecked_into::<js_sys::Error>()
-                    .message(),
-            );
-            assert!(message.contains("acceleratorBearer"), "{message}");
-            assert!(!message.contains("a-build-time-token"), "{message}");
         }
     }
 }

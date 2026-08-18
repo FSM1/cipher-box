@@ -12,8 +12,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{
-    Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs, StreamHandle, WriteHandle,
-    WriteTarget,
+    Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, SessionStatus, StatFs, StreamHandle,
+    WriteHandle, WriteTarget,
 };
 
 use zeroize::Zeroizing;
@@ -689,6 +689,13 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// enforces.
     pub async fn statfs(&mut self) -> Result<StatFs, VfsError> {
         Ok(self.render().await?.statfs())
+    }
+
+    /// What the mount owes the user outside the kernel path. Never reached from
+    /// a vfs operation: the tray reads it, and the kernel is never failed for
+    /// anything it reports.
+    pub async fn status(&self) -> Result<SessionStatus, VfsError> {
+        Ok(self.engine.status().await?)
     }
 
     /// One internally-consistent read of the facade's rendered state, with the

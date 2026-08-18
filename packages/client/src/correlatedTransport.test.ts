@@ -5,6 +5,7 @@ import {
   EngineRequestError,
   engineErrorCode,
   isRecoverableEngineError,
+  overBudgetRemedy,
 } from './correlatedTransport.js';
 import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
 
@@ -197,5 +198,33 @@ describe('isRecoverableEngineError', () => {
     undefined,
   ])('never treats %s as recoverable', (code) => {
     expect(isRecoverableEngineError(code)).toBe(false);
+  });
+});
+
+describe('overBudgetRemedy', () => {
+  // The engine's six causes, each with the one action it implies: two clear on
+  // their own, two need the user to free something, two never clear.
+  it.each([
+    ['overBudgetStagingBacklog', 'wait'],
+    ['overBudgetTooManyWrites', 'wait'],
+    ['overBudgetDeviceFull', 'freeDeviceSpace'],
+    ['overBudgetAccountQuota', 'freeAccountQuota'],
+    ['overBudgetStagingLimit', 'nothing'],
+    ['overBudgetStorageUnmeasured', 'nothing'],
+  ])('reads %s as %s', (code, remedy) => {
+    expect(overBudgetRemedy(code)).toBe(remedy);
+  });
+
+  it.each(['tooManyStreams', 'trustViolation', 'constructor', undefined])(
+    'leaves %s unclassified',
+    (code) => {
+      expect(overBudgetRemedy(code)).toBeUndefined();
+    }
+  );
+
+  // The Rust match that emits these is exhaustive and this table cannot be, so
+  // a cause added later must not inherit the retry the two waiting causes get.
+  it('reads an over-budget code it does not name as unclearable', () => {
+    expect(overBudgetRemedy('overBudgetSomeFutureCeiling')).toBe('nothing');
   });
 });

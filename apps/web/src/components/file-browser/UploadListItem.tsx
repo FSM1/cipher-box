@@ -1,3 +1,4 @@
+import { overBudgetRemedy, type OverBudgetRemedy } from '@cipherbox/client';
 import { isActiveUpload, type UploadEntry, type UploadPhase } from '../../hooks/useDropUpload';
 import { formatBytes } from '../../utils/format';
 
@@ -7,6 +8,15 @@ interface UploadListItemProps {
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
 }
+
+// What the user does next about a refused write. The engine's message says
+// which budget refused and by how much; this says what to do about it.
+const REMEDIES: Record<OverBudgetRemedy, string> = {
+  wait: 'Let an upload in progress finish, or cancel one, then try again.',
+  freeDeviceSpace: 'Free up space on this device, then try again.',
+  freeAccountQuota: 'Free up your CipherBox storage, then try again.',
+  nothing: 'Trying again will not help.',
+};
 
 const LABELS: Record<UploadPhase, string> = {
   staging: 'sealing',
@@ -27,9 +37,11 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
   // Only the row the client is actually feeding animates; a queued or retrying
   // one has nothing moving to report.
   const indeterminate = phase === 'staging';
-  // An over-budget refusal is a ceiling and a stopped attempt is retried, so
-  // neither reads as the settled red of a row that will never publish.
-  const transient = phase === 'stalled' || upload.code === 'overBudget';
+  const remedy = overBudgetRemedy(upload.code ?? undefined);
+  // A refusal something can still clear — the drain, free space, more quota —
+  // is a ceiling, not the settled red of a row that will never publish.
+  const transient = phase === 'stalled' || (remedy !== undefined && remedy !== 'nothing');
+  const retryable = phase !== 'uploaded' && remedy !== 'nothing';
 
   return (
     <div
@@ -76,7 +88,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           )}
           {settled && (
             <>
-              {phase !== 'uploaded' && (
+              {retryable && (
                 <button
                   type="button"
                   className="upload-row-button upload-row-button--retry"
@@ -106,6 +118,12 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           role={phase === 'failed' ? 'alert' : undefined}
         >
           {error}
+          {remedy !== undefined && (
+            <span className="upload-row-remedy" data-testid="upload-row-remedy">
+              {' '}
+              {REMEDIES[remedy]}
+            </span>
+          )}
         </p>
       )}
     </div>

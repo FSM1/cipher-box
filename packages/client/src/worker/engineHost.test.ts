@@ -10,7 +10,6 @@ interface Constructed {
   profile: unknown;
   apiBaseUrl: unknown;
   acceleratorBaseUrl: unknown;
-  acceleratorBearer: unknown;
   publicGateways: unknown;
   storageHeadroomBytes: unknown;
 }
@@ -25,7 +24,6 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
         profile: unknown,
         apiBaseUrl: unknown,
         acceleratorBaseUrl: unknown,
-        acceleratorBearer: unknown,
         publicGateways: unknown,
         storageHeadroomBytes: unknown
       ) {
@@ -34,7 +32,6 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
           profile,
           apiBaseUrl,
           acceleratorBaseUrl,
-          acceleratorBearer,
           publicGateways,
           storageHeadroomBytes,
         });
@@ -117,7 +114,9 @@ describe('EngineHost', () => {
     });
   });
 
-  it('forwards the content gateway configuration, bearerless', () => {
+  // `EngineWasm` is hand-written, so a positional slot shift is invisible to
+  // `tsc`; assert the trailing arguments together instead.
+  it('forwards the content gateway configuration', () => {
     const { wasm, constructed } = recordingWasm();
 
     new EngineHost(
@@ -127,14 +126,15 @@ describe('EngineHost', () => {
         apiBaseUrl: 'https://api.example.test',
         acceleratorBaseUrl: 'https://accelerator.example.test',
         publicGateways: ['https://gateway.example.test'],
+        storageHeadroomBytes: 2048,
       }
     );
 
     expect(constructed[0]).toMatchObject({
       acceleratorBaseUrl: 'https://accelerator.example.test',
       publicGateways: ['https://gateway.example.test'],
+      storageHeadroomBytes: 2048,
     });
-    expect(constructed[0].acceleratorBearer).toBeUndefined();
   });
 
   it('leaves the gateway dormant when no endpoint is configured', () => {

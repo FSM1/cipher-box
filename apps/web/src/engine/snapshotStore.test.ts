@@ -384,7 +384,7 @@ describe('failure classification', () => {
     expect(isRecoverable({ message: 'refused', code: 'trustViolation' })).toBe(false);
     expect(isRecoverable({ message: 'gone', code: 'unknownNode' })).toBe(false);
     expect(isRecoverable({ message: 'new', code: 'someFutureCeiling' })).toBe(false);
-    expect(isRecoverable({ message: 'no room', code: 'overBudget' })).toBe(false);
+    expect(isRecoverable({ message: 'no room', code: 'overBudgetStagingBacklog' })).toBe(false);
     expect(isRecoverable({ message: 'worker died' })).toBe(false);
   });
 });

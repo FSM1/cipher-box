@@ -84,9 +84,6 @@ export class EngineHost implements EngineHostLike {
       options.profile,
       options.apiBaseUrl,
       options.acceleratorBaseUrl,
-      // The accelerator bearer is a session credential, never a build-time
-      // constant, so no browser config surface supplies one yet.
-      undefined,
       options.publicGateways,
       options.storageHeadroomBytes
     );
