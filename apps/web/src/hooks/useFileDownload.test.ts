@@ -88,18 +88,37 @@ function mount(client: EngineClient) {
   return renderHook(() => useFileDownload(), { wrapper });
 }
 
-const clicked: string[] = [];
+/**
+ * Every URL the hook handed the browser, by either route: a clicked link for a
+ * blob, a navigated frame for a ticket. The frames are recorded separately
+ * because a ticket handed to a link never reaches the Service Worker, and the
+ * origin answers a ticket path with the app shell.
+ */
+const requested: string[] = [];
+const frames: HTMLIFrameElement[] = [];
 const originalClick = HTMLAnchorElement.prototype.click;
+const originalAppend = HTMLElement.prototype.append;
 
 beforeEach(() => {
-  clicked.length = 0;
+  requested.length = 0;
+  frames.length = 0;
   HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
-    clicked.push(this.getAttribute('href') ?? '');
+    requested.push(this.getAttribute('href') ?? '');
   };
+  HTMLElement.prototype.append = function append(this: HTMLElement, ...nodes: unknown[]) {
+    for (const node of nodes) {
+      if (node instanceof HTMLIFrameElement) {
+        requested.push(node.getAttribute('src') ?? '');
+        frames.push(node);
+      }
+    }
+    return originalAppend.apply(this, nodes as Parameters<typeof originalAppend>);
+  } as typeof HTMLElement.prototype.append;
 });
 
 afterEach(() => {
   HTMLAnchorElement.prototype.click = originalClick;
+  HTMLElement.prototype.append = originalAppend;
   mediaControl.create = () => null;
 });
 
@@ -118,7 +137,7 @@ describe('bounding the tickets a streamed save leaves live', () => {
     });
 
     // Revoking before the browser has read the bytes cancels the save.
-    expect(clicked).toEqual(['/stream/ticket-1']);
+    expect(requested).toEqual(['/stream/ticket-1']);
     expect([...pipe.live]).toEqual(['/stream/ticket-1']);
     expect(saved).toBeNull();
 
@@ -226,7 +245,7 @@ describe('saving a selection', () => {
     await pipe.finish('/stream/ticket-3');
 
     await waitFor(() => expect(done).toBe(true));
-    expect(clicked).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
+    expect(requested).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
     expect(result.current.error).toBe('could not download b.bin');
   });
 
@@ -271,7 +290,7 @@ describe('the buffered fallback', () => {
     });
 
     expect(saved).toBe('failed');
-    expect(clicked).toEqual([]);
+    expect(requested).toEqual([]);
     expect(result.current.error).toBe('the record is gone');
 
     act(() => result.current.clearError());
@@ -291,7 +310,7 @@ describe('the buffered fallback', () => {
         await result.current.save({ node: NODE, name: 'a.bin', size: null });
         await result.current.save({ node: NODE, name: 'b.bin', size: null });
       });
-      expect(clicked).toEqual(['blob:fake/1', 'blob:fake/2']);
+      expect(requested).toEqual(['blob:fake/1', 'blob:fake/2']);
       expect(revoked).toEqual([]);
 
       await act(async () => {
@@ -309,5 +328,36 @@ describe('the buffered fallback', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('how a ticket save reaches the Service Worker', () => {
+  it('navigates a frame rather than clicking a download link', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let saved: SaveOutcome | null = null;
+    await act(async () => {
+      void result.current.save(file('notes.txt')).then((outcome) => {
+        saved = outcome;
+      });
+      await Promise.resolve();
+    });
+
+    // Chromium issues an `<a download>` request without dispatching it to the
+    // worker, so a clicked link would fetch the app shell off the origin.
+    expect(frames.map((frame) => frame.getAttribute('src'))).toEqual(['/stream/ticket-1']);
+    expect(frames[0].isConnected).toBe(true);
+    expect(saved).toBeNull();
+
+    await pipe.finish('/stream/ticket-1');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saved).toBe('saved');
+    // The transfer is the browser's by now, so the frame has nothing left to do.
+    expect(frames[0].isConnected).toBe(false);
   });
 });

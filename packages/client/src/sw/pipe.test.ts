@@ -793,4 +793,40 @@ describe('MediaPipe response headers', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
   });
+
+  const dispositions: Array<[string, string, string]> = [
+    [
+      'serves the shape the tab mints',
+      "attachment; filename*=UTF-8''notes.md",
+      "attachment; filename*=UTF-8''notes.md",
+    ],
+    ['serves a bare attachment', 'attachment', 'attachment'],
+    ['drops a second parameter', "attachment; filename*=UTF-8''a.md; foo=bar", 'attachment'],
+    ['drops an unencoded name', 'attachment; filename="a b.md"', 'attachment'],
+    ['refuses to render inline', 'inline', 'attachment'],
+  ];
+
+  for (const [name, sent, served] of dispositions) {
+    it(`${name}`, async () => {
+      const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+      pipe.adoptPort(
+        new FakePort((message, self) => {
+          if (message.type !== 'cb:media:open') return;
+          self.deliver({
+            type: 'cb:media:head',
+            requestId: message.requestId,
+            status: 200,
+            headers: [
+              ['content-type', 'video/mp4'],
+              ['content-disposition', sent],
+            ],
+          });
+        })
+      );
+
+      const response = await pipe.respond(streamRequest());
+
+      expect(response.headers.get('content-disposition')).toBe(served);
+    });
+  }
 });

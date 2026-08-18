@@ -9,6 +9,18 @@ export interface MediaWindow {
   readonly length: number;
 }
 
+/** What the head declares about the body beyond its bytes. */
+export interface MediaPresentation {
+  readonly mimeType: string;
+  /**
+   * Set to save the body under this name rather than render it. It is what
+   * makes a save reach the pipe at all: Chromium issues an `<a download>`
+   * request without dispatching it to the worker, so a save is driven as a
+   * navigation and this header is what turns that navigation into a file.
+   */
+  readonly downloadName?: string;
+}
+
 /** The response head for a media request, with the window its body carries. */
 export type MediaHead =
   | { status: 200 | 206; headers: Array<[string, string]>; window: MediaWindow }
@@ -41,13 +53,37 @@ const hardening: Array<[string, string]> = [
   ['content-security-policy', "default-src 'none'; sandbox"],
 ];
 
-function baseHeaders(mimeType: string, length: number): Array<[string, string]> {
-  return [
-    ['content-type', safeMimeType(mimeType)],
+/**
+ * RFC 8187 `attr-char`. Everything else is percent-encoded, so a vault-chosen
+ * name carries no quote, no semicolon and no newline into the header — which is
+ * also the shape the worker re-checks before it serves one (`sw/pipe.ts`).
+ */
+const ATTR_CHAR = /[A-Za-z0-9!#$&+\-.^_`|~]/;
+
+function encodeAttr(name: string): string {
+  return Array.from(new TextEncoder().encode(name), (byte) => {
+    const char = String.fromCharCode(byte);
+    return ATTR_CHAR.test(char) ? char : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }).join('');
+}
+
+/** A name that encodes to nothing still saves — under whatever the browser picks. */
+export function contentDisposition(downloadName: string): string {
+  const encoded = encodeAttr(downloadName);
+  return encoded === '' ? 'attachment' : `attachment; filename*=UTF-8''${encoded}`;
+}
+
+function baseHeaders(presentation: MediaPresentation, length: number): Array<[string, string]> {
+  const headers: Array<[string, string]> = [
+    ['content-type', safeMimeType(presentation.mimeType)],
     ['content-length', String(length)],
     ['accept-ranges', 'bytes'],
     ...hardening,
   ];
+  if (presentation.downloadName !== undefined) {
+    headers.push(['content-disposition', contentDisposition(presentation.downloadName)]);
+  }
+  return headers;
 }
 
 function unsatisfiable(totalSize: number): MediaHead {
@@ -57,10 +93,10 @@ function unsatisfiable(totalSize: number): MediaHead {
   };
 }
 
-function whole(totalSize: number, mimeType: string): MediaHead {
+function whole(totalSize: number, presentation: MediaPresentation): MediaHead {
   return {
     status: 200,
-    headers: baseHeaders(mimeType, totalSize),
+    headers: baseHeaders(presentation, totalSize),
     window: { offset: 0, length: totalSize },
   };
 }
@@ -80,14 +116,14 @@ function parseOffset(digits: string): number | null {
 export function resolveMediaRequest(
   rangeHeader: string | null,
   totalSize: number,
-  mimeType: string
+  presentation: MediaPresentation
 ): MediaHead {
-  if (rangeHeader === null || rangeHeader.trim() === '') return whole(totalSize, mimeType);
+  if (rangeHeader === null || rangeHeader.trim() === '') return whole(totalSize, presentation);
 
   const spec = rangeHeader.trim();
-  if (!spec.toLowerCase().startsWith('bytes=')) return whole(totalSize, mimeType);
+  if (!spec.toLowerCase().startsWith('bytes=')) return whole(totalSize, presentation);
   const set = spec.slice('bytes='.length).trim();
-  if (set.includes(',')) return whole(totalSize, mimeType);
+  if (set.includes(',')) return whole(totalSize, presentation);
 
   const suffix = SUFFIX_FORM.exec(set);
   if (suffix) {
@@ -95,11 +131,11 @@ export function resolveMediaRequest(
     if (wanted === null) return unsatisfiable(totalSize);
     if (wanted === 0 || totalSize === 0) return unsatisfiable(totalSize);
     const offset = Math.max(0, totalSize - wanted);
-    return partial(offset, totalSize - 1, totalSize, mimeType);
+    return partial(offset, totalSize - 1, totalSize, presentation);
   }
 
   const interval = INTERVAL_FORM.exec(set);
-  if (!interval) return whole(totalSize, mimeType);
+  if (!interval) return whole(totalSize, presentation);
 
   const offset = parseOffset(interval[1]);
   if (offset === null || offset >= totalSize) return unsatisfiable(totalSize);
@@ -110,15 +146,20 @@ export function resolveMediaRequest(
     last = Math.min(requestedLast, last);
   }
   if (last < offset) return unsatisfiable(totalSize);
-  return partial(offset, last, totalSize, mimeType);
+  return partial(offset, last, totalSize, presentation);
 }
 
-function partial(offset: number, last: number, totalSize: number, mimeType: string): MediaHead {
+function partial(
+  offset: number,
+  last: number,
+  totalSize: number,
+  presentation: MediaPresentation
+): MediaHead {
   const length = last - offset + 1;
   return {
     status: 206,
     headers: [
-      ...baseHeaders(mimeType, length),
+      ...baseHeaders(presentation, length),
       ['content-range', `bytes ${offset}-${last}/${totalSize}`],
     ],
     window: { offset, length },

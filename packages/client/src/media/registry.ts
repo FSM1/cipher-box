@@ -4,13 +4,13 @@
  * can name it — so tickets are random and opaque, never derived from the node.
  */
 
+import type { MediaPresentation } from './range.js';
 import { STREAM_PATH_PREFIX, ticketFromUrl } from './protocol.js';
 
 /** What a ticket resolves to: the content node plus what the head must declare. */
-export interface MediaSource {
+export interface MediaSource extends MediaPresentation {
   readonly node: Uint8Array;
   readonly size: number;
-  readonly mimeType: string;
 }
 
 export class StreamRegistry {

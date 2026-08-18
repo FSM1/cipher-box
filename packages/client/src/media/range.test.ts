@@ -16,7 +16,7 @@ const windowOf = (head: MediaHead): MediaWindow => {
 };
 
 const contentTypeFor = (mimeType: string): string | undefined =>
-  headerMap(resolveMediaRequest(null, SIZE, mimeType)).get('content-type');
+  headerMap(resolveMediaRequest(null, SIZE, { mimeType })).get('content-type');
 
 describe('resolveMediaRequest content-type', () => {
   it('downgrades a type that would execute on the app origin', () => {
@@ -32,7 +32,7 @@ describe('resolveMediaRequest content-type', () => {
   });
 
   it('downgrades on the 206 head too', () => {
-    const head = resolveMediaRequest('bytes=0-99', SIZE, 'text/html');
+    const head = resolveMediaRequest('bytes=0-99', SIZE, { mimeType: 'text/html' });
     expect(head.status).toBe(206);
     expect(headerMap(head).get('content-type')).toBe('application/octet-stream');
   });
@@ -40,9 +40,9 @@ describe('resolveMediaRequest content-type', () => {
 
 describe('resolveMediaRequest hardening headers', () => {
   const cases: Array<[string, MediaHead]> = [
-    ['200', resolveMediaRequest(null, SIZE, MIME)],
-    ['206', resolveMediaRequest('bytes=0-99', SIZE, MIME)],
-    ['416', resolveMediaRequest(`bytes=${SIZE}-`, SIZE, MIME)],
+    ['200', resolveMediaRequest(null, SIZE, { mimeType: MIME })],
+    ['206', resolveMediaRequest('bytes=0-99', SIZE, { mimeType: MIME })],
+    ['416', resolveMediaRequest(`bytes=${SIZE}-`, SIZE, { mimeType: MIME })],
   ];
 
   for (const [status, head] of cases) {
@@ -72,7 +72,7 @@ describe('resolveMediaRequest 206 windows', () => {
 
   for (const { spec, offset, length } of cases) {
     it(`serves '${spec}' as ${length} bytes from ${offset}`, () => {
-      const head = resolveMediaRequest(spec, SIZE, MIME);
+      const head = resolveMediaRequest(spec, SIZE, { mimeType: MIME });
 
       expect(head.status).toBe(206);
       expect(windowOf(head)).toEqual({ offset, length });
@@ -96,7 +96,7 @@ describe('resolveMediaRequest whole-file fall-through', () => {
 
   for (const [name, spec] of cases) {
     it(`answers ${name} with the whole file`, () => {
-      const head = resolveMediaRequest(spec, SIZE, MIME);
+      const head = resolveMediaRequest(spec, SIZE, { mimeType: MIME });
 
       expect(head.status).toBe(200);
       expect(windowOf(head)).toEqual({ offset: 0, length: SIZE });
@@ -107,7 +107,7 @@ describe('resolveMediaRequest whole-file fall-through', () => {
   }
 
   it('answers an empty file with an empty window', () => {
-    const head = resolveMediaRequest(null, 0, MIME);
+    const head = resolveMediaRequest(null, 0, { mimeType: MIME });
 
     expect(head.status).toBe(200);
     expect(windowOf(head)).toEqual({ offset: 0, length: 0 });
@@ -128,7 +128,7 @@ describe('resolveMediaRequest 416', () => {
 
   for (const [name, spec, size] of cases) {
     it(`rejects ${name} with no window`, () => {
-      const head = resolveMediaRequest(spec, size, MIME);
+      const head = resolveMediaRequest(spec, size, { mimeType: MIME });
 
       expect(head.status).toBe(416);
       // A rejected range must read no plaintext at all.
@@ -138,4 +138,40 @@ describe('resolveMediaRequest 416', () => {
       expect(headers.has('content-length')).toBe(false);
     });
   }
+});
+
+describe('resolveMediaRequest content-disposition', () => {
+  const dispositionFor = (downloadName: string, spec: string | null = null): string | undefined =>
+    headerMap(resolveMediaRequest(spec, SIZE, { mimeType: MIME, downloadName })).get(
+      'content-disposition'
+    );
+
+  it('renders rather than saves when no name is given', () => {
+    expect(
+      headerMap(resolveMediaRequest(null, SIZE, { mimeType: MIME })).has('content-disposition')
+    ).toBe(false);
+  });
+
+  it('saves under the name it is given, whole file or range', () => {
+    expect(dispositionFor('notes.md')).toBe("attachment; filename*=UTF-8''notes.md");
+    expect(dispositionFor('notes.md', 'bytes=0-99')).toBe("attachment; filename*=UTF-8''notes.md");
+  });
+
+  it('percent-encodes anything that could forge a header or a second parameter', () => {
+    // A quote, a semicolon and a newline are what a name would need to break
+    // out of this header; a space and a comma are simply not `attr-char`.
+    expect(dispositionFor('a"b;c\r\nd e,f')).toBe(
+      "attachment; filename*=UTF-8''a%22b%3Bc%0D%0Ad%20e%2Cf"
+    );
+  });
+
+  it('encodes a non-ASCII name as UTF-8 bytes', () => {
+    expect(dispositionFor('naïve — ☃.txt')).toBe(
+      "attachment; filename*=UTF-8''na%C3%AFve%20%E2%80%94%20%E2%98%83.txt"
+    );
+  });
+
+  it('still saves when a name encodes to nothing', () => {
+    expect(dispositionFor('')).toBe('attachment');
+  });
 });

@@ -9,11 +9,12 @@ export function streamTicket(
   media: MediaService | null,
   node: Uint8Array,
   size: bigint | null,
-  mimeType: string
+  mimeType: string,
+  downloadName?: string
 ): string | null {
   if (media === null || size === null || !media.streaming) return null;
   const bytes = Number(size);
   return Number.isSafeInteger(bytes)
-    ? media.createStreamUrl({ node, size: bytes, mimeType })
+    ? media.createStreamUrl({ node, size: bytes, mimeType, downloadName })
     : null;
 }

@@ -372,6 +372,7 @@ function sealed(
     }
   }
   merged.set('cache-control', 'no-store');
+  clampDisposition(merged);
   // A ticket URL is same-origin and navigable, and the port that named the type
   // is untrusted input, so a body only ever renders under a clamped type.
   if (body !== null) {
@@ -380,6 +381,23 @@ function sealed(
     merged.set('content-security-policy', "default-src 'none'; sandbox");
   }
   return new Response(body, { status, headers: merged });
+}
+
+/**
+ * The shape `contentDisposition` mints, and the only one the pipe serves. A
+ * name reaches this header from the vault, so a value the port sends in any
+ * other shape is served as a bare `attachment` — it still saves, under a name
+ * the browser picks, and no second parameter of the port's choosing survives.
+ */
+const SAFE_DISPOSITION = /^attachment(; filename\*=UTF-8''[A-Za-z0-9!#$&+\-.^_`|~%]*)?$/;
+
+function clampDisposition(headers: Headers): void {
+  const disposition = headers.get('content-disposition');
+  if (disposition === null) return;
+  headers.set(
+    'content-disposition',
+    SAFE_DISPOSITION.test(disposition) ? disposition : 'attachment'
+  );
 }
 
 /** A same-origin port is still untrusted input: anything off-shape is dropped. */

@@ -739,10 +739,18 @@ describe('the vault browser read path over the facade', () => {
 });
 
 describe('the vault browser read path over the streaming pipe', () => {
-  const minted: { node: Uint8Array; size: number; mimeType: string }[] = [];
+  const minted: {
+    node: Uint8Array;
+    size: number;
+    mimeType: string;
+    downloadName?: string;
+  }[] = [];
   const revoked: string[] = [];
   const clicked: { href: string | null; download: string }[] = [];
+  /** The frames a ticket save navigates; a link would never reach the worker. */
+  const navigated: (string | null)[] = [];
   const originalClick = HTMLAnchorElement.prototype.click;
+  const originalAppend = HTMLElement.prototype.append;
   /** Whether the browser opens the save the ticket was minted for. */
   let fetched = true;
   /** Set by a test that drives the transfers itself, keyed by ticket url. */
@@ -780,6 +788,7 @@ describe('the vault browser read path over the streaming pipe', () => {
     minted.length = 0;
     revoked.length = 0;
     clicked.length = 0;
+    navigated.length = 0;
     fetched = true;
     transfers = null;
     streamListeners.clear();
@@ -788,7 +797,12 @@ describe('the vault browser read path over the streaming pipe', () => {
         streaming: true,
         start: () => Promise.resolve(),
         dispose: () => Promise.resolve(),
-        createStreamUrl: (source: { node: Uint8Array; size: number; mimeType: string }) => {
+        createStreamUrl: (source: {
+          node: Uint8Array;
+          size: number;
+          mimeType: string;
+          downloadName?: string;
+        }) => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
@@ -811,11 +825,18 @@ describe('the vault browser read path over the streaming pipe', () => {
     HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
       clicked.push({ href: this.getAttribute('href'), download: this.download });
     };
+    HTMLElement.prototype.append = function append(this: HTMLElement, ...nodes: unknown[]) {
+      for (const node of nodes) {
+        if (node instanceof HTMLIFrameElement) navigated.push(node.getAttribute('src'));
+      }
+      return originalAppend.apply(this, nodes as Parameters<typeof originalAppend>);
+    } as typeof HTMLElement.prototype.append;
   });
 
   afterEach(() => {
     mediaControl.create = () => null;
     HTMLAnchorElement.prototype.click = originalClick;
+    HTMLElement.prototype.append = originalAppend;
   });
 
   it('hands a save to the browser as a ticket instead of buffering the plaintext', async () => {
@@ -830,8 +851,13 @@ describe('the vault browser read path over the streaming pipe', () => {
     });
 
     expect(engine.facade.download).not.toHaveBeenCalled();
-    expect(minted).toEqual([{ node: NOTE, size: 12, mimeType: 'application/octet-stream' }]);
-    expect(clicked).toEqual([{ href: '/stream/ticket-1', download: 'notes.txt' }]);
+    expect(minted).toEqual([
+      { node: NOTE, size: 12, mimeType: 'application/octet-stream', downloadName: 'notes.txt' },
+    ]);
+    // The name rides the pipe's `content-disposition`, and the save is a
+    // navigation: a link's request is never dispatched to the worker.
+    expect(navigated).toEqual(['/stream/ticket-1']);
+    expect(clicked).toEqual([]);
     // The ticket serves plaintext to anything same-origin that can name it, so
     // it dies with the transfer rather than with the view.
     await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));

@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Download, type Locator, type Page } from '@playwright/test';
 
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
@@ -99,6 +99,20 @@ export class FilesPage {
   }
 
   /** Raises a row's action menu and picks one item off it. */
+  /**
+   * Saves a listed file to disk through the row's own action, and hands back
+   * the transfer the browser started. The URL it came from is what says which
+   * path served it: a `/stream/` ticket is the Service Worker pipe, a `blob:`
+   * is the tab's buffered fallback.
+   */
+  async save(name: string): Promise<Download> {
+    const [download] = await Promise.all([
+      this.page.waitForEvent('download'),
+      this.act(name, 'download'),
+    ]);
+    return download;
+  }
+
   private async act(name: string, item: string): Promise<void> {
     await this.page.getByRole('button', { name: `actions for ${name}`, exact: true }).click();
     await this.page
