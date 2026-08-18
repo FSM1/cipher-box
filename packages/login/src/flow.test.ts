@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createLoginFlow, type LoginFlow } from './flow';
 import type { LoginSecretExporter } from './secret';
+import { RecoveryRequiredError } from './session';
 import {
   fakeAccount,
   fakeExchange,
@@ -9,6 +10,7 @@ import {
   fakeSession,
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
+  FAKE_PHRASE,
   passThroughCollector,
   type WebCollected,
 } from './testFakes';
@@ -47,6 +49,61 @@ function build(
 }
 
 const loggedIn = (parts: Parts) => parts.account.calls.signedIn;
+
+describe('the recovery phrase step', () => {
+  it('reports a login held at the factor policy as a transition, not a failure', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    // The host renders the phrase prompt; a banner beside it would be noise.
+    expect(parts.progress.failures).toEqual([]);
+    expect(parts.progress.seen).toEqual(['begin', 'end']);
+    expect(parts.facade.calls.secrets).toEqual([]);
+  });
+
+  it('hands the engine its secret once the phrase opens the account', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await parts.flow.recoverWithPhrase(FAKE_PHRASE);
+
+    expect(parts.session.calls.phrases).toEqual([FAKE_PHRASE]);
+    expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+  });
+
+  it('rejects rather than reporting success when the engine refuses the secret', async () => {
+    // The whole point of running the handoff under the flow's own envelope: a
+    // refused engine must leave the member at the prompt, not at a blank vault.
+    const facade = fakeFacade({ start: () => Promise.reject(new Error('engine refused')) });
+    const parts = build({ session: fakeSession({ needsRecovery: true }), facade });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await expect(parts.flow.recoverWithPhrase(FAKE_PHRASE)).rejects.toThrow('engine refused');
+
+    expect(loggedIn(parts)).toEqual([]);
+    expect(parts.progress.failures).toHaveLength(1);
+  });
+
+  it('leaves the login held when the phrase does not open the account', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await expect(parts.flow.recoverWithPhrase('wrong')).rejects.toThrow('wrong phrase');
+
+    expect(parts.session.calls.logouts).toBe(0);
+    expect(parts.facade.calls.secrets).toEqual([]);
+  });
+});
 
 describe('the login flow', () => {
   it('exchanges the collected google token, then hands the engine the login secret', async () => {

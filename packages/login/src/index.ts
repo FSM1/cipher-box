@@ -25,4 +25,10 @@ export {
   type LoginFacade,
   type LoginSecretExporter,
 } from './secret';
-export type { AccountRecord, CoreKitSession, LoginProgress, SecretRearm } from './session';
+export {
+  RecoveryRequiredError,
+  type AccountRecord,
+  type CoreKitSession,
+  type LoginProgress,
+  type SecretRearm,
+} from './session';

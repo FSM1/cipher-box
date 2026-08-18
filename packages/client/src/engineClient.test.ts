@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
 import { LeaderRelay } from './leaderRelay.js';
-import type { LockReaderLike } from './leadership.js';
+import type { LockManagerLike } from './leadership.js';
 import {
   abortError,
   FakeBus,
@@ -22,7 +22,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0
  * election. Every other name — the tab's presence lock — takes the origin's own
  * manager, which the leader relay watches.
  */
-function pinnedFollower(locks: FakeLockManager): LockReaderLike {
+function pinnedFollower(locks: FakeLockManager): LockManagerLike {
   return {
     request: (name, options, callback) =>
       name === BROADCAST_CHANNEL_NAME
@@ -30,7 +30,6 @@ function pinnedFollower(locks: FakeLockManager): LockReaderLike {
             options.signal?.addEventListener('abort', () => reject(abortError()));
           })
         : locks.request(name, options, callback),
-    query: () => locks.query(),
   };
 }
 

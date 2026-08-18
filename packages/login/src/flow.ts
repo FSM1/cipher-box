@@ -8,7 +8,13 @@
 import { collectedMethods, type CollectedMaterial, type CredentialCollector } from './collector';
 import type { IdentityCredential, IdentityExchange, IdentityMethod } from './identity';
 import { handOffLoginSecret, type LoginFacade } from './secret';
-import type { AccountRecord, CoreKitSession, LoginProgress, SecretRearm } from './session';
+import {
+  RecoveryRequiredError,
+  type AccountRecord,
+  type CoreKitSession,
+  type LoginProgress,
+  type SecretRearm,
+} from './session';
 
 /** What the sequencing needs from the host it runs on. */
 export interface LoginHost<C extends CollectedMaterial = CollectedMaterial> {
@@ -37,6 +43,12 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
   /** Issues the single-use nonce the wallet's EIP-4361 message embeds. */
   walletNonce(): Promise<string>;
   loginWithWallet(collected: C['wallet']): Promise<void>;
+  /**
+   * Finishes a login that stopped at the factor policy, from the phrase alone.
+   * Rejects when the phrase does not open the account — leaving that login still
+   * held — and when the engine refuses the secret it then exports.
+   */
+  recoverWithPhrase(phrase: string): Promise<void>;
   logout(): Promise<void>;
   /**
    * Hands the engine its secret for a Core Kit session that outlived the page.
@@ -68,7 +80,9 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     try {
       await step();
     } catch (failure) {
-      progress.failed(failure);
+      // A login held at the factor policy is a transition, not a failure: the
+      // host renders the phrase prompt, and a banner beside it would be noise.
+      if (!(failure instanceof RecoveryRequiredError)) progress.failed(failure);
       throw failure;
     } finally {
       inFlight = false;
@@ -152,6 +166,15 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       return login(async () => {
         const proof = await collect(collected);
         return exchange.fromWalletSignature(proof.message, proof.signature);
+      });
+    },
+
+    recoverWithPhrase(phrase) {
+      return exclusively(async () => {
+        if (!session?.recoverWithPhrase)
+          throw new Error('recovery is not available on this device');
+        await session.recoverWithPhrase(phrase);
+        await handOff();
       });
     },
 

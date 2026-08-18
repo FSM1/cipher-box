@@ -7,8 +7,8 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
-import { createCoreKitSession, RecoveryRequiredError } from './coreKit';
-import type { IdentityCredential } from '@cipherbox/login';
+import { createCoreKitSession } from './coreKit';
+import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
 
 const STORE_KEY = 'corekit_store';
 
@@ -302,10 +302,13 @@ describe('the recovery phrase as a login', () => {
 
     await expect(created.recoverWithPhrase(PHRASE)).rejects.toThrow(/does not open this account/);
 
-    expect(created.needsRecovery()).toBe(true);
     expect(sdk.logoutCalls).toBe(0);
     expect(window.localStorage.getItem(STORE_KEY)).not.toBeNull();
     expect(sdk.created).toEqual([]);
+
+    // Still held at the policy, so the member can type it again.
+    sdk.opensWith = FACTOR_HEX;
+    await expect(created.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
   });
 
   it('refuses a phrase that is not a phrase, quoting none of it back', async () => {

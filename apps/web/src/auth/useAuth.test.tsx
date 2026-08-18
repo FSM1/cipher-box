@@ -5,6 +5,7 @@ import {
   authWrapper,
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
+  FAKE_PHRASE,
   fakeCoreKitSession,
   fakeEngineClient,
   fakeIdentityExchange,
@@ -30,13 +31,11 @@ function mount(
 }
 
 describe('useAuth recovery phrase', () => {
-  const PHRASE = 'word '.repeat(23) + 'last';
-
   beforeEach(() => authStore.signedOut());
 
   it('prompts for the phrase rather than reporting a failure', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession({ needsRecovery: true, phrase: PHRASE });
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
 
@@ -50,14 +49,14 @@ describe('useAuth recovery phrase', () => {
 
   it('hands the engine its secret once the phrase opens the account', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession({ needsRecovery: true, phrase: PHRASE });
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
     await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
 
-    await act(() => result.current.auth.loginWithRecoveryPhrase(PHRASE));
+    await act(() => result.current.auth.loginWithRecoveryPhrase(FAKE_PHRASE));
 
-    expect(coreKit.calls.phrases).toEqual([PHRASE]);
+    expect(coreKit.calls.phrases).toEqual([FAKE_PHRASE]);
     expect(result.current.auth.recoveryRequired).toBe(false);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     expect(authStore.getState()).toMatchObject({ isAuthenticated: true });
@@ -65,7 +64,7 @@ describe('useAuth recovery phrase', () => {
 
   it('keeps the prompt up for another attempt after a wrong phrase', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession({ needsRecovery: true, phrase: PHRASE });
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
     await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
@@ -82,7 +81,7 @@ describe('useAuth recovery phrase', () => {
 
   it('ends the partial session when the member abandons the prompt', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession({ needsRecovery: true, phrase: PHRASE });
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
     const { result } = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
     await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));

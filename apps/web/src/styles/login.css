@@ -457,64 +457,41 @@
   text-align: left;
 }
 
+/* Sits on `.email-login-input`, which carries the field skin; this is the
+   textarea-only part of it. */
 .recovery-input {
   width: 100%;
-  padding: var(--spacing-xs);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text);
-  background-color: rgb(0 0 0 / 40%);
-  border: 1px solid var(--color-border-dim);
   resize: vertical;
 }
 
 .recovery-actions {
   display: flex;
-  gap: var(--spacing-xs);
+  gap: var(--spacing-sm);
   align-items: center;
-}
-
-.recovery-cancel {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-dim);
-  background: none;
-  border: none;
-  cursor: pointer;
 }
 
 .recovery-phrase-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  margin: var(--spacing-sm) 0;
+  gap: var(--spacing-xs);
+  margin: 0;
   padding: 0;
   list-style-position: inside;
 }
 
 .recovery-phrase-cell {
-  padding: 4px var(--spacing-xs);
+  padding: var(--spacing-xs);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  border: 1px solid var(--color-border-dim);
-}
-
-.recovery-warning {
-  font-size: var(--font-size-xs);
-  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  border: var(--border-thickness) solid var(--color-border-dim);
 }
 
 .recovery-ack {
   display: flex;
   gap: var(--spacing-xs);
   align-items: center;
-  margin-bottom: var(--spacing-sm);
-  font-size: var(--font-size-xs);
-}
-
-.user-menu-note {
-  display: block;
-  padding: 4px var(--spacing-xs);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-dim);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }

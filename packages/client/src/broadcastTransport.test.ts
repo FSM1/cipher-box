@@ -702,7 +702,7 @@ describe('broadcast transport ↔ leader relay', () => {
     relayOn(bus, engine, ports.courier('leader'));
     const first = followerOn(bus, 'f', ports.courier('f'));
     await first.snapshot(null);
-    first.close(); // posts `cb:bye`, so the leader reclaims that port
+    first.close(); // releases its presence, so the leader reclaims that port
     await tick();
 
     const second = followerOn(bus, 'f', ports.courier('f'));
@@ -932,8 +932,6 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // Greeting on a name it no longer holds would invite the leader's watch to
     // reclaim it live, over and over; it fails closed instead.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
-    await after(20);
     await expect(follower.snapshot(null)).rejects.toThrow();
     expect(greetings()).toBe(1);
   });
@@ -1107,7 +1105,7 @@ describe('leader relay write handles', () => {
     engine.writeHandle = 2n;
     const kept = await staying.beginWrite({ node: node(2) }, 4);
 
-    leaving.close(); // posts `cb:bye`
+    leaving.close(); // releases its presence
     await tick();
 
     expect(engine.aborts).toEqual([orphan]);
@@ -1115,13 +1113,13 @@ describe('leader relay write handles', () => {
     expect(engine.chunks.map((entry) => entry.handle)).toEqual([kept]);
   });
 
-  it('keeps a live follower whole through a cb:bye it never sent', async () => {
+  it('keeps a live follower whole through a farewell forged in its name', async () => {
     const { bus, ports, engine } = bench();
     const follower = followerOn(bus, 'f1', ports.courier('f1'));
     const handle = await follower.beginWrite({ node: node(1) }, 4);
 
-    // Any same-origin context can forge this, and the tab still holds the
-    // presence lock that says otherwise, so it costs the tab nothing.
+    // The retired farewell shape, and any other message a same-origin context
+    // can put on the channel: only the presence lock reports a departure.
     bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
     await after(20);
 
@@ -1405,7 +1403,7 @@ describe('leader relay write handles', () => {
 describe('leader relay follower presence', () => {
   const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
 
-  it('reclaims the handles and port of a follower that died without a cb:bye', async () => {
+  it('reclaims the handles and port of a follower whose tab is gone', async () => {
     const { engine, leaderPort, kill } = await portBench();
     engine.writeHandle = 3n;
     engine.streamHandle = 4n;
@@ -1421,7 +1419,7 @@ describe('leader relay follower presence', () => {
     });
     await tick();
 
-    // The tab is gone: no farewell, just the browser releasing its presence lock.
+    // The tab is gone: the browser releases its presence lock.
     kill();
     await tick();
 
@@ -1432,25 +1430,6 @@ describe('leader relay follower presence', () => {
     expect(engine.aborts).toEqual([3n]);
     expect(replies(leaderPort, 'cb:portClosed')).toHaveLength(1);
     expect(leaderPort.closed).toBe(true);
-  });
-
-  it('ignores a farewell naming a client that still holds its presence', async () => {
-    const { bus, engine, leaderPort } = await portBench();
-    engine.streamHandle = 4n;
-    leaderPort.receive({
-      type: 'cb:portStream',
-      requestId: 1,
-      stream: { kind: 'openContentStream', node: node(2) },
-    });
-    await tick();
-
-    // The channel proves nothing about who posted this, and the named tab still
-    // holds the lock only its own death releases.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
-    await after(20);
-
-    expect(engine.closedStreams).toEqual([]);
-    expect(leaderPort.closed).toBe(false);
   });
 
   it('never reclaims a live but frozen follower that answers nothing at all', async () => {

@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react';
+import { normalizeRecoveryPhrase, RECOVERY_PHRASE_WORDS } from '../../auth/coreKit';
 import { useAuth } from '../../auth/useAuth';
 import { LoginError } from './LoginError';
-
-const WORDS = 24;
 
 /**
  * The recovery phrase as a login (ADR 0009 D2). The field is uncontrolled and
@@ -17,9 +16,9 @@ export function RecoveryPhraseLogin() {
   const submit = async () => {
     const input = field.current;
     if (!input) return;
-    const phrase = input.value.trim().replace(/\s+/g, ' ');
-    if (phrase.split(' ').filter(Boolean).length !== WORDS) {
-      setMalformed(`a recovery phrase is ${WORDS} words`);
+    const phrase = normalizeRecoveryPhrase(input.value);
+    if (phrase.split(' ').filter(Boolean).length !== RECOVERY_PHRASE_WORDS) {
+      setMalformed(`a recovery phrase is ${String(RECOVERY_PHRASE_WORDS)} words`);
       return;
     }
     setMalformed(null);
@@ -32,16 +31,18 @@ export function RecoveryPhraseLogin() {
     }
   };
 
+  const message = malformed ?? error;
+
   return (
     <div className="recovery-panel" data-testid="recovery-login">
       <h2>recovery phrase</h2>
       <p className="login-description">
-        this device holds no key for your account. enter the {WORDS}-word phrase you saved when you
-        turned the recovery phrase on.
+        this device holds no key for your account. enter the {RECOVERY_PHRASE_WORDS}-word phrase you
+        saved when you turned the recovery phrase on.
       </p>
       <textarea
         ref={field}
-        className="recovery-input"
+        className="email-login-input recovery-input"
         data-testid="recovery-phrase-input"
         rows={4}
         spellCheck={false}
@@ -52,7 +53,11 @@ export function RecoveryPhraseLogin() {
       <div className="recovery-actions">
         <button
           type="button"
-          className="login-button"
+          className={
+            isBusy
+              ? 'terminal-btn terminal-btn--filled terminal-btn--loading'
+              : 'terminal-btn terminal-btn--filled'
+          }
           data-testid="recovery-submit"
           disabled={isBusy}
           onClick={() => void submit()}
@@ -61,7 +66,7 @@ export function RecoveryPhraseLogin() {
         </button>
         <button
           type="button"
-          className="recovery-cancel"
+          className="email-login-restart"
           data-testid="recovery-cancel"
           disabled={isBusy}
           onClick={() => void cancelRecovery()}
@@ -69,7 +74,7 @@ export function RecoveryPhraseLogin() {
           cancel
         </button>
       </div>
-      {(malformed ?? error) && <LoginError message={malformed ?? error!} />}
+      {message && <LoginError message={message} />}
     </div>
   );
 }

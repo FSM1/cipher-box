@@ -6,11 +6,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { createLoginFlow, type LoginProgress } from '@cipherbox/login';
+import { createLoginFlow, RecoveryRequiredError, type LoginProgress } from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
-import { RecoveryRequiredError } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
 import type { WebCollected } from './webCollector';
@@ -61,6 +60,7 @@ export function useAuth(): Auth {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveryRequired, setRecoveryRequired] = useState(false);
+  const [recoveryEnrolled, setRecoveryEnrolled] = useState(false);
 
   const isReady = client !== null && session !== null && status === 'ready';
   const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
@@ -93,17 +93,13 @@ export function useAuth(): Auth {
     [client, collector, exchange, progress, rebuildEngine, secrets, session]
   );
 
-  /**
-   * A login that stopped at the factor policy is not a failure to report: it is
-   * the recovery prompt, and the flow has already rendered the throw as `error`.
-   */
+  /** The recovery prompt is a transition, not a failure the host renders. */
   const attempt = useCallback(async (login: Promise<void>): Promise<void> => {
     try {
       await login;
     } catch (failure) {
       if (!(failure instanceof RecoveryRequiredError)) throw failure;
       setRecoveryRequired(true);
-      setError(null);
     }
   }, []);
 
@@ -124,23 +120,11 @@ export function useAuth(): Auth {
 
   const loginWithRecoveryPhrase = useCallback(
     async (phrase: string): Promise<void> => {
-      if (!session) throw new Error('the login provider is not ready');
-      setIsBusy(true);
-      setError(null);
-      try {
-        await session.recoverWithPhrase(phrase);
-        setRecoveryRequired(false);
-        // The session is whole now, so the engine still needs its secret; the
-        // flow's own resume is the one path that hands it over.
-        await flow.resume();
-      } catch (failure) {
-        setError(errorMessage(failure));
-        throw failure;
-      } finally {
-        setIsBusy(false);
-      }
+      await flow.recoverWithPhrase(phrase);
+      setRecoveryRequired(false);
+      setRecoveryEnrolled(true);
     },
-    [flow, session]
+    [flow]
   );
 
   const cancelRecovery = useCallback(async (): Promise<void> => {
@@ -148,10 +132,27 @@ export function useAuth(): Auth {
     await flow.logout();
   }, [flow]);
 
-  const enrollRecoveryPhrase = useCallback((): Promise<string> => {
-    if (!session) return Promise.reject(new Error('the login provider is not ready'));
-    return session.enrollRecoveryPhrase();
+  const enrollRecoveryPhrase = useCallback(async (): Promise<string> => {
+    if (!session) throw new Error('the login provider is not ready');
+    setIsBusy(true);
+    setError(null);
+    try {
+      const phrase = await session.enrollRecoveryPhrase();
+      setRecoveryEnrolled(true);
+      return phrase;
+    } catch (failure) {
+      setError(errorMessage(failure));
+      throw failure;
+    } finally {
+      setIsBusy(false);
+    }
   }, [session]);
+
+  // The policy is read once a session settles, not per render: the SDK answers
+  // it by decompressing the account's public key.
+  useEffect(() => {
+    setRecoveryEnrolled(isAuthenticated && (session?.hasRecoveryPhrase() ?? false));
+  }, [isAuthenticated, session]);
 
   // A Core Kit session that survived the reload still has to hand the engine its
   // secret; without this the tab renders logged-out over a live login.
@@ -175,7 +176,7 @@ export function useAuth(): Auth {
     recoveryRequired,
     loginWithRecoveryPhrase,
     cancelRecovery,
-    recoveryEnrolled: isAuthenticated && (session?.hasRecoveryPhrase() ?? false),
+    recoveryEnrolled,
     enrollRecoveryPhrase,
   };
 }

@@ -2,11 +2,30 @@ import type { IdentityCredential, IdentityMethod } from './identity';
 import type { LoginSecretExporter } from './secret';
 
 /**
+ * A login that reached an account with a factor policy on a device holding no
+ * factor. The recovery phrase is the way through it (ADR 0009 D2), so the
+ * partial session stays resident until the member redeems a phrase against it
+ * or abandons it — ending it here would make every such login a lockout.
+ */
+export class RecoveryRequiredError extends Error {
+  constructor() {
+    super('this device needs your recovery phrase before it can sign in');
+    this.name = 'RecoveryRequiredError';
+  }
+}
+
+/**
  * The Core Kit surface the login flow drives. Narrow by construction: the flow
  * never sees a Web3Auth parameter shape, the host builds the instance, and a
  * test substitutes a plain object.
  */
 export interface CoreKitSession extends LoginSecretExporter {
+  /**
+   * Redeems a recovery phrase against a login held at the factor policy. Absent
+   * on a host that offers no recovery path; a `RecoveryRequiredError` is then
+   * terminal there.
+   */
+  recoverWithPhrase?(phrase: string): Promise<void>;
   /** Restores a prior session, if the SDK has one on this device. */
   restore(): Promise<void>;
   /** True once a login (or a restore) has completed on this device. */

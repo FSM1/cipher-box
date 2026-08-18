@@ -86,7 +86,6 @@ export function LoginPage() {
             </div>
           )}
 
-          {/* The recovery panel renders its own failures beside its own field. */}
           {error && !recoveryRequired && <LoginError message={error} />}
         </div>
         <footer className="login-footer">

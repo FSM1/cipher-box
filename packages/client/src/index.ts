@@ -26,7 +26,7 @@ export type { EngineClientConfig, EngineClientRole, SecretSource } from './engin
 export { spawnEngineWorker } from './spawnEngineWorker.js';
 export type { EngineHostConfig } from './spawnEngineWorker.js';
 export { LeaderElection } from './leadership.js';
-export type { LockManagerLike, LockReaderLike, LockGrant, ElectionRole } from './leadership.js';
+export type { LockManagerLike, LockGrant, ElectionRole } from './leadership.js';
 export { BroadcastTransport } from './broadcastTransport.js';
 export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';

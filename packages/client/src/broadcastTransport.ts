@@ -391,15 +391,12 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.rejectLeaderReady(error);
     this.fail(error);
     this.dropPort(error);
-    // Held → released; still queued → withdrawn.
+    // Held → released; still queued → withdrawn. The release is what tells the
+    // leader this tab is gone — there is no farewell on the channel, because a
+    // message there proves nothing about who sent it.
     this.releasePresence?.();
     this.releasePresence = null;
     this.presenceRequest.abort();
-    try {
-      this.post({ type: 'cb:bye', clientId: this.clientId });
-    } catch {
-      // The channel may already be torn down; teardown proceeds regardless.
-    }
     this.channel.removeEventListener('message', this.onMessage);
   }
 

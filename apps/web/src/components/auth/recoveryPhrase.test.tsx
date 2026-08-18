@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../../stores/auth.store';
 import {
   authWrapper,
+  FAKE_PHRASE,
   fakeCoreKitSession,
   fakeEngineClient,
   type CoreKitCalls,
@@ -10,15 +11,13 @@ import {
 import { RecoveryPhraseLogin } from './RecoveryPhraseLogin';
 import { RecoveryPhraseSetup } from './RecoveryPhraseSetup';
 
-const PHRASE = `${'word '.repeat(23)}last`;
-
 /**
  * Mounts a recovery surface over a Core Kit session already held at the factor
  * policy, which is the only state either of them renders in.
  */
 async function held(node: React.ReactElement): Promise<CoreKitCalls> {
   const engine = fakeEngineClient();
-  const coreKit = fakeCoreKitSession({ needsRecovery: true, phrase: PHRASE });
+  const coreKit = fakeCoreKitSession({ needsRecovery: true });
   render(node, { wrapper: authWrapper(engine.client, coreKit.session) });
   await act(async () => undefined);
   return coreKit.calls;
@@ -43,7 +42,7 @@ describe('the recovery phrase login', () => {
   it('normalises the typed phrase and clears the field once it is redeemed', async () => {
     const calls = await held(<RecoveryPhraseLogin />);
 
-    fireEvent.change(field(), { target: { value: `\n  ${PHRASE.replace(/ /g, '   ')} ` } });
+    fireEvent.change(field(), { target: { value: `\n  ${FAKE_PHRASE.replace(/ /g, '   ')} ` } });
     await act(async () => {
       submit();
     });
@@ -51,7 +50,7 @@ describe('the recovery phrase login', () => {
     // Held only for the attempt: a phrase left in the tree outlives the screen
     // the member can see.
     await waitFor(() => expect(field().value).toBe(''));
-    expect(calls.phrases).toEqual([PHRASE]);
+    expect(calls.phrases).toEqual([FAKE_PHRASE]);
   });
 
   it('keeps what was typed when the phrase is refused, so a typo can be fixed', async () => {
@@ -73,7 +72,7 @@ describe('the recovery phrase setup', () => {
 
   it('shows the phrase once and drops it when the member confirms they hold it', async () => {
     const engine = fakeEngineClient();
-    const coreKit = fakeCoreKitSession({ loggedIn: true, phrase: PHRASE });
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
     render(<RecoveryPhraseSetup onClose={() => undefined} />, {
       wrapper: authWrapper(engine.client, coreKit.session),
     });

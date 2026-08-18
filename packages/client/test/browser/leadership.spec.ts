@@ -7,6 +7,7 @@ import type {
   RangeResult,
   SnapshotResult,
 } from './leadership.js';
+import { presenceLockName } from '../../src/broadcast.js';
 import { hex } from './hexUtil.js';
 import { fixtureSlice, LEADER_SEED } from './mediaFixture.js';
 
@@ -298,7 +299,6 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     const observed = await eavesdropper.observed();
     // The channel still carries election and the port rendezvous...
     expect([...new Set(observed.map((message) => message.type))].sort()).toEqual([
-      'cb:bye',
       'cb:hello',
       'cb:leader',
       'cb:portHost',
@@ -352,14 +352,9 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     // The channel carries election and the port rendezvous — no write step, no
     // command and no event, so no argument and no descriptor can ride one.
     for (const type of new Set(observed.map((message) => message.type))) {
-      expect([
-        'cb:bye',
-        'cb:hello',
-        'cb:leader',
-        'cb:leaderGone',
-        'cb:portHost',
-        'cb:portWanted',
-      ]).toContain(type);
+      expect(['cb:hello', 'cb:leader', 'cb:leaderGone', 'cb:portHost', 'cb:portWanted']).toContain(
+        type
+      );
     }
     const seenBytes = observed.map((message) => message.bytesHex).join('|');
     expect(seenBytes).not.toContain(hex(plaintext.slice(0, 16)));
@@ -419,7 +414,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     await b.dispose();
   });
 
-  test('a forged farewell strands no live follower, and a real departure still reclaims', async ({
+  test('no channel message strands a live follower, and a real departure still reclaims', async ({
     context,
   }) => {
     const { lockName, channelName } = names();
@@ -443,16 +438,17 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
       .filter(Boolean)
       .at(-1);
     expect(clientId).toBeDefined();
-    const presence = `cipherbox-presence:${clientId!}`;
+    const presence = presenceLockName(clientId!);
     // The follower holds its presence name, and the leader's watch waits on it.
     await expect
       .poll(() => bystander.lockState(presence), { timeout: 10_000 })
       .toEqual({ held: 1, pending: 1 });
 
     const before = await dialCount(bystander);
+    // Nothing on the channel reports a departure, so neither the retired
+    // farewell shape nor anything else costs the follower its port or its
+    // handles: it never re-dials, and its writes keep landing.
     await bystander.forge({ type: 'cb:bye', clientId });
-    // The forgery costs the follower neither its port nor its handles, so it
-    // never re-dials and its writes keep landing.
     expect(await follower.createFile('after-farewell.txt')).toBe('ok');
     expect(await leader.journalCount()).toBe(2);
     expect(await dialCount(bystander)).toBe(before);
