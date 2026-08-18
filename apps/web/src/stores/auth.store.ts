@@ -14,12 +14,19 @@ export interface AuthState {
   /** Absent for wallet logins, which carry no email. */
   readonly email: string | null;
   readonly method: LoginMethod | null;
+  /**
+   * A login reached this account's factor policy and stopped: the tab owes a
+   * recovery phrase. Held here rather than in a hook so every surface reads the
+   * one answer, and a route change cannot lose the prompt over a live session.
+   */
+  readonly recoveryRequired: boolean;
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
   isAuthenticated: false,
   email: null,
   method: null,
+  recoveryRequired: false,
 });
 
 let state: AuthState = SIGNED_OUT;
@@ -31,7 +38,8 @@ function set(next: AuthState): void {
   if (
     next.isAuthenticated === state.isAuthenticated &&
     next.email === state.email &&
-    next.method === state.method
+    next.method === state.method &&
+    next.recoveryRequired === state.recoveryRequired
   ) {
     return;
   }
@@ -51,10 +59,23 @@ export const authStore = {
   signedIn(method: LoginMethod | null, email: string | null = null): void {
     // Drop an email a wallet login had no business carrying rather than hold
     // PII the state contract declares absent.
-    set({ isAuthenticated: true, email: method === 'wallet' ? null : email, method });
+    set({
+      isAuthenticated: true,
+      email: method === 'wallet' ? null : email,
+      method,
+      recoveryRequired: false,
+    });
   },
   signedOut(): void {
     set(SIGNED_OUT);
+  },
+  /** A login stopped at the factor policy; the front door owes a phrase. */
+  recoveryRequired(): void {
+    set({ ...state, recoveryRequired: true });
+  },
+  /** That prompt is resolved — redeemed, or abandoned. */
+  recoveryResolved(): void {
+    set({ ...state, recoveryRequired: false });
   },
 };
 

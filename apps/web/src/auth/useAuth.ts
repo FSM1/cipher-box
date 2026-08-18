@@ -10,6 +10,7 @@ import { createLoginFlow, RecoveryRequiredError, type LoginProgress } from '@cip
 import { errorMessage } from '../lib/errorMessage';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
+import type { RecoveryEnrollment } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
 import type { WebCollected } from './webCollector';
@@ -46,7 +47,7 @@ export interface Auth {
   /** Whether the signed-in account already carries a factor policy. */
   recoveryEnrolled: boolean;
   /** Turns the policy on; the phrase it returns is shown exactly once. */
-  enrollRecoveryPhrase(): Promise<string>;
+  enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
 }
 
 export function useAuth(): Auth {
@@ -55,11 +56,10 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { isAuthenticated } = useAuthState();
+  const { isAuthenticated, recoveryRequired } = useAuthState();
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recoveryRequired, setRecoveryRequired] = useState(false);
   const [recoveryEnrolled, setRecoveryEnrolled] = useState(false);
 
   const isReady = client !== null && session !== null && status === 'ready';
@@ -99,7 +99,7 @@ export function useAuth(): Auth {
       await login;
     } catch (failure) {
       if (!(failure instanceof RecoveryRequiredError)) throw failure;
-      setRecoveryRequired(true);
+      authStore.recoveryRequired();
     }
   }, []);
 
@@ -121,25 +121,24 @@ export function useAuth(): Auth {
   const loginWithRecoveryPhrase = useCallback(
     async (phrase: string): Promise<void> => {
       await flow.recoverWithPhrase(phrase);
-      setRecoveryRequired(false);
       setRecoveryEnrolled(true);
     },
     [flow]
   );
 
   const cancelRecovery = useCallback(async (): Promise<void> => {
-    setRecoveryRequired(false);
+    authStore.recoveryResolved();
     await flow.logout();
   }, [flow]);
 
-  const enrollRecoveryPhrase = useCallback(async (): Promise<string> => {
+  const enrollRecoveryPhrase = useCallback(async (): Promise<RecoveryEnrollment> => {
     if (!session) throw new Error('the login provider is not ready');
     setIsBusy(true);
     setError(null);
     try {
-      const phrase = await session.enrollRecoveryPhrase();
+      const enrolled = await session.enrollRecoveryPhrase();
       setRecoveryEnrolled(true);
-      return phrase;
+      return enrolled;
     } catch (failure) {
       setError(errorMessage(failure));
       throw failure;

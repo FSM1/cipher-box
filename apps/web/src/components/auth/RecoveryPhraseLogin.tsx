@@ -24,10 +24,13 @@ export function RecoveryPhraseLogin() {
     setMalformed(null);
     try {
       await loginWithRecoveryPhrase(phrase);
-      input.value = '';
     } catch {
-      // `useAuth` already surfaces the failure as `error`; the field keeps what
-      // was typed so a mistyped word can be corrected rather than retyped.
+      // `useAuth` already surfaces the failure as `error`.
+    } finally {
+      // Cleared on every settled attempt, including a refusal: a browser's
+      // crash-recovery snapshot persists form-field values to the profile
+      // directory, and retyping is cheaper than a phrase written to disk.
+      input.value = '';
     }
   };
 

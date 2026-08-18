@@ -35,7 +35,9 @@ const sdk = vi.hoisted(() => ({
   created: [] as Record<string, unknown>[],
   setDeviceFactors: 0,
   commits: 0,
-  totalFactors: 2,
+  /** Which `commitChanges` call rejects, 1-based; `0` for none. */
+  commitFailsAfter: 0,
+  shareDescriptions: {} as Record<string, string[]>,
   /** What `getKeyDetails` reports, so an enrollment can be seen to move it. */
   accountKey: 'aa',
   accountKeyAfterEnroll: undefined as string | undefined,
@@ -68,7 +70,9 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       commitChanges(): Promise<void> {
         sdk.commits += 1;
-        return Promise.resolve();
+        return sdk.commits === sdk.commitFailsAfter
+          ? Promise.reject(new Error('metadata sync failed'))
+          : Promise.resolve();
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
@@ -95,7 +99,7 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       getKeyDetails(): Record<string, unknown> {
         const key = sdk.accountKey;
         return {
-          totalFactors: sdk.totalFactors,
+          shareDescriptions: sdk.shareDescriptions,
           tssPubKey: { x: { toString: () => key }, y: { toString: () => key } },
         };
       }
@@ -147,7 +151,8 @@ beforeEach(() => {
   sdk.created = [];
   sdk.setDeviceFactors = 0;
   sdk.commits = 0;
-  sdk.totalFactors = 2;
+  sdk.commitFailsAfter = 0;
+  sdk.shareDescriptions = {};
   sdk.accountKey = 'aa';
   sdk.accountKeyAfterEnroll = undefined;
   sdk.enableMfaParams = undefined;
@@ -332,31 +337,56 @@ describe('recovery phrase enrollment', () => {
   it('cuts the factor policy and returns the phrase, labelled so a later read can tell', async () => {
     const created = await enrolled();
 
-    const phrase = await created.enrollRecoveryPhrase();
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
 
     expect(phrase.split(' ')).toHaveLength(24);
-    // Web3Auth labels an unnamed factor "Other", which no later read can tell
-    // apart from a device factor.
+    expect(warning).toBeNull();
     expect(sdk.enableMfaParams).toEqual({
       shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
     });
   });
 
-  it('refuses to hand back a phrase for an account key that moved under it', async () => {
+  it('hands the phrase back even when the sync that follows the cut fails', async () => {
+    const created = await enrolled();
+    // The sync after the cut: the login's commit is 1, the pre-cut commit 2.
+    sdk.commitFailsAfter = 3;
+
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
+
+    // The cut deleted the hashed cloud share, so these words are the account's
+    // only spare key: discarding them over a failed sync is a lockout.
+    expect(phrase.split(' ')).toHaveLength(24);
+    expect(warning).toMatch(/could not be synced/);
+  });
+
+  it('warns rather than withholds when the account key moved under the cut', async () => {
     const created = await enrolled();
     sdk.accountKeyAfterEnroll = 'bb';
 
-    // The login secret is the vault's root seed: a moved key would make the
-    // phrase open a vault holding none of the member's bytes.
-    await expect(created.enrollRecoveryPhrase()).rejects.toThrow(/account key changed/);
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
+
+    expect(phrase.split(' ')).toHaveLength(24);
+    expect(warning).toMatch(/account key changed/);
   });
 
-  it('reports a policy only past the two factors every fresh account carries', async () => {
+  it('reads the phrase off its factor label, not off a factor count', async () => {
     const created = await enrolled();
+    // A device-approval factor would take the count past the two a fresh
+    // account carries without a phrase ever having been shown.
+    sdk.shareDescriptions = { ab: [JSON.stringify({ module: 'deviceShare' })] };
     expect(created.hasRecoveryPhrase()).toBe(false);
 
-    sdk.totalFactors = 3;
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'deviceShare' })],
+      cd: [JSON.stringify({ module: 'seedPhrase' })],
+    };
     expect(created.hasRecoveryPhrase()).toBe(true);
+  });
+
+  it('reports no phrase when the descriptions cannot be read at all', () => {
+    const created = session();
+    sdk.shareDescriptions = { ab: ['not json'] };
+    expect(created.hasRecoveryPhrase()).toBe(false);
   });
 });
 

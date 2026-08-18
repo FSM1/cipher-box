@@ -129,7 +129,7 @@ export function fakeCoreKitSession(
     },
     enrollRecoveryPhrase() {
       calls.enrollments += 1;
-      return Promise.resolve(FAKE_PHRASE);
+      return Promise.resolve({ phrase: FAKE_PHRASE, warning: null });
     },
     method: () => method,
     email: options.email ?? (() => email),

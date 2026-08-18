@@ -14,10 +14,13 @@ export function RecoveryPhraseSetup({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>('explain');
   const [words, setWords] = useState<string[]>([]);
   const [held, setHeld] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const enroll = async () => {
     try {
-      setWords((await enrollRecoveryPhrase()).split(' '));
+      const enrolled = await enrollRecoveryPhrase();
+      setWords(enrolled.phrase.split(' '));
+      setWarning(enrolled.warning);
       setStep('reveal');
     } catch {
       // `useAuth` already surfaces the failure as `error`, which `Modal` renders.
@@ -61,6 +64,11 @@ export function RecoveryPhraseSetup({ onClose }: { onClose: () => void }) {
           <p className="dialog-error">
             anyone holding these words can open your vault. keep them offline.
           </p>
+          {warning && (
+            <p className="dialog-error" role="alert" data-testid="recovery-setup-warning">
+              {warning} — write the phrase down either way.
+            </p>
+          )}
           <label className="recovery-ack">
             <input
               type="checkbox"

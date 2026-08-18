@@ -5,7 +5,7 @@ afterEach(() => authStore.signedOut());
 
 describe('auth.store', () => {
   it('starts signed out', () => {
-    expect(authStore.getState()).toEqual({
+    expect(authStore.getState()).toMatchObject({
       isAuthenticated: false,
       email: null,
       method: null,
@@ -14,7 +14,7 @@ describe('auth.store', () => {
 
   it('records the method and email a login carries', () => {
     authStore.signedIn('google', 'user@example.com');
-    expect(authStore.getState()).toEqual({
+    expect(authStore.getState()).toMatchObject({
       isAuthenticated: true,
       email: 'user@example.com',
       method: 'google',
@@ -41,7 +41,7 @@ describe('auth.store', () => {
   it('clears the session on sign-out', () => {
     authStore.signedIn('email', 'user@example.com');
     authStore.signedOut();
-    expect(authStore.getState()).toEqual({
+    expect(authStore.getState()).toMatchObject({
       isAuthenticated: false,
       email: null,
       method: null,

@@ -35,20 +35,36 @@ export interface WebCoreKitSession extends CoreKitSession {
    * leaves the session and the store as they were, ready for another attempt.
    */
   recoverWithPhrase(phrase: string): Promise<void>;
-  /** Whether this account already carries a factor policy. */
+  /** Whether this account already carries a recovery phrase. */
   hasRecoveryPhrase(): boolean;
   /** Turns the factor policy on; the phrase it returns is shown exactly once. */
-  enrollRecoveryPhrase(): Promise<string>;
+  enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
 }
 
 /**
- * Every Core Kit account starts with two factors — the verifier share and the
- * hashed cloud share — so a policy is on only past them.
+ * What an enrollment produced. The phrase is returned even when a later step
+ * could not be confirmed: once `enableMFA` has cut the policy, those words are
+ * the member's only way onto a new device, and losing them to a failed sync is
+ * a permanent lockout — a warning beside them is not.
  */
-const UNENROLLED_FACTORS = 2;
+export interface RecoveryEnrollment {
+  /** The 24 words, to be shown exactly once. */
+  phrase: string;
+  /** What could not be confirmed after the policy was cut; `null` when all did. */
+  warning: string | null;
+}
 
 /** What the Core Kit's own serializer emits, and so what a field must collect. */
 export const RECOVERY_PHRASE_WORDS = 24;
+
+/** Whether one of the SDK's flattened factor descriptions names `module`. */
+function describes(entry: string, module: FactorKeyTypeShareDescription): boolean {
+  try {
+    return (JSON.parse(entry) as { module?: unknown }).module === module;
+  } catch {
+    return false;
+  }
+}
 
 /** The one reading of a typed phrase, so a field and the redemption agree. */
 export function normalizeRecoveryPhrase(typed: string): string {
@@ -95,11 +111,17 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   hasRecoveryPhrase(): boolean {
+    let described: string[][];
     try {
-      return this.coreKit.getKeyDetails().totalFactors > UNENROLLED_FACTORS;
+      described = Object.values(this.coreKit.getKeyDetails().shareDescriptions);
     } catch {
       return false;
     }
+    // By label, not by factor count: a device-approval factor would take the
+    // count past its unenrolled two and report a phrase nobody was ever shown.
+    return described.some((entries) =>
+      entries.some((entry) => describes(entry, FactorKeyTypeShareDescription.SeedPhrase))
+    );
   }
 
   async recoverWithPhrase(phrase: string): Promise<void> {
@@ -118,11 +140,18 @@ class Web3AuthSession implements WebCoreKitSession {
     } catch {
       throw new Error('that recovery phrase does not open this account');
     }
-    await this.mintDeviceFactor();
-    await this.coreKit.commitChanges();
+    // The account is open from here, so a device factor is a convenience and
+    // never a reason to fail: raising would leave a live session this device's
+    // own guard refuses to retry, and the next sign-in simply asks again.
+    try {
+      await this.mintDeviceFactor();
+      await this.coreKit.commitChanges();
+    } catch {
+      return;
+    }
   }
 
-  async enrollRecoveryPhrase(): Promise<string> {
+  async enrollRecoveryPhrase(): Promise<RecoveryEnrollment> {
     if (!this.isLoggedIn()) throw new Error('sign in before setting up a recovery phrase');
     // Manual sync: anything still pending has to land before the policy is cut.
     await this.coreKit.commitChanges();
@@ -132,14 +161,24 @@ class Web3AuthSession implements WebCoreKitSession {
       // device factor.
       shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
     });
-    await this.coreKit.commitChanges();
+    // Read before anything that can fail: past `enableMFA` the hashed cloud
+    // share is gone, so these words are the account's only spare key.
+    const phrase = keyToMnemonic(factorKeyHex);
+    try {
+      await this.coreKit.commitChanges();
+    } catch {
+      return { phrase, warning: 'the enrollment could not be synced — reload and check it landed' };
+    }
     // The login secret is this vault's root seed, so an account key that moved
     // under enrollment would leave every published byte unreachable.
     const after = this.accountKey();
     if (before && after && after !== before) {
-      throw new Error('the account key changed while enrolling — sign in again before retrying');
+      return {
+        phrase,
+        warning: 'the account key changed while enrolling — this vault may be lost',
+      };
     }
-    return keyToMnemonic(factorKeyHex);
+    return { phrase, warning: null };
   }
 
   /**
@@ -165,7 +204,10 @@ class Web3AuthSession implements WebCoreKitSession {
       factorKey: factor.private,
       shareDescription: FactorKeyTypeShareDescription.DeviceShare,
     });
-    await this.coreKit.setDeviceFactor(factor.private);
+    // Replacing: a stored factor the account never learned about — one whose
+    // commit failed — would otherwise refuse every later mint and leave this
+    // device unable to finish a recovery at all.
+    await this.coreKit.setDeviceFactor(factor.private, true);
   }
 
   /** A login reached the factor policy and this device holds no factor. */
@@ -173,11 +215,15 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
   }
 
-  /** The account's TSS public key; blank when this build cannot read it. */
+  /** The account's TSS public key; blank when this device cannot read it. */
   private accountKey(): string {
-    const point = this.coreKit.getKeyDetails().tssPubKey;
-    if (!point?.x || !point.y) return '';
-    return `${point.x.toString('hex')}:${point.y.toString('hex')}`;
+    try {
+      const point = this.coreKit.getKeyDetails().tssPubKey;
+      if (!point?.x || !point.y) return '';
+      return `${point.x.toString('hex')}:${point.y.toString('hex')}`;
+    } catch {
+      return '';
+    }
   }
 
   /**

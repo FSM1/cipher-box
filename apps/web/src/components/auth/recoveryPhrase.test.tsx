@@ -53,7 +53,7 @@ describe('the recovery phrase login', () => {
     expect(calls.phrases).toEqual([FAKE_PHRASE]);
   });
 
-  it('keeps what was typed when the phrase is refused, so a typo can be fixed', async () => {
+  it('clears the field on a refusal too, rather than leaving a phrase in the DOM', async () => {
     const calls = await held(<RecoveryPhraseLogin />);
     const wrong = `${'other '.repeat(23)}words`;
 
@@ -62,8 +62,10 @@ describe('the recovery phrase login', () => {
       submit();
     });
 
-    expect(field().value).toBe(wrong);
+    // A browser's crash-recovery snapshot persists form-field values to the
+    // profile directory, so a refused phrase must not sit there waiting.
     expect(calls.phrases).toEqual([wrong]);
+    await waitFor(() => expect(field().value).toBe(''));
   });
 });
 

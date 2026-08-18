@@ -79,6 +79,22 @@ describe('useAuth recovery phrase', () => {
     expect(engine.calls.secrets).toEqual([]);
   });
 
+  it('holds the prompt where every surface reads it, not per hook instance', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    const second = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    expect(second.result.current.auth.recoveryRequired).toBe(true);
+
+    // The panel is its own consumer, so a cancel taken there has to reach the
+    // page that decided to render it.
+    await act(() => second.result.current.auth.cancelRecovery());
+    expect(result.current.auth.recoveryRequired).toBe(false);
+  });
+
   it('ends the partial session when the member abandons the prompt', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({ needsRecovery: true });
