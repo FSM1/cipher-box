@@ -346,7 +346,7 @@ export class MediaBroker {
       return;
     }
 
-    const head = resolveMediaRequest(range, source.size, source.mimeType);
+    const head = resolveMediaRequest(range, source.size, source);
     if (head.status === 416) {
       postHead(head.status, head.headers);
       return;

@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Download, type Locator, type Page } from '@playwright/test';
 
 /** The vault browser route and the chrome around it. */
 export class FilesPage {
@@ -96,6 +96,14 @@ export class FilesPage {
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
     return (await shown.textContent()) ?? '';
+  }
+
+  async save(name: string): Promise<Download> {
+    const [download] = await Promise.all([
+      this.page.waitForEvent('download'),
+      this.act(name, 'download'),
+    ]);
+    return download;
   }
 
   /** Raises a row's action menu and picks one item off it. */

@@ -76,11 +76,11 @@ export function useFileDownload(): FileDownload {
       setError(null);
 
       if (media !== null) {
-        const ticket = streamTicket(media, node, size, OPAQUE);
+        const ticket = streamTicket(media, node, size, OPAQUE, name);
         if (ticket !== null) {
           tickets.current.add(ticket);
+          const frame = ticketFrame(ticket);
           try {
-            saveToDisk(ticket, name);
             const idle = await media.whenStreamIdle(ticket, STREAM_START_MS);
             if (idle.failure !== null) {
               setError(idle.failure);
@@ -92,6 +92,9 @@ export function useFileDownload(): FileDownload {
             }
             return 'saved';
           } finally {
+            // The browser owns the transfer once the read settles, so dropping
+            // the frame cannot cut it.
+            frame.remove();
             tickets.current.delete(ticket);
             media.revokeStreamUrl(ticket);
           }
@@ -101,7 +104,7 @@ export function useFileDownload(): FileDownload {
       try {
         const bytes = await client.facade.download(node);
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
-        saveToDisk(url, name);
+        saveBlobToDisk(url, name);
         setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
         return 'saved';
       } catch (failure: unknown) {
@@ -133,7 +136,8 @@ export function useFileDownload(): FileDownload {
   return { error, save, saveAll, clearError: useCallback(() => setError(null), []) };
 }
 
-function saveToDisk(url: string, name: string): void {
+/** A blob URL never involves the worker, so the link form is safe for it. */
+function saveBlobToDisk(url: string, name: string): void {
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
@@ -141,4 +145,19 @@ function saveToDisk(url: string, name: string): void {
   document.body.append(link);
   link.click();
   link.remove();
+}
+
+/**
+ * A navigation rather than a link, because Chromium issues an `<a download>`
+ * request without dispatching it to the Service Worker — the link form walks
+ * past the pipe and fetches the app shell. The pipe's `content-disposition`
+ * turns the navigation into a save, and its `sandbox` keeps a body that commits
+ * as a document out of this frame's reach.
+ */
+function ticketFrame(url: string): HTMLIFrameElement {
+  const frame = document.createElement('iframe');
+  frame.hidden = true;
+  frame.src = url;
+  document.body.append(frame);
+  return frame;
 }

@@ -29,6 +29,14 @@ const bufferOf = (bytes: Uint8Array): ArrayBuffer =>
   bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 
 /** A port that answers `open` with a 206 head and drains `chunks` on pull. */
+/** A tab whose registry never minted the ticket under request. */
+function unknownTicketPort(): FakePort {
+  return new FakePort((message, port) => {
+    if (message.type !== 'cb:media:open') return;
+    port.deliver({ type: 'cb:media:head', requestId: message.requestId, status: 404, headers: [] });
+  });
+}
+
 function streamingPort(chunks: Uint8Array[]): FakePort {
   const queue = [...chunks];
   return new FakePort((message, port) => {
@@ -548,6 +556,52 @@ describe('MediaPipe client routing', () => {
     ]);
   });
 
+  it('asks the other tabs when a navigation lands on a port that never minted the ticket', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // A save is a navigation, which carries no client id, so the pipe borrows
+    // the newest port — the tab that opened last, not the one that saved.
+    const owner = streamingPort([new Uint8Array([7, 7])]);
+    const stranger = unknownTicketPort();
+    pipe.adoptPort(owner, 'tab-a');
+    pipe.adoptPort(stranger, 'tab-b');
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.status).toBe(206);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([7, 7]));
+    expect(stranger.countOf('cb:media:open')).toBe(1);
+    expect(owner.countOf('cb:media:open')).toBe(1);
+  });
+
+  it('answers a navigation 404 when no tab minted the ticket', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const a = unknownTicketPort();
+    const b = unknownTicketPort();
+    pipe.adoptPort(a, 'tab-a');
+    pipe.adoptPort(b, 'tab-b');
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.status).toBe(404);
+    expect(a.countOf('cb:media:open')).toBe(1);
+    expect(b.countOf('cb:media:open')).toBe(1);
+  });
+
+  it('keeps an identified client to its own port, whatever another tab holds', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const other = streamingPort([new Uint8Array([9])]);
+    const own = unknownTicketPort();
+    pipe.adoptPort(own, 'tab-a');
+    pipe.adoptPort(other, 'tab-b');
+
+    const response = await pipe.respond(streamRequest(), 'tab-a');
+
+    // The fan-out is for navigations alone; a named client that does not know
+    // its own ticket gets its own answer.
+    expect(response.status).toBe(404);
+    expect(other.countOf('cb:media:open')).toBe(0);
+  });
+
   it('re-brokers to the owning tab instead of borrowing another client port', async () => {
     vi.useFakeTimers();
     const scope = new FakeScope();
@@ -793,4 +847,47 @@ describe('MediaPipe response headers', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
   });
+
+  const dispositions: Array<[string, string, string]> = [
+    [
+      'serves the shape the tab mints',
+      "attachment; filename*=UTF-8''notes.md",
+      "attachment; filename*=UTF-8''notes.md",
+    ],
+    [
+      'serves a percent-encoded name',
+      "attachment; filename*=UTF-8''notes%20%C3%A9.md",
+      "attachment; filename*=UTF-8''notes%20%C3%A9.md",
+    ],
+    ['serves a bare attachment', 'attachment', 'attachment'],
+    ['drops a truncated percent escape', "attachment; filename*=UTF-8''name%", 'attachment'],
+    ['drops a non-hex percent escape', "attachment; filename*=UTF-8''name%ZZ", 'attachment'],
+    ['drops a second parameter', "attachment; filename*=UTF-8''a.md; foo=bar", 'attachment'],
+    ['drops an unencoded name', 'attachment; filename="a b.md"', 'attachment'],
+    ['refuses to render inline', 'inline', 'attachment'],
+  ];
+
+  for (const [name, sent, served] of dispositions) {
+    it(name, async () => {
+      const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+      pipe.adoptPort(
+        new FakePort((message, self) => {
+          if (message.type !== 'cb:media:open') return;
+          self.deliver({
+            type: 'cb:media:head',
+            requestId: message.requestId,
+            status: 200,
+            headers: [
+              ['content-type', 'video/mp4'],
+              ['content-disposition', sent],
+            ],
+          });
+        })
+      );
+
+      const response = await pipe.respond(streamRequest());
+
+      expect(response.headers.get('content-disposition')).toBe(served);
+    });
+  }
 });

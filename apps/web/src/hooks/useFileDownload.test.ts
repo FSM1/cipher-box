@@ -3,6 +3,7 @@ import type { EngineClient, MediaService } from '@cipherbox/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
+import { trackSaves } from '../test/saveSpy';
 import { useFileDownload, type SaveOutcome, type SaveRequest } from './useFileDownload';
 
 /** The pipe this tab gets; `null` is the browser without a Service Worker. */
@@ -88,18 +89,15 @@ function mount(client: EngineClient) {
   return renderHook(() => useFileDownload(), { wrapper });
 }
 
-const clicked: string[] = [];
-const originalClick = HTMLAnchorElement.prototype.click;
+let saves = trackSaves();
 
 beforeEach(() => {
-  clicked.length = 0;
-  HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
-    clicked.push(this.getAttribute('href') ?? '');
-  };
+  saves.restore();
+  saves = trackSaves();
 });
 
 afterEach(() => {
-  HTMLAnchorElement.prototype.click = originalClick;
+  saves.restore();
   mediaControl.create = () => null;
 });
 
@@ -118,7 +116,7 @@ describe('bounding the tickets a streamed save leaves live', () => {
     });
 
     // Revoking before the browser has read the bytes cancels the save.
-    expect(clicked).toEqual(['/stream/ticket-1']);
+    expect(saves.navigated).toEqual(['/stream/ticket-1']);
     expect([...pipe.live]).toEqual(['/stream/ticket-1']);
     expect(saved).toBeNull();
 
@@ -226,7 +224,7 @@ describe('saving a selection', () => {
     await pipe.finish('/stream/ticket-3');
 
     await waitFor(() => expect(done).toBe(true));
-    expect(clicked).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
+    expect(saves.navigated).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
     expect(result.current.error).toBe('could not download b.bin');
   });
 
@@ -271,7 +269,8 @@ describe('the buffered fallback', () => {
     });
 
     expect(saved).toBe('failed');
-    expect(clicked).toEqual([]);
+    expect(saves.navigated).toEqual([]);
+    expect(saves.clicked).toEqual([]);
     expect(result.current.error).toBe('the record is gone');
 
     act(() => result.current.clearError());
@@ -291,7 +290,7 @@ describe('the buffered fallback', () => {
         await result.current.save({ node: NODE, name: 'a.bin', size: null });
         await result.current.save({ node: NODE, name: 'b.bin', size: null });
       });
-      expect(clicked).toEqual(['blob:fake/1', 'blob:fake/2']);
+      expect(saves.clicked.map((link) => link.href)).toEqual(['blob:fake/1', 'blob:fake/2']);
       expect(revoked).toEqual([]);
 
       await act(async () => {
@@ -309,5 +308,37 @@ describe('the buffered fallback', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('how a ticket save reaches the Service Worker', () => {
+  it('keeps the frame alive until the read settles, then drops it', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    let saved: SaveOutcome | null = null;
+    await act(async () => {
+      void result.current.save(file('notes.txt')).then((outcome) => {
+        saved = outcome;
+      });
+      await Promise.resolve();
+    });
+
+    // Chromium issues an `<a download>` request without dispatching it to the
+    // worker, so a clicked link would fetch the app shell off the origin.
+    expect(saves.navigated).toEqual(['/stream/ticket-1']);
+    expect(saves.clicked).toEqual([]);
+    expect(saves.frames[0].isConnected).toBe(true);
+    expect(saved).toBeNull();
+
+    await pipe.finish('/stream/ticket-1');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saved).toBe('saved');
+    // The transfer is the browser's by now, so the frame has nothing left to do.
+    expect(saves.frames[0].isConnected).toBe(false);
   });
 });

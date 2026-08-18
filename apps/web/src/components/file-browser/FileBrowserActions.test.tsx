@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { EngineProvider } from '../../providers/EngineProvider';
+import { trackSaves } from '../../test/saveSpy';
 import { FileBrowser } from './FileBrowser';
 
 /** The pipe this tab gets; `null` is the browser without a Service Worker. */
@@ -739,10 +740,14 @@ describe('the vault browser read path over the facade', () => {
 });
 
 describe('the vault browser read path over the streaming pipe', () => {
-  const minted: { node: Uint8Array; size: number; mimeType: string }[] = [];
+  const minted: {
+    node: Uint8Array;
+    size: number;
+    mimeType: string;
+    downloadName?: string;
+  }[] = [];
   const revoked: string[] = [];
-  const clicked: { href: string | null; download: string }[] = [];
-  const originalClick = HTMLAnchorElement.prototype.click;
+  let saves = trackSaves();
   /** Whether the browser opens the save the ticket was minted for. */
   let fetched = true;
   /** Set by a test that drives the transfers itself, keyed by ticket url. */
@@ -779,7 +784,8 @@ describe('the vault browser read path over the streaming pipe', () => {
   beforeEach(() => {
     minted.length = 0;
     revoked.length = 0;
-    clicked.length = 0;
+    saves.restore();
+    saves = trackSaves();
     fetched = true;
     transfers = null;
     streamListeners.clear();
@@ -788,7 +794,12 @@ describe('the vault browser read path over the streaming pipe', () => {
         streaming: true,
         start: () => Promise.resolve(),
         dispose: () => Promise.resolve(),
-        createStreamUrl: (source: { node: Uint8Array; size: number; mimeType: string }) => {
+        createStreamUrl: (source: {
+          node: Uint8Array;
+          size: number;
+          mimeType: string;
+          downloadName?: string;
+        }) => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
@@ -808,14 +819,11 @@ describe('the vault browser read path over the streaming pipe', () => {
           return true;
         },
       }) as unknown as MediaService;
-    HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
-      clicked.push({ href: this.getAttribute('href'), download: this.download });
-    };
   });
 
   afterEach(() => {
     mediaControl.create = () => null;
-    HTMLAnchorElement.prototype.click = originalClick;
+    saves.restore();
   });
 
   it('hands a save to the browser as a ticket instead of buffering the plaintext', async () => {
@@ -830,8 +838,12 @@ describe('the vault browser read path over the streaming pipe', () => {
     });
 
     expect(engine.facade.download).not.toHaveBeenCalled();
-    expect(minted).toEqual([{ node: NOTE, size: 12, mimeType: 'application/octet-stream' }]);
-    expect(clicked).toEqual([{ href: '/stream/ticket-1', download: 'notes.txt' }]);
+    expect(minted).toEqual([
+      { node: NOTE, size: 12, mimeType: 'application/octet-stream', downloadName: 'notes.txt' },
+    ]);
+    // The name rides the pipe's `content-disposition`, not the link's attribute.
+    expect(saves.navigated).toEqual(['/stream/ticket-1']);
+    expect(saves.clicked).toEqual([]);
     // The ticket serves plaintext to anything same-origin that can name it, so
     // it dies with the transfer rather than with the view.
     await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));

@@ -11,7 +11,7 @@ import {
   type MediaRequest,
   type MediaResponse,
 } from '../media/protocol.js';
-import { safeMimeType } from '../media/range.js';
+import { ATTR_CHARS, safeMimeType } from '../media/range.js';
 import type { MessagePortLike } from '../portRelay.js';
 import type { ClientsLike } from './clients.js';
 
@@ -127,25 +127,60 @@ export class MediaPipe {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const port = await this.acquirePort(clientId);
       if (!port) break;
-      const requestId = this.nextRequestId;
-      this.nextRequestId += 1;
-      const head = await this.open(port, requestId, ticket, range);
-      // An open the tab answered late, or answered with a head that carries no
-      // body, still left it holding a cursor and the stream that cursor pins.
-      if (!head) {
-        this.post(port, { type: 'cb:media:close', requestId });
-        this.discardPort(port);
-        continue;
+      const answer = await this.openOn(port, ticket, range);
+      if (answer === null) continue;
+      if (answer.status === 404 && clientId === ANONYMOUS_CLIENT) {
+        return (await this.askOtherPorts(port, ticket, range)) ?? answer;
       }
-      // Only these two carry a body; `Response` throws on a body under a
-      // null-body status, and the port that named the status is untrusted.
-      if (head.status !== 200 && head.status !== 206) {
-        this.post(port, { type: 'cb:media:close', requestId });
-        return sealed(head.status, head.headers);
-      }
-      return sealed(head.status, head.headers, this.body(port, requestId));
+      return answer;
     }
     return sealed(503);
+  }
+
+  /**
+   * Opens `ticket` on one port. `null` is that port going dead: an open it
+   * answered late, or answered with a head carrying no body, still left it
+   * holding a cursor and the stream that cursor pins.
+   */
+  private async openOn(
+    port: MessagePortLike,
+    ticket: string,
+    range: string | null
+  ): Promise<Response | null> {
+    const requestId = this.nextRequestId;
+    this.nextRequestId += 1;
+    const head = await this.open(port, requestId, ticket, range);
+    if (!head) {
+      this.post(port, { type: 'cb:media:close', requestId });
+      this.discardPort(port);
+      return null;
+    }
+    // Only these two carry a body; `Response` throws on a body under a
+    // null-body status, and the port that named the status is untrusted.
+    if (head.status !== 200 && head.status !== 206) {
+      this.post(port, { type: 'cb:media:close', requestId });
+      return sealed(head.status, head.headers);
+    }
+    return sealed(head.status, head.headers, this.body(port, requestId));
+  }
+
+  /**
+   * The remaining ports, for a request that named no client. A navigation
+   * carries none, so the borrowed port belongs to whichever tab brokered last,
+   * and only the tab that minted the ticket can resolve it.
+   */
+  private async askOtherPorts(
+    asked: MessagePortLike,
+    ticket: string,
+    range: string | null
+  ): Promise<Response | null> {
+    for (const entry of [...this.ports.values()].reverse()) {
+      if (entry.port === asked) continue;
+      const answer = await this.openOn(entry.port, ticket, range);
+      if (answer === null || answer.status === 404) continue;
+      return answer;
+    }
+    return null;
   }
 
   private onMessage(port: MessagePortLike, event: MessageEvent): void {
@@ -372,6 +407,7 @@ function sealed(
     }
   }
   merged.set('cache-control', 'no-store');
+  clampDisposition(merged);
   // A ticket URL is same-origin and navigable, and the port that named the type
   // is untrusted input, so a body only ever renders under a clamped type.
   if (body !== null) {
@@ -380,6 +416,24 @@ function sealed(
     merged.set('content-security-policy', "default-src 'none'; sandbox");
   }
   return new Response(body, { status, headers: merged });
+}
+
+/**
+ * The shape the tab mints, and the only one the pipe serves: the name reaches
+ * this header from the vault, so any other shape is served as a bare
+ * `attachment` rather than a second parameter of the port's choosing.
+ */
+const SAFE_DISPOSITION = new RegExp(
+  `^attachment(; filename\\*=UTF-8''(?:[${ATTR_CHARS}]|%[0-9A-Fa-f]{2})*)?$`
+);
+
+function clampDisposition(headers: Headers): void {
+  const disposition = headers.get('content-disposition');
+  if (disposition === null) return;
+  headers.set(
+    'content-disposition',
+    SAFE_DISPOSITION.test(disposition) ? disposition : 'attachment'
+  );
 }
 
 /** A same-origin port is still untrusted input: anything off-shape is dropped. */
