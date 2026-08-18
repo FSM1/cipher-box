@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "42b996bf2470",
+  "strategy": "manual-commit",
+  "branch": "fix/stream-save-reaches-the-service-worker",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/client/src/sw/pipe.ts",
+    "tests/web-e2e/tests/save-path.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/42/b996bf2470/0/metadata.json",
+      "transcript": "/42/b996bf2470/0/full.jsonl",
+      "compact_transcript": "/42/b996bf2470/0/transcript.jsonl",
+      "content_hash": "/42/b996bf2470/0/content_hash.txt",
+      "prompt": "/42/b996bf2470/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 644,
+    "cache_creation_tokens": 504395,
+    "cache_read_tokens": 78050223,
+    "output_tokens": 183594,
+    "api_call_count": 324
+  }
+}

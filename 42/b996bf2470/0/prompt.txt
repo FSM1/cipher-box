@@ -1,0 +1,268 @@
+https://github.com/FSM1/cipher-box/pull/1246#issuecomment-5259092482
+
+I would like to verify this PR locally. Please spin up the web front end and all supporting infrastructure so that I can do this. Also, please go through the PR comments to extract the instructions for the manual UAT.
+
+---
+
+ok firstly this whole pr needs be rebased on top of current main
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>ac1e8d3577735cc12</task-id>
+<tool-use-id>toolu_01RdZv3s9SFoRuF6uoQai9P8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5c828830-0371-4e01-87c0-47c94a29444e/tasks/ac1e8d3577735cc12.output</output-file>
+<status>completed</status>
+<summary>Agent "Find why writes stop draining on main" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Root cause found — it is not provisioning. It is the read accelerator's new session bearer + browser CORS.
+
+I reproduced it live in Chrome against the still-running local stack (web preview :4173, mock routing :3001, Kubo :8080) and traced it to the byte.
+
+### The mechanism (proven, not inferred)
+
+`892ca9981` (in your range) changed the accelerator's credential from *host-configured* to *the live session JWT*:
+
+- `crates/engine/src/facade.rs:1664` — `gateway: gateway.into_gateway(accelerator_bearer.clone())`, and `:1735` `.with_session_bearer(...)`, so `api.login_identity` at `:1739` fills the same cell.
+- `crates/engine/src/content/read.rs:219-230` — `into_gateway` attaches that bearer to the accelerator leg **if `carries_credentials_safely`**, and `:176-188` returns `true` for `localhost | 127.0.0.1 | [::1]` — the comment even says "a loopback host for local development (`apps/web/.env.example` ships a `http://localhost` Kubo)".
+- `crates/engine/src/content/read.rs:382-387` — every block fetch then carries `Authorization: Bearer &lt;jwt&gt;`.
+
+At the base commit that bearer was `Option&lt;Zeroizing&lt;String&gt;&gt;` supplied by the host (`git show 4128ccc:crates/engine/src/content/read.rs:68`), and `apps/web/src/engine/config.ts:103-104` never supplied one — so the request went out unauthenticated.
+
+An `Authorization` header makes the cross-origin GET non-simple. Kubo's gateway advertises `Access-Control-Allow-Headers: Content-Type, Range, User-Agent, X-Requested-With` — **no `Authorization`**. Measured in the page itself:
+
+```
+Accept: application/vnd.ipld.raw               -&gt; 200, 1052 bytes
+Accept + Authorization: Bearer x               -&gt; FAIL "Failed to fetch"   (preflight rejected)
+```
+
+`VITE_PUBLIC_GATEWAYS` is unset in `apps/web/.env`, so the accelerator is the only source (`read.rs:166`, `:315-319` rotates on transport failure — there is nothing to rotate to). Every block read in the browser now fails.
+
+### Answers
+
+1. **No new provisioning gate is failing.** The real gates are: the resolve-tick loop spawns only with a root name (`facade.rs:2192`), and the drain leg runs only when *both* scope seeds are cached (`facade.rs:2388-2390`). Both were satisfied in my repro. What blocks the publish is one step later: `Drain::load_scope_root` (`crates/engine/src/sync/drain.rs:838-852`) needs the root's head block through the gateway (`assemble_head_envelope`) and returns `Halt::UploadAttempt` when it cannot — silently, no dead letter. The same gateway failure makes `RootAdopter` fail, which the tick maps to `RefreshVerdict::Unreachable` → the exact string you saw (`facade.rs:2640`).
+
+2. **All-zero root id is legitimate.** `facade.rs:1669` seeds `Snapshot::new(NodeId([0u8; 16]))`, and `facade.rs:2227`: "The vault's own root scope and root node are the anchored all-zero id16". It is not an unprovisioned tell.
+
+3. **`handOffLoginSecret` is identical on both paths and the hook is missing no facade call.** Both `packages/login/src/flow.ts` (`handOff`) and `apps/web/src/engine/introspection.ts` call `handOffLoginSecret(facade, exporter)` → `facade.start(secret)` (`packages/login/src/secret.ts:63-73`). Provisioning lives *inside* `start` (`facade.rs:1779`). Live proof: the hook login minted the vault — no `vaultUnprovisioned` event was emitted (the event does cross the bridge: `crates/wasm/src/lib.rs:748`), and the mock routing log shows the mint's two PUTs (root record then vault pointer, both 200) followed by the tick loop GETting the root name 200/310 bytes every cadence. The app's own path only adds the API identity exchange before Core Kit; the engine does its own `api.login_identity` either way.
+
+4. **No test can see this.** `crates/engine/tests/write_plane.rs:578` builds engines on `ApiBaseUrl::offline()` (which skips provisioning by design, `facade.rs:1776-1779`) and plants records, so "first-run mint → queued write drains" is never composed. The gateway tests use a scripted HTTP fake and assert only that the header is *present* (`read.rs:506` "accelerator request carries the member bearer token"). CORS is browser-only, and the wasm suite's new test just proves a host-supplied bearer is refused (`crates/wasm/src/host.rs`). Your web-e2e write-path specs are the first thing in the repo that could catch it.
+
+5. **Root cause, one sentence:** since `892ca9981` the engine stamps the session JWT onto every read-accelerator request — including a loopback Kubo, which `carries_credentials_safely` explicitly permits — and the browser's CORS preflight for `Authorization` is rejected by that gateway, so no block can be read, the root never adopts, and the drain halts in `load_scope_root` before it publishes.
+
+**Smallest fix — it is main's regression, and the one-liner belongs in `crates/engine`:** in `crates/engine/src/content/read.rs:176-188`, stop treating a loopback accelerator as credential-safe (fall to `GatewaySource::public(base_url)`, `read.rs:227`). No browser will ever deliver an `Authorization` header to a plain local gateway, so the loopback exemption can only ever break reads — and it also stops shipping the session token to a gateway that isn't CipherBox's. Staging/prod are `https://` and unaffected.
+
+Caller-side alternatives if you want the loopback exemption kept: move the Kubo URL from `VITE_READ_ACCELERATOR_URL` to `VITE_PUBLIC_GATEWAYS` in `apps/web/.env`(+`.env.example`, + the web-e2e CI env), or add `Authorization` to Kubo's `Gateway.HTTPHeaders` CORS allowlist in the compose file. Either unblocks the specs, but neither protects the next host that points the accelerator at a gateway it doesn't control.
+
+One thing to check separately: whatever real accelerator staging uses must allowlist `Authorization` in its CORS response, or the web app will fail there the same way.</result>
+<usage><subagent_tokens>176605</subagent_tokens><tool_uses>77</tool_uses><duration_ms>791276</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab0c6c0917d6b36fc</task-id>
+<tool-use-id>toolu_018C7wiYDD45tQuRuzAkw6xN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5c828830-0371-4e01-87c0-47c94a29444e/tasks/ab0c6c0917d6b36fc.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto and privacy review of the fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review: `5dfc33553` — accelerator bearer narrowed to `https://`
+
+Verdict: the narrowing is sound and I found **no path where the session token reaches plaintext transport**. Three real gaps, none of them a token-disclosure bug; the most important one is that the fix does not cover the deployed configuration.
+
+### 1. Downgrade paths — clean
+
+- **Redirects are closed at both seams**, so a `https://` → `http://` hop cannot replay the header: `crates/desktop-seams/src/http.rs:38` (`redirect::Policy::none()`), `packages/client/src/seams/http.ts:29` (`redirect: 'error'`). Covered by `crates/desktop-seams/tests/conformance.rs:476` and `packages/client/src/seams/http.test.ts:125`. The one escape hatch, `ReqwestHttp::with_client` (`crates/desktop-seams/src/http.rs:46`), has a single caller and it sets `Policy::none()` (`crates/load/src/seams.rs:24`).
+- **Casing / whitespace / scheme-relative all fail closed.** `HTTPS://`, `" https://…"`, `//gw`, `https:/gw` all miss the prefix at `crates/engine/src/content/read.rs:178` → the leg is rebuilt via `GatewaySource::public` (`read.rs:218`) and never armed. Both host config edges also trim first: `apps/web/src/engine/config.ts:56-58`, `apps/desktop/src-tauri/src/engine/config.rs:89`.
+- **Denial is permanent.** `GatewaySource::public` mints a *fresh* cell (`read.rs:146-151`); `SessionBearer::set` is `pub(crate)` and only `ApiClient::with_session_bearer` (`crates/engine/src/facade.rs:1735`) ever writes, into the clone the facade holds (`facade.rs:1651-1665`). A denied leg has no path to being armed by a later login.
+
+### 2. Prefix vs. parse
+
+The prefix is the **right** primitive here, and a URL parse would be strictly *worse*: RFC 3986 schemes are case-insensitive, so a parser would accept `HTTPS://gw.test` and hand it the token, where the prefix denies it. Every parser-vs-prefix divergence I can construct lands on the fail-closed side.
+
+The one input that gets through and probably should not: `REDACTED` passes `read.rs:178` and is handed the bearer. Not a downgrade (still TLS to `gw.cipherbox.test`), and the browser `Request` constructor throws `TypeError` on a credentialed URL so it bricks rather than leaks — but reqwest will send it as Basic auth alongside the JWT. Worth an explicit reject on `@` in the authority, or accept it deliberately and pin it in the test.
+
+### 3. Credential leakage in the read path — clean
+
+`SessionBearer`'s hand-written `Debug` redacts (`read.rs:122-130`); `HttpRequest`'s `Debug` renders header *names* only (`crates/engine/src/seams/http.rs:57-67`); `InvalidBearer` carries nothing (`http.rs:31-33`); the `fetch` refusal string is a static literal (`read.rs:375-377`). Headers are rebuilt per source inside `fetch` (`read.rs:371`), so nothing is retained across a rotation, and `GatewaySource::public` fallbacks hold an unarmable cell. `HttpCredentials::Omit` is pinned on the gateway leg (`read.rs:385`).
+
+### 4. Privacy
+
+An unauthenticated accelerator read exposes **strictly less**: without the JWT the operator sees CIDs + IP + SNI, with it they also get account linkage plus a token that authorizes the whole API. The delta runs the other way — see gap B.
+
+Standing risk this change does not touch: the accelerator is CipherBox's own token-authed Kubo (`CONTEXT.md:81`), and it receives the *full-API* session JWT. A gateway compromise is a session takeover for every online member. TLS is not the mitigation for that; an audience-scoped gateway token is.
+
+---
+
+### Gap A (highest value) — the fix does not cover staging
+
+The commit's stated root cause is CORS, which is **scheme-independent**, but the fix keys on scheme. The read accelerator in staging is a token-authed Kubo behind TLS. If it ships the same stock `Access-Control-Allow-Headers` allow-list, `Authorization` is still attached (`read.rs:212-216`), the preflight is still rejected, and staging bricks in exactly the way the commit message describes — with `Drain::load_scope_root` halting and the chrome still reading `synced`. Confirm the deployed gateway explicitly allows `Authorization` (and that `vars.VITE_READ_ACCELERATOR_URL`, `.github/workflows/deploy-staging.yml:98`, points at that gateway and not a stock one).
+
+### Gap B — the downgrade is silent, and it can widen the CID audience
+
+`into_gateway` (`read.rs:209-221`) emits no event when it denies the token. If the configured accelerator *requires* auth, every block read now 401s and rotates to `public_fallbacks` — handing the member's read CID set to a third-party gateway that previously never saw it, with no event and no dead letter. That is the same fail-quiet shape the commit message calls out on the write path. Harmless in the shipped local config (`VITE_PUBLIC_GATEWAYS` empty) but not in a real deployment. Recommend surfacing the denial once at construction.
+
+### Gap C — the invariant lives at a call site, not in a constructor
+
+`GatewaySource.bearer` is `pub` (`read.rs:141`) and `Gateway.accelerator` is `pub`, so `carries_credentials_safely` guards exactly one call site. Any future in-crate `GatewaySource { base_url, bearer }` bypasses it silently. Make it structural:
+
+```rust
+impl GatewaySource {
+    /// The only way to attach a credential: TLS or no token.
+    pub fn accelerator(base_url: impl Into&lt;String&gt;, bearer: SessionBearer) -&gt; Self {
+        let base_url = base_url.into();
+        if carries_credentials_safely(&amp;base_url) { Self { base_url, bearer } }
+        else { Self::public(base_url) }
+    }
+}
+```
+
+### 5. Tests
+
+Neither updated test is vacuous — `SessionBearer::holding` starts held, so both `is_held()` / `!is_held()` assertions have real polarity. But both are **config-level only**: the doc comment's claim that "a leg denied the token still serves reads, unauthenticated" is never asserted on the wire. The only wire-level no-`AUTHORIZATION` assertion is on the *public fallback* leg (`read.rs:643-648`), not on a denied accelerator.
+
+Worth adding, in `crates/engine/src/content/read.rs`:
+
+```rust
+// The prefix-vs-parse divergence, frozen: a parser would accept these.
+#[test]
+fn an_uppercase_or_padded_https_scheme_is_denied_the_bearer() {
+    for base_url in ["HTTPS://gw.cipherbox.test", "Https://gw.cipherbox.test",
+                     " https://gw.cipherbox.test", "https:/gw.cipherbox.test",
+                     "https:gw.cipherbox.test"] { /* !is_held() */ }
+}
+
+// Decide and pin: today this IS handed the bearer.
+#[test]
+fn an_https_url_with_embedded_credentials_is_denied_the_bearer() {}
+
+// The doc comment's second half, asserted on the wire rather than the config.
+#[test]
+fn a_plain_http_accelerator_is_still_consulted_and_carries_no_authorization() {
+    // GatewayConfig { accelerator: Some("http://127.0.0.1:8080"), .. }
+    // -&gt; read_block -&gt; requests()[0].url starts with the accelerator
+    // -&gt; and no AUTHORIZATION header
+}
+
+// Denial survives a later login (facade-level).
+#[test]
+fn a_login_after_construction_cannot_arm_a_plain_http_accelerator() {}
+```
+
+The last one is the one that would catch a regression in Gap C.</result>
+<usage><subagent_tokens>72213</subagent_tokens><tool_uses>34</tool_uses><duration_ms>234963</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>biqezfw9n</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5c828830-0371-4e01-87c0-47c94a29444e/tasks/biqezfw9n.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI to settle on the PR" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/resolve-pr-reviews #1246
+
+---
+
+ok I just ran the test and got a 394 byte html file instead of the 5kB markdown file I was looking for.
+
+---
+
+getting a 404
+
+---
+
+yeah sure thing - go ahead
+
+---
+
+<task-notification>
+<task-id>a76de54f4639b097d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5c828830-0371-4e01-87c0-47c94a29444e/tasks/a76de54f4639b097d.output</output-file>
+<status>failed</status>
+<summary>Agent "Simplify pass on the save fix" failed: Agent terminated early due to an API error: API Error: Your computer went to sleep mid-response. The response above may be incomplete.</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I'll start by reading the project's standards, then the diff.</result>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a84c2268428089158</task-id>
+<tool-use-id>toolu_01KjiaV2wiDXf8xaijhyVkiZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/5c828830-0371-4e01-87c0-47c94a29444e/tasks/a84c2268428089158.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review of the save fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict
+
+The header-injection surface is genuinely closed, and the render path is untouched. I found **one real defect** (availability, multi-tab), plus a few notes. Nothing that leaks plaintext or lets a vault-chosen name escape the header.
+
+---
+
+### 1. Header injection — clean, both layers agree
+
+`packages/client/src/media/range.ts:61` — `ATTR_CHAR = /[A-Za-z0-9!#$&amp;+\-.^_\`|~]/` is **exactly** RFC 8187 `attr-char` (ALPHA / DIGIT / `!#$&amp;+-.^_\`|~`). `^` is not in leading position so it is literal; `\-` is literal. Everything else — `"` `;` `,` space CR LF `*` `'` `=` and every byte ≥ 0x80 — is percent-encoded (`range.ts:63-68`, encoding UTF-8 bytes, so multi-byte names are handled correctly). No second parameter, no second header, no change of disposition type is reachable from a name.
+
+`packages/client/src/sw/pipe.ts:392` — `SAFE_DISPOSITION` is anchored `^…$` (JS `$` does *not* match before a trailing `\n`, unlike Python/Ruby), and has a single `*` over a flat character class inside one optional group — linear, no catastrophic backtracking. Two ports appending two `content-disposition` headers is also handled: `Headers.get` joins with `", "`, which fails the regex and clamps to bare `attachment`.
+
+The only divergence between the two: the worker's class adds `%` unconditionally (`pipe.ts:392`), so it accepts `%`/`%ZZ` sequences the encoder would never mint. Harmless — `%` is not a delimiter, and a decoded `%3B` lands inside the filename value after parameter parsing, not in the header grammar.
+
+Residual (unchanged by this PR): the decoded filename can still contain `/`, `..`, NUL, or an RTL override — defense is the browser's download-filename sanitizer, exactly as it was for the old `&lt;a download&gt;` attribute. Not a regression.
+
+### 2. Render path — not weakened
+
+`apps/web/src/hooks/useFilePreview.ts:62` calls `streamTicket` with four args, so `downloadName` is `undefined` and `range.ts:83` pushes no header. The player never gets a disposition. `nosniff`, `default-src 'none'; sandbox` and the `safeMimeType` clamp in `pipe.ts:378-381` are applied identically on both paths; the disposition is additive.
+
+One thing this design now depends on that it did not before: **CSP `sandbox` on the response is what keeps the frame unreadable.** If the pipe ever serves a ticket body without a disposition, the response commits as a document *inside a same-origin frame the app owns*; `sandbox` gives it an opaque origin so `frame.contentDocument` is null. Dropping that header from `sealed()` would turn the hidden frame into readable plaintext. Worth a comment at `pipe.ts:381` — it is currently justified only as anti-execution.
+
+### 3. The iframe — no new exposure
+
+The ticket URL was already in the DOM as `link.href`, and any same-origin script can `fetch()` it regardless. The frame adds nothing an XSS did not already have. A cross-origin embedder cannot read either. The frame never commits a document (the response is a download), so there is no history entry and nothing to read out of it. `finally` at `useFileDownload.ts:94-100` removes the frame on every path — success, failure, refusal, and throw — and `saveTicketToDisk` is called outside the `try` only to build it, so there is no window where a frame exists without a teardown scheduled.
+
+### 4. Ticket lifetime — no truncation; two bounded overstays
+
+`whenIdle` (`packages/client/src/media/broker.ts:153-176`) resolves only when no cursor holds the ticket, and a reader *between windows* still counts, so a stalled or paused download cannot be revoked out from under itself. `revoke` (`broker.ts:200`) therefore only ever fires after the worker's body already closed — the remaining bytes are the browser's. No truncation path found.
+
+The inverse holds in two edges, both pre-existing in `whenIdle` and now also holding a DOM node:
+- a download the user pauses keeps `cursors &gt; 0`, `expire` re-arms indefinitely, and the ticket stays a live capability for the duration;
+- worker death is recovered — `MediaBroker.serve` calls `close()` (`broker.ts:117`), which re-arms every waiter with a fresh 30 s deadline — so that path does not leak.
+
+### 5. DoS — bounded
+
+`saveAll` awaits each `save` (`useFileDownload.ts:121-126`), so at most one frame, one ticket and one pin exist at a time, and `refused` breaks the loop. Concurrent clicks are bounded by user actions and each cleans up in its own `finally`. Nothing accumulates.
+
+### 6. FINDING — a second open tab breaks every save
+
+`install.ts:115` passes `event.clientId` to the pipe. Per the Service Worker spec, `clientId` is set only for **subresource** requests; a navigation carries `""` (the new client is `resultingClientId`). The old `&lt;a download&gt;` was a subresource-ish fetch that never reached the worker at all; the new frame navigation reaches it **anonymously**.
+
+`pipe.ts:298-305` then routes anonymous requests to the *newest adopted port* — not the saving tab's. With two vault tabs open, tab A's save is offered to tab B's port, whose registry never minted that ticket, so the broker answers `404` (`broker.ts:341-345`), the frame gets no download, and `whenStreamIdle` sits the full 30 s before returning `refused` → "the browser did not start the download". `saveAll` then aborts the whole batch.
+
+It fails closed — no cross-tab plaintext, and the innocent tab's port is not discarded (a `404` head returns rather than calling `discardPort`) — so this is availability, not confidentiality. But it defeats the per-client isolation the suite explicitly asserts at `packages/client/src/sw/pipe.test.ts:551`, and the e2e test is single-tab so it cannot catch it. The fix is to key the lookup off `event.resultingClientId` for navigations, or to make the pipe fall back to *broadcasting* the open and taking the port that recognises the ticket.
+
+Please confirm the `clientId === ""` premise with a two-tab manual save before acting on it — everything downstream follows from it, and I could not exercise a real browser here.
+
+### 7. The e2e spec
+
+`tests/web-e2e/tests/save-path.spec.ts` is strong for the defect it targets: it asserts the URL is `/stream/` (rejects the blob fallback, line 30), the `suggestedFilename` (line 33 — Playwright derives this from `content-disposition`, so a clamped-to-bare `attachment` would yield the ticket segment and fail), and byte equality against the upload (line 36 — rejects the `index.html` shell). It runs in the `e2e` project, which auto-includes new specs, against real Chromium. It also implicitly settles whether `default-src 'none'; sandbox` blocks the download in a non-sandboxed frame: if it did, `waitForEvent('download')` would time out.
+
+Two gaps, neither a false pass on the fixed defect:
+- `notes.md` is all `attr-char`, so the percent-encoding path is never exercised end to end — a browser-side mis-decode of `filename*` would not be caught. Consider a name with a space and a non-ASCII character.
+- `PAYLOAD` is ~60 bytes, one window, so the revoke-versus-transfer ordering in `useFileDownload.ts:94-100` is never actually raced. A multi-window payload would make that assertion mean something.
+
+### Nit
+
+`tests/web-e2e/page-objects/files.page.ts:101` — the old `/** Raises a row's action menu and picks one item off it. */` was left stranded above the new `save` doc block; it belongs on `act`.</result>
+<usage><subagent_tokens>89516</subagent_tokens><tool_uses>29</tool_uses><duration_ms>2082304</duration_ms></usage>
+</task-notification>
