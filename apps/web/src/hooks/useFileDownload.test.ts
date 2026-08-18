@@ -3,6 +3,7 @@ import type { EngineClient, MediaService } from '@cipherbox/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
+import { trackSaves } from '../test/saveSpy';
 import { useFileDownload, type SaveOutcome, type SaveRequest } from './useFileDownload';
 
 /** The pipe this tab gets; `null` is the browser without a Service Worker. */
@@ -88,37 +89,14 @@ function mount(client: EngineClient) {
   return renderHook(() => useFileDownload(), { wrapper });
 }
 
-/**
- * Every URL the hook handed the browser, by either route: a clicked link for a
- * blob, a navigated frame for a ticket. The frames are recorded separately
- * because a ticket handed to a link never reaches the Service Worker, and the
- * origin answers a ticket path with the app shell.
- */
-const requested: string[] = [];
-const frames: HTMLIFrameElement[] = [];
-const originalClick = HTMLAnchorElement.prototype.click;
-const originalAppend = HTMLElement.prototype.append;
+let saves = trackSaves();
 
 beforeEach(() => {
-  requested.length = 0;
-  frames.length = 0;
-  HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
-    requested.push(this.getAttribute('href') ?? '');
-  };
-  HTMLElement.prototype.append = function append(this: HTMLElement, ...nodes: unknown[]) {
-    for (const node of nodes) {
-      if (node instanceof HTMLIFrameElement) {
-        requested.push(node.getAttribute('src') ?? '');
-        frames.push(node);
-      }
-    }
-    return originalAppend.apply(this, nodes as Parameters<typeof originalAppend>);
-  } as typeof HTMLElement.prototype.append;
+  saves = trackSaves();
 });
 
 afterEach(() => {
-  HTMLAnchorElement.prototype.click = originalClick;
-  HTMLElement.prototype.append = originalAppend;
+  saves.restore();
   mediaControl.create = () => null;
 });
 
@@ -137,7 +115,7 @@ describe('bounding the tickets a streamed save leaves live', () => {
     });
 
     // Revoking before the browser has read the bytes cancels the save.
-    expect(requested).toEqual(['/stream/ticket-1']);
+    expect(saves.navigated).toEqual(['/stream/ticket-1']);
     expect([...pipe.live]).toEqual(['/stream/ticket-1']);
     expect(saved).toBeNull();
 
@@ -245,7 +223,7 @@ describe('saving a selection', () => {
     await pipe.finish('/stream/ticket-3');
 
     await waitFor(() => expect(done).toBe(true));
-    expect(requested).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
+    expect(saves.navigated).toEqual(['/stream/ticket-1', '/stream/ticket-2', '/stream/ticket-3']);
     expect(result.current.error).toBe('could not download b.bin');
   });
 
@@ -290,7 +268,8 @@ describe('the buffered fallback', () => {
     });
 
     expect(saved).toBe('failed');
-    expect(requested).toEqual([]);
+    expect(saves.navigated).toEqual([]);
+    expect(saves.clicked).toEqual([]);
     expect(result.current.error).toBe('the record is gone');
 
     act(() => result.current.clearError());
@@ -310,7 +289,7 @@ describe('the buffered fallback', () => {
         await result.current.save({ node: NODE, name: 'a.bin', size: null });
         await result.current.save({ node: NODE, name: 'b.bin', size: null });
       });
-      expect(requested).toEqual(['blob:fake/1', 'blob:fake/2']);
+      expect(saves.clicked.map((link) => link.href)).toEqual(['blob:fake/1', 'blob:fake/2']);
       expect(revoked).toEqual([]);
 
       await act(async () => {
@@ -332,7 +311,7 @@ describe('the buffered fallback', () => {
 });
 
 describe('how a ticket save reaches the Service Worker', () => {
-  it('navigates a frame rather than clicking a download link', async () => {
+  it('keeps the frame alive until the read settles, then drops it', async () => {
     const pipe = fakePipe();
     mediaControl.create = () => pipe.service;
     const { result } = mount(fakeEngine());
@@ -347,8 +326,9 @@ describe('how a ticket save reaches the Service Worker', () => {
 
     // Chromium issues an `<a download>` request without dispatching it to the
     // worker, so a clicked link would fetch the app shell off the origin.
-    expect(frames.map((frame) => frame.getAttribute('src'))).toEqual(['/stream/ticket-1']);
-    expect(frames[0].isConnected).toBe(true);
+    expect(saves.navigated).toEqual(['/stream/ticket-1']);
+    expect(saves.clicked).toEqual([]);
+    expect(saves.frames[0].isConnected).toBe(true);
     expect(saved).toBeNull();
 
     await pipe.finish('/stream/ticket-1');
@@ -358,6 +338,6 @@ describe('how a ticket save reaches the Service Worker', () => {
 
     expect(saved).toBe('saved');
     // The transfer is the browser's by now, so the frame has nothing left to do.
-    expect(frames[0].isConnected).toBe(false);
+    expect(saves.frames[0].isConnected).toBe(false);
   });
 });

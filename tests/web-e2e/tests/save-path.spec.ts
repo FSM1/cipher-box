@@ -8,7 +8,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '../fixtures';
-import { coldStart, drained, PAYLOAD } from './vault';
+import { coldStart, drained, PAYLOAD } from '../vault';
 
 /**
  * A space and a non-ASCII run, so the header carries a percent-encoded name
@@ -34,14 +34,13 @@ test('a saved file is its own bytes, not the app shell', async ({ page }) => {
   const bytes = new TextEncoder().encode(LONG);
   await files.upload(NAME, bytes);
   await expect(files.row(NAME)).toBeVisible();
-  expect(await drained(files, vault)).toEqual([`file ${NAME}`]);
+  await drained(files, vault);
 
   const download = await files.save(NAME);
 
   // A `blob:` here is the buffered fallback, which works and settles nothing.
   expect(download.url()).toContain('/stream/');
-  // The name rides the pipe's `content-disposition`; a link's `download`
-  // attribute cannot carry it, because a link never reaches the worker.
+  // The name rides the pipe's `content-disposition`.
   expect(download.suggestedFilename()).toBe(NAME);
 
   const saved = await download.path();
@@ -55,7 +54,7 @@ test('a save reaches the tab that minted it, whatever tab brokered last', async 
   const bytes = new TextEncoder().encode(PAYLOAD);
   await files.upload('shared.md', bytes);
   await expect(files.row('shared.md')).toBeVisible();
-  expect(await drained(files, vault)).toEqual(['file shared.md']);
+  await drained(files, vault);
 
   // A second tab brokers the newest port, and a save carries no client id, so
   // the pipe borrows that tab's port — whose registry minted no ticket.

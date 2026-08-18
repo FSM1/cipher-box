@@ -29,6 +29,14 @@ const bufferOf = (bytes: Uint8Array): ArrayBuffer =>
   bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 
 /** A port that answers `open` with a 206 head and drains `chunks` on pull. */
+/** A tab whose registry never minted the ticket under request. */
+function unknownTicketPort(): FakePort {
+  return new FakePort((message, port) => {
+    if (message.type !== 'cb:media:open') return;
+    port.deliver({ type: 'cb:media:head', requestId: message.requestId, status: 404, headers: [] });
+  });
+}
+
 function streamingPort(chunks: Uint8Array[]): FakePort {
   const queue = [...chunks];
   return new FakePort((message, port) => {
@@ -553,15 +561,7 @@ describe('MediaPipe client routing', () => {
     // A save is a navigation, which carries no client id, so the pipe borrows
     // the newest port — the tab that opened last, not the one that saved.
     const owner = streamingPort([new Uint8Array([7, 7])]);
-    const stranger = new FakePort((message, self) => {
-      if (message.type !== 'cb:media:open') return;
-      self.deliver({
-        type: 'cb:media:head',
-        requestId: message.requestId,
-        status: 404,
-        headers: [],
-      });
-    });
+    const stranger = unknownTicketPort();
     pipe.adoptPort(owner, 'tab-a');
     pipe.adoptPort(stranger, 'tab-b');
 
@@ -575,18 +575,8 @@ describe('MediaPipe client routing', () => {
 
   it('answers a navigation 404 when no tab minted the ticket', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
-    const deny = (): FakePort =>
-      new FakePort((message, self) => {
-        if (message.type !== 'cb:media:open') return;
-        self.deliver({
-          type: 'cb:media:head',
-          requestId: message.requestId,
-          status: 404,
-          headers: [],
-        });
-      });
-    const a = deny();
-    const b = deny();
+    const a = unknownTicketPort();
+    const b = unknownTicketPort();
     pipe.adoptPort(a, 'tab-a');
     pipe.adoptPort(b, 'tab-b');
 
@@ -600,15 +590,7 @@ describe('MediaPipe client routing', () => {
   it('keeps an identified client to its own port, whatever another tab holds', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const other = streamingPort([new Uint8Array([9])]);
-    const own = new FakePort((message, self) => {
-      if (message.type !== 'cb:media:open') return;
-      self.deliver({
-        type: 'cb:media:head',
-        requestId: message.requestId,
-        status: 404,
-        headers: [],
-      });
-    });
+    const own = unknownTicketPort();
     pipe.adoptPort(own, 'tab-a');
     pipe.adoptPort(other, 'tab-b');
 
@@ -879,7 +861,7 @@ describe('MediaPipe response headers', () => {
   ];
 
   for (const [name, sent, served] of dispositions) {
-    it(`${name}`, async () => {
+    it(name, async () => {
       const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
       pipe.adoptPort(
         new FakePort((message, self) => {

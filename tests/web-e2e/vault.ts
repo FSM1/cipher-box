@@ -4,9 +4,9 @@
  */
 
 import type { Page } from '@playwright/test';
-import { expect } from '../fixtures';
-import { FilesPage } from '../page-objects/files.page';
-import { VaultPage } from '../page-objects/vault.page';
+import { expect } from './fixtures';
+import { FilesPage } from './page-objects/files.page';
+import { VaultPage } from './page-objects/vault.page';
 
 /** Multi-byte and multi-line, so no transfer that mangles either passes. */
 export const PAYLOAD = 'ciphertext round trip\n\tédition — 中文\r\nlast line without a newline';

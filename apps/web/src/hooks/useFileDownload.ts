@@ -79,7 +79,7 @@ export function useFileDownload(): FileDownload {
         const ticket = streamTicket(media, node, size, OPAQUE, name);
         if (ticket !== null) {
           tickets.current.add(ticket);
-          const done = saveTicketToDisk(ticket);
+          const frame = ticketFrame(ticket);
           try {
             const idle = await media.whenStreamIdle(ticket, STREAM_START_MS);
             if (idle.failure !== null) {
@@ -92,9 +92,9 @@ export function useFileDownload(): FileDownload {
             }
             return 'saved';
           } finally {
-            // After the read settles: the browser owns the transfer by then, so
-            // dropping the frame cannot cut it.
-            done();
+            // The browser owns the transfer once the read settles, so dropping
+            // the frame cannot cut it.
+            frame.remove();
             tickets.current.delete(ticket);
             media.revokeStreamUrl(ticket);
           }
@@ -148,16 +148,17 @@ function saveBlobToDisk(url: string, name: string): void {
 }
 
 /**
- * Drives a ticket save and returns the teardown for the frame it left behind.
- * A navigation, not a link: Chromium issues an `<a download>` request without
- * dispatching it to the Service Worker, so the link form walks past the pipe to
- * the origin, which answers a ticket path with the app shell. The pipe's
- * `content-disposition` is what makes this navigation a save.
+ * Drives a ticket save, as a navigation rather than a link: Chromium issues an
+ * `<a download>` request without dispatching it to the Service Worker, so the
+ * link form walks past the pipe to the origin, which answers a ticket path with
+ * the app shell. The pipe's `content-disposition` makes the navigation a save,
+ * and its `sandbox` is what keeps the plaintext out of this frame's reach if a
+ * body ever commits as a document here.
  */
-function saveTicketToDisk(url: string): () => void {
+function ticketFrame(url: string): HTMLIFrameElement {
   const frame = document.createElement('iframe');
   frame.hidden = true;
   frame.src = url;
   document.body.append(frame);
-  return () => frame.remove();
+  return frame;
 }

@@ -8,7 +8,7 @@
  */
 
 import { expect, test } from '../fixtures';
-import { coldStart, drained, PAYLOAD } from './vault';
+import { coldStart, drained, PAYLOAD } from '../vault';
 
 test('a created folder publishes and is listed', async ({ page }) => {
   const { vault, files } = await coldStart(page);

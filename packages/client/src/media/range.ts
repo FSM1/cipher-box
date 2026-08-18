@@ -12,12 +12,7 @@ export interface MediaWindow {
 /** What the head declares about the body beyond its bytes. */
 export interface MediaPresentation {
   readonly mimeType: string;
-  /**
-   * Set to save the body under this name rather than render it. It is what
-   * makes a save reach the pipe at all: Chromium issues an `<a download>`
-   * request without dispatching it to the worker, so a save is driven as a
-   * navigation and this header is what turns that navigation into a file.
-   */
+  /** Set to save the body under this name rather than render it. */
   readonly downloadName?: string;
 }
 
@@ -53,12 +48,10 @@ const hardening: Array<[string, string]> = [
   ['content-security-policy', "default-src 'none'; sandbox"],
 ];
 
-/**
- * RFC 8187 `attr-char`. Everything else is percent-encoded, so a vault-chosen
- * name carries no quote, no semicolon and no newline into the header — which is
- * also the shape the worker re-checks before it serves one (`sw/pipe.ts`).
- */
-const ATTR_CHAR = /[A-Za-z0-9!#$&+\-.^_`|~]/;
+/** RFC 8187 `attr-char`: the only bytes a name keeps into the header. */
+export const ATTR_CHARS = 'A-Za-z0-9!#$&+\\-.^_`|~';
+
+const ATTR_CHAR = new RegExp(`[${ATTR_CHARS}]`);
 
 function encodeAttr(name: string): string {
   return Array.from(new TextEncoder().encode(name), (byte) => {
@@ -68,7 +61,7 @@ function encodeAttr(name: string): string {
 }
 
 /** A name that encodes to nothing still saves — under whatever the browser picks. */
-export function contentDisposition(downloadName: string): string {
+function contentDisposition(downloadName: string): string {
   const encoded = encodeAttr(downloadName);
   return encoded === '' ? 'attachment' : `attachment; filename*=UTF-8''${encoded}`;
 }

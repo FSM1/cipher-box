@@ -100,9 +100,7 @@ export class FilesPage {
 
   /**
    * Saves a listed file to disk through the row's own action, and hands back
-   * the transfer the browser started. The URL it came from is what says which
-   * path served it: a `/stream/` ticket is the Service Worker pipe, a `blob:`
-   * is the tab's buffered fallback.
+   * the transfer the browser started.
    */
   async save(name: string): Promise<Download> {
     const [download] = await Promise.all([
