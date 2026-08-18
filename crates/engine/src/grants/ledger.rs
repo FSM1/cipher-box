@@ -60,9 +60,12 @@ pub fn recipient_blinded_tag(
 /// `scope_root_ipns_name` — the check only a holder of the owner encryption
 /// subkey can run, since the tag is the owner–recipient pairwise ECDH.
 ///
-/// `false` on a malformed or low-order recipient key: a tag it can never derive
-/// is a tag it is not bound to. Every input is public and the verdict is a
-/// public tag comparison, so no constant-time guarantee is needed.
+/// `false` on a recipient key core refuses to adopt: a tag it can never derive
+/// is a tag it is not bound to. That refusal covers the whole cofactor class of
+/// an honest key, not just the low-order points — a twin re-derives the honest
+/// key's tag, so the shared secret alone cannot tell the two apart. Every input
+/// is public and the verdict is a public tag comparison, so no constant-time
+/// guarantee is needed.
 pub fn entry_tag_is_bound(
     owner_enc_secret: &X25519Secret,
     entry: &GrantLedgerEntry,
@@ -253,6 +256,56 @@ mod tests {
             recipient_blinded_tag(&recipient_enc, &owner_enc.public(), name).unwrap();
         let owner_side = recipient_blinded_tag(&owner_enc, &recipient_enc.public(), name).unwrap();
         assert_eq!(recipient_side, owner_side);
+    }
+
+    #[test]
+    fn a_cofactor_twin_recipient_key_is_not_bound_to_the_tag() {
+        // The lockout the prime-order gate closes: a committed write-grantee
+        // swaps a victim's `recipientEncPk` for its cofactor twin. Clamping makes
+        // the twin drive the identical ECDH, so the tag it re-derives is the
+        // victim's own and the binding used to pass — while HPKE binds the key
+        // bytes, so the blob re-minted at the next rotation would never open for
+        // the victim, with no revocation signal.
+        let owner_enc = X25519Secret::from_scalar([0x33; 32]);
+        let victim = X25519Secret::from_scalar([0x44; 32]).public();
+        let name = b"scope-root-name";
+
+        let row = mint_grant_row(
+            &owner_enc,
+            [0x02; IDENTITY_PUBLIC_LEN],
+            &victim,
+            &[0x07; 16],
+            name,
+            Permission::Read,
+        )
+        .expect("a contributory recipient key");
+        assert!(entry_tag_is_bound(&owner_enc, &row.ledger_entry, name));
+
+        let mut swapped = row.ledger_entry.clone();
+        swapped.recipient_enc_pk = cofactor_twin(&victim);
+        assert_ne!(swapped.recipient_enc_pk, victim.to_bytes());
+        assert_eq!(
+            swapped.tag, row.ledger_entry.tag,
+            "same owner-committed tag"
+        );
+        assert!(
+            !entry_tag_is_bound(&owner_enc, &swapped, name),
+            "a key outside the prime-order subgroup binds no tag"
+        );
+    }
+
+    /// `P + t` for a non-identity `t` in `E[8]`: a distinct encoding of the same
+    /// cofactor class, which every clamped X25519 exchange collapses onto `P`.
+    fn cofactor_twin(public: &X25519Public) -> [u8; 32] {
+        let honest = public.to_bytes();
+        let lifted = curve25519_dalek::montgomery::MontgomeryPoint(honest)
+            .to_edwards(0)
+            .expect("a legitimate X25519 public key lifts to Edwards");
+        curve25519_dalek::constants::EIGHT_TORSION
+            .iter()
+            .map(|t| (lifted + t).to_montgomery().to_bytes())
+            .find(|twin| *twin != honest)
+            .expect("E[8] has seven non-identity points")
     }
 
     #[test]

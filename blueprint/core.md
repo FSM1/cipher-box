@@ -86,6 +86,14 @@ Functional decomposition, not final file layout:
   (ECDSA over det-CBOR `{identityPk, encSubkey}`) and the **contact code**
   codec (`{identityPk, encSubkey, bindingSig}`, ~130 bytes, QR/URL-encodable,
   binding verify mandatory and fail-closed at import) are core exports.
+- Every adopted **X25519 public key** must lie in the curve's prime-order
+  subgroup — a u-coordinate is lifted to Edwards and tested for torsion, so the
+  twist, the RFC 7748 small-order points, and every cofactor twin `P + t`
+  (`t` in `E[8]`) are refused at the constructor. A blacklist of small-order
+  encodings is not sufficient: clamping collapses a twin onto `P` in the shared
+  secret while HPKE binds the supplied key bytes into `kem_context`, so a check
+  reading only the shared secret — the `blinded-tag` edge, and so the grant
+  ledger's tag binding — would pin the cofactor class rather than the key.
 - Writer pseudonyms sign with **Ed25519** (deterministic derivation from the
   pairwise secret, or from `ownerPseudonymSeed` for the owner; secp256k1 stays
   confined to identity signing per FSM1/cipher-box-next#27 D3).
@@ -275,12 +283,12 @@ string — not the framing — keep the two families apart.
 The `content-key` KAT set is `content_key_accept` (a genesis-epoch and a
 max-epoch blob, each reproducing its exact bytes from a fixed enc + ephemeral,
 then opening back to the version's content key) and `content_key_reject`
-(tampered ciphertext, tampered `enc`, a truncated blob, a foreign recipient, the
-same base-mode forgery, `scope` and `epoch` transplants, a **swapped
+(tampered ciphertext, a substituted `enc`, a truncated blob, a foreign recipient,
+the same base-mode forgery, `scope` and `epoch` transplants, a **swapped
 `contentCid`** — the binding that stops a key being moved onto another version's
 blocks — a forward `v` with and without an unknown clear-header field, an
-unknown clear-header field alone, a missing `enc`, and a wide and a low-order
-`enc`). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+unknown clear-header field alone, a missing `enc`, and a wide, a low-order and a
+non-prime-order `enc`). It seals HPKE **auth mode** to the owner's own enc subkey over the same
 three-key clear header as the settings record, with `{scope, epoch}` bound in
 the AAD and the `contentCid` bound inside the seal. Both directions refuse a
 malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the

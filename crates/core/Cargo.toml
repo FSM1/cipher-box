@@ -15,6 +15,10 @@ publish.workspace = true
 # suite compiles for wasm32-wasip1 unchanged.
 blake3 = { version = "1", default-features = false }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Pulled in directly (x25519-dalek already depends on it) for the prime-order-
+# subgroup check on X25519 public keys: `is_torsion_free` is Edwards-side and
+# x25519-dalek re-exports nothing that reaches it.
+curve25519-dalek = { version = "4", default-features = false }
 ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
 hkdf = { version = "0.12", default-features = false }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic"] }

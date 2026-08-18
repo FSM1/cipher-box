@@ -9,6 +9,7 @@
 
 use core::fmt;
 
+use curve25519_dalek::montgomery::MontgomeryPoint;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::secret::{SECRET_LEN, SecretBytes};
@@ -57,14 +58,22 @@ impl fmt::Debug for X25519Secret {
 }
 
 impl X25519Public {
-    /// Adopt a 32-byte public key, **rejecting** the RFC 7748 small-order
-    /// u-coordinates. Holding an `X25519Public` therefore means "not low-order",
-    /// so [`super::hpke::dhkem_encap`] (seal) needs no separate check. This
-    /// rejects the canonical chosen-key encodings up front, before contact
-    /// import or decap; the exhaustive gate is the contributory check in
-    /// [`Self::diffie_hellman`].
+    /// Adopt a 32-byte public key, **rejecting** every u-coordinate outside the
+    /// prime-order subgroup. Holding an `X25519Public` therefore means
+    /// "prime-order", so [`super::hpke::dhkem_encap`] (seal) needs no separate
+    /// check and the contributory backstop in [`Self::diffie_hellman`] can never
+    /// fire for a peer adopted here.
+    ///
+    /// A small-order blacklist is not enough. Clamping makes the scalar a
+    /// multiple of 8, so every cofactor twin `P + t` (`t` in `E[8]`) yields the
+    /// same shared secret as `P` under a distinct encoding, and the cheapest
+    /// twin `1/u` is computable from public data. A check that reads only the
+    /// shared secret — the KDF `blinded-tag` edge, and so the grant ledger's
+    /// tag binding — therefore pins the cofactor class rather than the key,
+    /// while HPKE binds the supplied bytes into `kem_context`. Refusing the
+    /// whole class here is what keeps those two in step.
     pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Option<Self> {
-        if is_small_order(&bytes) {
+        if !is_prime_order(&bytes) {
             return None;
         }
         Some(Self(PublicKey::from(bytes)))
@@ -76,51 +85,25 @@ impl X25519Public {
     }
 }
 
-/// One p-form small-order u-coordinate: `first || 0xff×30 || 0x7f` (the p-1/p/p+1
-/// encodings, high bit already clear).
-const fn p_form(first: u8) -> [u8; 32] {
-    let mut a = [0xff; 32];
-    a[0] = first;
-    a[31] = 0x7f;
-    a
-}
-
-/// The RFC 7748 small-order u-coordinate encodings (the identity and every
-/// order-2/4/8 point), in canonical + mod-p wraparound form, with the ignored
-/// high bit cleared (libsodium's blacklist). A peer of order dividing 8 forces an
-/// all-zero ECDH result; these are the encodings a chosen-key attacker uses.
-const SMALL_ORDER_POINTS: [[u8; 32]; 7] = [
-    [0u8; 32],
-    {
-        let mut a = [0u8; 32];
-        a[0] = 1;
-        a
-    },
-    [
-        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
-        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
-        0xb8, 0x00,
-    ],
-    [
-        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
-        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
-        0x11, 0x57,
-    ],
-    p_form(0xec),
-    p_form(0xed),
-    p_form(0xee),
-];
-
-/// Whether `bytes` encodes an X25519 point of order dividing 8. X25519 ignores
-/// bit 255 of the u-coordinate, so it is masked before the table compare.
-fn is_small_order(bytes: &[u8; SECRET_LEN]) -> bool {
+/// Whether `bytes` encodes a Curve25519 point of prime order `l`. The
+/// Montgomery u-coordinate is lifted to Edwards — which rejects the twist,
+/// where the birational map has no preimage — and the lift is then tested for a
+/// torsion component, which rejects the identity, every RFC 7748 small-order
+/// point, and every cofactor twin of an honest key.
+///
+/// X25519 ignores bit 255 of the u-coordinate, so it is masked first: the masked
+/// value is the one an exchange would actually use. The Edwards sign bit passed
+/// to the lift is arbitrary because `P` and `-P` share an order.
+fn is_prime_order(bytes: &[u8; SECRET_LEN]) -> bool {
     let mut masked = *bytes;
     masked[31] &= 0x7f;
-    SMALL_ORDER_POINTS.contains(&masked)
+    MontgomeryPoint(masked)
+        .to_edwards(0)
+        .is_some_and(|p| p.is_torsion_free())
 }
 
-/// Construct a public key **without** the low-order guard, so a test can drive
-/// the ECDH contributory backstop against a point `from_bytes` refuses.
+/// Construct a public key **without** the prime-order guard, so a test can
+/// drive the ECDH contributory backstop against a point `from_bytes` refuses.
 #[cfg(test)]
 pub(crate) fn testonly_public_from_bytes(bytes: [u8; SECRET_LEN]) -> X25519Public {
     X25519Public(PublicKey::from(bytes))
@@ -194,6 +177,62 @@ mod tests {
             *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("hex");
         }
         a
+    }
+
+    #[test]
+    fn cofactor_twins_are_rejected_yet_share_the_shared_secret() {
+        // The gap a small-order blacklist leaves open: each twin is on-curve,
+        // is not low-order, encodes to distinct bytes, and drives the identical
+        // X25519 output — so every check that reads only the shared secret
+        // accepts it while HPKE, which binds the key bytes, does not.
+        let honest = X25519Secret::from_scalar([0x5a; 32]).public();
+        let lifted = MontgomeryPoint(honest.to_bytes())
+            .to_edwards(0)
+            .expect("an honest public key lifts to Edwards");
+        let peer = X25519Secret::from_scalar([0x6b; 32]);
+        let honest_dh = peer.diffie_hellman(&honest).expect("contributory");
+
+        let mut twins = 0;
+        for torsion in curve25519_dalek::constants::EIGHT_TORSION.iter() {
+            let twin = (lifted + torsion).to_montgomery().to_bytes();
+            if twin == honest.to_bytes() {
+                continue; // the identity torsion point is the key itself
+            }
+            twins += 1;
+            assert_eq!(X25519Public::from_bytes(twin), None, "twin must be refused");
+            // Drive the peer through the unguarded constructor: a twin is not
+            // low-order, so the contributory backstop cannot see it either.
+            let dh = peer
+                .diffie_hellman(&testonly_public_from_bytes(twin))
+                .expect("a twin is not low-order");
+            assert_eq!(dh.as_bytes(), honest_dh.as_bytes());
+        }
+        assert_eq!(twins, 7, "E[8] has seven non-identity points");
+    }
+
+    #[test]
+    fn twist_points_are_rejected() {
+        // u = 2 satisfies no Curve25519 point equation (it lies on the quadratic
+        // twist), so the birational lift has no preimage to test for torsion.
+        let mut twist = [0u8; 32];
+        twist[0] = 2;
+        assert_eq!(X25519Public::from_bytes(twist), None);
+    }
+
+    #[test]
+    fn every_derived_public_key_survives_its_own_decoder() {
+        // Produce/decode symmetry. `X25519Secret::public()` is the one
+        // constructor that skips `from_bytes`, so what it emits must always be
+        // re-adoptable — clamping puts it in the prime-order subgroup for any
+        // injected scalar, including the degenerate ones.
+        for seed in [0x00u8, 0x01, 0x08, 0x7f, 0x80, 0xed, 0xff] {
+            let derived = X25519Secret::from_scalar([seed; 32]).public();
+            assert_eq!(
+                X25519Public::from_bytes(derived.to_bytes()),
+                Some(derived),
+                "a derived public key must survive its own decoder"
+            );
+        }
     }
 
     #[test]

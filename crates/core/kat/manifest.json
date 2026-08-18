@@ -165,7 +165,7 @@
       "sealFile": "vectors/hpke/seal.json",
       "sealCount": 3,
       "openRejectFile": "vectors/hpke/open_reject.json",
-      "openRejectCount": 3
+      "openRejectCount": 4
     },
     "contact": {
       "accept": {
@@ -174,7 +174,7 @@
       },
       "reject": {
         "file": "vectors/contact/reject.json",
-        "count": 9,
+        "count": 10,
         "checks": [
           "subkey-binding-invalid",
           "hpke-non-contributory",
@@ -526,7 +526,7 @@
     },
     "reject": {
       "file": "vectors/content_key/content_key_reject.json",
-      "count": 14,
+      "count": 15,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

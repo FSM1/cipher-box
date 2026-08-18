@@ -271,7 +271,7 @@ fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> SecretBytes {
 }
 
 /// DHKEM `Encap(pkR)` with an injected ephemeral scalar. Infallible: `pk_r` is a
-/// validated [`X25519Public`] (never low-order), so the exchange is always
+/// validated [`X25519Public`] (always prime-order), so the exchange is always
 /// contributory.
 pub(crate) fn dhkem_encap(
     pk_r: &X25519Public,
@@ -279,11 +279,11 @@ pub(crate) fn dhkem_encap(
 ) -> (SecretBytes, [u8; ENC_LEN]) {
     let sk_e = X25519Secret::from_scalar(*ephemeral_scalar);
     let enc = sk_e.public().to_bytes();
-    // Sound only while every `X25519Public` is built through the low-order-
+    // Sound only while every `X25519Public` is built through the prime-order-
     // rejecting `from_bytes`; a constructor that bypasses it needs a re-audit.
     let dh = sk_e
         .diffie_hellman(pk_r)
-        .expect("recipient key is validated non-low-order, so ECDH is contributory");
+        .expect("recipient key is validated prime-order, so ECDH is contributory");
     (
         extract_and_expand(dh.as_bytes(), &kem_context(&enc, pk_r, None)),
         enc,
@@ -301,7 +301,7 @@ pub(crate) fn dhkem_auth_encap(
 ) -> (SecretBytes, [u8; ENC_LEN]) {
     let sk_e = X25519Secret::from_scalar(*ephemeral_scalar);
     let enc = sk_e.public().to_bytes();
-    let contributory = "recipient key is validated non-low-order, so ECDH is contributory";
+    let contributory = "recipient key is validated prime-order, so ECDH is contributory";
     let dh_e = sk_e.diffie_hellman(pk_r).expect(contributory);
     let dh_s = sk_s.diffie_hellman(pk_r).expect(contributory);
     let mut dh = Zeroizing::new(Vec::with_capacity(2 * NSECRET));
@@ -327,10 +327,10 @@ fn kem_context(enc: &[u8; ENC_LEN], pk_r: &X25519Public, pk_s: Option<&X25519Pub
 }
 
 /// DHKEM `Decap(enc, skR)`. Fails closed with
-/// [`TrustViolation::HpkeNonContributory`] when the peer `enc` is a low-order
-/// point (rejected at the constructor) or otherwise yields a non-contributory
-/// shared secret (RFC 9180 §7.1.4) — a forced-known-secret / key-substitution
-/// attack, not staleness.
+/// [`TrustViolation::HpkeNonContributory`] when the peer `enc` is outside the
+/// prime-order subgroup (rejected at the constructor) or otherwise yields a
+/// non-contributory shared secret (RFC 9180 §7.1.4) — a forced-known-secret /
+/// key-substitution attack, not staleness.
 pub(crate) fn dhkem_decap(
     sk_r: &X25519Secret,
     enc: &[u8; ENC_LEN],

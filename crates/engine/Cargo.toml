@@ -29,6 +29,9 @@ zeroize.workspace = true
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
 # The KAT generator and suite encode vector bytes as lowercase hex.
 hex = "0.4"
+# Builds a cofactor twin of an X25519 public key, so the grant-ledger tag
+# binding is tested against the class core's prime-order gate exists to refuse.
+curve25519-dalek = { version = "4", default-features = false }
 # Integration tests construct real signed/sealed records with core's crypto to
 # hand-feed the adoption-gate simulation harness (core is already a normal
 # dependency; this line makes it addressable from `tests/`).

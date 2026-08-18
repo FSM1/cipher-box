@@ -175,6 +175,13 @@ pub enum CreateGrantError {
     },
     /// The recipient encryption key is non-contributory (degenerate ECDH).
     UnusableRecipientKey,
+    /// The recipient's encryption subkey is the vault owner's own. The owner
+    /// already outranks every grantee, so the grant confers nothing while
+    /// consuming a commitment slot and filing the owner's pseudonym as a third
+    /// party's. Refused pre-publish, so nothing is minted or shared. The invite
+    /// path refuses the same input as
+    /// [`InviteError::ClaimantIsTheOwner`](super::InviteError::ClaimantIsTheOwner).
+    RecipientIsTheOwner,
     /// Encoding/signing the grant-set commitment failed (fail-closed codec).
     CommitmentEncode(CodecError),
     /// Entropy acquisition failed (seed mint or mailbox ephemeral).
@@ -231,6 +238,7 @@ impl CreateGrantError {
             Self::Converge(_) => "converge-failed",
             Self::SubtreeNotConverged { .. } => "subtree-not-converged",
             Self::UnusableRecipientKey => "unusable-recipient-key",
+            Self::RecipientIsTheOwner => "recipient-is-the-owner",
             Self::CommitmentEncode(_) => "commitment-encode-failed",
             Self::Entropy(_) => "entropy-error",
             Self::Mint(_) => "mint-failed",
@@ -277,6 +285,13 @@ where
     P: ScopeRootPublisher + SweepPublisher,
     M: Mailbox,
 {
+    // 0) Refuse a self-grant before any network effect: the sweep below
+    // publishes, so a refusal after it would have already moved the vault for a
+    // grant that is never minted.
+    if *recipient.enc_pub == owner.enc_secret.public() {
+        return Err(CreateGrantError::RecipientIsTheOwner);
+    }
+
     // 1) Derive the scope root's ipnsName from the folder's write material — the
     // sole gated identity edge (blueprint/engine.md: the name binds the record
     // via the Ed25519 key it encodes). The tag and commitment below bind this
@@ -1031,6 +1046,20 @@ mod tests {
         Vec<ResealedScopeRoot>,
         InMemoryMailboxHub,
     ) {
+        run_for(entropy_seed, subtree, net, parent_grants, &recipient_enc())
+    }
+
+    fn run_for(
+        entropy_seed: u64,
+        subtree: &[ChildScopeRef],
+        net: FakeNet,
+        parent_grants: &[GrantRow],
+        recipient_enc: &X25519Secret,
+    ) -> (
+        Result<CreateGrantOutcome, CreateGrantError>,
+        Vec<ResealedScopeRoot>,
+        InMemoryMailboxHub,
+    ) {
         let hub = InMemoryMailboxHub::default();
         let mailbox = hub.mailbox_for(&recipient_identity().to_sec1());
 
@@ -1038,7 +1067,6 @@ mod tests {
         let owner_enc_pub = owner_enc.public();
         let owner_identity = owner_identity();
         let owner_pseudonym = owner_pseudonym();
-        let recipient_enc = recipient_enc();
         let recipient_pub = recipient_enc.public();
 
         let parent_node_seed = [0x44; SECRET_LEN];
@@ -1517,6 +1545,22 @@ mod tests {
             PARENT_NAME.to_vec(),
             "never republished under the parent scope-root name"
         );
+    }
+
+    #[test]
+    fn a_self_grant_is_refused_before_any_network_effect() {
+        // Handing the owner's own encryption subkey back as the recipient's is
+        // refused on the direct path exactly as the invite path refuses it, and
+        // the refusal lands before the convergence sweep publishes anything.
+        let (outcome, published, hub) = run_for(7, &[], FakeNet::new(Ok(())), &[], &owner_enc());
+
+        let err = outcome.expect_err("a self-grant is refused");
+        assert_eq!(err, CreateGrantError::RecipientIsTheOwner);
+        assert_eq!(err.check(), "recipient-is-the-owner");
+        assert!(published.is_empty(), "nothing reaches the network");
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        let items = block_on(poll_verified(&recip_box, &owner_enc(), V)).unwrap();
+        assert!(items.is_empty(), "no share pointer is posted");
     }
 
     #[test]
