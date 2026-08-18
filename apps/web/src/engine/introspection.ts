@@ -8,7 +8,7 @@
  * hook from is the very one under test.
  */
 
-import { toHex } from '@cipherbox/client';
+import { fromHex, toHex } from '@cipherbox/client';
 import { handOffLoginSecret } from '@cipherbox/login';
 import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
 import { authStore } from '../stores/auth.store';
@@ -39,6 +39,8 @@ export interface EngineIntrospection {
   signIn(loginSecretHex: string): Promise<void>;
   /** The engine's view of the vault root. */
   snapshot(): Promise<IntrospectedView>;
+  /** One node's plaintext as the engine reads it back, hex like every other tap. */
+  download(nodeHex: string): Promise<string>;
   /** Every engine event this tab has seen, in emission order. */
   events(): Plain<EventDescriptor>[];
 }
@@ -71,6 +73,9 @@ export function installIntrospection(client: EngineClient): EngineClient {
     async snapshot() {
       const view = await client.facade.snapshot(null);
       return { view: plain(view) as Plain<SnapshotDescriptor>, settled: settled(view) };
+    },
+    async download(nodeHex) {
+      return toHex(new Uint8Array(await client.facade.download(fromHex(nodeHex))));
     },
     events: () => seen,
   };

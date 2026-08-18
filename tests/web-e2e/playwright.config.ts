@@ -47,7 +47,9 @@ export default defineConfig({
   projects: [
     {
       name: 'e2e',
-      testMatch: '**/smoke.spec.ts',
+      // Everything but the bundle-shape spec, so a new spec is in the gate the
+      // moment it lands rather than on remembering to widen a list.
+      testIgnore: '**/release-bundle.spec.ts',
       use: { ...devices['Desktop Chrome'], baseURL: url(E2E_PORT) },
     },
     {

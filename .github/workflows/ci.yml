@@ -220,7 +220,9 @@ jobs:
             target/release
             target/wasm32-unknown-unknown
           key: wasm-engine-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: wasm-engine-cargo-
+          restore-keys: |
+            wasm-engine-cargo-
+            main-wasm-cargo-
 
       - uses: ./.github/actions/wasm-bindgen-cli
 
@@ -473,7 +475,9 @@ jobs:
             ~/.cargo/git
             target
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
 
       - name: Cargo fmt
         run: cargo fmt --all --check
@@ -508,7 +512,9 @@ jobs:
             ~/.cargo/git
             target
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
 
       - name: Engine KAT vectors fresh (committed generator is the only writer)
         run: |
@@ -543,7 +549,9 @@ jobs:
             ~/.cargo/git
             target
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
 
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
@@ -573,7 +581,9 @@ jobs:
             ~/.cargo/git
             target
           key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: core-kats-cargo-
+          restore-keys: |
+            core-kats-cargo-
+            main-cargo-
 
       # wasm-bindgen-test-runner drives the wasm32-unknown-unknown legs in Node.
       - uses: ./.github/actions/wasm-bindgen-cli
@@ -662,7 +672,9 @@ jobs:
             ~/.cargo/git
             target
           key: client-browser-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: client-browser-cargo-
+          restore-keys: |
+            client-browser-cargo-
+            main-cargo-
 
       # wasm-bindgen-cli drives the conformance module build.
       - uses: ./.github/actions/wasm-bindgen-cli
@@ -824,7 +836,9 @@ jobs:
             ~/.cargo/git
             target
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
