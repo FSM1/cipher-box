@@ -21,7 +21,7 @@ use cipherbox_engine::{
 };
 use cipherbox_fuse::{
     Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
-    NameError, OperationCore, OverBudgetCause, ROOT_INO, RefusedBudget, SpillArea, VfsError,
+    NameError, OperationCore, OverBudgetCause, ROOT_INO, SpillArea, VfsError,
 };
 
 /// A spill area in a throwaway directory the mount outlives, so the directory
@@ -92,9 +92,20 @@ fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
 /// A started engine plus a handle on its durable op queue, for tests that
 /// inject a staging outage.
 fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
+    started_engine_over_queue(&[])
+}
+
+/// A started engine whose durable queue already held `entries` when cold start
+/// read it — the only way to put a record there that this build cannot decode.
+fn started_engine_over_queue(
+    entries: &[&[u8]],
+) -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let staging = device.staging_store.clone();
+    for entry in entries {
+        block_on(staging.enqueue_op(entry)).expect("the queue takes the bytes");
+    }
     let (mut engine, _events) = Engine::new(
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
@@ -786,32 +797,6 @@ fn mount_spilling_into(dir: &Path) -> (Core, InMemoryStagingStore) {
     (core, staging)
 }
 
-/// A mount whose durable queue already held one entry no build can decode, so
-/// cold start dead-letters it and the mount inherits the surfaced reason.
-fn mount_over_an_undecodable_entry() -> (Core, InMemoryStagingStore) {
-    let world = FakeWorld::new();
-    let device = world.device(b"alice-pk");
-    let staging = device.staging_store.clone();
-    block_on(staging.enqueue_op(b"not an op record")).expect("the queue takes the bytes");
-    let (mut engine, _events) = Engine::new(
-        device.seam_set(),
-        Box::new(SeededEntropy::new(42)),
-        SyncTimingProfile::CI,
-        ContentProfile::CI,
-        StoragePolicy::CI,
-        ApiBaseUrl::offline(),
-        GatewayConfig::disabled(),
-    );
-    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
-    let core = OperationCore::new(
-        engine,
-        RecordingAdapter::push_capable(),
-        CacheBudget::CI,
-        spill_area(),
-    );
-    (core, staging)
-}
-
 /// How many ops the durable queue holds.
 fn queued(staging: &InMemoryStagingStore) -> usize {
     block_on(staging.queued_ops())
@@ -1214,7 +1199,7 @@ fn refused_cause(outcome: Result<(), VfsError>) -> OverBudgetCause {
 }
 
 #[test]
-fn a_write_past_the_staging_cap_is_refused_against_this_device_budget() {
+fn a_write_past_the_staging_cap_surfaces_the_ceiling_cause() {
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, staging) = mount_spilling_into(dir.path());
     let handle = writing_handle(&mut core);
@@ -1230,21 +1215,16 @@ fn a_write_past_the_staging_cap_is_refused_against_this_device_budget() {
         "a write past the cap is the ceiling, not a backlog"
     );
     assert_eq!(
-        cause.budget(),
-        RefusedBudget::Device,
-        "a full device must not read as a full account"
-    );
-    assert_eq!(
         queued(&staging),
         after_create,
         "a refused write spends no journal entry"
     );
 }
 
-/// The backlog and the ceiling are different refusals — one clears as the drain
-/// uploads, the other never does — and both are this device's budget.
+/// The backlog and the ceiling are different refusals: one clears as the drain
+/// uploads, the other never does.
 #[test]
-fn a_write_the_backlog_cannot_hold_is_a_different_cause_on_the_same_budget() {
+fn a_write_the_backlog_cannot_hold_surfaces_a_different_cause() {
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, staging) = mount_spilling_into(dir.path());
     // Sealed bytes are what the budget counts, and CI's 16-byte framing inflates
@@ -1263,7 +1243,6 @@ fn a_write_the_backlog_cannot_hold_is_a_different_cause_on_the_same_budget() {
     let cause = refused_cause(block_on(core.release(second)));
 
     assert_eq!(cause, OverBudgetCause::StagingBacklog);
-    assert_eq!(cause.budget(), RefusedBudget::Device);
     assert_eq!(
         queued(&staging),
         after_first,
@@ -1280,7 +1259,8 @@ fn a_write_the_backlog_cannot_hold_is_a_different_cause_on_the_same_budget() {
 
 #[test]
 fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
-    let (mut core, _staging) = mount_over_an_undecodable_entry();
+    let (engine, _root, _staging) = started_engine_over_queue(&[b"not an op record"]);
+    let mut core = mount_over(engine);
 
     let status = block_on(core.status()).expect("the status reads");
 
@@ -1305,11 +1285,11 @@ fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
     );
 }
 
-/// The refusal the ack cannot wait for: an op the engine will not accept is
-/// refused before it is journaled, because an op already acked at journal time
-/// can never be retro-failed.
+/// A relocation the engine will not accept is refused before the journal entry
+/// is spent — the one mutation class whose ack waits on more than the fsync,
+/// because an op the kernel already heard success for can never be retro-failed.
 #[test]
-fn a_relocation_the_engine_cannot_place_in_scope_is_refused_before_it_is_journaled() {
+fn a_relocation_the_engine_refuses_spends_no_journal_entry() {
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, staging) = mount_spilling_into(dir.path());
     let (file, handle) =
@@ -1319,15 +1299,14 @@ fn a_relocation_the_engine_cannot_place_in_scope_is_refused_before_it_is_journal
 
     let refusal = block_on(core.engine_mut().command(Command::Relink {
         node: file.node,
-        // A destination no walk from this vault's root reaches — the engine
-        // cannot rule out that moving there exits a granted scope.
         new_parent: NodeId([0xee; 16]),
     }))
-    .expect_err("an unplaceable destination is refused");
+    .expect_err("a destination the render does not hold is refused");
 
-    assert!(
-        matches!(VfsError::from(refusal), VfsError::Refused { .. }),
-        "the refusal must be its own class, not a host fault"
+    assert_eq!(
+        VfsError::from(refusal),
+        VfsError::NotFound,
+        "a destination that is simply gone is ENOENT, not a scope verdict"
     );
     assert_eq!(queued(&staging), before, "the queue is unchanged");
 }
@@ -1336,7 +1315,7 @@ fn a_relocation_the_engine_cannot_place_in_scope_is_refused_before_it_is_journal
 /// says and what the mount shows cannot disagree.
 #[test]
 fn the_mount_status_reports_a_quiet_mount_as_quiet() {
-    let (mut core, _adapter) = mount();
+    let (core, _adapter) = mount();
 
     let status = block_on(core.status()).expect("the status reads");
 

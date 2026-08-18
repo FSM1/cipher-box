@@ -3792,6 +3792,42 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
     );
 }
 
+/// The one mutation class whose ack waits on more than the fsync: a relocation
+/// the engine cannot prove stays in scope is refused before it is journaled,
+/// because an op the caller already heard success for can never be retro-failed
+/// (blueprint/desktop.md "Conflicts, dead letters, and rotation"). Before this,
+/// the op journaled and dead-lettered a drain pass later.
+#[test]
+fn a_relocation_the_engine_refuses_spends_no_journal_entry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (_photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    let before = block_on(StagingStore::queued_ops(&alice.staging_store))
+        .unwrap()
+        .len();
+
+    let refusal = block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: NodeId([0xee; 16]),
+    }))
+    .expect_err("a destination the render does not hold is refused");
+
+    assert!(
+        matches!(refusal, EngineError::UnknownNode),
+        "expected the same verdict every other read gives a missing node, got {refusal:?}"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        before,
+        "a refused relocation spends no journal entry"
+    );
+}
+
 /// Set up a relink whose source-remove leg is refused with `refusal`, and hand
 /// back the op the drain halts on. The dest-add lands and is compensated first,
 /// so what the queue sees afterwards is the classification of the source-remove

@@ -78,12 +78,14 @@ describe('an upload row', () => {
     expect(screen.queryByLabelText('Cancel upload of report.pdf')).toBeNull();
   });
 
+  // Every cause the user can still act on: the engine's message says which
+  // budget refused, and the row says what to do about that one.
   it.each([
-    ['overBudgetStagingBacklog', 'wait'],
-    ['overBudgetTooManyWrites', 'wait'],
-    ['overBudgetDeviceFull', 'freeDeviceSpace'],
-    ['overBudgetAccountQuota', 'freeAccountQuota'],
-  ])('offers a retry on %s, which the user can still clear', (code, remedy) => {
+    ['overBudgetStagingBacklog', 'finish first'],
+    ['overBudgetTooManyWrites', 'finish first'],
+    ['overBudgetDeviceFull', 'space on this device'],
+    ['overBudgetAccountQuota', 'your CipherBox storage'],
+  ])('offers a retry on %s and says what will clear it', (code, action) => {
     show(
       entry({
         phase: 'failed',
@@ -94,29 +96,40 @@ describe('an upload row', () => {
 
     const message = screen.getByTestId('upload-row-error');
     expect(message.className).toContain('upload-row-error--transient');
-    expect(message.getAttribute('data-remedy')).toBe(remedy);
+    expect(message.textContent).toContain('only 100 are free');
+    expect(screen.getByTestId('upload-row-remedy').textContent).toContain(action);
     expect(screen.getByLabelText('Retry upload of report.pdf')).toBeTruthy();
   });
 
-  it.each(['overBudgetStagingLimit', 'overBudgetStorageUnmeasured'])(
-    'drops the retry on %s, where retrying can never succeed',
-    (code) => {
-      show(
-        entry({
-          phase: 'failed',
-          code,
-          error: 'this device cannot stage a write this large',
-        })
-      );
+  // Including a cause this build does not name: an unnamed over-budget code
+  // must fail closed rather than inherit the retry.
+  it.each([
+    'overBudgetStagingLimit',
+    'overBudgetStorageUnmeasured',
+    'overBudgetSomethingThisBuildDoesNotName',
+  ])('drops the retry on %s, where trying again can never succeed', (code) => {
+    show(
+      entry({
+        phase: 'failed',
+        code,
+        error: 'this device cannot stage a write this large',
+      })
+    );
 
-      const message = screen.getByTestId('upload-row-error');
-      expect(message.className).not.toContain('upload-row-error--transient');
-      expect(message.getAttribute('data-remedy')).toBe('nothing');
-      expect(screen.queryByLabelText('Retry upload of report.pdf')).toBeNull();
-      // Nothing may strand its `File`, whether or not a retry can help.
-      expect(screen.getByLabelText('Dismiss upload of report.pdf')).toBeTruthy();
-    }
-  );
+    const message = screen.getByTestId('upload-row-error');
+    expect(message.className).not.toContain('upload-row-error--transient');
+    expect(screen.getByTestId('upload-row-remedy').textContent).toContain('will not help');
+    expect(screen.queryByLabelText('Retry upload of report.pdf')).toBeNull();
+    // Nothing may strand its `File`, whether or not a retry can help.
+    expect(screen.getByLabelText('Dismiss upload of report.pdf')).toBeTruthy();
+  });
+
+  it('leaves a failure that is not over-budget alone', () => {
+    show(entry({ phase: 'failed', code: 'noPlacement', error: 'no reachable pin provider' }));
+
+    expect(screen.queryByTestId('upload-row-remedy')).toBeNull();
+    expect(screen.getByLabelText('Retry upload of report.pdf')).toBeTruthy();
+  });
 
   it('marks a stopped attempt as retryable, not settled', () => {
     show(entry({ phase: 'stalled', opId: 1n, error: 'no reachable pin provider' }));

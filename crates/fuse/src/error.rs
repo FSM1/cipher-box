@@ -4,10 +4,9 @@
 use core::fmt;
 
 use cipherbox_engine::EngineError;
-/// Which budget a write exceeded, in the engine's own vocabulary. Which errno
-/// each maps to is the adapter's call, but not a judgement call:
-/// [`OverBudgetCause::budget`] answers it — `ENOSPC` for
-/// [`RefusedBudget::Device`], `EDQUOT` for [`RefusedBudget::Account`].
+/// Which budget a write exceeded, in the engine's own vocabulary. Choosing the
+/// errno stays the adapter's call, but not a judgement call:
+/// [`OverBudgetCause::budget`] decides it.
 pub use cipherbox_engine::{OverBudgetCause, RefusedBudget};
 
 use crate::name::NameError;
@@ -35,11 +34,8 @@ pub enum VfsError {
     BadHandle,
     /// A write exceeded a storage budget.
     OverBudget(OverBudgetCause),
-    /// The engine refused the mutation before journaling it, so the kernel
-    /// hears it now rather than being retro-failed for an op it was already
-    /// acked for. Fail-closed and never retried; an adapter maps it to its
-    /// EIO-class code (blueprint/desktop.md "Conflicts, dead letters, and
-    /// rotation").
+    /// A journal-time refusal ([`EngineError::ScopeExitRefused`]). Fail-closed
+    /// and never retried; an adapter maps it to its EIO-class code.
     Refused {
         /// The refusal classification; never key material.
         message: String,
@@ -225,8 +221,7 @@ mod tests {
         }
     }
 
-    /// The errno an adapter owes each cause, so the split cannot be re-decided
-    /// per adapter: a full device is `ENOSPC`, a full account is `EDQUOT`.
+    /// The whole cause set against the errno axis, so no adapter re-decides it.
     #[test]
     fn only_the_account_quota_is_an_account_budget() {
         for cause in [
@@ -244,17 +239,16 @@ mod tests {
         );
     }
 
-    /// A journal-time refusal is its own class: an adapter that mapped it to
-    /// [`VfsError::Internal`] would report a host fault for a fail-closed
-    /// verdict the user must act on.
+    /// An adapter that mapped this to [`VfsError::Internal`] would report a
+    /// host fault for a verdict the user must act on.
     #[test]
-    fn a_journal_time_refusal_is_neither_internal_nor_a_trust_verdict() {
+    fn a_journal_time_refusal_is_its_own_class() {
         assert_eq!(
             VfsError::from(EngineError::ScopeExitRefused {
-                message: "its destination folder is not inside this vault".into(),
+                message: "out of scope".into(),
             }),
             VfsError::Refused {
-                message: "its destination folder is not inside this vault".into(),
+                message: "out of scope".into(),
             }
         );
     }

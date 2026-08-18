@@ -58,29 +58,37 @@ export function isRecoverableEngineError(code: string | undefined): boolean {
 }
 
 /**
- * What a user can do about an over-budget refusal. The engine separates six
- * causes (`OverBudgetCause` in `crates/engine/src/facade.rs`) and each crosses
- * as its own code, because "wait for the drain" and "free some space" are
- * opposite instructions and only one of them is ever true.
+ * What a user can do about an over-budget refusal. Each of the engine's six
+ * `OverBudgetCause` values crosses as its own code, because "wait for the
+ * drain" and "free some space" are opposite instructions and only one of them
+ * is ever true of a given refusal.
  */
 export type OverBudgetRemedy = 'wait' | 'freeDeviceSpace' | 'freeAccountQuota' | 'nothing';
 
-const OVER_BUDGET_REMEDIES: Readonly<Record<string, OverBudgetRemedy>> = {
-  overBudgetStagingBacklog: 'wait',
-  overBudgetTooManyWrites: 'wait',
-  overBudgetDeviceFull: 'freeDeviceSpace',
-  overBudgetAccountQuota: 'freeAccountQuota',
-  overBudgetStagingLimit: 'nothing',
-  overBudgetStorageUnmeasured: 'nothing',
-};
+/** The shared prefix every over-budget code the wasm boundary emits carries. */
+const OVER_BUDGET_PREFIX = 'overBudget';
+
+const OVER_BUDGET_REMEDIES = new Map<string, OverBudgetRemedy>([
+  ['overBudgetStagingBacklog', 'wait'],
+  ['overBudgetTooManyWrites', 'wait'],
+  ['overBudgetDeviceFull', 'freeDeviceSpace'],
+  ['overBudgetAccountQuota', 'freeAccountQuota'],
+  ['overBudgetStagingLimit', 'nothing'],
+  ['overBudgetStorageUnmeasured', 'nothing'],
+]);
 
 /**
  * The remedy an over-budget code implies, or `undefined` for every failure that
- * is not one. Named codes only, so an unrecognized code never widens into an
- * offer to retry.
+ * is not one.
+ *
+ * The Rust `match` that emits these codes is exhaustive and this table cannot
+ * be, so an over-budget code this build does not name resolves to `'nothing'`:
+ * offering a retry that can never work is the failure the split exists to
+ * remove, and a cause added later must not reintroduce it.
  */
 export function overBudgetRemedy(code: string | undefined): OverBudgetRemedy | undefined {
-  return code === undefined ? undefined : OVER_BUDGET_REMEDIES[code];
+  if (code === undefined || !code.startsWith(OVER_BUDGET_PREFIX)) return undefined;
+  return OVER_BUDGET_REMEDIES.get(code) ?? 'nothing';
 }
 
 /** Which of the engine's handle tables a step addresses. */

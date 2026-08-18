@@ -1,4 +1,4 @@
-import { overBudgetRemedy } from '@cipherbox/client';
+import { overBudgetRemedy, type OverBudgetRemedy } from '@cipherbox/client';
 import { isActiveUpload, type UploadEntry, type UploadPhase } from '../../hooks/useDropUpload';
 import { formatBytes } from '../../utils/format';
 
@@ -8,6 +8,15 @@ interface UploadListItemProps {
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
 }
+
+// What the user does next about a refused write. The engine's message says
+// which budget refused and by how much; this says what to do about it.
+const REMEDIES: Record<OverBudgetRemedy, string> = {
+  wait: 'Queued uploads have to finish first — try again in a moment.',
+  freeDeviceSpace: 'Free up space on this device, then try again.',
+  freeAccountQuota: 'Free up your CipherBox storage, then try again.',
+  nothing: 'Trying again will not help.',
+};
 
 const LABELS: Record<UploadPhase, string> = {
   staging: 'sealing',
@@ -30,8 +39,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
   const indeterminate = phase === 'staging';
   const remedy = overBudgetRemedy(upload.code ?? undefined);
   // A refusal something can still clear — the drain, free space, more quota —
-  // is a ceiling, not the settled red of a row that will never publish. A
-  // `'nothing'` remedy is exactly the case where retrying can never work.
+  // is a ceiling, not the settled red of a row that will never publish.
   const transient = phase === 'stalled' || (remedy !== undefined && remedy !== 'nothing');
   const retryable = phase !== 'uploaded' && remedy !== 'nothing';
 
@@ -107,10 +115,15 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
         <p
           className={`upload-row-error${transient ? ' upload-row-error--transient' : ''}`}
           data-testid="upload-row-error"
-          data-remedy={remedy}
           role={phase === 'failed' ? 'alert' : undefined}
         >
           {error}
+          {remedy !== undefined && (
+            <span className="upload-row-remedy" data-testid="upload-row-remedy">
+              {' '}
+              {REMEDIES[remedy]}
+            </span>
+          )}
         </p>
       )}
     </div>

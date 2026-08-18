@@ -12,8 +12,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{
-    BlockedOp, Command, DeadLetter, Engine, EngineView, NodeAttrs, NodeId, NodeKind, Staleness,
-    StatFs, StreamHandle, WriteHandle, WriteTarget,
+    Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, SessionStatus, StatFs, StreamHandle,
+    WriteHandle, WriteTarget,
 };
 
 use zeroize::Zeroizing;
@@ -41,26 +41,6 @@ pub struct Attributes {
     pub size: Option<u64>,
     /// Modification time in Unix millis, once projected.
     pub mtime_millis: Option<u64>,
-}
-
-/// What the tray renders beside the mount, none of it kernel-facing.
-///
-/// The compensation channel for work the kernel was already acked for: a
-/// dead-lettered op is surfaced with its staged bytes preserved and a held op
-/// is surfaced as state, because neither may retro-fail an operation that
-/// already returned success (blueprint/desktop.md "Conflicts, dead letters,
-/// and rotation").
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MountStatus {
-    /// Terminally unrebasable ops, each with why it will never publish.
-    pub dead_letters: Vec<DeadLetter>,
-    /// The drain's over-quota hold, if it has one.
-    pub blocked: Option<BlockedOp>,
-    /// Queue entries this session holds but cannot read — what explains an
-    /// over-budget refusal on a mount that looks empty.
-    pub retained_records: usize,
-    /// The staleness rung the mount is reading at.
-    pub staleness: Staleness,
 }
 
 /// One entry in a directory listing.
@@ -711,17 +691,11 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(self.render().await?.statfs())
     }
 
-    /// What the mount owes the user outside the kernel path — dead letters, the
-    /// drain's hold, retained records, and the staleness rung — off the same
-    /// render every read uses, so the tray and the listing never disagree.
-    pub async fn status(&mut self) -> Result<MountStatus, VfsError> {
-        let view = self.render().await?;
-        Ok(MountStatus {
-            dead_letters: view.dead_letters().to_vec(),
-            blocked: view.blocked(),
-            retained_records: view.retained_records(),
-            staleness: view.staleness(),
-        })
+    /// What the mount owes the user outside the kernel path. Never reached from
+    /// a vfs operation: the tray reads it, and the kernel is never failed for
+    /// anything it reports.
+    pub async fn status(&self) -> Result<SessionStatus, VfsError> {
+        Ok(self.engine.status().await?)
     }
 
     /// One internally-consistent read of the facade's rendered state, with the

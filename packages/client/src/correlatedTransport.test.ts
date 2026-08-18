@@ -215,12 +215,16 @@ describe('overBudgetRemedy', () => {
     expect(overBudgetRemedy(code)).toBe(remedy);
   });
 
-  // Including the flattened code the boundary used to send: an unrecognized
-  // code must not widen into an offer to retry.
-  it.each(['tooManyStreams', 'trustViolation', 'overBudget', undefined])(
+  it.each(['tooManyStreams', 'trustViolation', 'constructor', undefined])(
     'leaves %s unclassified',
     (code) => {
       expect(overBudgetRemedy(code)).toBeUndefined();
     }
   );
+
+  // The Rust match that emits these is exhaustive and this table cannot be, so
+  // a cause added later must not inherit the retry the two waiting causes get.
+  it('reads an over-budget code it does not name as unclearable', () => {
+    expect(overBudgetRemedy('overBudgetSomeFutureCeiling')).toBe('nothing');
+  });
 });

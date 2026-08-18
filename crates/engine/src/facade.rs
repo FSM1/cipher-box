@@ -239,8 +239,10 @@ pub enum OverBudgetCause {
     AccountQuota,
 }
 
-/// Whose budget refused — the one axis both host boundaries branch on, so a
-/// POSIX adapter and a browser UI cannot classify the same refusal differently.
+/// Whose budget refused, which is the axis a POSIX host adapter needs and the
+/// only one it may decide from: `ENOSPC` for [`Device`](RefusedBudget::Device),
+/// `EDQUOT` for [`Account`](RefusedBudget::Account) (blueprint/desktop.md
+/// "Reads, writes, and the never-block law").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusedBudget {
     /// This device's staging budget, in every form it can run out.
@@ -250,10 +252,7 @@ pub enum RefusedBudget {
 }
 
 impl OverBudgetCause {
-    /// Whose budget this cause names. `ENOSPC` for [`RefusedBudget::Device`]
-    /// and `EDQUOT` for [`RefusedBudget::Account`] (blueprint/desktop.md
-    /// "Reads, writes, and the never-block law") — collapsing the two tells a
-    /// user to free space on the wrong machine.
+    /// Whose budget this cause names.
     pub fn budget(self) -> RefusedBudget {
         match self {
             OverBudgetCause::StagingLimit
@@ -277,6 +276,27 @@ pub struct DeadLetter {
     pub reason: DeadLetterReason,
 }
 
+/// What a session owes the user outside any one folder — the compensation
+/// channel for work already acked at journal time, which is why none of it may
+/// retro-fail an operation that already returned success (blueprint/desktop.md
+/// "Conflicts, dead letters, and rotation").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStatus {
+    /// Every retained dead-lettered op, with its reason.
+    pub dead_letters: Vec<DeadLetter>,
+    /// The over-quota hold, if the drain has one. Read rather than evented:
+    /// this is a state that *clears*, and a lost "resumed" would strand a host
+    /// on a blockage that is gone.
+    pub blocked: Option<BlockedOp>,
+    /// How many durable queue entries this session holds but cannot read
+    /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
+    /// device is not empty, never whose work it holds — and it exists so an
+    /// over-budget rejection on an apparently empty vault has an explanation.
+    pub retained_records: usize,
+    /// The staleness rung at read time.
+    pub staleness: Staleness,
+}
+
 /// A key-free snapshot of one folder for a host UI paint: its children, its
 /// breadcrumb trail, the retained dead letters, and the staleness rung — one
 /// internally-consistent read of the rendered view (state law).
@@ -295,18 +315,13 @@ pub struct SnapshotView {
     /// Ancestor trail from the folder's parent up to and including the root,
     /// nearest first.
     pub ancestors: Vec<Breadcrumb>,
-    /// Every retained dead-lettered op, with its reason.
+    /// See [`SessionStatus::dead_letters`].
     pub dead_letters: Vec<DeadLetter>,
-    /// The over-quota hold, if the drain has one. Read here and never as an
-    /// event: this is a state that *clears*, and a lost "resumed" would strand
-    /// the UI on a blockage that is gone.
+    /// See [`SessionStatus::blocked`].
     pub blocked: Option<BlockedOp>,
-    /// How many durable queue entries this session holds but cannot read
-    /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
-    /// device is not empty, never whose work it holds — and it exists so an
-    /// over-budget rejection on an apparently empty vault has an explanation.
+    /// See [`SessionStatus::retained_records`].
     pub retained_records: usize,
-    /// The staleness rung at read time.
+    /// See [`SessionStatus::staleness`].
     pub staleness: Staleness,
 }
 
@@ -1087,42 +1102,12 @@ impl EventStream {
 /// internally consistent.
 pub struct EngineView {
     rendered: Snapshot,
-    dead_letters: Vec<DeadLetter>,
-    blocked: Option<BlockedOp>,
-    retained_records: usize,
-    staleness: Staleness,
 }
 
 impl EngineView {
     /// The rendered root node id — the FUSE mount anchor.
     pub fn root(&self) -> NodeId {
         self.rendered.root
-    }
-
-    /// Every retained dead-lettered op, with its reason. The compensation
-    /// channel for ops already acked at journal time: a mount surfaces these
-    /// rather than retro-failing the kernel (blueprint/desktop.md "Conflicts,
-    /// dead letters, and rotation").
-    pub fn dead_letters(&self) -> &[DeadLetter] {
-        &self.dead_letters
-    }
-
-    /// The drain's over-quota hold, if it has one. A held op is state, not a
-    /// failure: it keeps its place and its staging reservation.
-    pub fn blocked(&self) -> Option<BlockedOp> {
-        self.blocked
-    }
-
-    /// Durable queue entries this session holds but cannot read (CONTEXT.md
-    /// "Retained record") — what explains an over-budget refusal on a vault
-    /// that looks empty.
-    pub fn retained_records(&self) -> usize {
-        self.retained_records
-    }
-
-    /// The staleness rung at render time.
-    pub fn staleness(&self) -> Staleness {
-        self.staleness
     }
 
     /// The children under `parent`, deterministically ordered by node id.
@@ -1159,27 +1144,31 @@ impl EngineView {
     }
 }
 
-/// Where a relocation lands relative to the source scope, decided at journal
-/// time and fail-closed.
+/// Prove at journal time that a relocation stays inside this session's one
+/// scope, so the op reaching [`stage_op`] is the [`ScopeCrossing::Intra`] its
+/// callers record.
 ///
-/// A session holds one scope, so a relocation is [`ScopeCrossing::Intra`] only
-/// when both parents hang off the rendered root. A parent the walk cannot place
-/// there may owe a scope-exit rotation, which no arm of this build authors, so
-/// the op is refused before it is journaled rather than journaled and stranded
-/// (blueprint/desktop.md "Conflicts, dead letters, and rotation").
-fn scope_crossing(
-    rendered: &Snapshot,
-    from_parent: NodeId,
-    new_parent: NodeId,
-) -> Result<ScopeCrossing, EngineError> {
-    for (role, node) in [("source", from_parent), ("destination", new_parent)] {
-        if node != rendered.root && !rendered.ancestors(node).contains(&rendered.root) {
-            return Err(EngineError::ScopeExitRefused {
-                message: format!("its {role} folder is not inside this vault"),
-            });
-        }
+/// A destination the render does not hold is [`EngineError::UnknownNode`] — the
+/// same verdict [`Engine::snapshot`] gives it, so a host reads one answer for a
+/// node that is gone. A destination it holds but cannot walk to the root is
+/// refused instead: the rotation such a relocation may owe cannot be settled
+/// here, and refusing before the journal entry is spent is the only order that
+/// works, because an op the caller was already told succeeded can never be
+/// retro-failed (blueprint/desktop.md "Conflicts, dead letters, and rotation").
+///
+/// Only the destination is checked: the source parent comes from
+/// [`Engine::relocation_anchors`], which reads it off the render or falls back
+/// to the root.
+fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), EngineError> {
+    if !rendered.contains(new_parent) {
+        return Err(EngineError::UnknownNode);
     }
-    Ok(ScopeCrossing::Intra)
+    if new_parent != rendered.root && !rendered.ancestors(new_parent).contains(&rendered.root) {
+        return Err(EngineError::ScopeExitRefused {
+            message: "its destination folder is not in this session's scope".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
@@ -2580,14 +2569,14 @@ impl<T: SeamTypes> Engine<T> {
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                let crossing = scope_crossing(&rendered, from_parent, new_parent)?;
+                refuse_scope_exit(&rendered, new_parent)?;
                 let op = Op::relink(
                     node,
                     from_parent,
                     new_parent,
                     base_sequence,
                     authored_at,
-                    crossing,
+                    ScopeCrossing::Intra,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -2599,7 +2588,7 @@ impl<T: SeamTypes> Engine<T> {
             } => {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                let crossing = scope_crossing(&rendered, from_parent, new_parent)?;
+                refuse_scope_exit(&rendered, new_parent)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -2615,7 +2604,7 @@ impl<T: SeamTypes> Engine<T> {
                     replacing,
                     base_sequence,
                     authored_at,
-                    crossing,
+                    ScopeCrossing::Intra,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -3246,17 +3235,26 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        let scan = self.scan_queue().await?;
-        let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
-        let rendered = {
-            let base = self.snapshot.borrow();
-            apply_overlay(&base, &ops)
-        };
         Ok(EngineView {
-            rendered,
+            rendered: self.render().await?,
+        })
+    }
+
+    /// What this session owes the user outside any one folder: the retained
+    /// dead letters, the drain's hold, the unreadable queue entries, and the
+    /// staleness rung. Off the durable queue and the engine's own state, never
+    /// off a render — a mount reads this for its tray without paying for the
+    /// snapshot overlay on the kernel path.
+    pub async fn status(&self) -> Result<SessionStatus, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        // Every `RefCell` read happens after the await, so no borrow spans it.
+        let retained_records = self.scan_queue().await?.retained;
+        Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
-            retained_records: scan.retained,
+            retained_records,
             staleness: self.staleness_now(),
         })
     }
@@ -3327,7 +3325,6 @@ impl<T: SeamTypes> Engine<T> {
             .node(folder)
             .map(|meta| meta.name.clone())
             .unwrap_or_default();
-        drop(dead);
         Ok(SnapshotView {
             root: rendered.root,
             folder,
@@ -3802,6 +3799,32 @@ mod tests {
 
     use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+
+    /// A destination the render cannot walk to the root is refused, and one it
+    /// does not hold at all is the same "gone" verdict every other read gives —
+    /// a host that could not tell them apart would show a scope-exit
+    /// explanation for a folder someone simply deleted.
+    #[test]
+    fn a_relocation_is_proven_in_scope_before_it_can_be_journaled() {
+        let root = NodeId([1; 16]);
+        let inside = NodeId([2; 16]);
+        let orphan = NodeId([3; 16]);
+        let mut rendered = Snapshot::new(root);
+        rendered.upsert_node(NodeMeta::new(inside, "box", NodeKind::Folder));
+        rendered.link_next(root, inside);
+        rendered.upsert_node(NodeMeta::new(orphan, "adrift", NodeKind::Folder));
+
+        assert!(refuse_scope_exit(&rendered, root).is_ok());
+        assert!(refuse_scope_exit(&rendered, inside).is_ok());
+        assert!(matches!(
+            refuse_scope_exit(&rendered, NodeId([9; 16])),
+            Err(EngineError::UnknownNode)
+        ));
+        assert!(matches!(
+            refuse_scope_exit(&rendered, orphan),
+            Err(EngineError::ScopeExitRefused { .. })
+        ));
+    }
 
     /// Shaped as the API issues one; the engine signs nothing else.
     const LOGIN_CHALLENGE_FIXTURE: &str =

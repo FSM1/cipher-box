@@ -29,5 +29,5 @@ pub use error::{OverBudgetCause, RefusedBudget, VfsError};
 pub use handle::{Access, HandleId, HandleTable, OpenFile};
 pub use inode::{InodeTable, ROOT_INO};
 pub use name::{MAX_NAME_BYTES, NameError, is_emittable, is_platform_junk, validate_name};
-pub use ops::{Attributes, DirEntry, MountStatus, OperationCore};
+pub use ops::{Attributes, DirEntry, OperationCore};
 pub use spill::SpillArea;

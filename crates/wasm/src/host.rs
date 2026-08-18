@@ -450,9 +450,8 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::MalformedInput { .. } => "malformedInput",
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
-        // One code per cause: a host branches on which budget refused, because
-        // the actions differ (wait, free space here, free the account, stop
-        // trying) and prose is not a branchable surface.
+        // One code per cause, because the actions differ and prose is not a
+        // branchable surface.
         EngineError::OverBudget { cause, .. } => match cause {
             OverBudgetCause::StagingLimit => "overBudgetStagingLimit",
             OverBudgetCause::DeviceFull => "overBudgetDeviceFull",
@@ -582,9 +581,7 @@ mod tests {
         }
     }
 
-    /// The over-budget wire codes `packages/client` and `apps/web` branch on.
-    /// Flattened to one, "free some space" and "wait for the drain" become the
-    /// same message and only one of them is ever true.
+    /// The wire codes `packages/client` and `apps/web` branch on.
     #[wasm_bindgen_test]
     fn each_over_budget_cause_crosses_as_its_own_code() {
         for (cause, expected) in [
