@@ -259,9 +259,10 @@ pub enum Malformed {
     UnexpectedBreak { offset: usize },
     /// Nesting beyond [`crate::codec::MAX_DEPTH`].
     DepthExceeded { offset: usize },
-    /// A repeated collection carried more members than its frozen bound admits.
-    /// A framing bound like [`Self::DepthExceeded`], not a cryptographic
-    /// verdict: it caps the verification work one record can demand.
+    /// A repeated collection carried more members — or a bounded byte field more
+    /// bytes — than its frozen bound admits. A framing bound like
+    /// [`Self::DepthExceeded`], not a cryptographic verdict: it caps the
+    /// verification work one record can demand.
     TooManyStructures {
         /// The wire key of the collection that overflowed.
         collection: &'static str,

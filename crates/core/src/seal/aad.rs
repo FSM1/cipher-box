@@ -73,6 +73,12 @@ pub const STRUCT_TAG_CONTENT_KEY: u8 = 0x0c;
 /// [`AadContext`]; the store kind separates the family from within
 /// (FSM1/cipher-box-next ADR 0006).
 pub const STRUCT_TAG_OWNER_LOCAL: u8 = 0x0d;
+/// `write-history-link` — the write plane's single history link, HPKE-sealed to
+/// the owner's enc subkey ([`super::grant::seal_owner_history_link`]). A
+/// separate tag from `history-link` because the two planes seal the same payload
+/// grammar under different constructions at independently-clocked epochs, so the
+/// tag is what keeps them structurally unswappable.
+pub const STRUCT_TAG_WRITE_HISTORY_LINK: u8 = 0x0e;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -83,7 +89,7 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The thirteen structure tags, in registry (byte) order. Every new tag extends
+/// The fourteen structure tags, in registry (byte) order. Every new tag extends
 /// this table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
@@ -137,6 +143,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "owner-local",
         tag: STRUCT_TAG_OWNER_LOCAL,
+    },
+    StructTagSpec {
+        name: "write-history-link",
+        tag: STRUCT_TAG_WRITE_HISTORY_LINK,
     },
 ];
 
@@ -197,8 +207,8 @@ mod tests {
         }
         assert_eq!(
             STRUCT_TAGS.len(),
-            13,
-            "the frozen byte-space is thirteen tags"
+            14,
+            "the frozen byte-space is fourteen tags"
         );
     }
 

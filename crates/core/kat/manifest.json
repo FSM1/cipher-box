@@ -58,7 +58,8 @@
     "pointer-payload": 7,
     "read-body": 1,
     "settings-record": 11,
-    "write-body": 2
+    "write-body": 2,
+    "write-history-link": 14
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
@@ -295,15 +296,17 @@
     "ownerWriteBlobStructTag": 9,
     "ascentLinkStructTag": 5,
     "historyLinkStructTag": 6,
+    "writeHistoryLinkStructTag": 14,
     "writeBodyAccept": {
       "file": "vectors/grant/write_body_accept.json",
       "count": 4
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 6,
+      "count": 7,
       "checks": [
         "duplicate-grant-tag",
+        "too-many-structures",
         "unexpected-type",
         "missing-field",
         "invalid-permission",
@@ -373,6 +376,17 @@
       "checks": [
         "missing-field",
         "invalid-field-length"
+      ]
+    },
+    "writeHistoryLinkAccept": {
+      "file": "vectors/grant/write_history_link_accept.json",
+      "count": 1
+    },
+    "writeHistoryLinkReject": {
+      "file": "vectors/grant/write_history_link_reject.json",
+      "count": 7,
+      "checks": [
+        "hpke-open-failed"
       ]
     },
     "structureSigAccept": {

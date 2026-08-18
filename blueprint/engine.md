@@ -496,8 +496,15 @@ unchanged read key at its unchanged read epoch; without it they reach the new
 root and stop ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
 The republish is therefore **not** byte-stable, and the wave touches read-plane
 _metadata_ while never re-keying it — the **read** override seed, read keys and
-`minReadEpoch` still carry verbatim, and the read-epoch floor never moves. The
-re-point publishes to three channels (FSM1/cipher-box-next#38 D3): the scope pointer record
+`minReadEpoch` still carry verbatim, and the read-epoch floor never moves.
+
+The wave carries one envelope epoch across the whole subtree, so every republish
+re-reads both durable floors immediately before it seals and refuses below
+either: a concurrent read rotation lifting the read floor mid-wave would
+otherwise leave the subtree gate-rejected at its new names and retired at its old
+ones.
+
+The re-point publishes to three channels (FSM1/cipher-box-next#38 D3): the scope pointer record
 (canonical), the mailbox
 (accelerator, verifiable), and the old root name's final tombstone
 (accelerator, feeding FSM1/cipher-box-next#33's silent depth-guarded `movedTo` chase). Inventory

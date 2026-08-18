@@ -1,0 +1,93 @@
+[
+  {
+    "name": "tampered-ciphertext",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 14,
+    "ciphertext": "d4e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009acfe4ab7a8ad9acc",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "tampered-tag",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 14,
+    "ciphertext": "d5e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009acfe4ab7a8ad9acd",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "truncated-ciphertext",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 14,
+    "ciphertext": "d5e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "read-plane-struct-tag",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 6,
+    "ciphertext": "d5e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009acfe4ab7a8ad9acc",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "scope-transplant",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "epoch": 3,
+    "structTag": 14,
+    "ciphertext": "d5e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009acfe4ab7a8ad9acc",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "write-epoch-transplant",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 14,
+    "ciphertext": "d5e8e21e304e64a64e3d9218d9c41f8071be1bc95ec4dd7dd2bec9fea9db4e459e1c61b1e6232642818f0c1e940c47adb9cd8bab695bde2acf255f9ac4e009acfe4ab7a8ad9acc",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "base-mode-forgery",
+    "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+    "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 14,
+    "ciphertext": "d866951fc9eaa6963724adc06fed52575134bf6309f0c3d3339204471a046a7794a0e3f012103c0dcec6295fc5a09e96ac12dfd2b304e8a92c180cfbaa37bd32a3132f1f658dc1",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  }
+]

@@ -72,14 +72,14 @@ Functional decomposition, not final file layout:
 
 ## Crypto suite
 
-| Role                       | Algorithm                                               | Used for                                                                                     |
-| -------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                              |
-| Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                                       |
-| Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, ascent links, mailbox payloads; auth mode: the op record |
-| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, grantee pseudonym derivation                                                   |
-| Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature              |
-| Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                                           |
+| Role                       | Algorithm                                               | Used for                                                                                                                                                                                         |
+| -------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                                                                                                                                  |
+| Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                                                                                                                                           |
+| Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner): op record, settings record, content key, owner-local, write-plane history link |
+| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, grantee pseudonym derivation                                                                                                                                                       |
+| Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature                                                                                                                  |
+| Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                                                                                                                                               |
 
 - Every user derives an **X25519 encryption subkey** from their login secret;
   the identity key only signs, the subkey only seals. The **subkey binding**
@@ -124,6 +124,25 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
   child-scope index enumerates directly-descendant scope roots for the F-4
   rotation cascade (FSM1/cipher-box-next#38 D6). Interior nodes publish no write-body at all.
+  The write-plane history link departs from the read plane's ratchet
+  construction and carries its own struct tag, `write-history-link` (`0x0e`): it
+  is **HPKE auth-mode sealed by the owner to the owner**
+  (`enc(32) || ciphertext||tag`), not symmetrically sealed under the fresh
+  `writeScopeSeed`'s structure key. That seed ships in every write grantee's
+  grant blob, while the retiring seed the link carries derives the IPNS signing
+  key of every pre-rotation name in the scope, and the link's only consumer —
+  the resumed name wave — is owner-only. Auth mode rather than base because the
+  field lives inside a body every committed writer can author and the owner's
+  enc subkey is public: base mode would let a writer hand the resumed wave a
+  seed of their choosing to derive signing keys from. Only a re-sealer holding
+  the owner encryption subkey can mint one, so a write-grantee re-seal carries
+  the existing link and never cuts. The field is bounded fail-closed at decode
+  and encode at 512 bytes (`too-many-structures`); over-length bytes make the
+  record undecodable, so — like a duplicate ledger tag — a committed writer can
+  stall the scope's rotations until the owner republishes the root from a
+  gate-passed earlier record. A re-seal handed an over-length link drops it
+  rather than failing, so the produce side can never emit a body its own
+  decoder refuses.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,
@@ -205,8 +224,14 @@ manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
 (`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`), `content-key`
-(`0x0c`), `owner-local` (`0x0d`). Every new tag extends the manifest and its
-vectors before merge; the `owner-write-blob` KAT set is
+(`0x0c`), `owner-local` (`0x0d`), `write-history-link` (`0x0e`). Every new tag
+extends the manifest and its vectors before merge; the `write-history-link` KAT
+set is `write_history_link_accept` (the flat `enc || ciphertext||tag` envelope
+reproduced from a fixed owner keypair and ephemeral, then reopened) and
+`write_history_link_reject` (tampered ciphertext/tag, truncation, and
+read-plane-struct-tag / scope / writeEpoch AAD transplants, plus a
+**base-mode-shaped forgery** — a correctly framed link sealed to the owner by a
+write grantee, which auth mode refuses). The `owner-write-blob` KAT set is
 `owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,

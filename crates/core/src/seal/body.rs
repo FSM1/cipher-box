@@ -375,8 +375,8 @@ pub(crate) fn assert_grant_tags_unique(
     Ok(())
 }
 
-/// Release-active bound on a repeated collection, symmetric across decode and
-/// encode (AGENTS.md rule 8).
+/// Release-active bound on a repeated collection or a bounded byte field,
+/// symmetric across decode and encode (AGENTS.md rule 8).
 pub(crate) fn assert_within_bound(
     collection: &'static str,
     count: usize,
