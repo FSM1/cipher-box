@@ -3777,12 +3777,10 @@ fn write_history_link_reject_vectors_fire_the_named_check() {
             open_owner_history_link(owner, ctx, &blob)
         },
     );
-    // Auth mode is what denies a write grantee's forgery, so the vector proving
-    // it has to be a base-mode seal the owner can open — a base-mode open under
-    // the owner's own secret and the vector's own AAD leaves the static-sender
-    // binding as the only thing `open_owner_history_link` can be refusing.
-    // `enc` cannot carry that claim: DHKEM's encapsulated key is the ephemeral
-    // public alone, with no dependence on the recipient.
+    // A base-mode open under the owner's own secret and the vector's own AAD
+    // leaves the static-sender binding as the only thing the reject can be, and
+    // `enc` cannot give it away: DHKEM's encapsulated key is the ephemeral
+    // public alone.
     let forgery = vectors
         .iter()
         .find_map(|v| match v {

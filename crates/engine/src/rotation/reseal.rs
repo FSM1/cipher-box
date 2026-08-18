@@ -258,9 +258,8 @@ pub enum ResealError {
     /// plane carries no chain. Release-active (AGENTS.md rule 8).
     HistoryLinkNotContiguous,
     /// A [`WriteHistory::Cut`] was asked of a re-sealer holding no owner
-    /// encryption subkey. The write-plane link is auth-mode sealed by the owner
-    /// to the owner, so only the owner can mint one — and a write grantee that
-    /// could is the forgery that seal shape exists to deny.
+    /// encryption subkey — only the owner can mint the link
+    /// ([`seal_owner_history_link`]).
     OwnerKeyRequiredForWriteCut,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
@@ -1942,9 +1941,6 @@ mod tests {
 
     #[test]
     fn a_write_cut_mints_its_history_link_to_the_owner_alone() {
-        // The link is the cut's own product: it opens only for the owner at the
-        // NEW write epoch, and yields exactly the seed and epoch being retired —
-        // the one step a resumed wave walks back.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.minted();
         let owner_pub = fx.owner_enc.public();
@@ -1973,9 +1969,6 @@ mod tests {
         assert!(ct_eq(payload.prev_seed(), &RETIRING_WRITE_SCOPE_SEED));
         assert_eq!(payload.prev_epoch, 4);
 
-        // Neither write scope seed is a key for this link: the fresh one ships in
-        // every write grantee's grant blob, and the retiring one it carries
-        // derives every pre-rotation `ipnsName` in the scope.
         for seed in [&FRESH_WRITE_SCOPE_SEED, &RETIRING_WRITE_SCOPE_SEED] {
             let key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
             assert!(
@@ -1987,9 +1980,6 @@ mod tests {
 
     #[test]
     fn a_write_cut_without_the_owner_key_is_refused_before_any_seal() {
-        // The link is auth-mode sealed by the owner to the owner, so a re-sealer
-        // holding no owner key cannot mint one — and one that could is the
-        // forgery that seal shape denies. Release-active.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed();
         let owner_pub = fx.owner_enc.public();
@@ -2020,9 +2010,8 @@ mod tests {
 
     #[test]
     fn a_carried_write_history_link_past_the_codec_bound_is_dropped_not_refused() {
-        // The carried bytes are a committed writer's, and the rotation carrying
-        // them may be the one revoking that writer — so an over-length blob is
-        // dropped rather than allowed to block the re-seal.
+        // Dropped, not refused: the rotation carrying a writer's bytes may be the
+        // one revoking that writer.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed();
         let owner_pub = fx.owner_enc.public();
@@ -2053,11 +2042,8 @@ mod tests {
 
     #[test]
     fn a_history_link_that_does_not_descend_is_refused_before_any_seal() {
-        // A link over an epoch the re-seal does not advance past is one the
-        // ratchet could only drop. `assert_eq!` on the verdict, not a
-        // `debug_assert!` — this must fire in a release build. An interior scope
-        // root, so `UndrawnEntropy` pins the refusal ahead of every seal the
-        // section carries, the ascent link included.
+        // An interior scope root, so `UndrawnEntropy` pins the refusal ahead of
+        // every seal the section carries, the ascent link included.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed();
         let owner_pub = fx.owner_enc.public();
@@ -2097,13 +2083,11 @@ mod tests {
 
     #[test]
     fn a_gapped_read_history_link_is_refused_but_a_gapped_write_cut_is_not() {
-        // The read plane is a contiguous chain, so a link skipping epoch 4
-        // strands every epoch past the hole — refused ahead of every seal, which
-        // `UndrawnEntropy` pins. The write plane carries a single link, not a
-        // chain, and its epoch is monotonic only: the name wave sources the cut's
+        // A gapped write cut is legitimate: the name wave sources the cut's
         // `epoch` from the rotation plan and its `prev.epoch` from the durable
         // write floor (`net/rotation.rs`), so a device whose floor lags the plan
-        // mints a legitimately gapped cut that must still seal.
+        // mints a gap that must still seal. Plane asymmetry:
+        // [`ResealSeeds::check_history_descends`].
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.minted();
         let owner_pub = fx.owner_enc.public();

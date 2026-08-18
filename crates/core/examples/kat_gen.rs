@@ -5743,11 +5743,8 @@ fn build_write_history_link_reject() -> Vec<BlobRejectVector> {
     let sealed = seal_owner_history_link(&owner, &eph, &ctx, &payload).unwrap();
     let (enc, ciphertext) = split_owner_history_link(&sealed);
 
-    // The forgery base mode would hand a write grantee: sealed to the owner's
-    // real enc subkey under the grant family's empty HPKE info, correctly
-    // AAD-bound, sharing the accepted vector's ephemeral — so mode is the only
-    // input that differs, and auth-mode verification is the only thing that can
-    // reject it.
+    // Identical to the accepted vector but for the HPKE mode, so auth-mode
+    // verification is the only thing that can reject it.
     let plaintext = encode_history_link_payload(&payload).unwrap();
     let forged = hpke_seal(&owner.public(), &eph, b"", &build_aad(&ctx), &plaintext);
     assert_eq!(

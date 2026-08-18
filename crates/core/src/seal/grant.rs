@@ -685,14 +685,10 @@ pub fn open_history_link(
 /// Returns the wire sealed blob `enc(32) || ciphertext||tag`; the encoded
 /// plaintext is zeroized here.
 ///
-/// Owner-sealed, not sealed under the plane seed's structure key: the fresh
-/// `writeScopeSeed` such a seal would key it under ships in every write
-/// grantee's grant blob, while the retiring seed the payload carries derives the
-/// IPNS signing key of every pre-rotation name in the scope. Auth mode rather
-/// than base, for the same reason `op_record` uses it: the field sits inside a
-/// body every committed writer can author, and base mode would let one of them
-/// hand the owner's resumed name wave an attacker-chosen seed to derive signing
-/// keys from.
+/// Owner-sealed rather than keyed under the plane seed, and auth mode rather
+/// than base: every committed writer holds that seed and authors the field, so
+/// base mode would let one of them mint a link the owner's resumed name wave
+/// accepts (blueprint/core.md "Write-body").
 pub fn seal_owner_history_link(
     owner_enc_secret: &X25519Secret,
     ephemeral_scalar: &[u8; 32],
@@ -1232,9 +1228,6 @@ mod tests {
         );
     }
 
-    /// Auth mode, not base: a write grantee holds the write key that authors the
-    /// field and knows the owner's public enc subkey, so a base-mode seal would
-    /// let them hand the owner's resumed name wave a seed of their choosing.
     #[test]
     fn a_link_sealed_to_the_owner_by_anyone_else_never_opens() {
         let owner = X25519Secret::from_scalar([0x41; 32]);

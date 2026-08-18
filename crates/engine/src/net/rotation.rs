@@ -5507,9 +5507,6 @@ mod tests {
         assert!(ct_eq(payload.prev_seed(), &OWNER_ROOT_WRITE_SCOPE_SEED));
         assert_eq!(payload.prev_epoch, OWNER_ROOT_EPOCH);
 
-        // The retiring write scope seed derives every pre-rotation `ipnsName` in
-        // the scope, and the fresh one ships in every write grantee's grant blob
-        // — so the link's audience is the owner alone.
         assert!(
             open_history_link(
                 kdf::structure_key(&fresh, STRUCT_TAG_HISTORY_LINK).as_bytes(),
