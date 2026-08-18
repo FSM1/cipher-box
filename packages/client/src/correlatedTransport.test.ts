@@ -5,6 +5,7 @@ import {
   EngineRequestError,
   engineErrorCode,
   isRecoverableEngineError,
+  overBudgetRemedy,
 } from './correlatedTransport.js';
 import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
 
@@ -198,4 +199,28 @@ describe('isRecoverableEngineError', () => {
   ])('never treats %s as recoverable', (code) => {
     expect(isRecoverableEngineError(code)).toBe(false);
   });
+});
+
+describe('overBudgetRemedy', () => {
+  // The engine's six causes, each with the one action it implies: two clear on
+  // their own, two need the user to free something, two never clear.
+  it.each([
+    ['overBudgetStagingBacklog', 'wait'],
+    ['overBudgetTooManyWrites', 'wait'],
+    ['overBudgetDeviceFull', 'freeDeviceSpace'],
+    ['overBudgetAccountQuota', 'freeAccountQuota'],
+    ['overBudgetStagingLimit', 'nothing'],
+    ['overBudgetStorageUnmeasured', 'nothing'],
+  ])('reads %s as %s', (code, remedy) => {
+    expect(overBudgetRemedy(code)).toBe(remedy);
+  });
+
+  // Including the flattened code the boundary used to send: an unrecognized
+  // code must not widen into an offer to retry.
+  it.each(['tooManyStreams', 'trustViolation', 'overBudget', undefined])(
+    'leaves %s unclassified',
+    (code) => {
+      expect(overBudgetRemedy(code)).toBeUndefined();
+    }
+  );
 });

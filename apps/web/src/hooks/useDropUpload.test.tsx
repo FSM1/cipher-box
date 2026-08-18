@@ -434,7 +434,10 @@ describe('refused writes', () => {
   it('keeps the engine code so the caller can classify an over-budget refusal', async () => {
     const engine = uploadEngine();
     engine.facade.beginWrite.mockRejectedValueOnce(
-      new EngineRequestError('this write needs 900 bytes but only 100 are free', 'overBudget')
+      new EngineRequestError(
+        'this write needs 900 bytes but only 100 are free',
+        'overBudgetStagingBacklog'
+      )
     );
     const { result } = mount(engine.client);
 
@@ -443,7 +446,7 @@ describe('refused writes', () => {
     });
 
     await waitFor(() => expect(result.current.uploads[0].phase).toBe('failed'));
-    expect(result.current.uploads[0].code).toBe('overBudget');
+    expect(result.current.uploads[0].code).toBe('overBudgetStagingBacklog');
     expect(result.current.uploads[0].error).toContain('only 100 are free');
     expect(engine.facade.commitWrite).not.toHaveBeenCalled();
   });

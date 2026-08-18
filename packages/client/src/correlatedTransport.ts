@@ -57,6 +57,32 @@ export function isRecoverableEngineError(code: string | undefined): boolean {
   return code === 'tooManyStreams';
 }
 
+/**
+ * What a user can do about an over-budget refusal. The engine separates six
+ * causes (`OverBudgetCause` in `crates/engine/src/facade.rs`) and each crosses
+ * as its own code, because "wait for the drain" and "free some space" are
+ * opposite instructions and only one of them is ever true.
+ */
+export type OverBudgetRemedy = 'wait' | 'freeDeviceSpace' | 'freeAccountQuota' | 'nothing';
+
+const OVER_BUDGET_REMEDIES: Readonly<Record<string, OverBudgetRemedy>> = {
+  overBudgetStagingBacklog: 'wait',
+  overBudgetTooManyWrites: 'wait',
+  overBudgetDeviceFull: 'freeDeviceSpace',
+  overBudgetAccountQuota: 'freeAccountQuota',
+  overBudgetStagingLimit: 'nothing',
+  overBudgetStorageUnmeasured: 'nothing',
+};
+
+/**
+ * The remedy an over-budget code implies, or `undefined` for every failure that
+ * is not one. Named codes only, so an unrecognized code never widens into an
+ * offer to retry.
+ */
+export function overBudgetRemedy(code: string | undefined): OverBudgetRemedy | undefined {
+  return code === undefined ? undefined : OVER_BUDGET_REMEDIES[code];
+}
+
 /** Which of the engine's handle tables a step addresses. */
 export type HandleKind = 'write' | 'stream';
 

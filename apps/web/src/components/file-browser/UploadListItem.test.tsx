@@ -78,19 +78,45 @@ describe('an upload row', () => {
     expect(screen.queryByLabelText('Cancel upload of report.pdf')).toBeNull();
   });
 
-  it('marks an over-budget refusal apart from a failure that will never clear', () => {
+  it.each([
+    ['overBudgetStagingBacklog', 'wait'],
+    ['overBudgetTooManyWrites', 'wait'],
+    ['overBudgetDeviceFull', 'freeDeviceSpace'],
+    ['overBudgetAccountQuota', 'freeAccountQuota'],
+  ])('offers a retry on %s, which the user can still clear', (code, remedy) => {
     show(
       entry({
         phase: 'failed',
-        code: 'overBudget',
+        code,
         error: 'this write needs 900 bytes but only 100 are free',
       })
     );
 
-    expect(screen.getByTestId('upload-row-error').className).toContain(
-      'upload-row-error--transient'
-    );
+    const message = screen.getByTestId('upload-row-error');
+    expect(message.className).toContain('upload-row-error--transient');
+    expect(message.getAttribute('data-remedy')).toBe(remedy);
+    expect(screen.getByLabelText('Retry upload of report.pdf')).toBeTruthy();
   });
+
+  it.each(['overBudgetStagingLimit', 'overBudgetStorageUnmeasured'])(
+    'drops the retry on %s, where retrying can never succeed',
+    (code) => {
+      show(
+        entry({
+          phase: 'failed',
+          code,
+          error: 'this device cannot stage a write this large',
+        })
+      );
+
+      const message = screen.getByTestId('upload-row-error');
+      expect(message.className).not.toContain('upload-row-error--transient');
+      expect(message.getAttribute('data-remedy')).toBe('nothing');
+      expect(screen.queryByLabelText('Retry upload of report.pdf')).toBeNull();
+      // Nothing may strand its `File`, whether or not a retry can help.
+      expect(screen.getByLabelText('Dismiss upload of report.pdf')).toBeTruthy();
+    }
+  );
 
   it('marks a stopped attempt as retryable, not settled', () => {
     show(entry({ phase: 'stalled', opId: 1n, error: 'no reachable pin provider' }));

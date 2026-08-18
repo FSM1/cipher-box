@@ -239,6 +239,33 @@ pub enum OverBudgetCause {
     AccountQuota,
 }
 
+/// Whose budget refused — the one axis both host boundaries branch on, so a
+/// POSIX adapter and a browser UI cannot classify the same refusal differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedBudget {
+    /// This device's staging budget, in every form it can run out.
+    Device,
+    /// The account's hosted storage quota.
+    Account,
+}
+
+impl OverBudgetCause {
+    /// Whose budget this cause names. `ENOSPC` for [`RefusedBudget::Device`]
+    /// and `EDQUOT` for [`RefusedBudget::Account`] (blueprint/desktop.md
+    /// "Reads, writes, and the never-block law") — collapsing the two tells a
+    /// user to free space on the wrong machine.
+    pub fn budget(self) -> RefusedBudget {
+        match self {
+            OverBudgetCause::StagingLimit
+            | OverBudgetCause::DeviceFull
+            | OverBudgetCause::StagingBacklog
+            | OverBudgetCause::TooManyWrites
+            | OverBudgetCause::StorageUnmeasured => RefusedBudget::Device,
+            OverBudgetCause::AccountQuota => RefusedBudget::Account,
+        }
+    }
+}
+
 /// One retained dead-lettered op and why it will never publish. The reason is
 /// the whole surface: "the folder this was going into no longer exists" and
 /// "this queued change is corrupt" call for different user actions.
@@ -870,6 +897,15 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
+    /// A relocation whose scope crossing this engine cannot settle, refused
+    /// before it is journaled (blueprint/desktop.md "Conflicts, dead letters,
+    /// and rotation"). Fail-closed: a crossing the engine cannot rule out may
+    /// owe a scope-exit rotation, and an op the kernel was already acked for
+    /// can never be retro-failed, so the refusal has to precede the ack.
+    ScopeExitRefused {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
 }
 
 impl EngineError {
@@ -1015,6 +1051,9 @@ impl fmt::Display for EngineError {
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
             EngineError::ColdStart { message } => write!(f, "cold-start failed: {message}"),
+            EngineError::ScopeExitRefused { message } => {
+                write!(f, "this move was refused before it was queued: {message}")
+            }
         }
     }
 }
@@ -1048,12 +1087,42 @@ impl EventStream {
 /// internally consistent.
 pub struct EngineView {
     rendered: Snapshot,
+    dead_letters: Vec<DeadLetter>,
+    blocked: Option<BlockedOp>,
+    retained_records: usize,
+    staleness: Staleness,
 }
 
 impl EngineView {
     /// The rendered root node id — the FUSE mount anchor.
     pub fn root(&self) -> NodeId {
         self.rendered.root
+    }
+
+    /// Every retained dead-lettered op, with its reason. The compensation
+    /// channel for ops already acked at journal time: a mount surfaces these
+    /// rather than retro-failing the kernel (blueprint/desktop.md "Conflicts,
+    /// dead letters, and rotation").
+    pub fn dead_letters(&self) -> &[DeadLetter] {
+        &self.dead_letters
+    }
+
+    /// The drain's over-quota hold, if it has one. A held op is state, not a
+    /// failure: it keeps its place and its staging reservation.
+    pub fn blocked(&self) -> Option<BlockedOp> {
+        self.blocked
+    }
+
+    /// Durable queue entries this session holds but cannot read (CONTEXT.md
+    /// "Retained record") — what explains an over-budget refusal on a vault
+    /// that looks empty.
+    pub fn retained_records(&self) -> usize {
+        self.retained_records
+    }
+
+    /// The staleness rung at render time.
+    pub fn staleness(&self) -> Staleness {
+        self.staleness
     }
 
     /// The children under `parent`, deterministically ordered by node id.
@@ -1088,6 +1157,29 @@ impl EngineView {
             nodes: count_nodes(&self.rendered),
         }
     }
+}
+
+/// Where a relocation lands relative to the source scope, decided at journal
+/// time and fail-closed.
+///
+/// A session holds one scope, so a relocation is [`ScopeCrossing::Intra`] only
+/// when both parents hang off the rendered root. A parent the walk cannot place
+/// there may owe a scope-exit rotation, which no arm of this build authors, so
+/// the op is refused before it is journaled rather than journaled and stranded
+/// (blueprint/desktop.md "Conflicts, dead letters, and rotation").
+fn scope_crossing(
+    rendered: &Snapshot,
+    from_parent: NodeId,
+    new_parent: NodeId,
+) -> Result<ScopeCrossing, EngineError> {
+    for (role, node) in [("source", from_parent), ("destination", new_parent)] {
+        if node != rendered.root && !rendered.ancestors(node).contains(&rendered.root) {
+            return Err(EngineError::ScopeExitRefused {
+                message: format!("its {role} folder is not inside this vault"),
+            });
+        }
+    }
+    Ok(ScopeCrossing::Intra)
 }
 
 fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
@@ -2488,15 +2580,14 @@ impl<T: SeamTypes> Engine<T> {
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                // This session holds one scope, so every relocation it can form
-                // stays inside it.
+                let crossing = scope_crossing(&rendered, from_parent, new_parent)?;
                 let op = Op::relink(
                     node,
                     from_parent,
                     new_parent,
                     base_sequence,
                     authored_at,
-                    ScopeCrossing::Intra,
+                    crossing,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -2508,6 +2599,7 @@ impl<T: SeamTypes> Engine<T> {
             } => {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
+                let crossing = scope_crossing(&rendered, from_parent, new_parent)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -2523,7 +2615,7 @@ impl<T: SeamTypes> Engine<T> {
                     replacing,
                     base_sequence,
                     authored_at,
-                    ScopeCrossing::Intra,
+                    crossing,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -3154,8 +3246,18 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
+        let scan = self.scan_queue().await?;
+        let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
+        let rendered = {
+            let base = self.snapshot.borrow();
+            apply_overlay(&base, &ops)
+        };
         Ok(EngineView {
-            rendered: self.render().await?,
+            rendered,
+            dead_letters: self.retained_dead_letters(),
+            blocked: *self.blocked.borrow(),
+            retained_records: scan.retained,
+            staleness: self.staleness_now(),
         })
     }
 
@@ -3225,31 +3327,17 @@ impl<T: SeamTypes> Engine<T> {
             .node(folder)
             .map(|meta| meta.name.clone())
             .unwrap_or_default();
-        let dead_letters = dead
-            .iter()
-            .map(|(op_id, (_, reason))| DeadLetter {
-                op_id: *op_id,
-                reason: *reason,
-            })
-            .collect();
-        let status = self.sync_status.borrow();
-        let staleness = classify(
-            self.seams.scheduler.now(),
-            status.last_success,
-            status.reconcile_in_flight,
-            Connectivity::Online,
-            &self.profile,
-        );
+        drop(dead);
         Ok(SnapshotView {
             root: rendered.root,
             folder,
             folder_name,
             children,
             ancestors,
-            dead_letters,
+            dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
             retained_records: scan.retained,
-            staleness,
+            staleness: self.staleness_now(),
         })
     }
 
@@ -3515,6 +3603,30 @@ impl<T: SeamTypes> Engine<T> {
         let ops = self.pending_ops().await?;
         let base = self.snapshot.borrow();
         Ok(apply_overlay(&base, &ops))
+    }
+
+    /// Every retained dead-lettered op, with its reason.
+    fn retained_dead_letters(&self) -> Vec<DeadLetter> {
+        self.dead_letters
+            .borrow()
+            .iter()
+            .map(|(op_id, (_, reason))| DeadLetter {
+                op_id: *op_id,
+                reason: *reason,
+            })
+            .collect()
+    }
+
+    /// The staleness rung at this instant, off the injected clock.
+    fn staleness_now(&self) -> Staleness {
+        let status = self.sync_status.borrow();
+        classify(
+            self.seams.scheduler.now(),
+            status.last_success,
+            status.reconcile_in_flight,
+            Connectivity::Online,
+            &self.profile,
+        )
     }
 
     /// Scan the durable staging store's queue for this session. Undecodable

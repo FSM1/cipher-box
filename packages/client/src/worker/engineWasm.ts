@@ -110,7 +110,6 @@ export interface EngineWasm {
     profile?: string,
     apiBaseUrl?: string,
     acceleratorBaseUrl?: string,
-    acceleratorBearer?: string,
     publicGateways?: string[],
     storageHeadroomBytes?: number
   ) => WasmEngineHandle;

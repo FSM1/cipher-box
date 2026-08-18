@@ -1,3 +1,4 @@
+import { overBudgetRemedy } from '@cipherbox/client';
 import { isActiveUpload, type UploadEntry, type UploadPhase } from '../../hooks/useDropUpload';
 import { formatBytes } from '../../utils/format';
 
@@ -27,9 +28,12 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
   // Only the row the client is actually feeding animates; a queued or retrying
   // one has nothing moving to report.
   const indeterminate = phase === 'staging';
-  // An over-budget refusal is a ceiling and a stopped attempt is retried, so
-  // neither reads as the settled red of a row that will never publish.
-  const transient = phase === 'stalled' || upload.code === 'overBudget';
+  const remedy = overBudgetRemedy(upload.code ?? undefined);
+  // A refusal something can still clear — the drain, free space, more quota —
+  // is a ceiling, not the settled red of a row that will never publish. A
+  // `'nothing'` remedy is exactly the case where retrying can never work.
+  const transient = phase === 'stalled' || (remedy !== undefined && remedy !== 'nothing');
+  const retryable = phase !== 'uploaded' && remedy !== 'nothing';
 
   return (
     <div
@@ -76,7 +80,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           )}
           {settled && (
             <>
-              {phase !== 'uploaded' && (
+              {retryable && (
                 <button
                   type="button"
                   className="upload-row-button upload-row-button--retry"
@@ -103,6 +107,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
         <p
           className={`upload-row-error${transient ? ' upload-row-error--transient' : ''}`}
           data-testid="upload-row-error"
+          data-remedy={remedy}
           role={phase === 'failed' ? 'alert' : undefined}
         >
           {error}
