@@ -8,49 +8,41 @@ use super::SeamResult;
 /// Only the root is journaled. Its leaves are re-derived at drain time from the
 /// root block, which is plaintext det-CBOR — so the ledger stays three orders of
 /// magnitude smaller than the CID set it stands for, and holds the half that is
-/// irrecoverable: once the shortened history publishes, nothing readable names
-/// the dropped roots, while a root always names its own leaves.
+/// irrecoverable: nothing readable names a dropped root once the shortened
+/// history publishes, while a root always names its own leaves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedRetire {
+    /// The node whose history dropped the target. The drain re-reads this
+    /// node's published record to decide what the retire may name, so the entry
+    /// carries it rather than a snapshot of the answer.
+    pub node: [u8; 16],
     /// The doomed version's root `contentCid` (multibase string).
     pub target: String,
-    /// The pinned bytes this entry stands for — the vault's pending-reclaim
-    /// figure is their sum. [`Self::retained`] is already subtracted, so it is
-    /// what the retire frees, not what the manifest accounts for.
+    /// The pinned bytes this entry stands for, as the prune quoted them.
     ///
-    /// An **upper bound**, not an equality: a merged retained set only ever
-    /// widens, so the drain recomputes the figure off the root block and holds
-    /// the stored one as the ceiling.
+    /// An **upper bound**, and only the fallback figure: it is what the vault
+    /// reports as pending on a pass that could not re-expand the entry. A pass
+    /// that can re-expand reports what the retire would actually free.
     pub owed_bytes: u64,
     /// The pinned total the doomed manifest must account for — the bound the
     /// expansion holds a hand-framed root to.
     pub manifest_bytes: u64,
-    /// Targets of this root's expansion that another entry of the prune already
-    /// accounts for — a version it **retained**, or a doomed one charged ahead
-    /// of this — so the retire must skip them
-    /// ([`Expansion::split_retained`](crate::content::Expansion::split_retained)).
-    ///
-    /// Normally empty — honestly-authored versions seal identical plaintext
-    /// under a fresh per-version key and a fresh per-chunk nonce, so their leaf
-    /// sets are disjoint by construction.
-    pub retained: Vec<String>,
 }
 
 impl OwedRetire {
-    /// A debt whose expansion aliases nothing a retained version names.
+    /// A debt quoted at its whole manifest total.
     #[must_use]
-    pub fn whole(target: String, pinned_bytes: u64) -> Self {
+    pub fn whole(node: [u8; 16], target: String, pinned_bytes: u64) -> Self {
         Self {
+            node,
             target,
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
-            retained: Vec::new(),
         }
     }
 }
 
-/// Durable per-owner set of retirements a published prune still owes the
-/// registry.
+/// Durable per-owner set of retirements a prune still owes the registry.
 ///
 /// Distinct from the op queue on all four axes at once: it outlives the op that
 /// filled it, it is a **set** rather than a FIFO, it is **never-discard** rather
@@ -65,12 +57,8 @@ impl OwedRetire {
 ///   ([`RetireResult`](crate::api::RetireResult)).
 /// - **Keyed by target**: [`owe`](RetireLedger::owe)ing a target the store
 ///   already holds keeps the stored entry rather than adding a second one, so a
-///   replayed prune cannot double the pending figure — unless the incoming entry
-///   names a [`retained`](OwedRetire::retained) target the held one does not, in
-///   which case the two retained sets **merge**, so protection only ever widens
-///   and never moves; the merged
-///   [`owed_bytes`](OwedRetire::owed_bytes) is the lower of the two. Order — of
-///   the entries, and of one entry's retained set — is not part of the contract.
+///   replayed prune cannot double the pending figure. Order is not part of the
+///   contract.
 /// - **Never-discard**: nothing but `settle` removes an entry. There is no
 ///   attempt budget, no expiry, and no sweep — every failure mode is either
 ///   self-clearing or ours, and the byte figure is the only record of what was
@@ -79,7 +67,7 @@ impl OwedRetire {
 ///
 /// `owner_tag` is opaque engine-chosen bytes; the store never interprets it.
 pub trait RetireLedger {
-    /// Journals `entries` under `owner_tag`, merging any target already held
+    /// Journals `entries` under `owner_tag`, keeping any target already held
     /// rather than adding a second entry for it.
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()>;
 

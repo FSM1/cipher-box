@@ -1,7 +1,7 @@
 //! Conformance kit: [`RetireLedger`] owner scoping, set semantics, and
 //! durability.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
@@ -13,8 +13,12 @@ fn root(seed: u8) -> String {
     encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &[seed]))
 }
 
+/// The node one debt is owed against. The kit's targets all ride one file's
+/// history, which is the shape a prune journals.
+const NODE: [u8; 16] = [0xA7; 16];
+
 fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
-    OwedRetire::whole(target.into(), owed_bytes)
+    OwedRetire::whole(NODE, target.into(), owed_bytes)
 }
 
 /// The entries as a map, so a kit assertion never depends on an order the
@@ -139,79 +143,30 @@ where
     reopened.settle(alice, &[]).await.unwrap();
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
-    // The retained set is the only record of what an entry must not retire, so
-    // it is as durable as the figure beside it, and protection only ever widens.
-    let aliased = OwedRetire {
+    // The owing node is what the drain re-reads to decide what the retire may
+    // name, and the manifest total is the bound it holds a hand-framed root to.
+    // Both are as durable as the owed figure, and none of the three moves under
+    // a replay.
+    let quoted = OwedRetire {
+        node: [0x5C; 16],
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
-        retained: vec![root(4), root(5)],
     };
-    // Retained order is not part of the contract, so the kit compares sets.
-    let held_of = async |ledger: &L, target: &str| {
-        ledger
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == target)
-            .map(|entry| {
-                (
-                    entry.owed_bytes,
-                    entry.manifest_bytes,
-                    BTreeSet::from_iter(entry.retained),
-                )
-            })
-    };
-    let merged = |owed_bytes, retained: &[String]| {
-        Some((
-            owed_bytes,
-            aliased.manifest_bytes,
-            BTreeSet::from_iter(retained.iter().cloned()),
-        ))
-    };
+    reopened.owe(alice, &[quoted.clone()]).await.unwrap();
     reopened
-        .owe(
-            alice,
-            &[
-                owed(&aliased.target, aliased.manifest_bytes),
-                aliased.clone(),
-            ],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        held_of(&reopened, &aliased.target).await,
-        merged(aliased.owed_bytes, &[root(4), root(5)]),
-        "a wider retained set widens the entry it merges into"
-    );
-    reopened
-        .owe(alice, &[owed(&aliased.target, aliased.manifest_bytes)])
-        .await
-        .unwrap();
-    assert_eq!(
-        held_of(&reopened, &aliased.target).await,
-        merged(aliased.owed_bytes, &[root(4), root(5)]),
-        "and a replay that protects nothing does not narrow it again"
-    );
-
-    // Two prunes of one target can protect non-comparable sets, and each is the
-    // only record that *its* survivors alias those bytes.
-    reopened
-        .owe(
-            alice,
-            &[OwedRetire {
-                owed_bytes: aliased.owed_bytes + 19,
-                retained: vec![root(6)],
-                ..aliased.clone()
-            }],
-        )
+        .owe(alice, &[owed(&quoted.target, quoted.manifest_bytes)])
         .await
         .unwrap();
     let after_reopen = open().await;
     assert_eq!(
-        held_of(&after_reopen, &aliased.target).await,
-        merged(aliased.owed_bytes, &[root(4), root(5), root(6)]),
-        "a disjoint retained set merges rather than displacing, and survives reopen"
+        after_reopen
+            .owed(alice)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.target == quoted.target),
+        Some(quoted),
+        "every field survives a replay and a reopen"
     );
 }

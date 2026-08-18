@@ -33,7 +33,9 @@ use cipherbox_engine::content::{
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
-use cipherbox_engine::net::{ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, resolve};
+use cipherbox_engine::net::{
+    ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, StagingRetireLedger, resolve,
+};
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     SnapshotCache, StagingStore, UnixMillis,
@@ -46,9 +48,9 @@ use cipherbox_engine::sync::pointer::{
 };
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
-    owner_scoped_key, record_content_root_cid,
+    owner_scoped_key, owner_tag, record_content_root_cid,
 };
-use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
+use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
@@ -6258,6 +6260,13 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
         .collect()
 }
 
+/// Every target this device named past `mark` — a count taken from an earlier
+/// [`retire_targets`]. A refused pass replays whole, so a per-pass property is
+/// read off the window that actually settled.
+fn retired_since(device: &FakeDevice, mark: usize) -> Vec<String> {
+    retire_targets(device)[mark..].to_vec()
+}
+
 /// Every target this device has asked the registry to retire, in order.
 fn retire_targets(device: &FakeDevice) -> Vec<String> {
     retire_batches(device).into_iter().flatten().collect()
@@ -7563,8 +7572,7 @@ fn a_prune_publishes_a_shortened_history_and_reclaims_every_dropped_block() {
 
     // The registry saw every dropped block, each version's leaves ahead of the
     // root that names them.
-    let mut every_target = retire_targets(&alice);
-    let retired = every_target.split_off(retired_before);
+    let retired = retired_since(&alice, retired_before);
     for root in &doomed {
         let root_str = encode_content_cid_str(root);
         let root_at = retired
@@ -7751,13 +7759,7 @@ fn a_doomed_root_naming_a_retained_versions_leaf_never_retires_that_leaf() {
     let body: Vec<u8> = (0..60u8).collect();
     let file = file_with_history(&world, &mut engine, &mut tasks, &[body.clone()]);
     let head = published_versions(&world.record_store, &blocks, file).remove(0);
-    let live_leaves = decode_root(
-        &blocks
-            .get(&encode_content_cid_str(&head.content_cid))
-            .expect("the head root block"),
-    )
-    .expect("a root manifest")
-    .leaf_cid_vecs();
+    let live_leaves = leaves_of(&blocks, &head.content_cid);
     assert!(
         live_leaves.len() > 1,
         "a multi-chunk head is the normal case"
@@ -7872,10 +7874,11 @@ fn a_leaf_two_doomed_roots_share_is_charged_to_exactly_one_of_them() {
         "the shared block is quoted once, not once per doomed root"
     );
 
+    let refused = retire_targets(&alice).len();
     blocks.refuse_retire(false);
     tick(&world, &engine, &mut tasks);
 
-    let retired = retire_targets(&alice);
+    let retired = retired_since(&alice, refused);
     let shared_cid = encode_content_cid_str(&shared);
     assert_eq!(
         retired.iter().filter(|cid| **cid == shared_cid).count(),
@@ -8007,5 +8010,207 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
         published_versions(&world.record_store, &blocks, file),
         planted_versions,
         "and leaves the history it could not expand standing, entry for entry"
+    );
+}
+
+/// The staging key `StagingRetireLedger` journals `target`'s debt under, from
+/// the ledger's own key derivation rather than a second copy of the layout.
+fn retire_ledger_key(target: &[u8]) -> Vec<u8> {
+    StagingRetireLedger::<InMemoryStagingStore>::key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        &encode_content_cid_str(target),
+    )
+    .expect("a content CID keys an entry")
+}
+
+/// The leaf CIDs a published version's root block names.
+fn leaves_of(blocks: &Blocks, content_cid: &[u8]) -> Vec<Vec<u8>> {
+    decode_root(
+        &blocks
+            .get(&encode_content_cid_str(content_cid))
+            .expect("the root block"),
+    )
+    .expect("a root manifest")
+    .leaf_cid_vecs()
+}
+
+/// Nothing readable names a dropped root once the shortened history is live, so
+/// a debt journaled after that publish is one no later pass could reconstruct:
+/// the ledger write goes first, and a store that refuses it must leave the
+/// history it was read from standing.
+#[test]
+fn a_prune_whose_ledger_write_fails_leaves_the_history_standing_and_still_reclaims() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    let doomed = history[1].content_cid.clone();
+    let retired_before = retire_targets(&alice).len();
+    alice
+        .staging_store
+        .interrupt_staged_write_after(&retire_ledger_key(&doomed), 0);
+
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file),
+        history,
+        "a debt the ledger would not take never shortens the history it was read from"
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "and nothing is retired against a history still on the wire"
+    );
+
+    // The injector was one-shot, so the retry journals, publishes, and reclaims
+    // the very versions the first pass could not record.
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        1,
+        "the retried prune shortens the history"
+    );
+    assert!(
+        retire_targets(&alice).contains(&encode_content_cid_str(&doomed)),
+        "and the debt the first pass could not journal is still collected"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "a store hiccup is not a terminal prune"
+    );
+}
+
+/// The retire can run passes after the prune journaled it — a registry outage,
+/// a device offline. A version adopted inside that window is live by the time
+/// the retire runs, so the protected set is re-derived then rather than frozen
+/// at the prune.
+#[test]
+fn a_version_adopted_after_the_prune_journaled_its_debt_is_protected_too() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    let doomed = history[1].content_cid.clone();
+    let hostage = leaves_of(&blocks, &doomed).remove(0);
+
+    blocks.refuse_retire(true);
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the debt is journaled and unpaid"
+    );
+
+    // Between the journal and the retire, a version naming one of the doomed
+    // root's leaves is published at the file's name.
+    let chunk = ContentProfile::CI.chunk_size() as u64;
+    let adopted = assemble(
+        &[
+            hostage.clone(),
+            compute_cid(CONTENT_CID_CODEC, b"a block only the adopted version names"),
+        ],
+        2 * chunk,
+        &ContentProfile::CI,
+    )
+    .expect("assembles");
+    blocks.put(adopted.root_block.clone());
+    plant_versions(
+        &world,
+        &blocks,
+        file,
+        vec![planted_version(&adopted.content_cid, 2 * chunk)],
+    );
+
+    let refused = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, refused);
+    assert!(
+        !retired.contains(&encode_content_cid_str(&hostage)),
+        "the leaf the newly adopted version lives on is never retired"
+    );
+    assert!(
+        retired.contains(&encode_content_cid_str(&doomed)),
+        "the doomed root itself still retires"
+    );
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+}
+
+/// A version this device cannot expand is authorable by anyone holding the
+/// scope's write seed. One sitting in the **retained** half of a plan bears on
+/// what the retire may name, never on whether the history may shorten, so it
+/// must not refuse the prune — the debt is journaled and waits.
+#[test]
+fn a_retained_version_this_device_cannot_expand_still_lets_the_prune_publish() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    let unserved = CoreVersion::new(
+        compute_cid(
+            DAG_ROOT_CODEC,
+            b"a retained root block no source ever stored",
+        ),
+        [0u8; 32],
+        ContentProfile::CI.chunk_size() as u64,
+        0,
+    );
+    plant_versions(
+        &world,
+        &blocks,
+        file,
+        vec![unserved.clone(), history[0].clone(), history[1].clone()],
+    );
+
+    stage_prune(&alice, &world, file, 1);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file),
+        vec![unserved],
+        "the head this device cannot expand does not refuse the shortening"
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "and it does not dead-letter the prune"
+    );
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the debt is journaled, and stands until the retire can prove what is live"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a pass that cannot establish the live set names nothing"
     );
 }

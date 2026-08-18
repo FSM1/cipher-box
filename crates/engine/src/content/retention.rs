@@ -226,40 +226,26 @@ impl Expansion {
             .collect()
     }
 
-    /// Split at the retained boundary: what a retire may still name, and the
-    /// targets a retained version holds hostage (deduplicated — a manifest may
-    /// repeat a link).
+    /// What a retire may still name once every CID in `held` is out of it.
     ///
     /// A pin row is keyed `(account, cid)` and physical unpin fires at global
-    /// refcount zero (blueprint/api.md "Pin/name registry"), so retiring a CID a
-    /// retained version also names unpins live content. Which versions are
-    /// retained is a whole-plan property the prune op decides, never one a
-    /// single root's expansion can see. A held target frees nothing, so the
-    /// total is re-summed rather than kept in the manifest's closed form.
+    /// refcount zero (blueprint/api.md "Pin/name registry"), so retiring a CID
+    /// another live version also names unpins live content. Which CIDs those are
+    /// is an account-wide property, never one a single root's expansion can see.
+    /// A held target frees nothing, so the total is re-summed rather than kept
+    /// in the manifest's closed form.
     #[must_use]
-    pub fn split_retained(&self, retained: &BTreeSet<String>) -> (Self, Vec<String>) {
-        let (held, retirable): (Vec<RetireTarget>, Vec<RetireTarget>) = self
+    pub fn minus(&self, held: &BTreeSet<String>) -> Self {
+        let retirable: Vec<RetireTarget> = self
             .targets
             .iter()
+            .filter(|target| !held.contains(&target.cid))
             .cloned()
-            .partition(|target| retained.contains(&target.cid));
-        (
-            Self {
-                pinned_bytes: sum_pinned(&retirable),
-                targets: retirable,
-            },
-            held.into_iter()
-                .map(|target| target.cid)
-                .collect::<BTreeSet<String>>()
-                .into_iter()
-                .collect(),
-        )
-    }
-
-    /// What a retire may still name once every retained target is out of it.
-    #[must_use]
-    pub fn minus_retained(&self, retained: &BTreeSet<String>) -> Self {
-        self.split_retained(retained).0
+            .collect();
+        Self {
+            pinned_bytes: sum_pinned(&retirable),
+            targets: retirable,
+        }
     }
 }
 
@@ -296,7 +282,7 @@ impl From<DagError> for ExpandError {
 /// *provenance*: anyone holding the scope's write seed authors both the root and
 /// the record `size` the plan quotes from, so the links can still be CIDs of
 /// that author's choosing. Keeping those off the retire is
-/// [`Expansion::split_retained`]'s job, at the plan that knows what it keeps.
+/// [`Expansion::minus`]'s job, at the caller that knows what is still live.
 pub fn expand_retire_targets(
     content_cid: &str,
     root_block: &[u8],
@@ -547,7 +533,7 @@ mod tests {
         let expansion = expand(&doomed, &root_block).expect("expands");
 
         let retained = BTreeSet::from([leaf_cids[0].clone()]);
-        let reduced = expansion.minus_retained(&retained);
+        let reduced = expansion.minus(&retained);
 
         assert!(
             !reduced.cids().contains(&leaf_cids[0]),
@@ -574,14 +560,14 @@ mod tests {
             let expansion = expand(&doomed, &root_block).expect("expands");
 
             let all_leaves = BTreeSet::from_iter(leaf_cids.iter().cloned());
-            let root_only = expansion.minus_retained(&all_leaves);
+            let root_only = expansion.minus(&all_leaves);
             assert_eq!(
                 root_only.pinned_bytes,
                 root_block.len() as u64,
                 "size {size}: an all-aliased expansion frees its root block alone"
             );
 
-            let nothing = expansion.minus_retained(&BTreeSet::new());
+            let nothing = expansion.minus(&BTreeSet::new());
             assert_eq!(
                 nothing, expansion,
                 "size {size}: subtracting nothing changes nothing"
@@ -589,7 +575,7 @@ mod tests {
 
             let whole = BTreeSet::from_iter(expansion.cids());
             assert_eq!(
-                expansion.minus_retained(&whole).pinned_bytes,
+                expansion.minus(&whole).pinned_bytes,
                 0,
                 "size {size}: an expansion that frees nothing quotes nothing"
             );
