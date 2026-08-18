@@ -93,12 +93,27 @@ struct Watched<T> {
 /// Runs `body` with the watchdog armed for `marker` on this thread. Every
 /// scenario owns its own watch, so none needs serializing against another.
 fn watched<T>(marker: u8, body: impl FnOnce() -> T) -> Watched<T> {
+    assert_ne!(
+        marker, 0,
+        "0x00 is what a wiped buffer holds, so it would match every correct wipe"
+    );
     LEAK.set(None);
     INSPECTED.set(0);
     MARKER_BYTE.set(marker);
-    WATCHING.set(true);
-    let outcome = body();
-    WATCHING.set(false);
+    let outcome = {
+        /// Disarms on the way out, an unwinding `body` included: a thread left
+        /// armed scans every later allocation against a marker no one is
+        /// watching for, which is the gate-flipping this suite exists to avoid.
+        struct Disarm;
+        impl Drop for Disarm {
+            fn drop(&mut self) {
+                WATCHING.set(false);
+            }
+        }
+        let _disarm = Disarm;
+        WATCHING.set(true);
+        body()
+    };
     Watched {
         outcome,
         leak: LEAK.get(),
@@ -124,6 +139,27 @@ fn the_watchdog_reports_the_block_an_unwiped_run_reached_it_in() {
         }),
         "a hit names its block, so a false positive is visible as one"
     );
+}
+
+/// A scenario that panics must still close its window. The harness gives each
+/// test its own thread, but under `--test-threads=1` a thread left armed would
+/// scan every later allocation against a stale marker.
+#[test]
+fn a_panicking_scenario_disarms_the_thread() {
+    let outcome = std::panic::catch_unwind(|| {
+        watched(0x7F, || -> () { panic!("the scenario blew up") });
+    });
+
+    assert!(outcome.is_err(), "the panic still reaches the harness");
+    assert!(!WATCHING.get(), "the window closed on the way out");
+}
+
+/// `0x00` is what a correctly wiped buffer holds, so arming on it would report
+/// a leak on every clean read.
+#[test]
+#[should_panic(expected = "match every correct wipe")]
+fn arming_on_the_wiped_buffer_byte_is_refused() {
+    watched(0, || ());
 }
 
 /// The property under test is what the read path leaves behind, so only the
