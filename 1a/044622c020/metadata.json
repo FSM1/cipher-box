@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1a044622c020",
+  "strategy": "manual-commit",
+  "branch": "ci/web-e2e-write-path-and-cargo-cache-seed",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1a/044622c020/0/metadata.json",
+      "transcript": "/1a/044622c020/0/full.jsonl",
+      "compact_transcript": "/1a/044622c020/0/transcript.jsonl",
+      "content_hash": "/1a/044622c020/0/content_hash.txt",
+      "prompt": "/1a/044622c020/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 386,
+    "cache_creation_tokens": 368375,
+    "cache_read_tokens": 32425441,
+    "output_tokens": 105094,
+    "api_call_count": 194
+  }
+}
