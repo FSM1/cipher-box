@@ -45,7 +45,7 @@ use crate::content::{
     read_block, version_cids,
 };
 use crate::entropy::Entropy;
-use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
+use crate::facade::{BlockProgress, Event, NodeId, NodeKind, OpPhase};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -583,6 +583,7 @@ where
             self.gateway,
             self.http,
             self.content_profile,
+            async || self.live_content_cids(scope).await,
         )
         .await
         {
@@ -940,6 +941,7 @@ where
         scope: &DrainScope<'_>,
         epoch: u64,
         node: NodeId,
+        mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
         let name = derive_write_name(scope.write_scope_seed, &node.0);
         let adopter = ChildAdopter::new(
@@ -950,15 +952,9 @@ where
             scope.read_scope_seed.clone(),
             node.0,
         );
-        let resolved = resolve(
-            self.transport,
-            self.snapshot_cache,
-            &adopter,
-            &name,
-            ResolveMode::CacheFirst,
-        )
-        .await
-        .map_err(seam)?;
+        let resolved = resolve(self.transport, self.snapshot_cache, &adopter, &name, mode)
+            .await
+            .map_err(seam)?;
         let record_bytes = match resolved.outcome {
             // An adopt caches its own gate-passing bytes; the other two arms
             // carry theirs.
@@ -1034,7 +1030,9 @@ where
         epoch: u64,
         folder: NodeId,
     ) -> Result<FolderState, Halt> {
-        let loaded = self.load_child_node(scope, epoch, folder).await?;
+        let loaded = self
+            .load_child_node(scope, epoch, folder, ResolveMode::CacheFirst)
+            .await?;
         let ReadBody::Folder {
             created_at,
             modified_at,
@@ -1558,12 +1556,16 @@ where
         // snapshot can be stale about — first before spending an upload on an
         // edit that cannot land, then again with the upload behind us, because
         // the transfer is the widest window a version can land in unseen.
-        let seen = self.load_child_node(scope, pass.epoch, target).await?;
+        let seen = self
+            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .await?;
         if head_version_cid(&seen.body) != base_version_cid {
             return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
         }
         let uploaded = self.upload_version(scope, applied, staged).await?;
-        let loaded = self.load_child_node(scope, pass.epoch, target).await?;
+        let loaded = self
+            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .await?;
         let ReadBody::File {
             created_at,
             mut versions,
@@ -1651,13 +1653,17 @@ where
         self.hold(target.0, published.held);
     }
 
-    /// `prune`: republish the file's record with its history shortened to the
-    /// newest `keep_latest` versions, then journal what that dropped to the
-    /// retire ledger.
+    /// `prune`: journal what the plan drops to the retire ledger, then republish
+    /// the file's record with its history shortened to the newest `keep_latest`
+    /// versions.
     ///
-    /// The journal happens **after** the publish: until the shortened history is
-    /// live, a resolvable record still names the dropped roots, and retiring
-    /// them would unpin content a reader can reach.
+    /// The journal happens **before** the publish, because everything after the
+    /// record acks is a window a crash leaves the debt in: nothing readable
+    /// names the dropped roots once the shortened history is live, so a journal
+    /// lost there is lost for good. Holding the entry early is safe because the
+    /// drain retires nothing a live record still names
+    /// ([`drain_owed_retires`]) — so an entry the publish never earns simply
+    /// never drains.
     async fn publish_prune(
         &self,
         scope: &DrainScope<'_>,
@@ -1673,7 +1679,9 @@ where
         }
         self.ensure_folder(scope, pass, self.published_parent(target)?)
             .await?;
-        let loaded = self.load_child_node(scope, pass.epoch, target).await?;
+        let loaded = self
+            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .await?;
         let ReadBody::File {
             created_at,
             modified_at,
@@ -1711,7 +1719,10 @@ where
         // Ahead of the publish: a debt this pass cannot compute must leave the
         // history it was read from standing, not a shortened one it never
         // journaled.
-        let owed = self.prune_debt(&plan.retire_targets, survivors).await?;
+        let owed = self.prune_debt(&plan.retire_targets).await?;
+        let ledger = StagingRetireLedger::new(self.staging);
+        let owner = owner_tag(scope.enc_secret);
+        ledger.owe(&owner, &owed).await.map_err(seam)?;
         versions.truncate(survivors.len());
         let content_cids = survivors
             .iter()
@@ -1726,7 +1737,7 @@ where
             versions,
             unknown,
         };
-        let published = self
+        let published = match self
             .publish_node(
                 scope,
                 pass.epoch,
@@ -1740,11 +1751,20 @@ where
                 Some(applied.op_id),
             )
             .await
-            .map_err(Halt::from)?;
-        StagingRetireLedger::new(self.staging)
-            .owe(&owner_tag(scope.enc_secret), &owed)
-            .await
-            .map_err(seam)?;
+        {
+            Ok(published) => published,
+            Err(failure) => {
+                // The record never reached its name, so the history the debt was
+                // read from still stands and the entries owe nothing. Dropping
+                // them is best-effort — one left behind is inert, since the live
+                // history the retire gate reads still names its target.
+                if !failure.confirmed {
+                    let targets: Vec<String> = owed.into_iter().map(|entry| entry.target).collect();
+                    let _ = ledger.settle(&owner, &targets).await;
+                }
+                return Err(failure.into());
+            }
+        };
         self.project_published_file(
             target,
             head_size,
@@ -1771,48 +1791,104 @@ where
             .collect()
     }
 
-    /// What each doomed version still owes the registry once every target
-    /// another version of the same plan already accounts for is taken out of it
-    /// ([`Expansion::split_retained`]).
+    /// What each doomed version owes the registry, as this prune can quote it.
     ///
-    /// A doomed root's link list is not this device's word for what that version
-    /// holds: in a shared scope a write-grantee authors versions of its own, and
-    /// their blocks register under the grantee's account until this one syncs —
-    /// so a root that content-addresses correctly can still name leaves the
-    /// owner is living on. Only the prune sees both sides of that.
+    /// A quote, not a promise: what the retire may actually name is decided at
+    /// drain time against the account's live records, so the figure here is the
+    /// ceiling a pass that cannot re-expand falls back on
+    /// ([`OwedRetire::owed_bytes`]). It is charged once per CID — a pin row is
+    /// keyed `(account, cid)`, so a leaf two doomed roots both name is one row
+    /// and quoting it twice would over-report pending reclaim.
     ///
-    /// The same argument lets two *doomed* roots name one leaf. A pin row is
-    /// keyed `(account, cid)`, so that leaf is one row and belongs to exactly one
-    /// entry: charging it twice would over-report pending reclaim and hand the
-    /// registry the same CID under two debts.
-    async fn prune_debt(
-        &self,
-        doomed: &[ContentVersion],
-        retained: &[ContentVersion],
-    ) -> Result<Vec<OwedRetire>, Halt> {
-        let mut protected = BTreeSet::new();
-        for version in retained {
-            protected.extend(self.expand_version(version).await?.cids());
-        }
+    /// Only *doomed* roots are fetched. A retained version is never expanded
+    /// here: it is the drain's business what is live, and a version this device
+    /// cannot expand would otherwise refuse a prune that has nothing to do with
+    /// it.
+    async fn prune_debt(&self, doomed: &[ContentVersion]) -> Result<Vec<OwedRetire>, Halt> {
         let mut owed = Vec::with_capacity(doomed.len());
-        let mut charged: BTreeSet<&str> = BTreeSet::new();
+        let mut charged: BTreeSet<String> = BTreeSet::new();
+        let mut journaled: BTreeSet<String> = BTreeSet::new();
         for version in doomed {
             // A history may name one root twice, and the ledger is keyed by
             // target: the second naming owes nothing the first does not carry.
-            if !charged.insert(version.content_cid.as_str()) {
+            if !journaled.insert(version.content_cid.clone()) {
                 continue;
             }
             let expansion = self.expand_version(version).await?;
-            let (retirable, held) = expansion.split_retained(&protected);
-            protected.extend(retirable.cids());
+            let quoted = expansion.minus(&charged);
+            charged.extend(expansion.cids());
             owed.push(OwedRetire {
                 target: version.content_cid.clone(),
-                owed_bytes: retirable.pinned_bytes,
+                owed_bytes: quoted.pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
-                retained: held,
             });
         }
         Ok(owed)
+    }
+
+    /// Every content CID a published record of this scope still reaches — the
+    /// set no retire may name. Costed against the whole base tree, so it runs
+    /// only on a pass that has a debt to work.
+    ///
+    /// Derived fresh on the pass that retires rather than frozen into the
+    /// ledger. A root block is authored by anyone holding the scope's write
+    /// seed, so a doomed root can name leaves a *different* node lives on, and a
+    /// version adopted after the prune journaled its debt is live by the time
+    /// the retire runs. Neither is visible from the prune, and both unpin live
+    /// content if the retire misses them. It is also the gate that lets the
+    /// journal precede the publish: a target this set still names is one a
+    /// resolvable record still reaches.
+    ///
+    /// `None` when any live version could not be established, which stands the
+    /// retire down for the pass — a partial set unpins what it failed to read,
+    /// where a pin row left charged is only a leak.
+    async fn live_content_cids(&self, scope: &DrainScope<'_>) -> Option<BTreeSet<String>> {
+        let (_, epoch) = self.load_scope_root(scope).await.ok()?;
+        let mut live = BTreeSet::new();
+        let mut expanded: BTreeSet<String> = BTreeSet::new();
+        for node in self.published_files(scope.root) {
+            // Nocache: the retire unpins, so what may be named is decided
+            // against the freshest record the gate will pass, never a cached one
+            // a concurrent writer has already moved past.
+            let ReadBody::File { versions, .. } = self
+                .load_child_node(scope, epoch, node, ResolveMode::NoCache)
+                .await
+                .ok()?
+                .body
+            else {
+                continue;
+            };
+            for version in self.pinned_history(&versions).ok()? {
+                if !expanded.insert(version.content_cid.clone()) {
+                    continue;
+                }
+                live.extend(self.expand_version(&version).await.ok()?.cids());
+            }
+        }
+        Some(live)
+    }
+
+    /// Every file node under `root` the base holds a published version for.
+    fn published_files(&self, root: NodeId) -> Vec<NodeId> {
+        let base = self.base.borrow();
+        let mut queue = vec![root];
+        let mut seen: BTreeSet<NodeId> = BTreeSet::from([root]);
+        let mut files = Vec::new();
+        while let Some(folder) = queue.pop() {
+            for child in base.children(folder) {
+                if !seen.insert(child.id) {
+                    continue;
+                }
+                match child.kind {
+                    NodeKind::Folder => queue.push(child.id),
+                    NodeKind::File if child.content_version.is_some_and(|count| count > 0) => {
+                        files.push(child.id);
+                    }
+                    NodeKind::File => {}
+                }
+            }
+        }
+        files
     }
 
     /// One published version's whole CID set, off its own fetched root block.
