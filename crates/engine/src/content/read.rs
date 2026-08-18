@@ -168,24 +168,14 @@ impl Gateway {
     }
 }
 
-/// Whether `base_url` may be handed a credential: TLS, or a loopback host for
-/// local development (`apps/web/.env.example` ships a `http://localhost` Kubo).
-/// The accelerator URL is host configuration, so a stale or mistyped one must
-/// cost the member their acceleration rather than their session token.
+/// Whether `base_url` may be handed a credential: TLS only. The accelerator URL
+/// is host configuration, so a stale or mistyped one must cost the member their
+/// acceleration rather than their session token. A plain-HTTP gateway also
+/// refuses the header in a browser: `Authorization` makes the cross-origin read
+/// non-simple, and a stock Kubo gateway's CORS allow-list omits it, so every
+/// block read preflights to a rejection.
 fn carries_credentials_safely(base_url: &str) -> bool {
-    if base_url.starts_with("https://") {
-        return true;
-    }
-    let Some(rest) = base_url.strip_prefix("http://") else {
-        return false;
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    // Split a `:port` suffix without splitting an IPv6 literal's own colons.
-    let host = match authority.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
-        _ => authority,
-    };
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+    base_url.starts_with("https://")
 }
 
 /// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
@@ -905,6 +895,10 @@ mod tests {
     fn an_accelerator_that_cannot_keep_a_credential_is_never_handed_one() {
         for base_url in [
             "http://gw.cipherbox.test",
+            "http://localhost:8080",
+            "http://localhost",
+            "http://127.0.0.1:8080/",
+            "http://[::1]:8080",
             "http://localhost.evil.test:8080",
             "http://127.0.0.1.evil.test",
             "ftp://gw.cipherbox.test",
@@ -921,16 +915,15 @@ mod tests {
         }
     }
 
-    /// TLS anywhere, and plain HTTP only on loopback — the local Kubo
-    /// `apps/web/.env.example` ships must stay usable.
+    /// TLS is the whole rule: a leg that cannot keep the token still reads,
+    /// unauthenticated, which is what the local Kubo `apps/web/.env.example`
+    /// ships needs.
     #[test]
-    fn a_tls_or_loopback_accelerator_is_handed_the_session_bearer() {
+    fn a_tls_accelerator_is_handed_the_session_bearer() {
         for base_url in [
             "https://gw.cipherbox.test",
-            "http://localhost:8080",
-            "http://localhost",
-            "http://127.0.0.1:8080/",
-            "http://[::1]:8080",
+            "https://gw.cipherbox.test:8443",
+            "https://gw.cipherbox.test/path",
         ] {
             let gateway = GatewayConfig {
                 accelerator: Some(base_url.to_owned()),
