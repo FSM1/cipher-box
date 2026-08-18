@@ -7,6 +7,7 @@
  * pass over a write that never published.
  */
 
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '../fixtures';
 import { coldStart, drained, PAYLOAD } from '../vault';
 
@@ -67,6 +68,12 @@ test('an uploaded file reads back byte for byte', async ({ page }) => {
   await expect(files.row('notes.txt')).toBeVisible();
   expect(await drained(files, vault)).toEqual(['file notes.txt']);
 
-  expect(await files.preview('notes.txt')).toBe(PAYLOAD);
+  // Off disk, through the row's own action: the bytes the member ends up with.
+  const saved = await files.save('notes.txt');
+  expect(new Uint8Array(await readFile(await saved.path()))).toEqual(bytes);
+
+  // A save reads in ranges; this is the whole-file read, which is a separate
+  // engine path, and the preview is the third way the chrome shows a file.
   expect(await vault.read('notes.txt')).toEqual(bytes);
+  expect(await files.preview('notes.txt')).toBe(PAYLOAD);
 });

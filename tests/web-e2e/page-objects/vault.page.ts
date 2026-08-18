@@ -66,8 +66,8 @@ export class VaultPage {
 
   /**
    * The plaintext the engine reads back for one child of the root, straight off
-   * the network. The preview decodes as UTF-8 — only these bytes can tell a byte
-   * the round trip changed from one the decoder folded away.
+   * the network, as one whole-file read — the route a save's ranged reads and
+   * the preview's decoded text both leave unexercised.
    */
   async read(name: string): Promise<Uint8Array> {
     const { view } = await this.settled();

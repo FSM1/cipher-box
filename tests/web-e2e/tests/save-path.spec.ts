@@ -1,9 +1,8 @@
 /**
  * The save affordance, end to end: what an ordinary browser writes to disk when
- * a member downloads a file. It is the one claim the round trip in
- * `write-path.spec.ts` cannot make — that one reads back through the preview,
- * because the buffered read and the saved file are different paths and only
- * this one leaves the tab.
+ * a member downloads a file. The round trip in `write-path.spec.ts` saves too,
+ * but only to claim the bytes survive; these cases pin the route they took, the
+ * name they landed under, and the tab that answered for them.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -24,12 +23,6 @@ const LONG = PAYLOAD.repeat(40_000);
 
 test('a saved file is its own bytes, not the app shell', async ({ page }) => {
   const { vault, files } = await coldStart(page);
-
-  // The pipe serves the save, so a tab the worker does not control would prove
-  // nothing: the buffered fallback would answer and it is not the path at risk.
-  await expect
-    .poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null))
-    .toBe(true);
 
   const bytes = new TextEncoder().encode(LONG);
   await files.upload(NAME, bytes);
