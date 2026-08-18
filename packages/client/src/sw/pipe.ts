@@ -137,6 +137,10 @@ export class MediaPipe {
         this.discardPort(port);
         continue;
       }
+      if (head.status === 404 && clientId === ANONYMOUS_CLIENT) {
+        this.post(port, { type: 'cb:media:close', requestId });
+        return (await this.askOtherPorts(port, ticket, range)) ?? sealed(404, head.headers);
+      }
       // Only these two carry a body; `Response` throws on a body under a
       // null-body status, and the port that named the status is untrusted.
       if (head.status !== 200 && head.status !== 206) {
@@ -146,6 +150,41 @@ export class MediaPipe {
       return sealed(head.status, head.headers, this.body(port, requestId));
     }
     return sealed(503);
+  }
+
+  /**
+   * The remaining ports, for a request that named no client. A save is driven
+   * as a navigation and a navigation carries no client id, so the borrowed port
+   * belongs to whichever tab brokered last — and only the tab that minted the
+   * ticket can resolve it. Asking the others discloses a random string they
+   * cannot redeem, which same-origin script could already read off the DOM.
+   */
+  private async askOtherPorts(
+    asked: MessagePortLike,
+    ticket: string,
+    range: string | null
+  ): Promise<Response | null> {
+    for (const entry of [...this.ports.values()].reverse()) {
+      if (entry.port === asked) continue;
+      const requestId = this.nextRequestId;
+      this.nextRequestId += 1;
+      const head = await this.open(entry.port, requestId, ticket, range);
+      if (!head) {
+        this.post(entry.port, { type: 'cb:media:close', requestId });
+        this.discardPort(entry.port);
+        continue;
+      }
+      if (head.status === 404) {
+        this.post(entry.port, { type: 'cb:media:close', requestId });
+        continue;
+      }
+      if (head.status !== 200 && head.status !== 206) {
+        this.post(entry.port, { type: 'cb:media:close', requestId });
+        return sealed(head.status, head.headers);
+      }
+      return sealed(head.status, head.headers, this.body(entry.port, requestId));
+    }
+    return null;
   }
 
   private onMessage(port: MessagePortLike, event: MessageEvent): void {
@@ -374,7 +413,10 @@ function sealed(
   merged.set('cache-control', 'no-store');
   clampDisposition(merged);
   // A ticket URL is same-origin and navigable, and the port that named the type
-  // is untrusted input, so a body only ever renders under a clamped type.
+  // is untrusted input, so a body only ever renders under a clamped type. The
+  // sandbox is load-bearing beyond execution: a save navigates a frame the app
+  // owns, and an opaque origin is what keeps the plaintext out of its reach if
+  // a body ever commits as a document there.
   if (body !== null) {
     merged.set('content-type', safeMimeType(merged.get('content-type') ?? ''));
     merged.set('x-content-type-options', 'nosniff');

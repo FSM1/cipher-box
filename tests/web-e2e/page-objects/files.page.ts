@@ -98,7 +98,6 @@ export class FilesPage {
     return (await shown.textContent()) ?? '';
   }
 
-  /** Raises a row's action menu and picks one item off it. */
   /**
    * Saves a listed file to disk through the row's own action, and hands back
    * the transfer the browser started. The URL it came from is what says which
@@ -113,6 +112,7 @@ export class FilesPage {
     return download;
   }
 
+  /** Raises a row's action menu and picks one item off it. */
   private async act(name: string, item: string): Promise<void> {
     await this.page.getByRole('button', { name: `actions for ${name}`, exact: true }).click();
     await this.page

@@ -548,6 +548,78 @@ describe('MediaPipe client routing', () => {
     ]);
   });
 
+  it('asks the other tabs when a navigation lands on a port that never minted the ticket', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // A save is a navigation, which carries no client id, so the pipe borrows
+    // the newest port — the tab that opened last, not the one that saved.
+    const owner = streamingPort([new Uint8Array([7, 7])]);
+    const stranger = new FakePort((message, self) => {
+      if (message.type !== 'cb:media:open') return;
+      self.deliver({
+        type: 'cb:media:head',
+        requestId: message.requestId,
+        status: 404,
+        headers: [],
+      });
+    });
+    pipe.adoptPort(owner, 'tab-a');
+    pipe.adoptPort(stranger, 'tab-b');
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.status).toBe(206);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([7, 7]));
+    expect(stranger.countOf('cb:media:open')).toBe(1);
+    expect(owner.countOf('cb:media:open')).toBe(1);
+  });
+
+  it('answers a navigation 404 when no tab minted the ticket', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const deny = (): FakePort =>
+      new FakePort((message, self) => {
+        if (message.type !== 'cb:media:open') return;
+        self.deliver({
+          type: 'cb:media:head',
+          requestId: message.requestId,
+          status: 404,
+          headers: [],
+        });
+      });
+    const a = deny();
+    const b = deny();
+    pipe.adoptPort(a, 'tab-a');
+    pipe.adoptPort(b, 'tab-b');
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.status).toBe(404);
+    expect(a.countOf('cb:media:open')).toBe(1);
+    expect(b.countOf('cb:media:open')).toBe(1);
+  });
+
+  it('keeps an identified client to its own port, whatever another tab holds', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const other = streamingPort([new Uint8Array([9])]);
+    const own = new FakePort((message, self) => {
+      if (message.type !== 'cb:media:open') return;
+      self.deliver({
+        type: 'cb:media:head',
+        requestId: message.requestId,
+        status: 404,
+        headers: [],
+      });
+    });
+    pipe.adoptPort(own, 'tab-a');
+    pipe.adoptPort(other, 'tab-b');
+
+    const response = await pipe.respond(streamRequest(), 'tab-a');
+
+    // The fan-out is for navigations alone; a named client that does not know
+    // its own ticket gets its own answer.
+    expect(response.status).toBe(404);
+    expect(other.countOf('cb:media:open')).toBe(0);
+  });
+
   it('re-brokers to the owning tab instead of borrowing another client port', async () => {
     vi.useFakeTimers();
     const scope = new FakeScope();
