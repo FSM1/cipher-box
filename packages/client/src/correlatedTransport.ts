@@ -65,7 +65,6 @@ export function isRecoverableEngineError(code: string | undefined): boolean {
  */
 export type OverBudgetRemedy = 'wait' | 'freeDeviceSpace' | 'freeAccountQuota' | 'nothing';
 
-/** The shared prefix every over-budget code the wasm boundary emits carries. */
 const OVER_BUDGET_PREFIX = 'overBudget';
 
 const OVER_BUDGET_REMEDIES = new Map<string, OverBudgetRemedy>([

@@ -12,7 +12,7 @@ interface UploadListItemProps {
 // What the user does next about a refused write. The engine's message says
 // which budget refused and by how much; this says what to do about it.
 const REMEDIES: Record<OverBudgetRemedy, string> = {
-  wait: 'Queued uploads have to finish first — try again in a moment.',
+  wait: 'Let an upload in progress finish, or cancel one, then try again.',
   freeDeviceSpace: 'Free up space on this device, then try again.',
   freeAccountQuota: 'Free up your CipherBox storage, then try again.',
   nothing: 'Trying again will not help.',

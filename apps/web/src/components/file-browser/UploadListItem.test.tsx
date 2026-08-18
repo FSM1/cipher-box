@@ -81,8 +81,8 @@ describe('an upload row', () => {
   // Every cause the user can still act on: the engine's message says which
   // budget refused, and the row says what to do about that one.
   it.each([
-    ['overBudgetStagingBacklog', 'finish first'],
-    ['overBudgetTooManyWrites', 'finish first'],
+    ['overBudgetStagingBacklog', 'or cancel one'],
+    ['overBudgetTooManyWrites', 'or cancel one'],
     ['overBudgetDeviceFull', 'space on this device'],
     ['overBudgetAccountQuota', 'your CipherBox storage'],
   ])('offers a retry on %s and says what will clear it', (code, action) => {
