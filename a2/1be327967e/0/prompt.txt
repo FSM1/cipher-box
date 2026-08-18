@@ -171,3 +171,15 @@ The last one is the one that would catch a regression in Gap C.</result>
 ---
 
 /resolve-pr-reviews #1246
+
+---
+
+ok I just ran the test and got a 394 byte html file instead of the 5kB markdown file I was looking for.
+
+---
+
+getting a 404
+
+---
+
+yeah sure thing - go ahead
