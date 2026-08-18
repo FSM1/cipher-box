@@ -51,8 +51,14 @@ them.
      KUBO_API_URL=http://localhost:5001 \
      CORS_ALLOWED_ORIGINS=http://localhost:4173,http://localhost:4174
    pnpm --filter @cipherbox/api migration:run
-   pnpm --filter @cipherbox/api build && node apps/api/dist/main.js
+   pnpm --filter @cipherbox/api build
+   node apps/api/dist/main.js > /tmp/api.log 2>&1 &
+   curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health
    ```
+
+   The API holds the shell it runs in, so it is started in the background here
+   and steps 3 and 4 continue in the same terminal. Run it in the foreground
+   instead and the rest needs a second one.
 
    Without `KUBO_API_URL` the API refuses every hosted upload with a 503, and
    the write specs dead-letter rather than fail on an assertion.

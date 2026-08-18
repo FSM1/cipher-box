@@ -189,12 +189,11 @@ fn carries_credentials_safely(base_url: &str) -> bool {
     let Some(rest) = base_url.strip_prefix("https://") else {
         return false;
     };
-    // `user:pass@host` would ride as Basic auth beside the bearer.
-    !rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .contains('@')
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // `user:pass@host` would ride as Basic auth beside the bearer, and an empty
+    // authority is the same URL a slash short — a parser reads its userinfo as
+    // the path, so the host the token reaches is not the configured one.
+    !authority.is_empty() && !authority.contains('@')
 }
 
 /// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
@@ -952,12 +951,16 @@ mod tests {
             "http://127.0.0.1.evil.test",
             "ftp://gw.cipherbox.test",
             "//gw.cipherbox.test",
-            // A URL parse would read the first three as TLS, and the last would
-            // send `user:pass` as Basic auth beside the bearer.
+            // A URL parse would read the first three as TLS, and the rest carry
+            // an authority the token must not reach: `user:pass` as Basic auth
+            // beside the bearer, or — a slash short — none at all.
             "HTTPS://gw.cipherbox.test",
             " https://gw.cipherbox.test",
             "https:/gw.cipherbox.test",
             "https://member:secret@gw.cipherbox.test",
+            "https:///member:secret@gw.cipherbox.test",
+            "https:////member:secret@gw.cipherbox.test",
+            "https://",
         ] {
             let gateway = GatewayConfig {
                 accelerator: Some(base_url.to_owned()),

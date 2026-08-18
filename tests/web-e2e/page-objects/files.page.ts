@@ -43,7 +43,6 @@ export class FilesPage {
       .filter({ has: this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }) });
   }
 
-  /** Opens a folder. */
   async open(name: string): Promise<void> {
     await this.row(name).dblclick();
   }
@@ -92,7 +91,6 @@ export class FilesPage {
     });
   }
 
-  /** Reads a listed file back through the preview, and returns what it shows. */
   async preview(name: string): Promise<string> {
     await this.act(name, 'preview');
     const shown = this.page.getByTestId('preview-text');
