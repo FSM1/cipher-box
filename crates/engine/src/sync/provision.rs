@@ -602,8 +602,11 @@ where
     )
     .map_err(ProvisionError::Author)?;
 
-    // Register-first, upload, CAS publish. The name has no durable sequence
-    // floor, so the pipeline embeds sequence 1.
+    // Register-first, upload, CAS publish. The publish pipeline mints
+    // `sequence_floor + 1`, so this name's sequence floor stays unseeded for the
+    // genesis record to embed sequence 1. The session's first resolve adopts
+    // that record and raises the floor, an ordering the write-plane suite
+    // asserts end to end.
     let binding = HeadBinding {
         node_id: scope_id,
         scope_id,
@@ -1477,6 +1480,26 @@ mod tests {
         assert_eq!(
             block_on(floor::write_epoch_floor(&floors, &SCOPE)).unwrap(),
             Some(GENESIS_EPOCH),
+        );
+    }
+
+    /// The epoch floors are seeded; the genesis root name's **sequence** floor
+    /// deliberately is not. The publish pipeline mints `sequence_floor + 1`, so
+    /// seeding one here would embed sequence 2 in the record that must embed 1.
+    #[test]
+    fn the_genesis_root_name_is_left_without_a_sequence_floor() {
+        let session = session();
+        let floors = InMemoryFloorStore::default();
+        let net = Network::default();
+        let vault = mint(&session, &FakePublisher::new(&net), &floors, 8);
+
+        assert_eq!(
+            block_on(floor::sequence_floor(
+                &floors,
+                vault.root_name.as_str().as_bytes()
+            ))
+            .unwrap(),
+            None,
         );
     }
 

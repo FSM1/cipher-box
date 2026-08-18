@@ -4,11 +4,10 @@
 //! every seek unseals head and tail bytes the caller never receives, and a
 //! mid-read trust reject abandons whatever the assembly buffer already holds.
 //! This suite owns the whole test binary because it installs a global allocator
-//! that inspects each block as it is freed.
+//! that inspects each block freed on the thread under test.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::suite::aead::KEY_LEN;
@@ -25,20 +24,32 @@ const CHUNK: usize = 16;
 /// A run of this many identical bytes in a freed block is stranded plaintext.
 const MARKER_LEN: usize = CHUNK;
 
-static WATCHING: AtomicBool = AtomicBool::new(false);
-static LEAKED: AtomicBool = AtomicBool::new(false);
-/// Blocks the scan actually looked at. Without it a `!LEAKED` assertion passes
-/// vacuously whenever nothing in the armed window matched the filter.
-static INSPECTED: AtomicUsize = AtomicUsize::new(0);
-/// The byte the armed scenario's marker is made of. Each scenario picks its own:
-/// the harness runs the tests on parallel threads, and one scenario's fixture
-/// buffers drop inside another's window.
-static MARKER_BYTE: AtomicU8 = AtomicU8::new(0);
-/// The watchdog statics are global, so only one scenario may be armed at a time.
-static SERIAL: Mutex<()> = Mutex::new(());
+/// The freed block that carried a marker run. Reported rather than reduced to a
+/// bare boolean, so a failure is diagnosable from CI output alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Leak {
+    block_size: usize,
+    run_start: usize,
+}
 
-/// Flags any freed block still carrying a marker run, while a read is in flight.
-/// A block too small to hold one cannot carry it.
+thread_local! {
+    /// The whole watch is thread-local: the allocator is process-wide, so
+    /// global state would let a block the read path never owned decide the
+    /// verdict. This scoping assumes the single-threaded drive `block_on`
+    /// gives — were the read to move onto a worker, the scan would stop
+    /// seeing it.
+    static WATCHING: Cell<bool> = const { Cell::new(false) };
+    /// The byte the armed scenario's marker is made of.
+    static MARKER_BYTE: Cell<u8> = const { Cell::new(0) };
+    /// Blocks the scan actually looked at. Without it a no-leak assertion
+    /// passes vacuously whenever nothing in the armed window matched.
+    static INSPECTED: Cell<usize> = const { Cell::new(0) };
+    /// First hit only; a later one adds nothing.
+    static LEAK: Cell<Option<Leak>> = const { Cell::new(None) };
+}
+
+/// Flags any freed block still carrying a marker run, while a read is in flight
+/// on this thread. A block too small to hold one cannot carry it.
 struct Watchdog;
 
 unsafe impl GlobalAlloc for Watchdog {
@@ -47,15 +58,20 @@ unsafe impl GlobalAlloc for Watchdog {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if layout.size() >= MARKER_LEN && WATCHING.load(Ordering::Relaxed) {
-            INSPECTED.fetch_add(1, Ordering::Relaxed);
-            let wanted = MARKER_BYTE.load(Ordering::Relaxed);
+        if layout.size() >= MARKER_LEN && WATCHING.get() {
+            INSPECTED.set(INSPECTED.get() + 1);
+            let wanted = MARKER_BYTE.get();
             let mut matched = 0usize;
             for offset in 0..layout.size() {
                 let byte = unsafe { ptr.add(offset).read_volatile() };
                 matched = if byte == wanted { matched + 1 } else { 0 };
                 if matched == MARKER_LEN {
-                    LEAKED.store(true, Ordering::Relaxed);
+                    if LEAK.get().is_none() {
+                        LEAK.set(Some(Leak {
+                            block_size: layout.size(),
+                            run_start: offset + 1 - MARKER_LEN,
+                        }));
+                    }
                     break;
                 }
             }
@@ -70,27 +86,60 @@ static ALLOCATOR: Watchdog = Watchdog;
 /// What the watchdog saw over one armed read.
 struct Watched<T> {
     outcome: T,
-    leaked: bool,
+    leak: Option<Leak>,
     inspected: usize,
 }
 
-/// Runs `body` with the watchdog armed for `marker`, serialized against every
-/// other scenario.
+/// Runs `body` with the watchdog armed for `marker` on this thread. Every
+/// scenario owns its own watch, so none needs serializing against another.
 fn watched<T>(marker: u8, body: impl FnOnce() -> T) -> Watched<T> {
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    LEAKED.store(false, Ordering::Relaxed);
-    INSPECTED.store(0, Ordering::Relaxed);
-    MARKER_BYTE.store(marker, Ordering::Relaxed);
-    WATCHING.store(true, Ordering::Relaxed);
+    LEAK.set(None);
+    INSPECTED.set(0);
+    MARKER_BYTE.set(marker);
+    WATCHING.set(true);
     let outcome = body();
-    WATCHING.store(false, Ordering::Relaxed);
+    WATCHING.set(false);
     Watched {
         outcome,
-        leaked: LEAKED.load(Ordering::Relaxed),
-        inspected: INSPECTED.load(Ordering::Relaxed),
+        leak: LEAK.get(),
+        inspected: INSPECTED.get(),
     }
+}
+
+/// The scoped window still catches what it exists to catch.
+#[test]
+fn the_watchdog_reports_the_block_an_unwiped_run_reached_it_in() {
+    const MARKER: u8 = 0xD9;
+    let seen = watched(MARKER, || {
+        let mut stranded = vec![0u8; 3 * CHUNK];
+        stranded[CHUNK..2 * CHUNK].fill(MARKER);
+        drop(stranded);
+    });
+
+    assert_eq!(
+        seen.leak,
+        Some(Leak {
+            block_size: 3 * CHUNK,
+            run_start: CHUNK,
+        }),
+        "a hit names its block, so a false positive is visible as one"
+    );
+}
+
+/// The property under test is what the read path leaves behind, so only the
+/// thread running it may decide the verdict.
+#[test]
+fn a_foreign_threads_freed_block_never_trips_the_watchdog() {
+    const MARKER: u8 = 0xE1;
+    let seen = watched(MARKER, || {
+        std::thread::spawn(|| {
+            drop(vec![MARKER; 4 * CHUNK]);
+        })
+        .join()
+        .expect("the foreign thread ran");
+    });
+
+    assert_eq!(seen.leak, None, "a foreign block cannot fail this suite");
 }
 
 #[test]
@@ -118,8 +167,8 @@ fn a_ranged_read_wipes_each_leafs_plaintext_before_it_drops() {
         "the window the caller asked for"
     );
     assert!(seen.inspected > 0, "the watchdog scanned nothing");
-    assert!(
-        !seen.leaked,
+    assert_eq!(
+        seen.leak, None,
         "a leaf's plaintext reached the allocator unwiped"
     );
 }
@@ -178,8 +227,8 @@ fn a_mid_read_trust_reject_wipes_what_the_assembly_buffer_already_holds() {
         "rejected for the per-leaf length, not something else: {err:?}"
     );
     assert!(seen.inspected > 0, "the watchdog scanned nothing");
-    assert!(
-        !seen.leaked,
+    assert_eq!(
+        seen.leak, None,
         "the abandoned assembly buffer reached the allocator unwiped"
     );
 }
@@ -218,8 +267,8 @@ fn outgrowing_the_assembly_buffer_wipes_the_allocation_it_leaves_behind() {
         "the whole window the caller asked for"
     );
     assert!(seen.inspected > 0, "the watchdog scanned nothing");
-    assert!(
-        !seen.leaked,
+    assert_eq!(
+        seen.leak, None,
         "the outgrown assembly buffer reached the allocator unwiped"
     );
 }
