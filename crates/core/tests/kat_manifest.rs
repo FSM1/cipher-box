@@ -3777,11 +3777,25 @@ fn write_history_link_reject_vectors_fire_the_named_check() {
             open_owner_history_link(owner, ctx, &blob)
         },
     );
-    assert!(
-        vectors
-            .iter()
-            .any(|v| v.name() == "sealed-by-a-write-grantee"),
-        "auth mode is what denies a write grantee's forgery; the vector proving it must stay"
+    // Auth mode is what denies a write grantee's forgery, and the vector proving
+    // it is only worth anything while it is sealed to the owner's own enc subkey
+    // under the accept vector's ephemeral — otherwise a wrong recipient, not the
+    // mode, is what rejects it.
+    let accepted_enc = write_history_link_accept_vectors(&m)
+        .into_iter()
+        .map(|v| v.enc)
+        .next()
+        .expect("a write-history-link accept vector");
+    let forgery = vectors
+        .iter()
+        .find_map(|v| match v {
+            BlobRejectVector::HpkeOpen(v) if v.name == "base-mode-forgery" => Some(v),
+            _ => None,
+        })
+        .expect("the base-mode-forgery reject vector");
+    assert_eq!(
+        forgery.enc, accepted_enc,
+        "write-history-link base-mode-forgery: not sealed to the owner"
     );
 }
 

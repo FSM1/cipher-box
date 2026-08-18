@@ -78,7 +78,7 @@
     "class": "trust"
   },
   {
-    "name": "sealed-by-a-write-grantee",
+    "name": "base-mode-forgery",
     "recipientSecret": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
     "enc": "27da2e9fcad7ef13ed32ba952051a628e88a638397c848a637035b441c3ea324",
     "v": 2,
@@ -86,7 +86,7 @@
     "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
     "epoch": 3,
     "structTag": 14,
-    "ciphertext": "a471acf6796634c214fc11115f73a73b4c5c6ba7689a3b5a966ee81d4a04244f2ec25cae14731eda7f4e74534726bf14c7f1580e804e06e1542b64f55df69d4fdd11ceeb8c2379",
+    "ciphertext": "d866951fc9eaa6963724adc06fed52575134bf6309f0c3d3339204471a046a7794a0e3f012103c0dcec6295fc5a09e96ac12dfd2b304e8a92c180cfbaa37bd32a3132f1f658dc1",
     "check": "hpke-open-failed",
     "class": "trust"
   }

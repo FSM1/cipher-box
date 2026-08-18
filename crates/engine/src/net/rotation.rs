@@ -1544,6 +1544,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
+        | ResealError::HistoryLinkNotContiguous
         | ResealError::OwnerKeyRequiredForWriteCut
         | ResealError::Encode(_) => WritePublishError::Rejected,
     }
@@ -5029,6 +5030,7 @@ mod tests {
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
+            ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
@@ -5048,6 +5050,7 @@ mod tests {
                 | ResealError::TooManyHistoryLinks
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending
+                | ResealError::HistoryLinkNotContiguous
                 | ResealError::OwnerKeyRequiredForWriteCut
                 | ResealError::Encode(_) => (
                     WritePublishError::Rejected,

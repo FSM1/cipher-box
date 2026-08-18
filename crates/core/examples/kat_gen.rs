@@ -5743,12 +5743,17 @@ fn build_write_history_link_reject() -> Vec<BlobRejectVector> {
     let sealed = seal_owner_history_link(&owner, &eph, &ctx, &payload).unwrap();
     let (enc, ciphertext) = split_owner_history_link(&sealed);
 
-    // Auth mode names the owner as the static sender, so a link any other party
-    // seals to the owner is exactly as unopenable as a tampered one — the
-    // property base mode would not give this writer-authored field.
-    let forger = X25519Secret::from_scalar([0x42; 32]);
-    let forged = seal_owner_history_link(&forger, &eph, &ctx, &payload).unwrap();
-    let (forged_enc, forged_ct) = split_owner_history_link(&forged);
+    // The forgery base mode would hand a write grantee: sealed to the owner's
+    // real enc subkey under the grant family's empty HPKE info, correctly
+    // AAD-bound, sharing the accepted vector's ephemeral — so mode is the only
+    // input that differs, and auth-mode verification is the only thing that can
+    // reject it.
+    let plaintext = encode_history_link_payload(&payload).unwrap();
+    let forged = hpke_seal(&owner.public(), &eph, b"", &build_aad(&ctx), &plaintext);
+    assert_eq!(
+        forged.enc, enc,
+        "write-history-link: the base-mode forgery must share the accepted vector's enc"
+    );
 
     let mut tampered_ct = ciphertext.clone();
     tampered_ct[0] ^= 0x01;
@@ -5780,7 +5785,7 @@ fn build_write_history_link_reject() -> Vec<BlobRejectVector> {
             &write_epoch_transplant,
             &ciphertext,
         ),
-        ("sealed-by-a-write-grantee", forged_enc, &ctx, &forged_ct),
+        ("base-mode-forgery", forged.enc, &ctx, &forged.ciphertext),
     ];
     cases
         .into_iter()

@@ -1240,19 +1240,32 @@ mod tests {
         let owner = X25519Secret::from_scalar([0x41; 32]);
         let grantee = X25519Secret::from_scalar([0x42; 32]);
         let ctx = grant_ctx(super::super::STRUCT_TAG_WRITE_HISTORY_LINK);
-        let forged = seal_owner_history_link(
-            &grantee,
-            &[0x57; 32],
-            &ctx,
-            &HistoryLinkPayload::new([0xaa; 32], 3),
-        )
-        .unwrap();
-        assert_eq!(
-            open_owner_history_link(&owner, &ctx, &forged)
-                .unwrap_err()
-                .check(),
-            "hpke-open-failed"
-        );
+        let eph = [0x57; 32];
+        let aad = build_aad(&ctx);
+        let plaintext =
+            encode_history_link_payload(&HistoryLinkPayload::new([0xaa; 32], 3)).unwrap();
+        // Both shapes seal to the owner's real enc subkey under the real AAD, so
+        // only the static-sender binding can refuse them.
+        for forged in [
+            hpke::hpke_seal(&owner.public(), &eph, GRANT_HPKE_INFO, &aad, &plaintext),
+            hpke::hpke_seal_auth(
+                &grantee,
+                &owner.public(),
+                &eph,
+                GRANT_HPKE_INFO,
+                &aad,
+                &plaintext,
+            ),
+        ] {
+            let mut blob = forged.enc.to_vec();
+            blob.extend_from_slice(&forged.ciphertext);
+            assert_eq!(
+                open_owner_history_link(&owner, &ctx, &blob)
+                    .unwrap_err()
+                    .check(),
+                "hpke-open-failed"
+            );
+        }
     }
 
     /// The bound the write-body enforces has to admit the link this build mints,

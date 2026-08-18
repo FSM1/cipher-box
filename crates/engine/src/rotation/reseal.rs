@@ -159,14 +159,27 @@ impl ResealSeeds<'_> {
     /// drops one whose epoch does not descend — so a link at or above the epoch
     /// it seals under is one no walk could follow. The single home of that
     /// invariant across the two planes (AGENTS.md rule 8).
+    ///
+    /// The two planes part company above that floor. The read plane's links are
+    /// a **contiguous chain, one epoch per step** (blueprint/core.md
+    /// "History-link retention"), so a gap strands every epoch beyond it. The
+    /// write plane carries a single link that "departs from the read plane's
+    /// ratchet construction" (blueprint/core.md "Write-body") — there is no
+    /// chain to hole, and its epoch is monotonic only, the axis
+    /// [`build_repoint_object`](super::rotate_write::build_repoint_object)
+    /// enforces on `writeEpoch`.
     fn check_history_descends(&self) -> Result<(), ResealError> {
-        let read = self.prev.as_ref().map(|prev| (self.read_epoch, prev));
-        let write = match &self.write_history {
-            WriteHistory::Cut(prev) => Some((self.write_epoch, prev)),
-            WriteHistory::Carried(_) => None,
-        };
-        for (epoch, prev) in read.into_iter().chain(write) {
-            if prev.epoch >= epoch {
+        if let Some(prev) = self.prev.as_ref() {
+            if prev.epoch >= self.read_epoch {
+                return Err(ResealError::HistoryLinkNotDescending);
+            }
+            // Cannot overflow: `prev.epoch` is below `read_epoch`.
+            if prev.epoch + 1 != self.read_epoch {
+                return Err(ResealError::HistoryLinkNotContiguous);
+            }
+        }
+        if let WriteHistory::Cut(prev) = &self.write_history {
+            if prev.epoch >= self.write_epoch {
                 return Err(ResealError::HistoryLinkNotDescending);
             }
         }
@@ -238,6 +251,12 @@ pub enum ResealError {
     /// it is sealed under — a link the ratchet, which only ever steps backward,
     /// could not walk. Release-active (AGENTS.md rule 8).
     HistoryLinkNotDescending,
+    /// A read-plane mint would seal a link over an epoch more than one below the
+    /// one it is sealed under, holing a chain blueprint/core.md
+    /// ("History-link retention") specifies as contiguous — every epoch past the
+    /// hole becomes unreachable to every reader. Read plane only: the write
+    /// plane carries no chain. Release-active (AGENTS.md rule 8).
+    HistoryLinkNotContiguous,
     /// A [`WriteHistory::Cut`] was asked of a re-sealer holding no owner
     /// encryption subkey. The write-plane link is auth-mode sealed by the owner
     /// to the owner, so only the owner can mint one — and a write grantee that
@@ -279,6 +298,9 @@ impl core::fmt::Display for ResealError {
             ResealError::HistoryLinkNotDescending => {
                 f.write_str("history link would not step the ratchet backward")
             }
+            ResealError::HistoryLinkNotContiguous => {
+                f.write_str("history link would leave a hole in the read-plane ratchet")
+            }
             ResealError::OwnerKeyRequiredForWriteCut => {
                 f.write_str("write-plane cut needs the owner encryption subkey to mint its link")
             }
@@ -303,6 +325,7 @@ impl ResealError {
             ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
             ResealError::HistoryLinkNotDescending => "history-link-not-descending",
+            ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::Encode(_) => "structure-encode-failed",
         }
@@ -351,7 +374,11 @@ fn ratchet_step(
     let key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
     let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
     let payload = open_history_link(key.as_bytes(), &ctx, &link.sealed).ok()?;
-    if payload.prev_epoch >= epoch {
+    // One epoch per step, the decode-side mirror of
+    // [`ResealSeeds::check_history_descends`]. `None` truncates the walk rather
+    // than refusing it — the carried set is attacker-influenced (blueprint/core.md
+    // "History-link retention").
+    if payload.prev_epoch.checked_add(1) != Some(epoch) {
         return None;
     }
     Some((Zeroizing::new(*payload.prev_seed()), payload.prev_epoch))
@@ -2066,6 +2093,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_gapped_read_history_link_is_refused_but_a_gapped_write_cut_is_not() {
+        // The read plane is a contiguous chain, so a link skipping epoch 4
+        // strands every epoch past the hole — refused ahead of every seal, which
+        // `UndrawnEntropy` pins. The write plane carries a single link, not a
+        // chain, and its epoch is monotonic only: the name wave sources the cut's
+        // `epoch` from the rotation plan and its `prev.epoch` from the durable
+        // write floor (`net/rotation.rs`), so a device whose floor lags the plan
+        // mints a legitimately gapped cut that must still seal.
+        let fx = Fixture::new();
+        let (commitment, sig, ledger) = fx.minted();
+        let owner_pub = fx.owner_enc.public();
+        let id = ScopeRootIdentity {
+            owner_enc_secret: Some(&fx.owner_enc),
+            ..identity(&fx, &owner_pub, MINTED_NAME, None)
+        };
+        let override_seed = [0x0e; 32];
+        let cs = committed_set(&commitment, &sig, &ledger);
+
+        let read_cut = seeds(
+            &override_seed,
+            5,
+            Some(PrevEpochSeed {
+                seed: &RETIRING_WRITE_SCOPE_SEED,
+                epoch: 3,
+            }),
+            &FRESH_WRITE_SCOPE_SEED,
+            &fx.pointer_read_key,
+        );
+        assert_eq!(
+            reseal_scope_root(&mut UndrawnEntropy, &id, &read_cut, &cs, &[])
+                .expect_err("a gapped read link seals nothing")
+                .check(),
+            "history-link-not-contiguous"
+        );
+
+        let write_cut = cut_seeds(
+            &override_seed,
+            &fx.pointer_read_key,
+            PrevEpochSeed {
+                seed: &RETIRING_WRITE_SCOPE_SEED,
+                epoch: 3,
+            },
+            5,
+        );
+        let section = reseal_scope_root(&mut SeededEntropy::new(70), &id, &write_cut, &cs, &[])
+            .expect("a gapped write cut still seals");
+        let payload = open_owner_history_link(
+            &fx.owner_enc,
+            &ctx_for(V, SCOPE, 5, STRUCT_TAG_WRITE_HISTORY_LINK),
+            &opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 5).write_history_link,
+        )
+        .expect("the gapped link opens for the owner");
+        assert_eq!(payload.prev_epoch, 3);
     }
 
     // --- The key-regression ratchet walked backward ---
