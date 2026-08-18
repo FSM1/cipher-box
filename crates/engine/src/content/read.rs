@@ -149,6 +149,17 @@ impl GatewaySource {
             bearer: SessionBearer::default(),
         }
     }
+
+    /// The only way a source is handed `bearer`: a URL that cannot keep it
+    /// yields a public source instead ([`carries_credentials_safely`]).
+    pub fn accelerator(base_url: impl Into<String>, bearer: SessionBearer) -> Self {
+        let base_url = base_url.into();
+        if carries_credentials_safely(&base_url) {
+            Self { base_url, bearer }
+        } else {
+            Self::public(base_url)
+        }
+    }
 }
 
 /// The ordered read source set: the token-authed accelerator is tried first as
@@ -168,14 +179,22 @@ impl Gateway {
     }
 }
 
-/// Whether `base_url` may be handed a credential: TLS only. The accelerator URL
-/// is host configuration, so a stale or mistyped one must cost the member their
-/// acceleration rather than their session token. A plain-HTTP gateway also
-/// refuses the header in a browser: `Authorization` makes the cross-origin read
-/// non-simple, and a stock Kubo gateway's CORS allow-list omits it, so every
-/// block read preflights to a rejection.
+/// Whether `base_url` may be handed a credential: TLS, and no credentials of
+/// its own. The token authorizes the whole API, so it must not ride a cleartext
+/// hop, and a `user:pass@host` authority would send Basic auth beside it.
+///
+/// The prefix is deliberate rather than a URL parse: a parser accepts `HTTPS://`
+/// as TLS, and every divergence between the two must fall on the denying side.
 fn carries_credentials_safely(base_url: &str) -> bool {
-    base_url.starts_with("https://")
+    let Some(rest) = base_url.strip_prefix("https://") else {
+        return false;
+    };
+    // `user:pass@host` would ride as Basic auth beside the bearer.
+    !rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .contains('@')
 }
 
 /// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
@@ -208,16 +227,9 @@ impl GatewayConfig {
     /// a leg denied it still serves reads, just unauthenticated.
     pub fn into_gateway(self, accelerator_bearer: SessionBearer) -> Gateway {
         Gateway {
-            accelerator: self.accelerator.map(|base_url| {
-                if carries_credentials_safely(&base_url) {
-                    GatewaySource {
-                        base_url,
-                        bearer: accelerator_bearer,
-                    }
-                } else {
-                    GatewaySource::public(base_url)
-                }
-            }),
+            accelerator: self
+                .accelerator
+                .map(|base_url| GatewaySource::accelerator(base_url, accelerator_bearer)),
             public_fallbacks: self
                 .public_fallbacks
                 .into_iter()
@@ -648,6 +660,44 @@ mod tests {
         );
     }
 
+    /// The other half of the denial, on the wire rather than in the config: a
+    /// leg refused the bearer is still the first source consulted, and it sends
+    /// no `Authorization` — which is what a stock gateway's CORS allow-list and
+    /// a token-free local Kubo both need.
+    #[test]
+    fn a_plain_http_accelerator_is_consulted_and_carries_no_authorization() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let gateway = GatewayConfig {
+            accelerator: Some("http://127.0.0.1:8080".into()),
+            public_fallbacks: Vec::new(),
+        }
+        .into_gateway(SessionBearer::holding("member-token"));
+
+        let out = block_on(read_block(
+            &gateway,
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.starts_with("http://127.0.0.1:8080/ipfs/"));
+        assert!(
+            !requests[0]
+                .headers
+                .iter()
+                .any(|(name, _)| name == AUTHORIZATION),
+            "a denied accelerator carries no bearer token"
+        );
+    }
+
     /// A source whose bearer cannot be a header value is skipped, never
     /// contacted without it — and rotation still reaches a healthy source.
     #[test]
@@ -888,11 +938,10 @@ mod tests {
         );
     }
 
-    /// The accelerator URL is host configuration and the token it would be
-    /// handed authorizes the whole API, so a stale or mistyped value must cost
-    /// the acceleration, not the session. The leg still serves reads.
+    /// Anything but a bare TLS URL is denied the token. The leg still serves
+    /// reads, so a denial costs the member their acceleration at most.
     #[test]
-    fn an_accelerator_that_cannot_keep_a_credential_is_never_handed_one() {
+    fn an_accelerator_that_is_not_plain_tls_is_never_handed_a_credential() {
         for base_url in [
             "http://gw.cipherbox.test",
             "http://localhost:8080",
@@ -903,6 +952,12 @@ mod tests {
             "http://127.0.0.1.evil.test",
             "ftp://gw.cipherbox.test",
             "//gw.cipherbox.test",
+            // A URL parse would read the first three as TLS, and the last would
+            // send `user:pass` as Basic auth beside the bearer.
+            "HTTPS://gw.cipherbox.test",
+            " https://gw.cipherbox.test",
+            "https:/gw.cipherbox.test",
+            "https://member:secret@gw.cipherbox.test",
         ] {
             let gateway = GatewayConfig {
                 accelerator: Some(base_url.to_owned()),
