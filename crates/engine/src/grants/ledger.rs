@@ -259,13 +259,11 @@ mod tests {
     }
 
     #[test]
-    fn a_cofactor_twin_recipient_key_is_not_bound_to_the_tag() {
-        // The lockout the prime-order gate closes: a committed write-grantee
-        // swaps a victim's `recipientEncPk` for its cofactor twin. Clamping makes
-        // the twin drive the identical ECDH, so the tag it re-derives is the
-        // victim's own and the binding used to pass — while HPKE binds the key
-        // bytes, so the blob re-minted at the next rotation would never open for
-        // the victim, with no revocation signal.
+    fn a_recipient_key_core_will_not_adopt_is_not_bound_to_the_tag() {
+        // Both encodings a write-grantee can swap in re-derive the victim's own
+        // tag — a cofactor twin and a non-canonical spelling of the key itself —
+        // so only core's adoption gate ([`X25519Public::from_bytes`]) stops the
+        // owner re-minting a blob the victim can never open.
         let owner_enc = X25519Secret::from_scalar([0x33; 32]);
         let victim = X25519Secret::from_scalar([0x44; 32]).public();
         let name = b"scope-root-name";
@@ -281,31 +279,21 @@ mod tests {
         .expect("a contributory recipient key");
         assert!(entry_tag_is_bound(&owner_enc, &row.ledger_entry, name));
 
-        let mut swapped = row.ledger_entry.clone();
-        swapped.recipient_enc_pk = cofactor_twin(&victim);
-        assert_ne!(swapped.recipient_enc_pk, victim.to_bytes());
-        assert_eq!(
-            swapped.tag, row.ledger_entry.tag,
-            "same owner-committed tag"
-        );
-        assert!(
-            !entry_tag_is_bound(&owner_enc, &swapped, name),
-            "a key outside the prime-order subgroup binds no tag"
-        );
-    }
+        let mut high_bit = victim.to_bytes();
+        high_bit[31] |= 0x80;
+        let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
+            .into_iter()
+            .chain([high_bit]);
 
-    /// `P + t` for a non-identity `t` in `E[8]`: a distinct encoding of the same
-    /// cofactor class, which every clamped X25519 exchange collapses onto `P`.
-    fn cofactor_twin(public: &X25519Public) -> [u8; 32] {
-        let honest = public.to_bytes();
-        let lifted = curve25519_dalek::montgomery::MontgomeryPoint(honest)
-            .to_edwards(0)
-            .expect("a legitimate X25519 public key lifts to Edwards");
-        curve25519_dalek::constants::EIGHT_TORSION
-            .iter()
-            .map(|t| (lifted + t).to_montgomery().to_bytes())
-            .find(|twin| *twin != honest)
-            .expect("E[8] has seven non-identity points")
+        for enc_pk in unadoptable {
+            let mut swapped = row.ledger_entry.clone();
+            swapped.recipient_enc_pk = enc_pk;
+            assert_eq!(swapped.tag, row.ledger_entry.tag, "owner-committed tag");
+            assert!(
+                !entry_tag_is_bound(&owner_enc, &swapped, name),
+                "a key core will not adopt binds no tag"
+            );
+        }
     }
 
     #[test]

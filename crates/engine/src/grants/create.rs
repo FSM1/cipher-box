@@ -175,12 +175,12 @@ pub enum CreateGrantError {
     },
     /// The recipient encryption key is non-contributory (degenerate ECDH).
     UnusableRecipientKey,
-    /// The recipient's encryption subkey is the vault owner's own. The owner
+    /// The recipient's encryption subkey is the vault owner's own: the owner
     /// already outranks every grantee, so the grant confers nothing while
     /// consuming a commitment slot and filing the owner's pseudonym as a third
-    /// party's. Refused pre-publish, so nothing is minted or shared. The invite
-    /// path refuses the same input as
-    /// [`InviteError::ClaimantIsTheOwner`](super::InviteError::ClaimantIsTheOwner).
+    /// party's. The invite path's
+    /// [`ClaimantIsTheOwner`](super::InviteError::ClaimantIsTheOwner) refuses
+    /// the same input.
     RecipientIsTheOwner,
     /// Encoding/signing the grant-set commitment failed (fail-closed codec).
     CommitmentEncode(CodecError),
@@ -285,9 +285,7 @@ where
     P: ScopeRootPublisher + SweepPublisher,
     M: Mailbox,
 {
-    // 0) Refuse a self-grant before any network effect: the sweep below
-    // publishes, so a refusal after it would have already moved the vault for a
-    // grant that is never minted.
+    // Refused ahead of the publishing sweep, so a self-grant costs no publish.
     if *recipient.enc_pub == owner.enc_secret.public() {
         return Err(CreateGrantError::RecipientIsTheOwner);
     }
@@ -1549,9 +1547,6 @@ mod tests {
 
     #[test]
     fn a_self_grant_is_refused_before_any_network_effect() {
-        // Handing the owner's own encryption subkey back as the recipient's is
-        // refused on the direct path exactly as the invite path refuses it, and
-        // the refusal lands before the convergence sweep publishes anything.
         let (outcome, published, hub) = run_for(7, &[], FakeNet::new(Ok(())), &[], &owner_enc());
 
         let err = outcome.expect_err("a self-grant is refused");

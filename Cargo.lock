@@ -682,7 +682,6 @@ dependencies = [
  "base64 0.22.1",
  "cipherbox-core",
  "cipherbox-engine",
- "curve25519-dalek",
  "futures-channel",
  "futures-core",
  "hex",

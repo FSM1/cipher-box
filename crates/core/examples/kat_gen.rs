@@ -65,7 +65,7 @@ use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{self, ENC_LEN, MODE_AUTH, hpke_open, hpke_seal};
 use cipherbox_core::suite::secret::SECRET_LEN;
-use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret, cofactor_twins};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 det-cbor";
@@ -3568,22 +3568,20 @@ const LOW_ORDER_X25519: [u8; 32] = [
     0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
 ];
 
-/// The cofactor twin `P + t` of a legitimate X25519 public key, for a
-/// non-identity `t` in `E[8]`. On-curve and not low-order, so neither the RFC
-/// 7748 blacklist nor the contributory backstop sees it; clamping makes it drive
-/// the identical ECDH, so a check reading only the shared secret cannot tell it
-/// from `P`, while HPKE binds the supplied bytes into `kem_context` and seals to
-/// something the holder of `P` can never open.
+/// One cofactor twin of `public` — see [`cofactor_twins`] for what the class is
+/// and why the prime-order gate refuses it.
 fn cofactor_twin(public: &X25519Public) -> [u8; 32] {
-    let honest = public.to_bytes();
-    let lifted = curve25519_dalek::montgomery::MontgomeryPoint(honest)
-        .to_edwards(0)
-        .expect("a legitimate X25519 public key lifts to Edwards");
-    curve25519_dalek::constants::EIGHT_TORSION
-        .iter()
-        .map(|t| (lifted + t).to_montgomery().to_bytes())
-        .find(|twin| *twin != honest)
-        .expect("E[8] has seven non-identity points")
+    cofactor_twins(public)[0]
+}
+
+/// The same point spelled with the u-coordinate's ignored bit 255 set. X25519
+/// masks that bit, so this re-derives the key's blinded tag, but `to_bytes`
+/// re-emits it verbatim and HPKE binds it into `kem_context` — the canonical
+/// half of the adoption gate.
+fn non_canonical(enc: [u8; 32]) -> [u8; 32] {
+    let mut alt = enc;
+    alt[31] |= 0x80;
+    alt
 }
 
 fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
@@ -3633,6 +3631,13 @@ fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
         (
             "non-prime-order-enc",
             twin_enc,
+            sealed.ciphertext.clone(),
+            aad,
+            "hpke-non-contributory",
+        ),
+        (
+            "non-canonical-enc",
+            non_canonical(sealed.enc),
             sealed.ciphertext.clone(),
             aad,
             "hpke-non-contributory",
@@ -3734,6 +3739,7 @@ fn build_contact_reject() -> Vec<RejectVector> {
     // The signed subkey's cofactor twin: on-curve and contributory, so only the
     // prime-order gate refuses it — and it refuses before the binding verify.
     let twin_enc = cofactor_twin(&enc_public).to_vec();
+    let non_canonical_enc = non_canonical(enc_public.to_bytes()).to_vec();
 
     let bytes_of = |identity: Option<Value>, enc: Option<Value>, sig: Option<Value>| -> Vec<u8> {
         let mut m = Map::new();
@@ -3811,6 +3817,19 @@ fn build_contact_reject() -> Vec<RejectVector> {
             // grant blob being sealed to a key the grantee can never open.
             "enc-subkey-non-prime-order",
             bytes_of(Some(b(&good_id)), Some(b(&twin_enc)), Some(b(&good_sig))),
+            "hpke-non-contributory",
+            "trust",
+        ),
+        (
+            // A second spelling of the signed subkey. The binding still verifies
+            // over the signed bytes, so this pins that the key gate runs FIRST —
+            // the ordering that stops a re-derived-tag substitution.
+            "enc-subkey-non-canonical",
+            bytes_of(
+                Some(b(&good_id)),
+                Some(b(&non_canonical_enc)),
+                Some(b(&good_sig)),
+            ),
             "hpke-non-contributory",
             "trust",
         ),
@@ -6905,6 +6924,17 @@ fn build_content_key_reject() -> Vec<ContentKeyRejectVector> {
         let twin = cofactor_twin(&X25519Public::from_bytes(enc).expect("valid enc"));
         m.insert("enc", Value::Bytes(twin.to_vec()));
     });
+    // The same ephemeral, spelled with the ignored high bit set.
+    let non_canonical_enc = reframe_content_key(&blob, |m| {
+        let enc: [u8; 32] = m
+            .get("enc")
+            .unwrap()
+            .as_bytes()
+            .unwrap()
+            .try_into()
+            .expect("enc is 32 bytes");
+        m.insert("enc", Value::Bytes(non_canonical(enc).to_vec()));
+    });
     let forward_version = reframe_content_key(&blob, |m| {
         m.insert("v", Value::Unsigned(CONTENT_KEY_V + 1));
     });
@@ -6957,6 +6987,14 @@ fn build_content_key_reject() -> Vec<ContentKeyRejectVector> {
             scalar,
             &authored(),
             &twin_enc,
+            "hpke-non-contributory",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "non-canonical-enc",
+            scalar,
+            &authored(),
+            &non_canonical_enc,
             "hpke-non-contributory",
             "trust",
         ),
