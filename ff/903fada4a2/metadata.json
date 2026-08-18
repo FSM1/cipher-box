@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "ff903fada4a2",
+  "strategy": "manual-commit",
+  "branch": "fix/stream-save-reaches-the-service-worker",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ff/903fada4a2/0/metadata.json",
+      "transcript": "/ff/903fada4a2/0/full.jsonl",
+      "compact_transcript": "/ff/903fada4a2/0/transcript.jsonl",
+      "content_hash": "/ff/903fada4a2/0/content_hash.txt",
+      "prompt": "/ff/903fada4a2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 810,
+    "cache_creation_tokens": 1060232,
+    "cache_read_tokens": 95701137,
+    "output_tokens": 232657,
+    "api_call_count": 408
+  }
+}
