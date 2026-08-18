@@ -16,8 +16,10 @@
 //!   readers descend ([`open_ascent_link`] is the derive-and-verify check).
 //! - **History link** — the previous epoch's seed symmetrically sealed under
 //!   the current one (struct tag `history-link`); the key-regression ratchet.
-//!   The write plane's single link seals to the owner instead
-//!   ([`seal_owner_history_link`]), whose audience is the one it is read by.
+//! - **Write-history link** — the write plane's single link (struct tag
+//!   `write-history-link`), HPKE auth-mode sealed by the owner to themselves
+//!   ([`seal_owner_history_link`]), so only the owner opens it and only the
+//!   owner can have written it.
 //! - **Grant-set commitment** — the owner-signed, **epoch-free**
 //!   `{ipnsName, ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`
 //!   ([`GrantSetCommitment`]).
@@ -28,7 +30,7 @@
 //! encoded plaintext (which carries those seeds) is zeroized at its terminal
 //! owner — the seal path — before it drops.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::codec::{Map, Value, decode, encode};
 use crate::error::{CodecError, Malformed, TrustViolation};
@@ -676,47 +678,53 @@ pub fn open_history_link(
     result
 }
 
-/// HPKE-seal a history link to the vault owner's encryption subkey, binding the
-/// history-link AAD for `ctx` (`struct_tag` must be
-/// [`super::STRUCT_TAG_HISTORY_LINK`]). Returns the wire sealed blob
-/// `enc(32) || ciphertext||tag`; the encoded plaintext is zeroized here.
+/// Seal the write plane's history link to the vault owner under HPKE **auth
+/// mode**, owner as both sender and recipient, binding the write-history-link
+/// AAD for `ctx` (`struct_tag` must be
+/// [`super::STRUCT_TAG_WRITE_HISTORY_LINK`], `epoch` the **write** epoch).
+/// Returns the wire sealed blob `enc(32) || ciphertext||tag`; the encoded
+/// plaintext is zeroized here.
 ///
-/// The write plane seals its link this way rather than under the plane seed's
-/// structure key: the retiring `writeScopeSeed` a write link carries derives the
-/// IPNS signing key of every pre-rotation name in the scope, and the fresh
-/// `writeScopeSeed` a symmetric seal would key it under ships in every write
-/// grantee's grant blob. Its consumer — the resumed name wave — is owner-only.
+/// Owner-sealed, not sealed under the plane seed's structure key: the fresh
+/// `writeScopeSeed` such a seal would key it under ships in every write
+/// grantee's grant blob, while the retiring seed the payload carries derives the
+/// IPNS signing key of every pre-rotation name in the scope. Auth mode rather
+/// than base, for the same reason `op_record` uses it: the field sits inside a
+/// body every committed writer can author, and base mode would let one of them
+/// hand the owner's resumed name wave an attacker-chosen seed to derive signing
+/// keys from.
 pub fn seal_owner_history_link(
-    owner_enc_pub: &X25519Public,
+    owner_enc_secret: &X25519Secret,
     ephemeral_scalar: &[u8; 32],
     ctx: &AadContext,
     payload: &HistoryLinkPayload,
 ) -> Result<Vec<u8>, CodecError> {
-    let mut plaintext = encode_history_link_payload(payload)?;
-    let sealed = hpke::hpke_seal(
-        owner_enc_pub,
+    let plaintext = Zeroizing::new(encode_history_link_payload(payload)?);
+    let sealed = hpke::hpke_seal_auth(
+        owner_enc_secret,
+        &owner_enc_secret.public(),
         ephemeral_scalar,
         GRANT_HPKE_INFO,
         &build_aad(ctx),
         &plaintext,
     );
-    plaintext.zeroize();
     let mut out = Vec::with_capacity(ENC_LEN + sealed.ciphertext.len());
     out.extend_from_slice(&sealed.enc);
     out.extend_from_slice(&sealed.ciphertext);
     Ok(out)
 }
 
-/// Open an owner-sealed history link with the owner's encryption subkey secret.
-/// Fails closed with [`Malformed::Truncated`] on a blob below the `enc` floor and
-/// [`TrustViolation::HpkeOpenFailed`] on a tag mismatch or an `enc`/AAD
-/// transplant.
+/// Open a write-plane history link the owner sealed to themselves. Fails closed
+/// with [`Malformed::Truncated`] below the `enc`+tag floor,
+/// [`TrustViolation::HpkeNonContributory`] on a degenerate `enc`, and
+/// [`TrustViolation::HpkeOpenFailed`] on tampering, an `enc`/AAD transplant, or
+/// bytes any party other than the owner authored.
 pub fn open_owner_history_link(
     owner_enc_secret: &X25519Secret,
     ctx: &AadContext,
     sealed: &[u8],
 ) -> Result<HistoryLinkPayload, CodecError> {
-    if sealed.len() < ENC_LEN {
+    if sealed.len() < ENC_LEN + crate::suite::aead::TAG_LEN {
         return Err(Malformed::Truncated {
             offset: sealed.len(),
         }
@@ -724,8 +732,9 @@ pub fn open_owner_history_link(
     }
     let (enc, ciphertext) = sealed.split_at(ENC_LEN);
     let enc: &[u8; ENC_LEN] = enc.try_into().expect("split_at ENC_LEN");
-    let plaintext = hpke::hpke_open(
+    let plaintext = hpke::hpke_open_auth(
         owner_enc_secret,
+        &owner_enc_secret.public(),
         enc,
         GRANT_HPKE_INFO,
         &build_aad(ctx),
@@ -889,7 +898,7 @@ pub fn verify_grant_set(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suite::aead::{KEY_LEN, NONCE_LEN};
+    use crate::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 
     fn grant_ctx(struct_tag: u8) -> AadContext {
         AadContext {
@@ -1180,9 +1189,9 @@ mod tests {
     #[test]
     fn owner_history_link_opens_only_for_the_owner_and_only_at_its_own_aad() {
         let owner = X25519Secret::from_scalar([0x41; 32]);
-        let ctx = grant_ctx(super::super::STRUCT_TAG_HISTORY_LINK);
+        let ctx = grant_ctx(super::super::STRUCT_TAG_WRITE_HISTORY_LINK);
         let payload = HistoryLinkPayload::new([0x99; 32], 3);
-        let sealed = seal_owner_history_link(&owner.public(), &[0x57; 32], &ctx, &payload).unwrap();
+        let sealed = seal_owner_history_link(&owner, &[0x57; 32], &ctx, &payload).unwrap();
         assert_eq!(
             open_owner_history_link(&owner, &ctx, &sealed).unwrap(),
             payload
@@ -1195,19 +1204,54 @@ mod tests {
                 .check(),
             "hpke-open-failed"
         );
-        let mut wrong = ctx;
-        wrong.epoch += 1;
+        for wrong in [
+            AadContext {
+                epoch: ctx.epoch + 1,
+                ..ctx
+            },
+            grant_ctx(super::super::STRUCT_TAG_HISTORY_LINK),
+        ] {
+            assert_eq!(
+                open_owner_history_link(&owner, &wrong, &sealed)
+                    .unwrap_err()
+                    .check(),
+                "hpke-open-failed"
+            );
+        }
         assert_eq!(
-            open_owner_history_link(&owner, &wrong, &sealed)
+            open_owner_history_link(&owner, &ctx, &sealed[..sealed.len() - 1])
                 .unwrap_err()
                 .check(),
             "hpke-open-failed"
         );
         assert_eq!(
-            open_owner_history_link(&owner, &ctx, &sealed[..ENC_LEN - 1])
+            open_owner_history_link(&owner, &ctx, &sealed[..ENC_LEN + TAG_LEN - 1])
                 .unwrap_err()
                 .check(),
             "truncated"
+        );
+    }
+
+    /// Auth mode, not base: a write grantee holds the write key that authors the
+    /// field and knows the owner's public enc subkey, so a base-mode seal would
+    /// let them hand the owner's resumed name wave a seed of their choosing.
+    #[test]
+    fn a_link_sealed_to_the_owner_by_anyone_else_never_opens() {
+        let owner = X25519Secret::from_scalar([0x41; 32]);
+        let grantee = X25519Secret::from_scalar([0x42; 32]);
+        let ctx = grant_ctx(super::super::STRUCT_TAG_WRITE_HISTORY_LINK);
+        let forged = seal_owner_history_link(
+            &grantee,
+            &[0x57; 32],
+            &ctx,
+            &HistoryLinkPayload::new([0xaa; 32], 3),
+        )
+        .unwrap();
+        assert_eq!(
+            open_owner_history_link(&owner, &ctx, &forged)
+                .unwrap_err()
+                .check(),
+            "hpke-open-failed"
         );
     }
 
@@ -1216,9 +1260,9 @@ mod tests {
     #[test]
     fn a_minted_owner_history_link_fits_the_write_bodys_byte_bound() {
         let owner = X25519Secret::from_scalar([0x41; 32]);
-        let ctx = grant_ctx(super::super::STRUCT_TAG_HISTORY_LINK);
+        let ctx = grant_ctx(super::super::STRUCT_TAG_WRITE_HISTORY_LINK);
         let payload = HistoryLinkPayload::new([0x99; 32], u64::MAX);
-        let sealed = seal_owner_history_link(&owner.public(), &[0x57; 32], &ctx, &payload).unwrap();
+        let sealed = seal_owner_history_link(&owner, &[0x57; 32], &ctx, &payload).unwrap();
         assert!(
             sealed.len() <= super::super::MAX_WRITE_HISTORY_LINK_BYTES,
             "a minted link is {} bytes",

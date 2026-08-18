@@ -32,16 +32,17 @@ use cipherbox_core::seal::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
-    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
-    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
-    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
-    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    StructureSigInput, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
     encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
     open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
-    open_owner_local, open_owner_write_blob, open_read_body, open_settings_record,
-    seal_content_key, seal_op_record, seal_owner_local, seal_settings_record,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
+    open_settings_record, seal_content_key, seal_op_record, seal_owner_history_link,
+    seal_owner_local, seal_settings_record, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -196,6 +197,14 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/grant/history_link_reject.json",
         include_str!("../kat/vectors/grant/history_link_reject.json"),
+    ),
+    (
+        "vectors/grant/write_history_link_accept.json",
+        include_str!("../kat/vectors/grant/write_history_link_accept.json"),
+    ),
+    (
+        "vectors/grant/write_history_link_reject.json",
+        include_str!("../kat/vectors/grant/write_history_link_reject.json"),
     ),
     (
         "vectors/grant/structure_sig_accept.json",
@@ -644,6 +653,7 @@ struct GrantManifest {
     owner_write_blob_struct_tag: u8,
     ascent_link_struct_tag: u8,
     history_link_struct_tag: u8,
+    write_history_link_struct_tag: u8,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     grant_blob_accept: FileCount,
@@ -656,6 +666,8 @@ struct GrantManifest {
     ascent_link_reject: RejectSection,
     history_link_accept: FileCount,
     history_link_reject: RejectSection,
+    write_history_link_accept: FileCount,
+    write_history_link_reject: RejectSection,
     structure_sig_accept: FileCount,
     structure_sig_reject: RejectSection,
     grant_set_accept: FileCount,
@@ -1292,6 +1304,16 @@ fn history_link_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
         .expect("history_link_reject shape")
 }
 
+fn write_history_link_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
+    serde_json::from_str(fixture(&m.grant.write_history_link_accept.file))
+        .expect("write_history_link_accept shape")
+}
+
+fn write_history_link_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
+    serde_json::from_str(fixture(&m.grant.write_history_link_reject.file))
+        .expect("write_history_link_reject shape")
+}
+
 fn structure_sig_accept_vectors(m: &Manifest) -> Vec<StructureSigAcceptVector> {
     serde_json::from_str(fixture(&m.grant.structure_sig_accept.file))
         .expect("structure_sig_accept shape")
@@ -1400,6 +1422,8 @@ fn fixture_table_matches_manifest_files() {
         m.grant.ascent_link_reject.file.as_str(),
         m.grant.history_link_accept.file.as_str(),
         m.grant.history_link_reject.file.as_str(),
+        m.grant.write_history_link_accept.file.as_str(),
+        m.grant.write_history_link_reject.file.as_str(),
         m.grant.structure_sig_accept.file.as_str(),
         m.grant.structure_sig_reject.file.as_str(),
         m.grant.grant_set_accept.file.as_str(),
@@ -1498,6 +1522,7 @@ const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
     ("vectors/owner_local/owner_local_accept.json", 4),
     ("vectors/payload/mailbox_accept.json", 2),
     ("vectors/settings_record/settings_record_accept.json", 2),
+    ("vectors/grant/write_history_link_accept.json", 1),
 ];
 
 /// Every `(vector name, ephemeral scalar)` a vector file pins, decoded, so the
@@ -1664,6 +1689,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check().to_string()),
     );
     covered.extend(history_link_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        write_history_link_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check().to_string()),
+    );
     covered.extend(ascent_link_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(
         structure_sig_reject_vectors(&m)
@@ -1903,6 +1933,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("settings-record", 11),
     ("content-key", 12),
     ("owner-local", 13),
+    ("write-history-link", 14),
 ];
 
 #[test]
@@ -3300,6 +3331,10 @@ fn grant_struct_tags_are_frozen() {
     );
     assert_eq!(m.grant.ascent_link_struct_tag, STRUCT_TAG_ASCENT_LINK);
     assert_eq!(m.grant.history_link_struct_tag, STRUCT_TAG_HISTORY_LINK);
+    assert_eq!(
+        m.grant.write_history_link_struct_tag,
+        STRUCT_TAG_WRITE_HISTORY_LINK
+    );
     // The frozen byte-space (mirrors ALL_STRUCT_TAGS).
     assert_eq!(STRUCT_TAG_WRITE_BODY, 2);
     assert_eq!(STRUCT_TAG_GRANT_BLOB, 3);
@@ -3658,6 +3693,96 @@ fn owner_write_blob_reject_vectors_fire_the_named_check() {
             "owner-write-blob reject must cover the {required} check"
         );
     }
+}
+
+/// The write-plane history link's own full envelope: a fixed owner keypair and
+/// ephemeral must reproduce `enc(32) || ciphertext||tag` byte for byte through
+/// the public API, and the owner must reopen it.
+#[test]
+fn write_history_link_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    assert_eq!(
+        m.grant.write_history_link_struct_tag,
+        STRUCT_TAG_WRITE_HISTORY_LINK
+    );
+    let vectors = write_history_link_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.write_history_link_accept.count,
+        "write-history-link accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "write-history-link accept family must not be empty"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_WRITE_HISTORY_LINK,
+            "write-history-link accept {}: tag",
+            v.name
+        );
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        assert_eq!(
+            hex::encode(build_aad(&ctx)),
+            v.aad,
+            "write-history-link accept {}: aad drift",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
+        assert_eq!(
+            owner.public().to_bytes(),
+            unhex32(&v.name, &v.recipient_public),
+            "write-history-link accept {}: owner keypair",
+            v.name
+        );
+        let payload = decode_history_link_payload(&unhex(&v.name, &v.plaintext))
+            .unwrap_or_else(|e| panic!("write-history-link accept {}: plaintext: {e}", v.name));
+        let sealed = seal_owner_history_link(
+            &owner,
+            &unhex32(&v.name, &v.ephemeral_scalar),
+            &ctx,
+            &payload,
+        )
+        .unwrap_or_else(|e| panic!("write-history-link accept {}: seal: {e}", v.name));
+        let mut frozen = unhex(&v.name, &v.enc);
+        frozen.extend_from_slice(&unhex(&v.name, &v.ciphertext));
+        assert_eq!(
+            hex::encode(&sealed),
+            hex::encode(&frozen),
+            "write-history-link accept {}: envelope drift",
+            v.name
+        );
+        assert_eq!(
+            open_owner_history_link(&owner, &ctx, &frozen)
+                .unwrap_or_else(|e| panic!("write-history-link accept {}: open: {e}", v.name)),
+            payload,
+            "write-history-link accept {}: round-trip",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn write_history_link_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = write_history_link_reject_vectors(&m);
+    check_blob_reject_family(
+        "write-history-link",
+        &vectors,
+        &m.grant.write_history_link_reject,
+        decode_history_link_payload,
+        |owner, enc, ctx, ciphertext| {
+            let mut blob = enc.to_vec();
+            blob.extend_from_slice(ciphertext);
+            open_owner_history_link(owner, ctx, &blob)
+        },
+    );
+    assert!(
+        vectors
+            .iter()
+            .any(|v| v.name() == "sealed-by-a-write-grantee"),
+        "auth mode is what denies a write grantee's forgery; the vector proving it must stay"
+    );
 }
 
 #[test]

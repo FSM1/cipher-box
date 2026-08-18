@@ -208,8 +208,10 @@ impl ChildScopeRef {
 pub struct WriteBody {
     /// The authoritative grant ledger.
     pub grant_ledger: Vec<GrantLedgerEntry>,
-    /// The sealed write-plane history-link blob (opaque; empty at write epoch 1),
-    /// bounded at [`MAX_WRITE_HISTORY_LINK_BYTES`].
+    /// The sealed write-plane history-link blob (opaque, bounded at
+    /// [`MAX_WRITE_HISTORY_LINK_BYTES`]). **Empty means no link** — the state at
+    /// write epoch 1 — and a consumer must test that before opening, since an
+    /// empty blob is below every seal's framing floor and reads as truncated.
     pub write_history_link: Vec<u8>,
     /// The directly-descendant scope roots (the F-4 cascade index).
     pub direct_child_scope_index: Vec<ChildScopeRef>,
@@ -223,10 +225,8 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 /// plane's analogue of the read plane's
 /// [`MAX_HISTORY_LINKS`](super::MAX_HISTORY_LINKS).
 ///
-/// The field is authored under a write key every committed writer holds, and a
-/// re-seal carries it into a section the *owner* signs and publishes — so
-/// without a bound a write grantee could inflate it until the record carrying it
-/// passed the transport's ceiling, blocking the rotation that revokes them. A
+/// Any committed writer authors the field and no owner signature covers it, so
+/// it is bounded rather than trusted (blueprint/core.md "Write-body"). A
 /// well-formed link is ~103 bytes; the rest is headroom for preserved unknown
 /// fields.
 pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
@@ -242,18 +242,20 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
+    // Bound the writer-authored blob before the ledger walk allocates for it.
+    let write_history_link = req(map, "writeHistoryLink")?.as_bytes()?;
+    assert_within_bound(
+        "writeHistoryLink",
+        write_history_link.len(),
+        MAX_WRITE_HISTORY_LINK_BYTES,
+    )?;
+    let write_history_link = write_history_link.to_vec();
+
     let mut grant_ledger = Vec::new();
     for item in req(map, "grantLedger")?.as_array()? {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
     assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
-    let raw_write_history_link = req(map, "writeHistoryLink")?.as_bytes()?;
-    assert_within_bound(
-        "writeHistoryLink",
-        raw_write_history_link.len(),
-        MAX_WRITE_HISTORY_LINK_BYTES,
-    )?;
-    let write_history_link = raw_write_history_link.to_vec();
     let mut direct_child_scope_index = Vec::new();
     for item in req(map, "directChildScopeIndex")?.as_array()? {
         direct_child_scope_index.push(ChildScopeRef::from_value(item)?);
@@ -274,10 +276,10 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// fail-closed guard: a duplicate-tag ledger, or a `writeHistoryLink` past
 /// [`MAX_WRITE_HISTORY_LINK_BYTES`], fails here with the same verdict
 /// [`decode_write_body`] raises, so it never hands back bytes its own decoder
-/// rejects. The decoder's other reject,
-/// `invalid-expiry`, needs no guard — [`GrantLedgerEntry::expires_at`] is
-/// `NonZeroU64`, so those bytes are unrepresentable rather than checked. Its key
-/// is optional, though, so each row's preserved fields must not smuggle one in.
+/// rejects. The decoder's other reject, `invalid-expiry`, needs no guard —
+/// [`GrantLedgerEntry::expires_at`] is `NonZeroU64`, so those bytes are
+/// unrepresentable rather than checked. Its key is optional, though, so each
+/// row's preserved fields must not smuggle one in.
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     assert_within_bound(
         "writeHistoryLink",

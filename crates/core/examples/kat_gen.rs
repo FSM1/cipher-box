@@ -42,18 +42,19 @@ use cipherbox_core::seal::{
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
     STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader, SignedAscentLink, SignedGrantBlob,
-    SignedOwnerBlob, SignedSealed, StructureSigInput, Version, WriteBody, build_aad,
-    content_key_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
-    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
-    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_blob_payload,
-    encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload,
-    encode_owner_write_blob_payload, encode_read_body, encode_write_body, op_record_aad,
-    open_ascent_link, open_content_key, open_grant_blob, open_history_link, open_op_record,
-    open_owner_blob, open_owner_local, open_owner_write_blob, open_read_body, open_settings_record,
-    owner_local_aad, seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link,
-    seal_op_record, seal_owner_blob, seal_owner_local, seal_owner_write_blob, seal_read_body,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
+    WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
+    encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob,
+    open_history_link, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
+    open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad, seal_ascent_link,
+    seal_content_key, seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob,
+    seal_owner_history_link, seal_owner_local, seal_owner_write_blob, seal_read_body,
     seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
     structure_sig_preimage, verify_grant_set, verify_structure,
 };
@@ -517,6 +518,7 @@ struct GrantSection {
     owner_write_blob_struct_tag: u8,
     ascent_link_struct_tag: u8,
     history_link_struct_tag: u8,
+    write_history_link_struct_tag: u8,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     grant_blob_accept: FileCount,
@@ -529,6 +531,8 @@ struct GrantSection {
     ascent_link_reject: RejectSection,
     history_link_accept: FileCount,
     history_link_reject: RejectSection,
+    write_history_link_accept: FileCount,
+    write_history_link_reject: RejectSection,
     structure_sig_accept: FileCount,
     structure_sig_reject: RejectSection,
     grant_set_accept: FileCount,
@@ -1102,6 +1106,14 @@ fn main() {
     write_pretty(
         &grant_dir.join("history_link_reject.json"),
         &g.history_link_reject,
+    );
+    write_pretty(
+        &grant_dir.join("write_history_link_accept.json"),
+        &g.write_history_link_accept,
+    );
+    write_pretty(
+        &grant_dir.join("write_history_link_reject.json"),
+        &g.write_history_link_reject,
     );
     write_pretty(
         &grant_dir.join("structure_sig_accept.json"),
@@ -2395,6 +2407,7 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         owner_write_blob_struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
         ascent_link_struct_tag: STRUCT_TAG_ASCENT_LINK,
         history_link_struct_tag: STRUCT_TAG_HISTORY_LINK,
+        write_history_link_struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
         write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
         write_body_reject: reject("write_body_reject", &g.write_body_reject),
         grant_blob_accept: file_count("grant_blob_accept", g.grant_blob_accept.len()),
@@ -2419,6 +2432,14 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         },
         history_link_accept: file_count("history_link_accept", g.history_link_accept.len()),
         history_link_reject: reject("history_link_reject", &g.history_link_reject),
+        write_history_link_accept: file_count(
+            "write_history_link_accept",
+            g.write_history_link_accept.len(),
+        ),
+        write_history_link_reject: blob_reject(
+            "write_history_link_reject",
+            &g.write_history_link_reject,
+        ),
         structure_sig_accept: file_count("structure_sig_accept", g.structure_sig_accept.len()),
         structure_sig_reject: RejectSection {
             file: "vectors/grant/structure_sig_reject.json".to_string(),
@@ -4573,6 +4594,8 @@ struct GrantVectors {
     ascent_link_reject: Vec<AscentLinkRejectVector>,
     history_link_accept: Vec<HistoryLinkAcceptVector>,
     history_link_reject: Vec<RejectVector>,
+    write_history_link_accept: Vec<HpkeStructureVector>,
+    write_history_link_reject: Vec<BlobRejectVector>,
     structure_sig_accept: Vec<StructureSigAcceptVector>,
     structure_sig_reject: Vec<StructureSigRejectVector>,
     grant_set_accept: Vec<GrantSetAcceptVector>,
@@ -4597,6 +4620,8 @@ impl GrantVectors {
             + self.ascent_link_reject.len()
             + self.history_link_accept.len()
             + self.history_link_reject.len()
+            + self.write_history_link_accept.len()
+            + self.write_history_link_reject.len()
             + self.structure_sig_accept.len()
             + self.structure_sig_reject.len()
             + self.grant_set_accept.len()
@@ -4641,6 +4666,8 @@ fn build_grant_vectors() -> GrantVectors {
         ascent_link_reject: build_ascent_link_reject(),
         history_link_accept: build_history_link_accept(),
         history_link_reject: build_history_link_reject(),
+        write_history_link_accept: build_write_history_link_accept(),
+        write_history_link_reject: build_write_history_link_reject(),
         structure_sig_accept: build_structure_sig_accept(),
         structure_sig_reject: build_structure_sig_reject(),
         grant_set_accept: build_grant_set_accept(),
@@ -4826,8 +4853,6 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "trust",
         ),
         (
-            // A committed writer inflating the one field no owner signature
-            // covers, so the rotation that revokes them cannot publish.
             "write-history-link-over-bound",
             body(
                 vec![good_entry()],
@@ -5647,6 +5672,134 @@ fn build_history_link_reject() -> Vec<RejectVector> {
         ),
     ];
     finish_hex_reject_vectors("history-link", cases, decode_history_link_payload)
+}
+
+// --- Write-plane history link (HPKE auth mode, owner to owner) --------------
+
+/// The AAD context of the write-plane history link: `id == scope` like every
+/// scope-root structure, at the write plane's own [`GRANT_WRITE_EPOCH`].
+fn write_history_link_ctx() -> AadContext {
+    let id = grant_scope_id();
+    AadContext {
+        v: GRANT_V,
+        id,
+        scope: id,
+        epoch: GRANT_WRITE_EPOCH,
+        struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
+    }
+}
+
+/// The frozen owner keypair and ephemeral the write-history-link vectors seal
+/// under, so every vector in the family reproduces the same bytes.
+fn write_history_link_material() -> ([u8; 32], X25519Secret, [u8; 32], HistoryLinkPayload) {
+    let owner_scalar: [u8; 32] = std::array::from_fn(|i| (0x41 + i) as u8);
+    let owner = X25519Secret::from_scalar(owner_scalar);
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x57 + i) as u8);
+    (
+        owner_scalar,
+        owner,
+        eph,
+        HistoryLinkPayload::new([0x99; 32], GRANT_WRITE_EPOCH - 1),
+    )
+}
+
+/// Split the flat `enc(32) || ciphertext||tag` wire blob back into its halves.
+fn split_owner_history_link(sealed: &[u8]) -> ([u8; 32], Vec<u8>) {
+    let (enc, ciphertext) = sealed.split_at(32);
+    (enc.try_into().expect("enc half"), ciphertext.to_vec())
+}
+
+fn build_write_history_link_accept() -> Vec<HpkeStructureVector> {
+    let (owner_scalar, owner, eph, payload) = write_history_link_material();
+    let ctx = write_history_link_ctx();
+    let plaintext = encode_history_link_payload(&payload).unwrap();
+
+    let sealed = seal_owner_history_link(&owner, &eph, &ctx, &payload).unwrap();
+    assert_eq!(
+        seal_owner_history_link(&owner, &eph, &ctx, &payload).unwrap(),
+        sealed,
+        "write-history-link: not deterministic"
+    );
+    assert_eq!(
+        open_owner_history_link(&owner, &ctx, &sealed).expect("write-history-link open"),
+        payload,
+        "write-history-link: round-trip"
+    );
+    let (enc, ciphertext) = split_owner_history_link(&sealed);
+    vec![hpke_structure_vector(
+        "write-history",
+        &ctx,
+        owner_scalar,
+        &owner,
+        eph,
+        &plaintext,
+        &cipherbox_core::suite::hpke::HpkeCiphertext { enc, ciphertext },
+    )]
+}
+
+fn build_write_history_link_reject() -> Vec<BlobRejectVector> {
+    let (owner_scalar, owner, eph, payload) = write_history_link_material();
+    let ctx = write_history_link_ctx();
+    let sealed = seal_owner_history_link(&owner, &eph, &ctx, &payload).unwrap();
+    let (enc, ciphertext) = split_owner_history_link(&sealed);
+
+    // Auth mode names the owner as the static sender, so a link any other party
+    // seals to the owner is exactly as unopenable as a tampered one — the
+    // property base mode would not give this writer-authored field.
+    let forger = X25519Secret::from_scalar([0x42; 32]);
+    let forged = seal_owner_history_link(&forger, &eph, &ctx, &payload).unwrap();
+    let (forged_enc, forged_ct) = split_owner_history_link(&forged);
+
+    let mut tampered_ct = ciphertext.clone();
+    tampered_ct[0] ^= 0x01;
+    let mut tampered_tag = ciphertext.clone();
+    *tampered_tag.last_mut().expect("non-empty ciphertext") ^= 0x01;
+    let truncated = ciphertext[..ciphertext.len() - 8].to_vec();
+    let read_plane_tag = AadContext {
+        struct_tag: STRUCT_TAG_HISTORY_LINK,
+        ..ctx
+    };
+    let scope_transplant = AadContext {
+        scope: std::array::from_fn(|i| (0xd0 + i) as u8),
+        ..ctx
+    };
+    let write_epoch_transplant = AadContext {
+        epoch: ctx.epoch + 1,
+        ..ctx
+    };
+
+    let cases: Vec<(&str, [u8; 32], &AadContext, &[u8])> = vec![
+        ("tampered-ciphertext", enc, &ctx, &tampered_ct),
+        ("tampered-tag", enc, &ctx, &tampered_tag),
+        ("truncated-ciphertext", enc, &ctx, &truncated),
+        ("read-plane-struct-tag", enc, &read_plane_tag, &ciphertext),
+        ("scope-transplant", enc, &scope_transplant, &ciphertext),
+        (
+            "write-epoch-transplant",
+            enc,
+            &write_epoch_transplant,
+            &ciphertext,
+        ),
+        ("sealed-by-a-write-grantee", forged_enc, &ctx, &forged_ct),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, enc, open_ctx, ct)| {
+            hpke_blob_reject_vector(
+                name,
+                owner_scalar,
+                &owner,
+                &enc,
+                open_ctx,
+                ct,
+                |r, e, c, ct| {
+                    let mut blob = e.to_vec();
+                    blob.extend_from_slice(ct);
+                    open_owner_history_link(r, c, &blob).map(drop)
+                },
+            )
+        })
+        .collect()
 }
 
 // --- Structure signatures ---------------------------------------------------

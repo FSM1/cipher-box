@@ -38,10 +38,10 @@ use cipherbox_core::seal::{
     HistoryLinkPayload, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, MAX_WRITE_HISTORY_LINK_BYTES,
     OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields,
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
-    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
-    encode_write_body, open_ascent_link, open_history_link, seal, seal_ascent_link,
-    seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_history_link,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
+    StructureSigInput, WriteBody, encode_write_body, open_ascent_link, open_history_link, seal,
+    seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_history_link,
     seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -121,10 +121,9 @@ pub struct PrevEpochSeed<'a> {
 pub enum WriteHistory<'a> {
     /// The write plane is untouched (a read rotation or a sweep): the root's
     /// existing opaque link stays byte-for-byte, still openable by the owner at
-    /// the write epoch that minted it. Nothing authenticates these bytes — any
-    /// committed writer authored them — so one past
-    /// [`MAX_WRITE_HISTORY_LINK_BYTES`] is dropped rather than refused, the same
-    /// truncate-don't-refuse rule [`walkable_chain_start`] states.
+    /// the write epoch that minted it. A blob past
+    /// [`MAX_WRITE_HISTORY_LINK_BYTES`] is dropped rather than refused, so the
+    /// re-seal can never emit a write-body its own encoder rejects.
     Carried(&'a [u8]),
     /// The write plane is being cut: mint a fresh link over the retiring write
     /// scope seed, sealed to the owner at the advanced write epoch.
@@ -153,6 +152,26 @@ pub struct ResealSeeds<'a> {
     pub write_history: WriteHistory<'a>,
     /// The stable per-scope pointer read key carried in every grant blob.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
+}
+
+impl ResealSeeds<'_> {
+    /// Both planes' history links step the ratchet backward, and [`ratchet_step`]
+    /// drops one whose epoch does not descend — so a link at or above the epoch
+    /// it seals under is one no walk could follow. The single home of that
+    /// invariant across the two planes (AGENTS.md rule 8).
+    fn check_history_descends(&self) -> Result<(), ResealError> {
+        let read = self.prev.as_ref().map(|prev| (self.read_epoch, prev));
+        let write = match &self.write_history {
+            WriteHistory::Cut(prev) => Some((self.write_epoch, prev)),
+            WriteHistory::Carried(_) => None,
+        };
+        for (epoch, prev) in read.into_iter().chain(write) {
+            if prev.epoch >= epoch {
+                return Err(ResealError::HistoryLinkNotDescending);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The owner-committed grant set plus the write-body content a re-seal carries.
@@ -219,6 +238,11 @@ pub enum ResealError {
     /// it is sealed under — a link the ratchet, which only ever steps backward,
     /// could not walk. Release-active (AGENTS.md rule 8).
     HistoryLinkNotDescending,
+    /// A [`WriteHistory::Cut`] was asked of a re-sealer holding no owner
+    /// encryption subkey. The write-plane link is auth-mode sealed by the owner
+    /// to the owner, so only the owner can mint one — and a write grantee that
+    /// could is the forgery that seal shape exists to deny.
+    OwnerKeyRequiredForWriteCut,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -255,6 +279,9 @@ impl core::fmt::Display for ResealError {
             ResealError::HistoryLinkNotDescending => {
                 f.write_str("history link would not step the ratchet backward")
             }
+            ResealError::OwnerKeyRequiredForWriteCut => {
+                f.write_str("write-plane cut needs the owner encryption subkey to mint its link")
+            }
             ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
@@ -276,6 +303,7 @@ impl ResealError {
             ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
             ResealError::HistoryLinkNotDescending => "history-link-not-descending",
+            ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::Encode(_) => "structure-encode-failed",
         }
     }
@@ -359,17 +387,6 @@ pub fn seed_at_epoch(
     (epoch == target_epoch).then_some(seed)
 }
 
-/// The ratchet only ever steps backward ([`ratchet_step`] drops a link whose
-/// epoch does not descend), so a link at or above the epoch it seals under is
-/// one no walk could follow. The single home of the invariant both mints check
-/// before they seal (AGENTS.md rule 8).
-fn check_descending(epoch: u64, prev: &PrevEpochSeed<'_>) -> Result<(), ResealError> {
-    if prev.epoch >= epoch {
-        return Err(ResealError::HistoryLinkNotDescending);
-    }
-    Ok(())
-}
-
 /// Seal one read-plane history link — `prev`'s seed under `seed`'s structure
 /// key, bound to `epoch` — the ratchet's single backward step.
 fn mint_history_link<E: Entropy>(
@@ -380,7 +397,6 @@ fn mint_history_link<E: Entropy>(
     epoch: u64,
     prev: &PrevEpochSeed<'_>,
 ) -> Result<Vec<u8>, ResealError> {
-    check_descending(epoch, prev)?;
     let structure_key = kdf::structure_key(seed, STRUCT_TAG_HISTORY_LINK);
     let nonce = fresh_nonce(entropy).map_err(ResealError::Entropy)?;
     let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
@@ -389,23 +405,20 @@ fn mint_history_link<E: Entropy>(
 }
 
 /// Seal the write plane's single history link — `prev`'s retiring write scope
-/// seed HPKE-sealed to the owner at `epoch`. Owner-sealed, not sealed under the
-/// fresh write scope seed: that seed ships in every write grantee's grant blob,
-/// while the retiring one this link carries derives the IPNS signing key of
-/// every pre-rotation name in the scope ([`seal_owner_history_link`]).
+/// seed sealed by the owner to the owner at `epoch` (see
+/// [`seal_owner_history_link`] for why the owner and not the plane seed).
 fn mint_owner_history_link<E: Entropy>(
     entropy: &mut E,
     v: u64,
     scope_id: [u8; 16],
-    owner_enc_pub: &X25519Public,
+    owner_enc_secret: &X25519Secret,
     epoch: u64,
     prev: &PrevEpochSeed<'_>,
 ) -> Result<Vec<u8>, ResealError> {
-    check_descending(epoch, prev)?;
     let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
-    let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
+    let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_WRITE_HISTORY_LINK);
     let payload = HistoryLinkPayload::new(*prev.seed, prev.epoch);
-    let sealed = seal_owner_history_link(owner_enc_pub, &ephemeral, &ctx, &payload);
+    let sealed = seal_owner_history_link(owner_enc_secret, &ephemeral, &ctx, &payload);
     ephemeral.zeroize();
     sealed.map_err(ResealError::Encode)
 }
@@ -468,6 +481,13 @@ pub fn reseal_scope_root<E: Entropy>(
         || committed.grant_ledger.len() > MAX_GRANT_BLOBS
     {
         return Err(ResealError::TooManyCommittedGrants);
+    }
+
+    // Fail-closed BEFORE any seal (see `ResealError::HistoryLinkNotDescending`
+    // and `ResealError::OwnerKeyRequiredForWriteCut`).
+    seeds.check_history_descends()?;
+    if matches!(seeds.write_history, WriteHistory::Cut(_)) && identity.owner_enc_secret.is_none() {
+        return Err(ResealError::OwnerKeyRequiredForWriteCut);
     }
 
     // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
@@ -648,7 +668,9 @@ pub fn reseal_scope_root<E: Entropy>(
             entropy,
             identity.v,
             scope_id,
-            identity.owner_enc_pub,
+            identity
+                .owner_enc_secret
+                .ok_or(ResealError::OwnerKeyRequiredForWriteCut)?,
             seeds.write_epoch,
             prev,
         )?,
@@ -1897,9 +1919,12 @@ mod tests {
         // NEW write epoch, and yields exactly the seed and epoch being retired —
         // the one step a resumed wave walks back.
         let fx = Fixture::new();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.minted();
         let owner_pub = fx.owner_enc.public();
-        let id = identity(&fx, &owner_pub, MINTED_NAME, None);
+        let id = ScopeRootIdentity {
+            owner_enc_secret: Some(&fx.owner_enc),
+            ..identity(&fx, &owner_pub, MINTED_NAME, None)
+        };
         let override_seed = [0x0e; 32];
         let s = cut_seeds(
             &override_seed,
@@ -1915,11 +1940,7 @@ mod tests {
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
 
         let body = opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 5);
-        assert!(
-            !body.write_history_link.is_empty(),
-            "the cut mints a link rather than publishing an empty field"
-        );
-        let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_HISTORY_LINK);
+        let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_WRITE_HISTORY_LINK);
         let payload = open_owner_history_link(&fx.owner_enc, &ctx, &body.write_history_link)
             .expect("the link opens for the owner at the new write epoch");
         assert!(ct_eq(payload.prev_seed(), &RETIRING_WRITE_SCOPE_SEED));
@@ -1935,6 +1956,39 @@ mod tests {
                 "a write-plane seed opens nothing"
             );
         }
+    }
+
+    #[test]
+    fn a_write_cut_without_the_owner_key_is_refused_before_any_seal() {
+        // The link is auth-mode sealed by the owner to the owner, so a re-sealer
+        // holding no owner key cannot mint one — and one that could is the
+        // forgery that seal shape denies. Release-active.
+        let fx = Fixture::new();
+        let (commitment, sig, ledger) = fx.committed();
+        let owner_pub = fx.owner_enc.public();
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
+        let override_seed = [0x0e; 32];
+        let s = cut_seeds(
+            &override_seed,
+            &fx.pointer_read_key,
+            PrevEpochSeed {
+                seed: &RETIRING_WRITE_SCOPE_SEED,
+                epoch: 4,
+            },
+            5,
+        );
+        assert_eq!(
+            reseal_scope_root(
+                &mut UndrawnEntropy,
+                &id,
+                &s,
+                &committed_set(&commitment, &sig, &ledger),
+                &[]
+            )
+            .expect_err("a keyless cut seals nothing")
+            .check(),
+            "owner-key-required-for-write-cut"
+        );
     }
 
     #[test]
@@ -1971,14 +2025,16 @@ mod tests {
     }
 
     #[test]
-    fn a_history_link_that_does_not_descend_is_never_sealed_on_either_plane() {
-        // A link over an epoch the mint does not advance past is one the ratchet
-        // could only drop. `assert_eq!` on the verdict, not a `debug_assert!` —
-        // this must fire in a release build.
+    fn a_history_link_that_does_not_descend_is_refused_before_any_seal() {
+        // A link over an epoch the re-seal does not advance past is one the
+        // ratchet could only drop. `assert_eq!` on the verdict, not a
+        // `debug_assert!` — this must fire in a release build. An interior scope
+        // root, so `UndrawnEntropy` pins the refusal ahead of every seal the
+        // section carries, the ascent link included.
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed();
         let owner_pub = fx.owner_enc.public();
-        let id = identity(&fx, &owner_pub, MINTED_NAME, None);
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
         let override_seed = [0x0e; 32];
         let cs = committed_set(&commitment, &sig, &ledger);
         for prev_epoch in [5, 6] {
@@ -2002,9 +2058,8 @@ mod tests {
                 &fx.pointer_read_key,
             );
             for s in [write_cut, read_cut] {
-                let mut e = SeededEntropy::new(72);
                 assert_eq!(
-                    reseal_scope_root(&mut e, &id, &s, &cs, &[])
+                    reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[])
                         .expect_err("a non-descending link seals nothing")
                         .check(),
                     "history-link-not-descending"
