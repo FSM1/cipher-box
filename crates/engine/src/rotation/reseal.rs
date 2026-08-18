@@ -156,9 +156,9 @@ pub struct ResealSeeds<'a> {
 
 impl ResealSeeds<'_> {
     /// Both planes' history links step the ratchet backward, and [`ratchet_step`]
-    /// drops one whose epoch does not descend — so a link at or above the epoch
-    /// it seals under is one no walk could follow. The single home of that
-    /// invariant across the two planes (AGENTS.md rule 8).
+    /// drops one whose epoch is not exactly one below — so a link that does not
+    /// sit one below the epoch it seals under is one no walk could follow. The
+    /// single home of that invariant across the two planes (AGENTS.md rule 8).
     ///
     /// The two planes part company above that floor. The read plane's links are
     /// a **contiguous chain, one epoch per step** (blueprint/core.md

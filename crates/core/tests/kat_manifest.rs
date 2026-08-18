@@ -3777,15 +3777,12 @@ fn write_history_link_reject_vectors_fire_the_named_check() {
             open_owner_history_link(owner, ctx, &blob)
         },
     );
-    // Auth mode is what denies a write grantee's forgery, and the vector proving
-    // it is only worth anything while it is sealed to the owner's own enc subkey
-    // under the accept vector's ephemeral — otherwise a wrong recipient, not the
-    // mode, is what rejects it.
-    let accepted_enc = write_history_link_accept_vectors(&m)
-        .into_iter()
-        .map(|v| v.enc)
-        .next()
-        .expect("a write-history-link accept vector");
+    // Auth mode is what denies a write grantee's forgery, so the vector proving
+    // it has to be a base-mode seal the owner can open — a base-mode open under
+    // the owner's own secret and the vector's own AAD leaves the static-sender
+    // binding as the only thing `open_owner_history_link` can be refusing.
+    // `enc` cannot carry that claim: DHKEM's encapsulated key is the ephemeral
+    // public alone, with no dependence on the recipient.
     let forgery = vectors
         .iter()
         .find_map(|v| match v {
@@ -3793,10 +3790,22 @@ fn write_history_link_reject_vectors_fire_the_named_check() {
             _ => None,
         })
         .expect("the base-mode-forgery reject vector");
-    assert_eq!(
-        forgery.enc, accepted_enc,
-        "write-history-link base-mode-forgery: not sealed to the owner"
+    let ctx = seal_ctx(
+        &forgery.name,
+        forgery.v,
+        &forgery.id,
+        &forgery.scope,
+        forgery.epoch,
+        forgery.struct_tag,
     );
+    hpke_open(
+        &X25519Secret::from_scalar(unhex32(&forgery.name, &forgery.recipient_secret)),
+        &unhex32(&forgery.name, &forgery.enc),
+        b"",
+        &build_aad(&ctx),
+        &unhex(&forgery.name, &forgery.ciphertext),
+    )
+    .expect("write-history-link base-mode-forgery: not a base-mode seal to the owner");
 }
 
 #[test]
