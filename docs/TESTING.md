@@ -89,8 +89,8 @@ and rate-limit strategy.
 - `tools/mock-ipns-routing` built and running
 
 ```bash
-# Build and start mock IPNS routing
-cd tools/mock-ipns-routing && npm install && npm run build
+# Build and start mock IPNS routing (npm, not pnpm — it is not a workspace member)
+cd tools/mock-ipns-routing && npm ci && npm run build
 node dist/index.js &
 
 # Start the API in dev mode

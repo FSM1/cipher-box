@@ -1,27 +1,19 @@
+# This tool is not a pnpm workspace member: it carries its own npm lockfile and
+# builds with npm, the same recipe .github/actions/mock-ipns-routing runs.
 FROM node:22-alpine
 
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+COPY package.json package-lock.json ./
+RUN npm ci
 
-# Copy package files
-COPY package.json pnpm-lock.yaml* ./
-
-# Install dependencies
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-
-# Copy source
 COPY tsconfig.json ./
 COPY src ./src
+RUN npm run build
 
-# Build
-RUN pnpm build
-
-# Run
-ENV HOST=0.0.0.0
-ENV PORT=3001
-ENV NODE_ENV=production
+ENV HOST=0.0.0.0 \
+    PORT=3001 \
+    NODE_ENV=production
 
 EXPOSE 3001
 

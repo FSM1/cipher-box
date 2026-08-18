@@ -91,6 +91,10 @@ services:
     build:
       context: ../tools/mock-ipns-routing
       dockerfile: Dockerfile
+    # Build on every `up`, not only under `--build`: a locally cached image from an
+    # earlier commit serves the CORS policy of its own build, and a browser read
+    # against a stale one fails in a way that reads as a client bug.
+    pull_policy: build
     container_name: cipherbox-mock-ipns-routing
     restart: unless-stopped
     environment:
