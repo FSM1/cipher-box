@@ -92,6 +92,7 @@ function mount(client: EngineClient) {
 let saves = trackSaves();
 
 beforeEach(() => {
+  saves.restore();
   saves = trackSaves();
 });
 

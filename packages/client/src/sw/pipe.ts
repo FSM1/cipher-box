@@ -423,7 +423,9 @@ function sealed(
  * this header from the vault, so any other shape is served as a bare
  * `attachment` rather than a second parameter of the port's choosing.
  */
-const SAFE_DISPOSITION = new RegExp(`^attachment(; filename\\*=UTF-8''[${ATTR_CHARS}%]*)?$`);
+const SAFE_DISPOSITION = new RegExp(
+  `^attachment(; filename\\*=UTF-8''(?:[${ATTR_CHARS}]|%[0-9A-Fa-f]{2})*)?$`
+);
 
 function clampDisposition(headers: Headers): void {
   const disposition = headers.get('content-disposition');

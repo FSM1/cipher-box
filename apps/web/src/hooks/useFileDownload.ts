@@ -148,12 +148,11 @@ function saveBlobToDisk(url: string, name: string): void {
 }
 
 /**
- * Drives a ticket save, as a navigation rather than a link: Chromium issues an
- * `<a download>` request without dispatching it to the Service Worker, so the
- * link form walks past the pipe to the origin, which answers a ticket path with
- * the app shell. The pipe's `content-disposition` makes the navigation a save,
- * and its `sandbox` is what keeps the plaintext out of this frame's reach if a
- * body ever commits as a document here.
+ * A navigation rather than a link, because Chromium issues an `<a download>`
+ * request without dispatching it to the Service Worker — the link form walks
+ * past the pipe and fetches the app shell. The pipe's `content-disposition`
+ * turns the navigation into a save, and its `sandbox` keeps a body that commits
+ * as a document out of this frame's reach.
  */
 function ticketFrame(url: string): HTMLIFrameElement {
   const frame = document.createElement('iframe');

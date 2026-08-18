@@ -98,10 +98,6 @@ export class FilesPage {
     return (await shown.textContent()) ?? '';
   }
 
-  /**
-   * Saves a listed file to disk through the row's own action, and hands back
-   * the transfer the browser started.
-   */
   async save(name: string): Promise<Download> {
     const [download] = await Promise.all([
       this.page.waitForEvent('download'),
