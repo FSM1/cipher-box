@@ -127,6 +127,10 @@ binds it to all interfaces, so run this stack on a network you trust.
 `--wait` holds until every service's healthcheck passes and exits non-zero if one does
 not within the timeout, so the migration below cannot race a Postgres still starting.
 
+The record store is the one service built from this checkout rather than pulled, and it
+is rebuilt on every `up`, so the first start is slower and a CORS policy changed in
+`tools/mock-ipns-routing` reaches the browser without a `--build` flag.
+
 ### 2. Configure and start the API
 
 ```bash
