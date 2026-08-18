@@ -13,8 +13,12 @@ fn root(seed: u8) -> String {
     encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &[seed]))
 }
 
+/// The node one debt is owed against. The kit's targets all ride one file's
+/// history, which is the shape a prune journals.
+const NODE: [u8; 16] = [0xA7; 16];
+
 fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
-    OwedRetire::whole(target.into(), owed_bytes)
+    OwedRetire::whole(NODE, target.into(), owed_bytes)
 }
 
 /// The entries as a map, so a kit assertion never depends on an order the
@@ -139,20 +143,15 @@ where
     reopened.settle(alice, &[]).await.unwrap();
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
-    // The manifest total is the bound the drain holds a hand-framed root to, so
-    // it is as durable as the figure beside it and neither moves under a replay.
+    // The owing node is what the drain re-reads to decide what the retire may
+    // name, and the manifest total is the bound it holds a hand-framed root to.
+    // Both are as durable as the owed figure, and none of the three moves under
+    // a replay.
     let quoted = OwedRetire {
+        node: [0x5C; 16],
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
-    };
-    let held_of = async |ledger: &L, target: &str| {
-        ledger
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == target)
     };
     reopened.owe(alice, &[quoted.clone()]).await.unwrap();
     reopened
@@ -161,8 +160,13 @@ where
         .unwrap();
     let after_reopen = open().await;
     assert_eq!(
-        held_of(&after_reopen, &quoted.target).await,
+        after_reopen
+            .owed(alice)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.target == quoted.target),
         Some(quoted),
-        "both figures survive a replay and a reopen"
+        "every field survives a replay and a reopen"
     );
 }

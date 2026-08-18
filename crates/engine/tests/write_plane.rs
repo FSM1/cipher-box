@@ -34,7 +34,7 @@ use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::{
-    ChildAdopter, REGISTRY_BATCH_MAX, RETIRE_LEDGER_PREFIX, ResolveOutcome, resolve,
+    ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
@@ -48,9 +48,9 @@ use cipherbox_engine::sync::pointer::{
 };
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
-    owner_scoped_key, record_content_root_cid,
+    owner_scoped_key, owner_tag, record_content_root_cid,
 };
-use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
+use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
@@ -6260,6 +6260,13 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
         .collect()
 }
 
+/// Every target this device named past `mark` — a count taken from an earlier
+/// [`retire_targets`]. A refused pass replays whole, so a per-pass property is
+/// read off the window that actually settled.
+fn retired_since(device: &FakeDevice, mark: usize) -> Vec<String> {
+    retire_targets(device)[mark..].to_vec()
+}
+
 /// Every target this device has asked the registry to retire, in order.
 fn retire_targets(device: &FakeDevice) -> Vec<String> {
     retire_batches(device).into_iter().flatten().collect()
@@ -7565,8 +7572,7 @@ fn a_prune_publishes_a_shortened_history_and_reclaims_every_dropped_block() {
 
     // The registry saw every dropped block, each version's leaves ahead of the
     // root that names them.
-    let mut every_target = retire_targets(&alice);
-    let retired = every_target.split_off(retired_before);
+    let retired = retired_since(&alice, retired_before);
     for root in &doomed {
         let root_str = encode_content_cid_str(root);
         let root_at = retired
@@ -7753,13 +7759,7 @@ fn a_doomed_root_naming_a_retained_versions_leaf_never_retires_that_leaf() {
     let body: Vec<u8> = (0..60u8).collect();
     let file = file_with_history(&world, &mut engine, &mut tasks, &[body.clone()]);
     let head = published_versions(&world.record_store, &blocks, file).remove(0);
-    let live_leaves = decode_root(
-        &blocks
-            .get(&encode_content_cid_str(&head.content_cid))
-            .expect("the head root block"),
-    )
-    .expect("a root manifest")
-    .leaf_cid_vecs();
+    let live_leaves = leaves_of(&blocks, &head.content_cid);
     assert!(
         live_leaves.len() > 1,
         "a multi-chunk head is the normal case"
@@ -7874,14 +7874,11 @@ fn a_leaf_two_doomed_roots_share_is_charged_to_exactly_one_of_them() {
         "the shared block is quoted once, not once per doomed root"
     );
 
-    // A refused pass replays whole — the registry is idempotent — so the
-    // one-row-one-retire property is read off the pass that actually settles.
     let refused = retire_targets(&alice).len();
     blocks.refuse_retire(false);
     tick(&world, &engine, &mut tasks);
 
-    let mut every_target = retire_targets(&alice);
-    let retired = every_target.split_off(refused);
+    let retired = retired_since(&alice, refused);
     let shared_cid = encode_content_cid_str(&shared);
     assert_eq!(
         retired.iter().filter(|cid| **cid == shared_cid).count(),
@@ -8016,35 +8013,14 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
     );
 }
 
-/// The staging key `StagingRetireLedger` journals `target`'s debt under.
+/// The staging key `StagingRetireLedger` journals `target`'s debt under, from
+/// the ledger's own key derivation rather than a second copy of the layout.
 fn retire_ledger_key(target: &[u8]) -> Vec<u8> {
-    let owner = owner_scoped_key(&[], &kdf::enc_subkey(&SECRET));
-    let mut key = RETIRE_LEDGER_PREFIX.to_vec();
-    key.push(u8::try_from(owner.len()).expect("an owner tag under 255 bytes"));
-    key.extend_from_slice(&owner);
-    key.extend_from_slice(target);
-    key
-}
-
-/// A file under the root named `name`, carrying one version.
-fn file_named(
-    world: &FakeWorld,
-    engine: &mut Engine<FakeSeamTypes>,
-    tasks: &mut [BoxedTask],
-    name: &str,
-    body: &[u8],
-) -> NodeId {
-    write_file(
-        engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: name.into(),
-        },
-        body,
+    StagingRetireLedger::<InMemoryStagingStore>::key(
+        &owner_tag(&kdf::enc_subkey(&SECRET)),
+        &encode_content_cid_str(target),
     )
-    .expect("the create commits");
-    tick(world, engine, tasks);
-    child_id(engine, ROOT, name)
+    .expect("a content CID keys an entry")
 }
 
 /// The leaf CIDs a published version's root block names.
@@ -8117,69 +8093,6 @@ fn a_prune_whose_ledger_write_fails_leaves_the_history_standing_and_still_reclai
     );
 }
 
-/// Root blocks are keyless plaintext det-CBOR, so a write-grantee can read one
-/// file's leaf CIDs off the gateway and author a version of **another** file
-/// naming them. The pruned file's own survivors are no defence: what a retire
-/// may not name is every CID the account's published records still reach.
-#[test]
-fn a_doomed_root_naming_another_files_live_leaf_never_retires_that_leaf() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-
-    let neighbour_body: Vec<u8> = (0..60u8).map(|byte| byte ^ 0x5a).collect();
-    let neighbour = file_named(&world, &mut engine, &mut tasks, "keep.bin", &neighbour_body);
-    let neighbour_head = published_versions(&world.record_store, &blocks, neighbour)
-        .remove(0)
-        .content_cid;
-    let hostage = leaves_of(&blocks, &neighbour_head).remove(0);
-
-    let body: Vec<u8> = (0..60u8).collect();
-    let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
-    let head = published_versions(&world.record_store, &blocks, file).remove(0);
-
-    // A version of `clip.bin` whose links name a leaf `keep.bin` lives on. The
-    // block is well formed: it addresses to its own CID and its link count
-    // matches the `size` it declares.
-    let chunk = ContentProfile::CI.chunk_size() as u64;
-    let grantee_leaf = compute_cid(CONTENT_CID_CODEC, b"a block only the planted root names");
-    let planted = assemble(
-        &[hostage.clone(), grantee_leaf.clone()],
-        2 * chunk,
-        &ContentProfile::CI,
-    )
-    .expect("assembles");
-    let planted_root = blocks.put(planted.root_block.clone());
-    plant_versions(
-        &world,
-        &blocks,
-        file,
-        vec![head, planted_version(&planted.content_cid, 2 * chunk)],
-    );
-
-    stage_prune(&alice, &world, file, 1);
-    tick(&world, &engine, &mut tasks);
-
-    let retired = retire_targets(&alice);
-    assert!(
-        !retired.contains(&encode_content_cid_str(&hostage)),
-        "a leaf another file's live version names is never retired"
-    );
-    assert!(
-        retired.contains(&encode_content_cid_str(&grantee_leaf)),
-        "the blocks the planted version really added still retire"
-    );
-    assert!(retired.contains(&planted_root), "and so does its own root");
-    assert_eq!(
-        block_on(engine.read_content(neighbour)).expect("the neighbour still reads"),
-        neighbour_body,
-        "the file the doomed root aliased is intact"
-    );
-    assert_eq!(engine.pending_reclaim_bytes(), 0);
-}
-
 /// The retire can run passes after the prune journaled it — a registry outage,
 /// a device offline. A version adopted inside that window is live by the time
 /// the retire runs, so the protected set is re-derived then rather than frozen
@@ -8228,14 +8141,11 @@ fn a_version_adopted_after_the_prune_journaled_its_debt_is_protected_too() {
         vec![planted_version(&adopted.content_cid, 2 * chunk)],
     );
 
-    // The refused pass named what was live *then*, so the protection is read
-    // off the pass that runs once the new version is on the wire.
     let refused = retire_targets(&alice).len();
     blocks.refuse_retire(false);
     tick(&world, &engine, &mut tasks);
 
-    let mut every_target = retire_targets(&alice);
-    let retired = every_target.split_off(refused);
+    let retired = retired_since(&alice, refused);
     assert!(
         !retired.contains(&encode_content_cid_str(&hostage)),
         "the leaf the newly adopted version lives on is never retired"

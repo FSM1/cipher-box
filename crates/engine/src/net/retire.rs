@@ -10,7 +10,8 @@
 //! ordered it ([`drain_owed_retires`]).
 
 use core::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
@@ -18,7 +19,9 @@ use cipherbox_core::content::{
 
 use super::REGISTRY_BATCH_MAX;
 use crate::api::{ApiClient, ApiError};
-use crate::content::{ContentPlane, ContentProfile, Gateway, expand_retire_targets, read_block};
+use crate::content::{
+    ContentPlane, ContentProfile, Expansion, Gateway, expand_retire_targets, read_block,
+};
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
@@ -131,9 +134,13 @@ where
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 
-/// One stored entry: the owed figure then the manifest total, both big-endian
-/// `u64`. The target itself is the key, so it is not written into the value.
-const ENTRY_LEN: usize = 2 * size_of::<u64>();
+/// One stored entry: the owing node's id, then the owed figure and the manifest
+/// total as big-endian `u64`. The target itself is the key, so it is not written
+/// into the value.
+const ENTRY_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>();
+
+/// The engine's location-independent node id, as the entry stores it.
+const NODE_ID_LEN: usize = 16;
 
 /// The [`RetireLedger`] every host gets for free, over the durable staging store
 /// it already implements.
@@ -161,7 +168,7 @@ impl<'a, St: StagingStore> StagingRetireLedger<'a, St> {
 
     /// One entry's key. The target rides as its **binary** CID, a third shorter
     /// than the multibase spelling and the form the suffix decodes back from.
-    fn key(owner_tag: &[u8], target: &str) -> SeamResult<Vec<u8>> {
+    pub fn key(owner_tag: &[u8], target: &str) -> SeamResult<Vec<u8>> {
         let cid = decode_content_cid_str(target)
             .map_err(|_| SeamError::new("retire-ledger target is not a content CID"))?;
         let mut key = Self::scope(owner_tag)?;
@@ -180,9 +187,7 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             if decode_entry(self.0.staged_bytes(&key).await?).is_some() {
                 continue;
             }
-            self.0
-                .put_staged_bytes(&key, &encode_entry(entry.owed_bytes, entry.manifest_bytes))
-                .await?;
+            self.0.put_staged_bytes(&key, &encode_entry(entry)).await?;
         }
         Ok(())
     }
@@ -197,14 +202,12 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             else {
                 continue;
             };
-            let Some((owed_bytes, manifest_bytes)) = decode_entry(self.0.staged_bytes(&key).await?)
-            else {
+            let Some(stored) = decode_entry(self.0.staged_bytes(&key).await?) else {
                 continue;
             };
             entries.push(OwedRetire {
                 target: encode_content_cid_str(cid),
-                owed_bytes,
-                manifest_bytes,
+                ..stored
             });
         }
         // Store enumeration order is host-dependent, and a pass can stop early;
@@ -224,24 +227,33 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 }
 
 /// One entry as the staging store holds it.
-fn encode_entry(owed_bytes: u64, manifest_bytes: u64) -> [u8; ENTRY_LEN] {
+fn encode_entry(entry: &OwedRetire) -> [u8; ENTRY_LEN] {
     let mut stored = [0u8; ENTRY_LEN];
-    stored[..size_of::<u64>()].copy_from_slice(&owed_bytes.to_be_bytes());
-    stored[size_of::<u64>()..].copy_from_slice(&manifest_bytes.to_be_bytes());
+    let (node, rest) = stored.split_at_mut(NODE_ID_LEN);
+    let (owed, manifest) = rest.split_at_mut(size_of::<u64>());
+    node.copy_from_slice(&entry.node);
+    owed.copy_from_slice(&entry.owed_bytes.to_be_bytes());
+    manifest.copy_from_slice(&entry.manifest_bytes.to_be_bytes());
     stored
 }
 
-/// One entry's owed figure and manifest total — or `None` for bytes this build
-/// did not write, which read as unwritten rather than as a figure of their own.
-/// The target itself comes from the key, never the value.
-fn decode_entry(stored: Option<Vec<u8>>) -> Option<(u64, u64)> {
+/// One entry's node, owed figure and manifest total — or `None` for bytes this
+/// build did not write, which read as unwritten rather than as figures of their
+/// own. The `target` of what comes back is a placeholder: it lives in the key.
+fn decode_entry(stored: Option<Vec<u8>>) -> Option<OwedRetire> {
     let stored = stored?;
     if stored.len() != ENTRY_LEN {
         return None;
     }
-    let (owed, rest) = stored.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (node, rest) = stored.split_first_chunk::<NODE_ID_LEN>()?;
+    let (owed, rest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
     let (manifest, _) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
-    Some((u64::from_be_bytes(*owed), u64::from_be_bytes(*manifest)))
+    Some(OwedRetire {
+        node: *node,
+        target: String::new(),
+        owed_bytes: u64::from_be_bytes(*owed),
+        manifest_bytes: u64::from_be_bytes(*manifest),
+    })
 }
 
 /// Work the ledger once and report the pinned bytes still owed afterwards — the
@@ -250,15 +262,14 @@ fn decode_entry(stored: Option<Vec<u8>>) -> Option<(u64, u64)> {
 ///
 /// Each entry is expanded from its own root block, fetched keyless (plaintext
 /// det-CBOR), and retired in [`expand_retire_targets`] order, less every CID
-/// `live` names. `live` is the caller's account-wide set of CIDs a published
-/// record still reaches; `None` is "this pass could not establish it", and no
-/// entry retires without it — a pin row is keyed `(account, cid)` and physical
-/// unpin fires at global refcount zero (blueprint/api.md "Pin/name registry"),
-/// so retiring without that set is loss where waiting is a leak.
+/// `live` reports for the entry's own node ([`Expansion::minus`]).
 ///
-/// It is also what makes a debt safe to journal **ahead** of the shortened
-/// record: a target the live set still names is one a resolvable record still
-/// reaches, and it stays owed rather than retiring.
+/// `live` answers "what does this node's **currently published** record still
+/// reach", read fresh so a version adopted since the prune journaled its debt is
+/// in the answer. `None` is "this pass could not establish it", and no entry
+/// retires without it, because retiring blind is loss where waiting is a leak.
+/// It is also what makes a debt safe to journal ahead of the shortened record: a
+/// target the node's record still names has no landed shortening behind it.
 ///
 /// An entry clears on the registry's own answer. Everything else — offline, an
 /// expired token, a throttle, a root no source will serve — leaves the entry
@@ -267,155 +278,140 @@ fn decode_entry(stored: Option<Vec<u8>>) -> Option<(u64, u64)> {
 /// the expansion is also what the vault reports as pending. There is no attempt
 /// budget and no dead-letter class: every failure is either self-clearing or
 /// ours, and the byte figure is the only record of what was owed.
-pub async fn drain_owed_retires<L, H, C, F>(
+pub async fn drain_owed_retires<L, H, C>(
     ledger: &L,
     owner_tag: &[u8],
     api: &ApiClient<H, C>,
     gateway: &Gateway,
     http: &H,
     profile: &ContentProfile,
-    live: F,
+    live: impl AsyncFn([u8; 16]) -> Option<BTreeSet<String>>,
 ) -> Option<u64>
 where
     L: RetireLedger,
     H: Http,
     C: CredentialStore,
-    F: AsyncFnOnce() -> Option<BTreeSet<String>>,
 {
     let owed = ledger.owed(owner_tag).await.ok()?;
-    if owed.is_empty() {
-        return Some(0);
-    }
-    // Deriving the live set costs a walk of every published record, so it is
-    // paid for only once a debt is actually outstanding.
-    let live = live().await;
     let mut still_owed = 0u64;
     let mut registry_up = true;
-    // A CID two doomed roots both name is one pin row, so the first entry to
-    // name it carries it and the rest quote nothing for it.
-    let mut named: BTreeSet<String> = BTreeSet::new();
+    // One record read per owing node, not per entry — a prune drops several
+    // versions of one file. A node's set grows only with what actually retired,
+    // so a CID a deferred entry named is still reachable by the next one.
+    let mut live_of: BTreeMap<[u8; 16], Option<BTreeSet<String>>> = BTreeMap::new();
+    // A CID two doomed roots both name is one pin row either way, so the figure
+    // counts it once whether or not the retire that names it lands.
+    let mut counted: BTreeSet<String> = BTreeSet::new();
     for entry in owed {
-        let outcome = match &live {
-            Some(live) => {
-                retire_owed(
-                    &entry,
-                    ledger,
-                    owner_tag,
-                    api,
-                    gateway,
-                    http,
-                    profile,
-                    live,
-                    &mut named,
-                    registry_up,
-                )
-                .await
-            }
-            None => RetireOutcome::Deferred(entry.owed_bytes),
+        let node = match live_of.entry(entry.node) {
+            Entry::Occupied(held) => held.into_mut(),
+            Entry::Vacant(slot) => slot.insert(live(entry.node).await),
         };
-        match outcome {
-            RetireOutcome::Retired | RetireOutcome::NotOwed => {}
-            RetireOutcome::Deferred(pinned_bytes) => {
-                still_owed = still_owed.saturating_add(pinned_bytes);
+        let Some(node) = node else {
+            still_owed = still_owed.saturating_add(entry.owed_bytes);
+            continue;
+        };
+        // A target its own node's record still reaches is one whose shortening
+        // has not landed. Live content is not pending reclaim, so it adds
+        // nothing to the figure and the entry waits for the record that drops
+        // it.
+        if node.contains(&entry.target) {
+            continue;
+        }
+        let Some(expansion) = expand_owed(&entry, gateway, http, profile).await else {
+            still_owed = still_owed.saturating_add(entry.owed_bytes);
+            continue;
+        };
+        let retirable = expansion.minus(node);
+        let targets = retirable.cids();
+        let pinned_bytes = retirable.minus(&counted).pinned_bytes;
+        counted.extend(targets.iter().cloned());
+        still_owed = still_owed.saturating_add(pinned_bytes);
+        if !registry_up {
+            continue;
+        }
+        match send_retire(&entry, &targets, ledger, owner_tag, api).await {
+            SendOutcome::Retired => {
+                still_owed = still_owed.saturating_sub(pinned_bytes);
+                node.extend(targets);
             }
-            RetireOutcome::RegistryDown(pinned_bytes) => {
-                registry_up = false;
-                still_owed = still_owed.saturating_add(pinned_bytes);
-            }
+            SendOutcome::Deferred => {}
+            SendOutcome::RegistryDown => registry_up = false,
         }
     }
     Some(still_owed)
 }
 
-/// How one owed entry's pass ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RetireOutcome {
-    /// The entry is settled and owes nothing further.
-    Retired,
-    /// A published record still reaches the target, so the shortening this debt
-    /// was journaled for is not live. Nothing is pending reclaim while that
-    /// holds, and the entry waits for the record that drops it.
-    NotOwed,
-    /// Nothing this entry can do this pass — a root no source served, a manifest
-    /// that is not this version's, or a store that would not take the settle. It
-    /// stays owed for the bytes it carries and the pass moves on.
-    Deferred(u64),
-    /// The registry refused or could not be reached — not this entry's fault,
-    /// and not the next one's either.
-    RegistryDown(u64),
-}
-
-/// Retire one owed version's block set, less every CID the account's live
-/// records reach and every CID an earlier entry of this pass already named.
-///
-/// The entry settles **between** the leaf batches and the root's own final
-/// batch. The root is the expansion key, so an entry still owed once its root is
-/// gone could never be re-expanded and would owe forever; settling first trades
-/// that for a bounded leak — one root block, on the narrow window where the
-/// final batch never lands.
-#[expect(clippy::too_many_arguments, reason = "one entry's whole retire")]
-async fn retire_owed<L, H, C>(
+/// One owed entry's whole expansion, off its own fetched root block. `None`
+/// leaves the entry owed for the figure the prune quoted: a root no source
+/// served, or a manifest that is not this version's.
+async fn expand_owed<H: Http>(
     entry: &OwedRetire,
-    ledger: &L,
-    owner_tag: &[u8],
-    api: &ApiClient<H, C>,
     gateway: &Gateway,
     http: &H,
     profile: &ContentProfile,
-    live: &BTreeSet<String>,
-    named: &mut BTreeSet<String>,
-    registry_up: bool,
-) -> RetireOutcome
+) -> Option<Expansion> {
+    let expected = decode_content_cid_str(&entry.target).ok()?;
+    let root_block = read_block(gateway, http, &entry.target, &expected, ContentPlane::Root)
+        .await
+        .ok()?;
+    expand_retire_targets(&entry.target, &root_block, profile, entry.manifest_bytes).ok()
+}
+
+/// How one owed entry's registry call ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendOutcome {
+    /// The entry is settled and owes nothing further.
+    Retired,
+    /// A store that would not take the settle, or a target set the entry cannot
+    /// name in full. It stays owed and the pass moves on.
+    Deferred,
+    /// The registry refused or could not be reached — not this entry's fault,
+    /// and not the next one's either.
+    RegistryDown,
+}
+
+/// Hand `targets` to the registry and settle the entry.
+///
+/// The settle lands **between** the leaf batches and the root's own final batch.
+/// The root is the expansion key, so an entry still owed once its root is gone
+/// could never be re-expanded and would owe forever; settling first trades that
+/// for a bounded leak — one root block, on the narrow window where the final
+/// batch never lands.
+async fn send_retire<L, H, C>(
+    entry: &OwedRetire,
+    targets: &[String],
+    ledger: &L,
+    owner_tag: &[u8],
+    api: &ApiClient<H, C>,
+) -> SendOutcome
 where
     L: RetireLedger,
     H: Http,
     C: CredentialStore,
 {
-    if live.contains(&entry.target) {
-        return RetireOutcome::NotOwed;
-    }
-    let Ok(expected) = decode_content_cid_str(&entry.target) else {
-        return RetireOutcome::Deferred(entry.owed_bytes);
-    };
-    let Ok(root_block) =
-        read_block(gateway, http, &entry.target, &expected, ContentPlane::Root).await
-    else {
-        return RetireOutcome::Deferred(entry.owed_bytes);
-    };
-    let Ok(expansion) =
-        expand_retire_targets(&entry.target, &root_block, profile, entry.manifest_bytes)
-    else {
-        return RetireOutcome::Deferred(entry.owed_bytes);
-    };
-    let retirable = expansion.minus(&live.union(named).cloned().collect());
-    let targets = retirable.cids();
-    // Claimed here rather than after the registry answers: an entry the pass
-    // could not send stays owed and names these CIDs again next pass, so the
-    // figure below counts each pin row exactly once either way.
-    named.extend(targets.iter().cloned());
+    // The expansion key must ride the final batch, so an entry whose own root a
+    // live record holds back cannot name the rest of its set either.
     let Some((root, leaves)) = targets.split_last() else {
-        return RetireOutcome::Deferred(retirable.pinned_bytes);
+        return SendOutcome::Deferred;
     };
     if root != &entry.target {
-        return RetireOutcome::Deferred(retirable.pinned_bytes);
-    }
-    if !registry_up {
-        return RetireOutcome::Deferred(retirable.pinned_bytes);
+        return SendOutcome::Deferred;
     }
     if retire(api, leaves).await.is_err() {
-        return RetireOutcome::RegistryDown(retirable.pinned_bytes);
+        return SendOutcome::RegistryDown;
     }
     if ledger
         .settle(owner_tag, core::slice::from_ref(&entry.target))
         .await
         .is_err()
     {
-        return RetireOutcome::Deferred(retirable.pinned_bytes);
+        return SendOutcome::Deferred;
     }
     // Past the settle the debt is discharged, so a refused root batch is a leaked
     // pin row rather than a reason to re-own it.
     let _ = retire(api, core::slice::from_ref(root)).await;
-    RetireOutcome::Retired
+    SendOutcome::Retired
 }
 
 /// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
@@ -513,44 +509,55 @@ mod tests {
     const OWNER: &[u8] = b"owner-tag";
     const OTHER_OWNER: &[u8] = b"another-owner-tag";
 
+    /// The node every fixture debt is owed against — one file's history, which
+    /// is the shape a prune journals.
+    const NODE: [u8; 16] = [0x3B; 16];
+
     /// The debt a prune journals for one sealed version.
     fn owed_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
         let (version, root_block, leaf_cids) = doomed_version(plaintext);
         (
-            OwedRetire::whole(version.content_cid, version.pinned_bytes),
+            OwedRetire::whole(NODE, version.content_cid, version.pinned_bytes),
             root_block,
             leaf_cids,
         )
     }
 
-    /// A transport serving the doomed root off the gateway and answering the
-    /// registry with `retired` — `None` being a refusal. An absent `root_block`
-    /// is a root no source will serve.
-    fn ledger_http(
-        entry: &OwedRetire,
-        root_block: Option<Vec<u8>>,
-        retired: Option<u64>,
-    ) -> ScriptedHttp {
+    /// A transport serving each named root block off the gateway and answering
+    /// the registry with `retired` — `None` being a refusal. A root the list
+    /// omits is one no source will serve.
+    fn blocks_http(blocks: Vec<(String, Vec<u8>)>, retired: Option<u64>) -> ScriptedHttp {
         let http = ScriptedHttp::default();
-        let cid = entry.target.clone();
-        for _ in 0..32 {
-            let cid = cid.clone();
-            let root_block = root_block.clone();
+        for _ in 0..64 {
+            let blocks = blocks.clone();
             http.enqueue_derived(move |request| {
                 if request.url.ends_with("/registry/retire") {
                     return Ok(retire_answer(retired));
                 }
-                match root_block.filter(|_| requested_cid(&request.url) == cid) {
-                    Some(block) => Ok(HttpResponse {
+                let requested = requested_cid(&request.url);
+                match blocks.iter().find(|(cid, _)| *cid == requested) {
+                    Some((_, block)) => Ok(HttpResponse {
                         status: 200,
                         headers: Vec::new(),
-                        body: block,
+                        body: block.clone(),
                     }),
                     None => Err(SeamError::new("no such block")),
                 }
             });
         }
         http
+    }
+
+    /// The single-entry case: an absent `root_block` is a root no source serves.
+    fn ledger_http(
+        entry: &OwedRetire,
+        root_block: Option<Vec<u8>>,
+        retired: Option<u64>,
+    ) -> ScriptedHttp {
+        let blocks = root_block
+            .map(|block| vec![(entry.target.clone(), block)])
+            .unwrap_or_default();
+        blocks_http(blocks, retired)
     }
 
     /// The retire calls the pass made, one entry per batch, in order.
@@ -572,8 +579,9 @@ mod tests {
         retire_batches(http).into_iter().flatten().collect()
     }
 
-    /// A pass over the ledger against `live` — the CIDs a published record still
-    /// reaches, `None` being a pass that could not establish them.
+    /// A pass over the ledger against `live` — the CIDs the owing node's
+    /// published record still reaches, `None` being a pass that could not
+    /// establish them.
     fn drain_against(
         store: &InMemoryStagingStore,
         owner: &[u8],
@@ -593,13 +601,13 @@ mod tests {
             &gateway(),
             http,
             &ContentProfile::CI,
-            async || live,
+            async |_| live.clone(),
         ))
         .expect("the ledger reads");
         (remaining, block_on(ledger.owed(owner)).expect("owed"))
     }
 
-    /// A pass whose account holds nothing but the doomed versions themselves.
+    /// A pass whose node's record reaches nothing but the doomed versions.
     fn drain(
         store: &InMemoryStagingStore,
         owner: &[u8],
@@ -873,27 +881,13 @@ mod tests {
 
         // A second root that content-addresses correctly and names the first's
         // leading leaf — what a write-grantee can put on the wire.
-        let http = ScriptedHttp::default();
-        for _ in 0..64 {
-            let blocks = [
-                (first.target.clone(), first_block.clone()),
-                (second.target.clone(), second_block.clone()),
-            ];
-            http.enqueue_derived(move |request| {
-                if request.url.ends_with("/registry/retire") {
-                    return Ok(retire_answer(Some(1)));
-                }
-                let requested = requested_cid(&request.url);
-                match blocks.iter().find(|(cid, _)| *cid == requested) {
-                    Some((_, block)) => Ok(HttpResponse {
-                        status: 200,
-                        headers: Vec::new(),
-                        body: block.clone(),
-                    }),
-                    None => Err(SeamError::new("no such block")),
-                }
-            });
-        }
+        let http = blocks_http(
+            vec![
+                (first.target.clone(), first_block),
+                (second.target.clone(), second_block),
+            ],
+            Some(1),
+        );
         let (remaining, owed) = drain(&store, OWNER, &http);
 
         assert_eq!(
@@ -913,10 +907,14 @@ mod tests {
     #[test]
     fn a_stored_entry_this_build_did_not_write_reads_as_nothing() {
         let (entry, ..) = owed_version(&[1u8; 40]);
-        let stored = encode_entry(entry.owed_bytes, entry.manifest_bytes);
+        let stored = encode_entry(&entry);
         assert_eq!(
             decode_entry(Some(stored.to_vec())),
-            Some((entry.owed_bytes, entry.manifest_bytes)),
+            // The target rides the key, so the value round-trips without it.
+            Some(OwedRetire {
+                target: String::new(),
+                ..entry.clone()
+            }),
             "a round trip is the whole entry"
         );
         for bytes in [

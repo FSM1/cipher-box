@@ -10,13 +10,12 @@ use super::SeamResult;
 /// magnitude smaller than the CID set it stands for, and holds the half that is
 /// irrecoverable: nothing readable names a dropped root once the shortened
 /// history publishes, while a root always names its own leaves.
-///
-/// What the retire must *not* name is deliberately absent. Which blocks are live
-/// is a property of the account's published records at the moment the retire
-/// runs, not of the prune that journaled the debt, so the drain re-derives it
-/// from those records on every pass rather than freezing a snapshot here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwedRetire {
+    /// The node whose history dropped the target. The drain re-reads this
+    /// node's published record to decide what the retire may name, so the entry
+    /// carries it rather than a snapshot of the answer.
+    pub node: [u8; 16],
     /// The doomed version's root `contentCid` (multibase string).
     pub target: String,
     /// The pinned bytes this entry stands for, as the prune quoted them.
@@ -33,8 +32,9 @@ pub struct OwedRetire {
 impl OwedRetire {
     /// A debt quoted at its whole manifest total.
     #[must_use]
-    pub fn whole(target: String, pinned_bytes: u64) -> Self {
+    pub fn whole(node: [u8; 16], target: String, pinned_bytes: u64) -> Self {
         Self {
+            node,
             target,
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
