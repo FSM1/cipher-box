@@ -68,7 +68,8 @@ test('an uploaded file reads back byte for byte', async ({ page }) => {
   await expect(files.row('notes.txt')).toBeVisible();
   expect(await drained(files, vault)).toEqual(['file notes.txt']);
 
-  // Off disk, through the row's own action: the bytes the member ends up with.
+  // The one route that both leaves the tab and keeps the bytes exact, so it is
+  // what settles the round trip.
   const saved = await files.save('notes.txt');
   expect(new Uint8Array(await readFile(await saved.path()))).toEqual(bytes);
 
