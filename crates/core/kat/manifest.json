@@ -301,9 +301,10 @@
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 6,
+      "count": 7,
       "checks": [
         "duplicate-grant-tag",
+        "too-many-structures",
         "unexpected-type",
         "missing-field",
         "invalid-permission",

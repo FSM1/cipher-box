@@ -124,6 +124,16 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
   child-scope index enumerates directly-descendant scope roots for the F-4
   rotation cascade (FSM1/cipher-box-next#38 D6). Interior nodes publish no write-body at all.
+  The write-plane history link departs from the read plane's ratchet
+  construction: it is **HPKE-sealed to the owner's encryption subkey**
+  (`enc(32) || ciphertext||tag`), not symmetrically sealed under the fresh
+  `writeScopeSeed`'s structure key. That seed ships in every write grantee's
+  grant blob, while the retiring seed the link carries derives the IPNS signing
+  key of every pre-rotation name in the scope, and the link's only consumer —
+  the resumed name wave — is owner-only. It is bounded fail-closed at decode and
+  encode at 512 bytes (`too-many-structures`), and a re-seal that carries an
+  over-length one **drops** it: nothing owner-signed covers the field, so
+  refusing would let a committed writer block the rotation that revokes them.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,

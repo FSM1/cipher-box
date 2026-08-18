@@ -47,9 +47,9 @@ pub use grant::{
     decode_override_seed_payload, decode_owner_write_blob_payload, encode_ascent_link,
     encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
     encode_override_seed_payload, encode_owner_write_blob_payload, open_ascent_link,
-    open_grant_blob, open_history_link, open_owner_blob, open_owner_write_blob, seal_ascent_link,
-    seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_grant_set,
-    verify_grant_set,
+    open_grant_blob, open_history_link, open_owner_blob, open_owner_history_link,
+    open_owner_write_blob, seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob,
+    seal_owner_history_link, seal_owner_write_blob, sign_grant_set, verify_grant_set,
 };
 pub use op_record::{
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, decode_op_record_header, op_record_aad,
@@ -70,7 +70,8 @@ pub use settings_record::{
 };
 pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
 pub use write_body::{
-    ChildScopeRef, GrantLedgerEntry, WriteBody, decode_write_body, encode_write_body,
+    ChildScopeRef, GrantLedgerEntry, MAX_WRITE_HISTORY_LINK_BYTES, WriteBody, decode_write_body,
+    encode_write_body,
 };
 
 use crate::error::{CodecError, Malformed, TrustViolation};

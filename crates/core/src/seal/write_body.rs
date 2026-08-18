@@ -26,8 +26,8 @@ use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
-    collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::grant::Permission;
 
@@ -208,7 +208,8 @@ impl ChildScopeRef {
 pub struct WriteBody {
     /// The authoritative grant ledger.
     pub grant_ledger: Vec<GrantLedgerEntry>,
-    /// The sealed write-plane history-link blob (opaque; empty at write epoch 1).
+    /// The sealed write-plane history-link blob (opaque; empty at write epoch 1),
+    /// bounded at [`MAX_WRITE_HISTORY_LINK_BYTES`].
     pub write_history_link: Vec<u8>,
     /// The directly-descendant scope roots (the F-4 cascade index).
     pub direct_child_scope_index: Vec<ChildScopeRef>,
@@ -217,6 +218,18 @@ pub struct WriteBody {
 }
 
 const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "writeHistoryLink"];
+
+/// The frozen byte bound on [`WriteBody::write_history_link`] — the write
+/// plane's analogue of the read plane's
+/// [`MAX_HISTORY_LINKS`](super::MAX_HISTORY_LINKS).
+///
+/// The field is authored under a write key every committed writer holds, and a
+/// re-seal carries it into a section the *owner* signs and publishes — so
+/// without a bound a write grantee could inflate it until the record carrying it
+/// passed the transport's ceiling, blocking the rotation that revokes them. A
+/// well-formed link is ~103 bytes; the rest is headroom for preserved unknown
+/// fields.
+pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
 
 /// Decode a write-body plaintext (strict det-CBOR, unknown fields preserved).
 ///
@@ -234,7 +247,13 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
     assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
-    let write_history_link = req(map, "writeHistoryLink")?.as_bytes()?.to_vec();
+    let raw_write_history_link = req(map, "writeHistoryLink")?.as_bytes()?;
+    assert_within_bound(
+        "writeHistoryLink",
+        raw_write_history_link.len(),
+        MAX_WRITE_HISTORY_LINK_BYTES,
+    )?;
+    let write_history_link = raw_write_history_link.to_vec();
     let mut direct_child_scope_index = Vec::new();
     for item in req(map, "directChildScopeIndex")?.as_array()? {
         direct_child_scope_index.push(ChildScopeRef::from_value(item)?);
@@ -252,13 +271,19 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
 /// The write body is sealed outside core, so this encode is its release-active
-/// fail-closed guard: a duplicate-tag ledger fails here with the same
-/// `duplicate-grant-tag` verdict [`decode_write_body`] raises, so it never hands
-/// back bytes its own decoder rejects. The decoder's other reject,
+/// fail-closed guard: a duplicate-tag ledger, or a `writeHistoryLink` past
+/// [`MAX_WRITE_HISTORY_LINK_BYTES`], fails here with the same verdict
+/// [`decode_write_body`] raises, so it never hands back bytes its own decoder
+/// rejects. The decoder's other reject,
 /// `invalid-expiry`, needs no guard — [`GrantLedgerEntry::expires_at`] is
 /// `NonZeroU64`, so those bytes are unrepresentable rather than checked. Its key
 /// is optional, though, so each row's preserved fields must not smuggle one in.
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
+    assert_within_bound(
+        "writeHistoryLink",
+        body.write_history_link.len(),
+        MAX_WRITE_HISTORY_LINK_BYTES,
+    )?;
     assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
     for entry in &body.grant_ledger {
         assert_unknown_disjoint(&entry.unknown, LEDGER_ENTRY_KNOWN)?;
@@ -354,6 +379,42 @@ mod tests {
         };
         let bytes = encode_write_body(&body).expect("encodes");
         assert_eq!(decode_write_body(&bytes).unwrap(), body);
+    }
+
+    /// Encode/decode symmetry on the byte bound (AGENTS.md rule 8): both sides
+    /// admit exactly `MAX_WRITE_HISTORY_LINK_BYTES` and refuse one more with the
+    /// same verdict. `assert_eq!`, not `debug_assert!` — this fires in release.
+    #[test]
+    fn a_write_history_link_past_its_byte_bound_is_refused_by_both_sides() {
+        let at_bound = WriteBody {
+            write_history_link: vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES],
+            ..sample()
+        };
+        let bytes = encode_write_body(&at_bound).expect("a link at the bound encodes");
+        assert_eq!(decode_write_body(&bytes).unwrap(), at_bound);
+
+        let over = WriteBody {
+            write_history_link: vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES + 1],
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&over).unwrap_err().check(),
+            "too-many-structures"
+        );
+
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(vec![]));
+        m.insert("grantLedger", Value::Array(vec![]));
+        m.insert(
+            "writeHistoryLink",
+            Value::Bytes(vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES + 1]),
+        );
+        assert_eq!(
+            decode_write_body(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "too-many-structures"
+        );
     }
 
     #[test]

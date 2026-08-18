@@ -1946,6 +1946,20 @@ where
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
 
+        // A name wave cuts no read key, so `read_epoch` is the enumeration's
+        // envelope epoch carried across the whole subtree. A read rotation
+        // adopted while the wave runs lifts the floor above it, and gate stage 5
+        // rejects every record below the live floor — the interior names retire
+        // at completion, so the subtree would then be reachable at neither name.
+        // Strictly `<`, like `check_publishable`: a wave at the floor is correct.
+        let read_floor = floor::read_epoch_floor(self.floors, &self.scope_id)
+            .await
+            .map_err(|_| WritePublishError::NotLanded)?
+            .unwrap_or(0);
+        if read_epoch < read_floor {
+            return Err(WritePublishError::Rejected);
+        }
+
         let mut nonce = [0u8; 24];
         self.entropy
             .borrow_mut()
@@ -2297,8 +2311,8 @@ mod tests {
         STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
         STRUCT_TAG_OWNER_WRITE_BLOB, decode_envelope, decode_grant_section, encode_envelope,
         encode_grant_section, grant_section_bytes, open_ascent_link, open_grant_blob,
-        open_history_link, open_owner_write_blob, open_read_body, seal_read_body,
-        set_grant_section, sign_grant_set, verify_grant_set,
+        open_history_link, open_owner_history_link, open_owner_write_blob, open_read_body,
+        seal_read_body, set_grant_section, sign_grant_set, verify_grant_set,
     };
     use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -2781,7 +2795,10 @@ mod tests {
     }
 
     /// The record `rotate_scope` hands the publisher: `fixture`'s scope root
-    /// re-sealed at `read_epoch` under a fresh override seed.
+    /// re-sealed at `read_epoch` under a fresh override seed. The history link
+    /// descends from `read_epoch`, so a cut minted from a stale snapshot carries
+    /// the link that snapshot would have — and epoch 0, which has no epoch below
+    /// it, carries none.
     fn cut(fixture: &OwnerRootFixture, scope_id: [u8; 16], read_epoch: u64) -> ResealedScopeRoot {
         let pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
         let owner_enc_pub = owner_enc().public();
@@ -2801,9 +2818,9 @@ mod tests {
             &ResealSeeds {
                 override_seed: &FRESH_SEED,
                 read_epoch,
-                prev: Some(PrevEpochSeed {
+                prev: read_epoch.checked_sub(1).map(|epoch| PrevEpochSeed {
                     seed: &OWNER_ROOT_SCOPE_SEED,
-                    epoch: OWNER_ROOT_EPOCH,
+                    epoch,
                 }),
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
@@ -4773,6 +4790,73 @@ mod tests {
         assert!(!published_at(&harness, &moved.new_name));
     }
 
+    /// A root fixture with no children, staged and gated so the wave parks it.
+    fn parked_root(harness: &Harness<InMemoryRecordStore>) -> OwnerRootFixture {
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        root
+    }
+
+    #[test]
+    fn a_read_floor_rise_before_the_republish_refuses_the_record() {
+        // A name wave cuts no read key, so every record it publishes carries the
+        // envelope epoch the enumeration captured — and the enumeration parks the
+        // root while the whole interior subtree runs. A concurrent read rotation
+        // lifts the floor above that epoch in between, and every reader's own
+        // gate, this device's included, then rejects what the wave would publish.
+        let harness = Harness::plain();
+        let root = parked_root(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
+
+        block_on(
+            harness
+                .floors
+                .raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH + 1),
+        )
+        .expect("the floor rise lands");
+
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+        );
+        assert!(!published_at(&harness, &moved.new_name));
+    }
+
+    #[test]
+    fn a_republish_at_exactly_the_read_floor_still_lands() {
+        // Strictly below, not at: a name wave cuts no read key, so publishing at
+        // the floor is what the floor law admits — refusing there would stall the
+        // gated read's own floor advance, which sets the floor to that epoch.
+        let harness = Harness::plain();
+        let root = parked_root(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
+        assert_eq!(
+            block_on(floor::read_epoch_floor(&harness.floors, &SCOPE)),
+            Ok(Some(OWNER_ROOT_EPOCH)),
+            "the gated read left the floor at exactly the epoch the wave carries",
+        );
+
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("a republish at the floor lands");
+        assert!(published_at(&harness, &moved.new_name));
+    }
+
     #[test]
     fn a_failed_root_publish_leaves_the_root_republishable() {
         // A pass that gated the root and then failed to publish retries off the
@@ -5435,7 +5519,6 @@ mod tests {
             PLANTED,
             "the planted bytes are not what the owner re-signed"
         );
-        let key = kdf::structure_key(&fresh, STRUCT_TAG_HISTORY_LINK);
         let link_ctx = AadContext {
             v: ENVELOPE_V,
             id: SCOPE,
@@ -5443,10 +5526,23 @@ mod tests {
             epoch: new_epoch,
             struct_tag: STRUCT_TAG_HISTORY_LINK,
         };
-        let payload = open_history_link(key.as_bytes(), &link_ctx, &body.write_history_link)
-            .expect("the wave's own link opens under the seed it published");
+        let payload = open_owner_history_link(&owner_enc(), &link_ctx, &body.write_history_link)
+            .expect("the wave's own link opens for the owner");
         assert!(ct_eq(payload.prev_seed(), &OWNER_ROOT_WRITE_SCOPE_SEED));
         assert_eq!(payload.prev_epoch, OWNER_ROOT_EPOCH);
+
+        // The retiring write scope seed derives every pre-rotation `ipnsName` in
+        // the scope, and the fresh one ships in every write grantee's grant blob
+        // — so the link's audience is the owner alone.
+        assert!(
+            open_history_link(
+                kdf::structure_key(&fresh, STRUCT_TAG_HISTORY_LINK).as_bytes(),
+                &link_ctx,
+                &body.write_history_link,
+            )
+            .is_err(),
+            "a write grantee holding the published seed opens nothing"
+        );
     }
 
     #[test]
