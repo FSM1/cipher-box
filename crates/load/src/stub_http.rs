@@ -10,7 +10,7 @@ use std::rc::Rc;
 use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest, HttpResponse, SeamResult};
 
 /// One request the harness issued, keyed the way a test wants to read it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Call {
     pub(crate) method: HttpMethod,
     pub(crate) path: String,
@@ -22,7 +22,6 @@ struct State {
     calls: Vec<Call>,
     /// Paths answered 429 instead of their canned response.
     throttled: HashSet<String>,
-    next_message_id: u64,
 }
 
 /// A stub API and gateway. Cheap to clone; clones share one recording.
@@ -38,30 +37,79 @@ impl StubHttp {
         self.state.borrow_mut().throttled.insert(path.to_owned());
     }
 
+    /// Drop the recording, so a test can discard provisioning traffic before
+    /// driving a scenario.
+    pub(crate) fn clear_calls(&self) {
+        self.state.borrow_mut().calls.clear();
+    }
+
     /// Every call so far, in send order.
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.state.borrow().calls.clone()
     }
 
-    /// Every call so far, clearing the recording — so a test can discard the
-    /// provisioning traffic before driving a scenario.
-    pub(crate) fn take_calls(&self) -> Vec<Call> {
-        std::mem::take(&mut self.state.borrow_mut().calls)
-    }
-
     /// The paths of every call so far, in send order.
     pub(crate) fn paths(&self) -> Vec<String> {
-        self.calls().into_iter().map(|call| call.path).collect()
+        self.state
+            .borrow()
+            .calls
+            .iter()
+            .map(|call| call.path.clone())
+            .collect()
     }
 
-    /// Every target named in a `/registry/retire` body, in retire order.
-    pub(crate) fn retired(&self) -> Vec<String> {
-        self.calls()
+    /// The bodies every call to `path` carried, in send order.
+    pub(crate) fn bodies_for(&self, path: &str) -> Vec<Vec<u8>> {
+        self.state
+            .borrow()
+            .calls
             .iter()
-            .filter(|call| call.path == "/registry/retire")
-            .flat_map(|call| {
-                serde_json::from_slice::<Vec<String>>(&call.body)
-                    .expect("retire body is a JSON array of targets")
+            .filter(|call| call.path == path)
+            .map(|call| call.body.clone())
+            .collect()
+    }
+
+    /// Every name registered, in registration order.
+    pub(crate) fn registered_names(&self) -> Vec<String> {
+        self.registrations()
+            .map(|entry| entry["ipnsName"].as_str().expect("ipnsName").to_owned())
+            .collect()
+    }
+
+    /// Every row a registration created — each name and its content CIDs. This
+    /// is exactly the set a scenario owes the registry back.
+    pub(crate) fn registered_targets(&self) -> Vec<String> {
+        self.registrations()
+            .flat_map(|entry| {
+                let mut targets = vec![entry["ipnsName"].as_str().expect("ipnsName").to_owned()];
+                targets.extend(
+                    entry["contentCids"]
+                        .as_array()
+                        .expect("contentCids")
+                        .iter()
+                        .map(|cid| cid.as_str().expect("a cid").to_owned()),
+                );
+                targets
+            })
+            .collect()
+    }
+
+    fn registrations(&self) -> impl Iterator<Item = serde_json::Value> {
+        self.bodies_for("/registry/register")
+            .into_iter()
+            .flat_map(|body| {
+                serde_json::from_slice::<Vec<serde_json::Value>>(&body)
+                    .expect("a register body is a JSON array of registrations")
+            })
+    }
+
+    /// Every target retired, in retire order.
+    pub(crate) fn retired(&self) -> Vec<String> {
+        self.bodies_for("/registry/retire")
+            .iter()
+            .flat_map(|body| {
+                serde_json::from_slice::<Vec<String>>(body)
+                    .expect("a retire body is a JSON array of targets")
             })
             .collect()
     }
@@ -92,56 +140,52 @@ fn empty(status: u16) -> HttpResponse {
     }
 }
 
+fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
+    match (method, path) {
+        (HttpMethod::Post, "/auth/test-login") => json(
+            201,
+            r#"{"accessToken":"stub-access","refreshToken":"stub-refresh","isNewUser":true,"publicKey":"stub-public-key","privateKey":"00"}"#,
+        ),
+        (HttpMethod::Post, "/content/upload") => {
+            json(201, &format!(r#"{{"cid":"stub","size":{}}}"#, body.len()))
+        }
+        (HttpMethod::Post, "/registry/register") => empty(201),
+        (HttpMethod::Post, "/registry/retire") => {
+            let retired = serde_json::from_slice::<Vec<String>>(body).map_or(0, |t| t.len());
+            json(200, &format!(r#"{{"retired":{retired},"unpinned":0}}"#))
+        }
+        (HttpMethod::Get, "/account/quota") => json(
+            200,
+            r#"{"usedBytes":0,"limitBytes":1073741824,"advisory":false}"#,
+        ),
+        (HttpMethod::Patch, "/account/byo") => empty(200),
+        (HttpMethod::Post, "/mailbox/messages") => json(201, r#"{"id":"msg-1"}"#),
+        (HttpMethod::Get, "/mailbox/messages") => json(200, r#"{"messages":[]}"#),
+        (HttpMethod::Delete, path) if path.starts_with("/mailbox/messages/") => empty(200),
+        (HttpMethod::Get, path) if path.starts_with("/ipfs/") => HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![0u8; 64],
+        },
+        _ => json(404, r#"{"statusCode":404,"message":"stub has no route"}"#),
+    }
+}
+
 impl Http for StubHttp {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
         let path = path_of(&request.url);
         let body = request.body.unwrap_or_default();
-        let mut state = self.state.borrow_mut();
-        state.calls.push(Call {
-            method: request.method,
-            path: path.clone(),
-            body: body.clone(),
-        });
-        if state.throttled.contains(&path) {
-            return Ok(json(
-                429,
-                r#"{"statusCode":429,"message":"Too Many Requests"}"#,
-            ));
-        }
-
-        let response = match (request.method, path.as_str()) {
-            (HttpMethod::Post, "/auth/test-login") => json(
-                201,
-                r#"{"accessToken":"stub-access","refreshToken":"stub-refresh","isNewUser":true,"publicKey":"stub-public-key","privateKey":"00"}"#,
-            ),
-            (HttpMethod::Post, "/content/upload") => {
-                json(201, &format!(r#"{{"cid":"stub","size":{}}}"#, body.len()))
-            }
-            (HttpMethod::Post, "/registry/register") => empty(201),
-            (HttpMethod::Post, "/registry/retire") => {
-                let retired =
-                    serde_json::from_slice::<Vec<String>>(&body).map_or(0, |targets| targets.len());
-                json(200, &format!(r#"{{"retired":{retired},"unpinned":0}}"#))
-            }
-            (HttpMethod::Get, "/account/quota") => json(
-                200,
-                r#"{"usedBytes":0,"limitBytes":1073741824,"advisory":false}"#,
-            ),
-            (HttpMethod::Patch, "/account/byo") => empty(200),
-            (HttpMethod::Delete, "/account") => empty(200),
-            (HttpMethod::Post, "/mailbox/messages") => {
-                state.next_message_id += 1;
-                json(201, &format!(r#"{{"id":"msg-{}"}}"#, state.next_message_id))
-            }
-            (HttpMethod::Get, "/mailbox/messages") => json(200, r#"{"messages":[]}"#),
-            (HttpMethod::Delete, path) if path.starts_with("/mailbox/messages/") => empty(200),
-            (HttpMethod::Get, path) if path.starts_with("/ipfs/") => HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: vec![0u8; 64],
-            },
-            _ => json(404, r#"{"statusCode":404,"message":"stub has no route"}"#),
+        let throttled = self.state.borrow().throttled.contains(&path);
+        let response = if throttled {
+            json(429, r#"{"statusCode":429,"message":"Too Many Requests"}"#)
+        } else {
+            route(request.method, &path, &body)
         };
+        self.state.borrow_mut().calls.push(Call {
+            method: request.method,
+            path,
+            body,
+        });
         Ok(response)
     }
 }

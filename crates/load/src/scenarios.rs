@@ -280,85 +280,59 @@ async fn retire<H: Http>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_engine::api::ApiClient;
     use cipherbox_engine::seams::HttpMethod;
 
     use crate::plan::Target;
-    use crate::seams::MemoryCredentialStore;
+    use crate::runner::provision;
     use crate::stub_http::StubHttp;
-
-    const API_URL: &str = "http://localhost:3000";
-    const GATEWAY_URL: &str = "http://localhost:8080";
 
     fn plan(scenario: Scenario, ops_per_client: u32, batch_size: u32) -> RunPlan {
         RunPlan {
             scenario,
             target: Target::Local,
-            api_url: API_URL.to_owned(),
-            gateway_url: Some(GATEWAY_URL.to_owned()),
+            api_url: "http://localhost:3000".to_owned(),
+            gateway_url: Some("http://localhost:8080".to_owned()),
             gateway_token: None,
             test_login_secret: "stub-secret".to_owned(),
             clients: 1,
             ops_per_client,
             block_bytes: 128,
             batch_size,
-            // Zero pace keeps the run off the timer wheel, so the stubbed
-            // sequence is the whole of what the scenario does.
             pace_ms: 0,
             ramp_ms: 0,
             report_dir: String::new(),
         }
     }
 
-    /// Drive one scenario against a stub API, returning the stub and the
-    /// samples the run filed. Provisioning traffic is discarded first, so the
-    /// recording is the scenario's own call sequence.
-    fn drive_against_stub(
-        plan: &RunPlan,
-        arrange: impl FnOnce(&StubHttp),
-    ) -> (StubHttp, Collector) {
-        let http = StubHttp::default();
+    /// Drive one scenario over `http`, returning the samples it filed. The
+    /// client is minted through the harness's own `provision`, and its traffic
+    /// dropped, so the recording is the scenario's own call sequence.
+    fn drive_over(plan: &RunPlan, http: &StubHttp) -> Collector {
         let mut collector = Collector::default();
         tokio::runtime::Builder::new_current_thread()
+            .enable_time()
             .build()
             .expect("runtime")
             .block_on(async {
-                let client =
-                    ApiClient::new(http.clone(), MemoryCredentialStore::default(), API_URL);
-                let outcome = client
-                    .test_login("load-stub", &plan.test_login_secret)
-                    .await
-                    .expect("the stub authenticates");
-                let virtual_client = VirtualClient {
-                    client,
-                    public_key: outcome.public_key,
-                };
-                http.take_calls();
-                arrange(&http);
-                drive(&virtual_client, plan, &http, &mut collector).await;
+                let mut clients = provision(plan, http, "stub", &mut Collector::default()).await;
+                let virtual_client = clients.pop().expect("the stub authenticates one client");
+                http.clear_calls();
+                drive(&virtual_client, plan, http, &mut collector).await;
             });
-        (http, collector)
+        collector
+    }
+
+    fn drive_against_stub(plan: &RunPlan) -> StubHttp {
+        let http = StubHttp::default();
+        drive_over(plan, &http);
+        http
     }
 
     /// The content addresses a run uploaded, recomputed from the bytes it sent.
     fn uploaded_cids(http: &StubHttp) -> Vec<String> {
-        http.calls()
+        http.bodies_for("/content/upload")
             .iter()
-            .filter(|call| call.path == "/content/upload")
-            .map(|call| leaf_cid(&call.body))
-            .collect()
-    }
-
-    /// The names a run registered, read back out of the register bodies.
-    fn registered_names(http: &StubHttp) -> Vec<String> {
-        http.calls()
-            .iter()
-            .filter(|call| call.path == "/registry/register")
-            .flat_map(|call| {
-                serde_json::from_slice::<Vec<serde_json::Value>>(&call.body)
-                    .expect("register body is a JSON array")
-            })
-            .map(|entry| entry["ipnsName"].as_str().expect("ipnsName").to_owned())
+            .map(|block| leaf_cid(block))
             .collect()
     }
 
@@ -367,27 +341,46 @@ mod tests {
         values
     }
 
+    /// A scenario must outlive nothing it registered: every target it created
+    /// comes back in a retire body before it returns.
+    fn assert_retires(http: &StubHttp, expected: Vec<String>) {
+        assert_eq!(sorted(http.retired()), sorted(expected));
+    }
+
+    /// The `(method, path)` shape of the run, in send order.
+    fn shape(http: &StubHttp) -> Vec<(HttpMethod, String)> {
+        http.calls()
+            .into_iter()
+            .map(|call| (call.method, call.path))
+            .collect()
+    }
+
+    fn posts(paths: &[&str]) -> Vec<(HttpMethod, String)> {
+        paths
+            .iter()
+            .map(|path| (HttpMethod::Post, (*path).to_owned()))
+            .collect()
+    }
+
     #[test]
     fn content_ingest_uploads_then_retires_every_block_it_pinned() {
-        let plan = plan(Scenario::ContentIngest, 3, 8);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::ContentIngest, 3, 8));
 
         assert_eq!(
-            http.paths(),
-            [
+            shape(&http),
+            posts(&[
                 "/content/upload",
                 "/content/upload",
                 "/content/upload",
                 "/registry/retire",
-            ]
+            ])
         );
-        assert_eq!(sorted(http.retired()), sorted(uploaded_cids(&http)));
+        assert_retires(&http, uploaded_cids(&http));
     }
 
     #[test]
     fn gateway_read_seeds_blocks_reads_them_back_and_retires_the_seed() {
-        let plan = plan(Scenario::GatewayRead, 2, 8);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::GatewayRead, 2, 8));
 
         let paths = http.paths();
         assert_eq!(&paths[..2], ["/content/upload", "/content/upload"]);
@@ -396,34 +389,31 @@ mod tests {
             "{paths:?}"
         );
         assert_eq!(paths[4], "/registry/retire");
-        assert_eq!(sorted(http.retired()), sorted(uploaded_cids(&http)));
+        assert_retires(&http, uploaded_cids(&http));
     }
 
     #[test]
     fn a_name_wave_retires_every_name_it_registered() {
-        let plan = plan(Scenario::NameWave, 2, 3);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::NameWave, 2, 3));
 
         assert_eq!(
-            http.paths(),
-            [
+            shape(&http),
+            posts(&[
                 "/registry/register",
                 "/registry/register",
                 "/registry/retire",
                 "/registry/retire",
-            ]
+            ])
         );
-        let registered = registered_names(&http);
-        assert_eq!(registered.len(), 6);
-        assert_eq!(sorted(http.retired()), sorted(registered));
+        assert_eq!(http.registered_names().len(), 6);
+        assert_retires(&http, http.registered_targets());
     }
 
     // The drain keeps a long wave's memory on the batch size rather than the
     // run length; it must retire what it drops, not leak it.
     #[test]
     fn the_drain_path_retires_mid_run_and_still_leaves_nothing_behind() {
-        let plan = plan(Scenario::NameWave, 5, 1);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::NameWave, 5, 1));
 
         let paths = http.paths();
         let first_retire = paths
@@ -436,61 +426,63 @@ mod tests {
             .expect("registered");
         assert!(first_retire < last_register, "{paths:?}");
 
-        let registered = registered_names(&http);
-        assert_eq!(registered.len(), 5);
-        assert_eq!(sorted(http.retired()), sorted(registered));
+        assert_eq!(http.registered_names().len(), 5);
+        assert_retires(&http, http.registered_targets());
     }
 
     #[test]
     fn the_mixed_profile_interleaves_ingest_registry_quota_and_a_mailbox_round_trip() {
-        let plan = plan(Scenario::Mixed, 1, 8);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::Mixed, 1, 8));
 
-        let calls = http.calls();
-        let shape: Vec<_> = calls
-            .iter()
-            .map(|call| (call.method, call.path.as_str()))
-            .collect();
         assert_eq!(
-            shape,
+            shape(&http),
             [
-                (HttpMethod::Post, "/content/upload"),
-                (HttpMethod::Post, "/registry/register"),
-                (HttpMethod::Get, "/account/quota"),
-                (HttpMethod::Post, "/mailbox/messages"),
-                (HttpMethod::Get, "/mailbox/messages"),
-                (HttpMethod::Delete, "/mailbox/messages/msg-1"),
-                (HttpMethod::Post, "/registry/retire"),
+                (HttpMethod::Post, "/content/upload".to_owned()),
+                (HttpMethod::Post, "/registry/register".to_owned()),
+                (HttpMethod::Get, "/account/quota".to_owned()),
+                (HttpMethod::Post, "/mailbox/messages".to_owned()),
+                (HttpMethod::Get, "/mailbox/messages".to_owned()),
+                // The ack can only name the id the post came back with.
+                (HttpMethod::Delete, "/mailbox/messages/msg-1".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
             ]
         );
 
-        let mut expected = registered_names(&http);
-        expected.extend(uploaded_cids(&http));
-        assert_eq!(sorted(http.retired()), sorted(expected));
+        // The block it ingested is the CID it registered, so retiring the
+        // registration's targets retires the pin it created.
+        assert!(http.registered_targets().contains(&uploaded_cids(&http)[0]));
+        assert_retires(&http, http.registered_targets());
     }
 
     #[test]
     fn byo_advisory_flips_the_account_then_retires_its_advisory_rows() {
-        let plan = plan(Scenario::ByoAdvisory, 1, 2);
-        let (http, _) = drive_against_stub(&plan, |_| {});
+        let http = drive_against_stub(&plan(Scenario::ByoAdvisory, 1, 2));
 
-        let calls = http.calls();
-        assert_eq!(calls[0].method, HttpMethod::Patch);
-        assert_eq!(calls[0].path, "/account/byo");
-        assert_eq!(http.paths()[1..3], ["/registry/register", "/account/quota"]);
-        // Two names and their two advisory CIDs, retired in batch-size chunks.
-        let registered = registered_names(&http);
-        assert_eq!(registered.len(), 2);
-        assert_eq!(http.retired().len(), 4);
-        assert!(registered.iter().all(|name| http.retired().contains(name)));
+        assert_eq!(
+            shape(&http),
+            [
+                (HttpMethod::Patch, "/account/byo".to_owned()),
+                (HttpMethod::Post, "/registry/register".to_owned()),
+                (HttpMethod::Get, "/account/quota".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
+            ]
+        );
+
+        // A BYO account's bytes never reach the ingress — it registers advisory
+        // pin rows only, and owes every one of them back.
+        assert!(http.bodies_for("/content/upload").is_empty());
+        assert_eq!(http.registered_names().len(), 2);
+        assert_retires(&http, http.registered_targets());
     }
 
     // A 429 is the API keeping its throttling promise, so it must file apart
     // from a genuine failure end to end, not just at the sample level.
     #[test]
     fn a_throttled_upload_is_filed_as_throttled_and_leaves_nothing_to_retire() {
-        let plan = plan(Scenario::ContentIngest, 2, 8);
-        let (http, collector) = drive_against_stub(&plan, |http| http.throttle("/content/upload"));
+        let http = StubHttp::default();
+        http.throttle("/content/upload");
+        let collector = drive_over(&plan(Scenario::ContentIngest, 2, 8), &http);
 
         let upload = collector
             .summarize(1_000.0)

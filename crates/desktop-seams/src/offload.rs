@@ -10,21 +10,30 @@ use futures_channel::oneshot;
 /// every timer and sync tick until it returns. An OS keyring call can block on
 /// a user-facing unlock prompt, which is unbounded.
 ///
-/// A thread per call rather than a runtime blocking pool: the seam must work
-/// under whatever executor drives the engine, and `tokio::task::spawn_blocking`
-/// panics without an ambient Tokio runtime.
+/// A thread per call rather than a blocking pool: the seam conformance kits
+/// drive this under an executor that has none, and keyring calls happen only
+/// at login and token rotation. The work is detached — dropping the returned
+/// future does not cancel it.
 pub(crate) async fn off_thread<T, F>(what: &'static str, work: F) -> SeamResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> SeamResult<T> + Send + 'static,
 {
     let (sender, receiver) = oneshot::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(work());
-    });
-    receiver
-        .await
-        .unwrap_or_else(|_| Err(SeamError::new(format!("{what}: worker thread panicked"))))
+    // Builder, not `thread::spawn`: a refused thread is an `Err` the caller can
+    // surface, never a panic that unwinds the engine's serve loop.
+    std::thread::Builder::new()
+        .name(what.to_owned())
+        .spawn(move || {
+            let _ = sender.send(work());
+        })
+        .map_err(|err| SeamError::new(format!("{what}: spawn worker thread: {err}")))?;
+    match receiver.await {
+        Ok(result) => result,
+        Err(_) => Err(SeamError::new(format!(
+            "{what}: the worker thread ended without a result"
+        ))),
+    }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::{ApiClient, ApiError};
 use cipherbox_engine::seams::{
     Http, HttpCredentials, HttpMethod, HttpRequest, SeamError, bearer_header,
@@ -21,8 +22,7 @@ use crate::seams::{MemoryCredentialStore, build_http};
 pub(crate) type Client<H> = ApiClient<H, MemoryCredentialStore>;
 
 /// One authenticated account driving load. Generic over the transport so a
-/// scenario can be driven over a stub seam without a live stack; a run always
-/// binds it to the desktop [`ReqwestHttp`].
+/// scenario can be driven over a stub seam; a run binds it to the desktop one.
 pub(crate) struct VirtualClient<H: Http> {
     pub(crate) client: Client<H>,
     /// The account's identity `publicKey` — its own mailbox address.
@@ -170,7 +170,7 @@ pub(crate) fn leaf_cid(bytes: &[u8]) -> String {
 
 /// Mint `count` accounts through test-login. Handles carry a per-run token so a
 /// crashed run never leaves a later one sharing its accounts and quota.
-async fn provision<H: Http + Clone>(
+pub(crate) async fn provision<H: Http + Clone>(
     plan: &RunPlan,
     http: &H,
     run_id: &str,
@@ -201,7 +201,7 @@ async fn provision<H: Http + Clone>(
     clients
 }
 
-async fn teardown<H: Http>(clients: Vec<VirtualClient<H>>, collector: &mut Collector) {
+async fn teardown(clients: Vec<VirtualClient<ReqwestHttp>>, collector: &mut Collector) {
     for virtual_client in clients {
         measure(
             collector,
