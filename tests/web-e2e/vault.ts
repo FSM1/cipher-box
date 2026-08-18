@@ -38,7 +38,7 @@ export async function coldStart(page: Page): Promise<{ vault: VaultPage; files: 
  */
 export async function drained(files: FilesPage, vault: VaultPage): Promise<string[]> {
   await files.createFolder(PROBE);
-  const { view } = await vault.settledNow();
+  const { view } = await vault.settled();
   expect(view.deadLetters).toEqual([]);
   return view.children
     .filter((child) => child.name !== PROBE)

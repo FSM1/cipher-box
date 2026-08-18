@@ -10,6 +10,7 @@ import { createLoginFlow, type LoginProgress } from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
+import { RecoveryRequiredError } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
 import type { WebCollected } from './webCollector';
@@ -37,6 +38,16 @@ export interface Auth {
   /** `signature` is the `0x`-prefixed EIP-191 hex wagmi returns, sent verbatim. */
   loginWithWallet(message: string, signature: string): Promise<void>;
   logout(): Promise<void>;
+  /** True while a login is held at a factor policy this device has no factor for. */
+  recoveryRequired: boolean;
+  /** Finishes such a login from the phrase alone (ADR 0009 D2). */
+  loginWithRecoveryPhrase(phrase: string): Promise<void>;
+  /** Abandons it instead, ending the partial session on this device. */
+  cancelRecovery(): Promise<void>;
+  /** Whether the signed-in account already carries a factor policy. */
+  recoveryEnrolled: boolean;
+  /** Turns the policy on; the phrase it returns is shown exactly once. */
+  enrollRecoveryPhrase(): Promise<string>;
 }
 
 export function useAuth(): Auth {
@@ -49,6 +60,7 @@ export function useAuth(): Auth {
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
 
   const isReady = client !== null && session !== null && status === 'ready';
   const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
@@ -81,15 +93,65 @@ export function useAuth(): Auth {
     [client, collector, exchange, progress, rebuildEngine, secrets, session]
   );
 
+  /**
+   * A login that stopped at the factor policy is not a failure to report: it is
+   * the recovery prompt, and the flow has already rendered the throw as `error`.
+   */
+  const attempt = useCallback(async (login: Promise<void>): Promise<void> => {
+    try {
+      await login;
+    } catch (failure) {
+      if (!(failure instanceof RecoveryRequiredError)) throw failure;
+      setRecoveryRequired(true);
+      setError(null);
+    }
+  }, []);
+
+  const loginWithGoogle = useCallback(
+    (idToken: string) => attempt(flow.loginWithGoogle(idToken)),
+    [attempt, flow]
+  );
+
   const loginWithEmailCode = useCallback(
-    (email: string, code: string) => flow.loginWithEmailCode({ email, code }),
-    [flow]
+    (email: string, code: string) => attempt(flow.loginWithEmailCode({ email, code })),
+    [attempt, flow]
   );
 
   const loginWithWallet = useCallback(
-    (message: string, signature: string) => flow.loginWithWallet({ message, signature }),
-    [flow]
+    (message: string, signature: string) => attempt(flow.loginWithWallet({ message, signature })),
+    [attempt, flow]
   );
+
+  const loginWithRecoveryPhrase = useCallback(
+    async (phrase: string): Promise<void> => {
+      if (!session) throw new Error('the login provider is not ready');
+      setIsBusy(true);
+      setError(null);
+      try {
+        await session.recoverWithPhrase(phrase);
+        setRecoveryRequired(false);
+        // The session is whole now, so the engine still needs its secret; the
+        // flow's own resume is the one path that hands it over.
+        await flow.resume();
+      } catch (failure) {
+        setError(errorMessage(failure));
+        throw failure;
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [flow, session]
+  );
+
+  const cancelRecovery = useCallback(async (): Promise<void> => {
+    setRecoveryRequired(false);
+    await flow.logout();
+  }, [flow]);
+
+  const enrollRecoveryPhrase = useCallback((): Promise<string> => {
+    if (!session) return Promise.reject(new Error('the login provider is not ready'));
+    return session.enrollRecoveryPhrase();
+  }, [session]);
 
   // A Core Kit session that survived the reload still has to hand the engine its
   // secret; without this the tab renders logged-out over a live login.
@@ -104,11 +166,16 @@ export function useAuth(): Auth {
     isSignedOut,
     isBusy,
     error: error ?? coreKitError,
-    loginWithGoogle: flow.loginWithGoogle,
+    loginWithGoogle,
     sendEmailCode: flow.sendEmailCode,
     loginWithEmailCode,
     walletNonce: flow.walletNonce,
     loginWithWallet,
     logout: flow.logout,
+    recoveryRequired,
+    loginWithRecoveryPhrase,
+    cancelRecovery,
+    recoveryEnrolled: isAuthenticated && (session?.hasRecoveryPhrase() ?? false),
+    enrollRecoveryPhrase,
   };
 }

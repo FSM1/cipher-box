@@ -12,6 +12,13 @@
  * Nothing that names or measures vault content touches the `BroadcastChannel`
  * in either direction: it carries election and the port rendezvous only. One
  * port per follower per leadership.
+ *
+ * The channel is a **rendezvous, not an authority**: every same-origin context
+ * can read and write it, so the leadership token bounds accidental delivery and
+ * fences leaderships, and authenticates nothing. Each trust decision rests on
+ * something the channel cannot forge — a request is served only over the port
+ * the follower itself dialed, and a departure is believed only once the
+ * follower's presence lock, which only its own tab can release, is gone.
  */
 
 import {
@@ -26,7 +33,7 @@ import {
   type WireWrite,
 } from './broadcast.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
-import type { LockManagerLike } from './leadership.js';
+import type { LockReaderLike, LockStateLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
 import type {
@@ -159,10 +166,8 @@ export class LeaderRelay {
   // trailing pass behind it (see `forceRefresh`).
   private refreshInFlight = false;
   private refreshTrailing = false;
-  // An unguessable per-leadership capability. It stamps every leader→follower
-  // message so followers reject a forged beacon or port rendezvous from a
-  // non-leader same-origin context (integrity defense-in-depth; same-origin is
-  // the trust boundary).
+  // Stamps every leader→follower message so a follower can tell this leadership
+  // from the one before it, and drop a stale beacon.
   private readonly token = globalThis.crypto.randomUUID();
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
@@ -170,7 +175,7 @@ export class LeaderRelay {
     private readonly channel: BroadcastChannelLike,
     private readonly transport: EngineTransport,
     private readonly courier: PortCourier,
-    private readonly locks: LockManagerLike,
+    private readonly locks: LockReaderLike,
     options: LeaderRelayOptions = {}
   ) {
     this.namingTimeoutMs = options.namingTimeoutMs ?? DEFAULT_NAMING_TIMEOUT_MS;
@@ -217,9 +222,28 @@ export class LeaderRelay {
         void this.announceHost();
         return;
       case 'cb:bye':
-        this.reclaim((message as Extract<FollowerMessage, { type: 'cb:bye' }>).clientId);
+        void this.byeIfDeparted((message as Extract<FollowerMessage, { type: 'cb:bye' }>).clientId);
         return;
     }
+  }
+
+  /**
+   * Acts on a farewell only once the named tab's presence lock is gone. The
+   * channel carries no proof of who sent the message, but the lock is released
+   * by the browser on that tab's own death and by nobody else, so it — not the
+   * message — decides. A live tab keeps its focus and its handles.
+   */
+  private async byeIfDeparted(clientId: string): Promise<void> {
+    if (typeof clientId !== 'string' || this.closed) return;
+    const name = presenceLockName(clientId);
+    let state: LockStateLike;
+    try {
+      state = await this.locks.query();
+    } catch {
+      return;
+    }
+    if (this.closed || (state.held ?? []).some((lock) => lock.name === name)) return;
+    this.reclaim(clientId);
   }
 
   /** Every engine event, to every adopted port, in emission order. */

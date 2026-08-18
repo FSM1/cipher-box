@@ -28,6 +28,8 @@ interface LeadershipHarness {
   }): Promise<void>;
   cbObserve(channelName: string): void;
   cbObserved(): ObservedMessage[];
+  cbForge(message: Record<string, unknown>): void;
+  cbLockState(name: string): Promise<{ held: number; pending: number }>;
   cbEvents(): ObservedEvent[];
   cbReadStream(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
@@ -40,7 +42,6 @@ interface LeadershipHarness {
   cbDispose(): Promise<void>;
   cbJournalCount(): Promise<number>;
   cbJournalRecords(): Promise<unknown[]>;
-  cbHeldLocks(lockName: string): Promise<number>;
   cbResetJournal(): Promise<void>;
 }
 
@@ -64,6 +65,8 @@ function harness(page: Page): {
   ): Promise<void>;
   observe(channelName: string): Promise<void>;
   observed(): Promise<ObservedMessage[]>;
+  forge(message: Record<string, unknown>): Promise<void>;
+  lockState(name: string): Promise<{ held: number; pending: number }>;
   events(): Promise<ObservedEvent[]>;
   readStream(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
@@ -76,7 +79,6 @@ function harness(page: Page): {
   dispose(): Promise<void>;
   journalCount(): Promise<number>;
   journalRecords(): Promise<unknown[]>;
-  heldLocks(lockName: string): Promise<number>;
   resetJournal(): Promise<void>;
   waitForRole(role: string): Promise<void>;
 } {
@@ -93,6 +95,10 @@ function harness(page: Page): {
         channelName
       ),
     observed: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbObserved()),
+    forge: (message) =>
+      page.evaluate((m) => (window as unknown as LeadershipHarness).cbForge(m), message),
+    lockState: (name) =>
+      page.evaluate((n) => (window as unknown as LeadershipHarness).cbLockState(n), name),
     events: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbEvents()),
     readStream: (offset, length) =>
       page.evaluate(
@@ -122,8 +128,6 @@ function harness(page: Page): {
       page.evaluate(() => (window as unknown as LeadershipHarness).cbJournalCount()),
     journalRecords: () =>
       page.evaluate(() => (window as unknown as LeadershipHarness).cbJournalRecords()),
-    heldLocks: (lockName) =>
-      page.evaluate((n) => (window as unknown as LeadershipHarness).cbHeldLocks(n), lockName),
     resetJournal: () =>
       page.evaluate(() => (window as unknown as LeadershipHarness).cbResetJournal()),
     waitForRole: (role) =>
@@ -133,6 +137,15 @@ function harness(page: Page): {
         { timeout: 10_000 }
       ) as unknown as Promise<void>,
   };
+}
+
+/**
+ * How many times a follower has asked where to open a port. It rises only when
+ * one re-brokers, so an unchanged count is the proof a port still stands.
+ */
+async function dialCount(bystander: ReturnType<typeof harness>): Promise<number> {
+  const observed = await bystander.observed();
+  return observed.filter((message) => message.type === 'cb:portWanted').length;
 }
 
 function names(): { lockName: string; channelName: string } {
@@ -154,7 +167,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     const roles = [await a.role(), await b.role()].sort();
     expect(roles).toEqual(['follower', 'leader']);
     // The single exclusive lock is held exactly once — one engine writer.
-    expect(await a.heldLocks(lockName)).toBe(1);
+    expect((await a.lockState(lockName)).held).toBe(1);
 
     await a.dispose();
     await b.dispose();
@@ -362,6 +375,94 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     const needles = progress!.text.split(' ').filter((value) => value.length >= 4);
     expect(needles.length).toBeGreaterThan(0);
     for (const needle of needles) expect(seenText).not.toContain(needle);
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a forged port rendezvous carrying the observed token moves no adopted follower', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+    const bystander = harness(await openTab(context));
+    await bystander.observe(channelName);
+    await a.resetJournal();
+
+    await a.create(lockName, channelName);
+    await b.create(lockName, channelName);
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+    await leader.start();
+    await follower.start();
+    expect(await follower.createFile('before-forgery.txt')).toBe('ok');
+
+    // The token rides the channel in the clear, so a bystander holds it. It
+    // authenticates nothing: the follower adopted a port it dialed itself, and
+    // takes no rendezvous while that port stands.
+    const token = (await bystander.observed())
+      .map((message) => message.token)
+      .filter(Boolean)
+      .at(-1);
+    expect(token).toBeDefined();
+    const before = await dialCount(bystander);
+    await bystander.forge({ type: 'cb:portHost', token, address: 'attacker-broker' });
+    await bystander.forge({ type: 'cb:portHost', token, address: 'attacker-broker' });
+
+    // Still the real leader's engine, over the port it already held.
+    expect(await follower.createFile('after-forgery.txt')).toBe('ok');
+    expect(await leader.journalCount()).toBe(2);
+    expect(await dialCount(bystander)).toBe(before);
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a forged farewell strands no live follower, and a real departure still reclaims', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+    const bystander = harness(await openTab(context));
+    await bystander.observe(channelName);
+    await a.resetJournal();
+
+    await a.create(lockName, channelName);
+    await b.create(lockName, channelName);
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+    await leader.start();
+    await follower.start();
+    expect(await follower.createFile('before-farewell.txt')).toBe('ok');
+
+    const clientId = (await bystander.observed())
+      .filter((message) => message.type === 'cb:portWanted')
+      .map((message) => message.clientId)
+      .filter(Boolean)
+      .at(-1);
+    expect(clientId).toBeDefined();
+    const presence = `cipherbox-presence:${clientId!}`;
+    // The follower holds its presence name, and the leader's watch waits on it.
+    await expect
+      .poll(() => bystander.lockState(presence), { timeout: 10_000 })
+      .toEqual({ held: 1, pending: 1 });
+
+    const before = await dialCount(bystander);
+    await bystander.forge({ type: 'cb:bye', clientId });
+    // The forgery costs the follower neither its port nor its handles, so it
+    // never re-dials and its writes keep landing.
+    expect(await follower.createFile('after-farewell.txt')).toBe('ok');
+    expect(await leader.journalCount()).toBe(2);
+    expect(await dialCount(bystander)).toBe(before);
+
+    // The tab genuinely departs: the browser releases the name, the leader's
+    // watch is granted, and the reclaim retires it.
+    await follower.dispose();
+    await expect
+      .poll(() => bystander.lockState(presence), { timeout: 10_000 })
+      .toEqual({ held: 0, pending: 0 });
 
     await a.dispose();
     await b.dispose();

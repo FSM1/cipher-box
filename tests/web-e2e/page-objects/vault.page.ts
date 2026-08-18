@@ -52,19 +52,6 @@ export class VaultPage {
   }
 
   /**
-   * The same wait, after forcing one resolve-and-drain pass. A queued write
-   * publishes on a pass and this bundle carries the shipped 30 s cadence, so
-   * the footer's refresh control is what keeps a write assertion bounded by
-   * the engine's work rather than by that cadence. Exactly one pass: a second
-   * forced while the first is in flight displaces it, and the queue drains on
-   * neither.
-   */
-  async settledNow(): Promise<IntrospectedView> {
-    await this.page.getByTestId('status-indicator').click();
-    return this.settled();
-  }
-
-  /**
    * The plaintext the engine reads back for one child of the root, straight off
    * the network, as one whole-file read — the route a save's ranged reads and
    * the preview's decoded text both leave unexercised.

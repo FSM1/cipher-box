@@ -79,6 +79,17 @@ describe('engineHostConfig', () => {
     }
   });
 
+  it('runs the CI cadence only for a CI bundle', () => {
+    // Without this the e2e bundle polls on the shipped 30 s cadence, and a
+    // write does not settle inside a spec budget.
+    expect(engineHostConfig({ VITE_ENVIRONMENT: 'ci' }, artifact).profile).toBe('ci');
+    for (const deployment of ['local', 'staging', 'production', undefined] as const) {
+      expect(engineHostConfig({ VITE_ENVIRONMENT: deployment }, artifact).profile).toBe(
+        'production'
+      );
+    }
+  });
+
   it('trims a configured API origin, which is concatenated into request URLs', () => {
     expect(
       engineHostConfig({ VITE_API_URL: ' https://api.example.test\n' }, artifact).apiBaseUrl

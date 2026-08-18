@@ -21,7 +21,7 @@ import { BroadcastTransport } from './broadcastTransport.js';
 import { fanOut, unknownHandle } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
-import { LeaderElection, type LockManagerLike } from './leadership.js';
+import { LeaderElection, type LockReaderLike } from './leadership.js';
 import { defaultCourier } from './portCourier.js';
 import type { PortCourier } from './portRelay.js';
 import { requestStoragePersistence } from './storagePersistence.js';
@@ -47,7 +47,7 @@ export interface SecretSource {
 
 export interface EngineClientConfig {
   /** `navigator.locks` (or a test double). */
-  locks: LockManagerLike;
+  locks: LockReaderLike;
   /** Builds the broadcast channel; each tab keeps one for its lifetime. */
   createChannel?: () => BroadcastChannelLike;
   /** Brokers the private port a follower reads over; defaults to the tab's Service Worker. */

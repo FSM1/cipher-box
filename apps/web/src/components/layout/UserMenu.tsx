@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { LogoutButton } from '../auth/LogoutButton';
+import { RecoveryPhraseSetup } from '../auth/RecoveryPhraseSetup';
+import { useAuth } from '../../auth/useAuth';
 import { useAuthState } from '../../stores/auth.store';
 
 /**
@@ -8,7 +10,9 @@ import { useAuthState } from '../../stores/auth.store';
  */
 export function UserMenu() {
   const { email } = useAuthState();
+  const { recoveryEnrolled } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [settingUpRecovery, setSettingUpRecovery] = useState(false);
 
   return (
     <div
@@ -34,9 +38,25 @@ export function UserMenu() {
 
       {isOpen && (
         <div className="user-menu-dropdown" role="menu">
+          {recoveryEnrolled ? (
+            <span className="user-menu-note" data-testid="recovery-enrolled">
+              recovery phrase on
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="logout-link"
+              data-testid="recovery-setup-open"
+              onClick={() => setSettingUpRecovery(true)}
+            >
+              set up recovery phrase
+            </button>
+          )}
           <LogoutButton />
         </div>
       )}
+
+      {settingUpRecovery && <RecoveryPhraseSetup onClose={() => setSettingUpRecovery(false)} />}
     </div>
   );
 }

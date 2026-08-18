@@ -8,14 +8,10 @@ import type { EngineClient } from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
+import { RecoveryRequiredError, type WebCoreKitSession } from '../auth/coreKit';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
-import type {
-  CoreKitSession,
-  IdentityCredential,
-  IdentityExchange,
-  IdentityMethod,
-} from '@cipherbox/login';
+import type { IdentityCredential, IdentityExchange, IdentityMethod } from '@cipherbox/login';
 import { wagmiConfig } from '../lib/wagmi';
 import { EngineProvider } from '../providers/EngineProvider';
 
@@ -81,6 +77,8 @@ export interface CoreKitCalls {
   logins: IdentityCredential[];
   exports: number;
   logouts: number;
+  phrases: string[];
+  enrollments: number;
 }
 
 export function fakeCoreKitSession(
@@ -89,23 +87,48 @@ export function fakeCoreKitSession(
     email?: () => string | null;
     /** Stands in for the mount-time restore; omit for one that settles at once. */
     restore?: () => Promise<void>;
+    /** Turns every login into one that stops at the factor policy. */
+    needsRecovery?: boolean;
+    /** The one phrase `recoverWithPhrase` accepts; anything else is refused. */
+    phrase?: string;
+    enrolled?: boolean;
   } = {}
 ) {
-  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0 };
+  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0, phrases: [], enrollments: 0 };
   let loggedIn = options.loggedIn ?? false;
+  let pending = false;
   // Both read off the redeemed credential, as the real session does: a bare
   // restore knows neither, and a wallet login carries no address.
   let method: IdentityMethod | null = null;
   let email: string | null = null;
-  const session: CoreKitSession = {
+  const session: WebCoreKitSession = {
     restore: options.restore ?? (() => Promise.resolve()),
     isLoggedIn: () => loggedIn,
     login(credential) {
       calls.logins.push(credential);
       method = credential.method;
       email = credential.email;
+      if (options.needsRecovery) {
+        pending = true;
+        return Promise.reject(new RecoveryRequiredError());
+      }
       loggedIn = true;
       return Promise.resolve();
+    },
+    needsRecovery: () => pending,
+    hasRecoveryPhrase: () => options.enrolled ?? false,
+    recoverWithPhrase(phrase) {
+      calls.phrases.push(phrase);
+      if (phrase !== options.phrase) {
+        return Promise.reject(new Error('that recovery phrase does not open this account'));
+      }
+      pending = false;
+      loggedIn = true;
+      return Promise.resolve();
+    },
+    enrollRecoveryPhrase() {
+      calls.enrollments += 1;
+      return Promise.resolve(options.phrase ?? '');
     },
     method: () => method,
     email: options.email ?? (() => email),
@@ -177,7 +200,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
 /** Mounts the providers the login flow reads, over the given fakes. */
 export function authWrapper(
   client: EngineClient,
-  session: CoreKitSession,
+  session: WebCoreKitSession,
   exchange: IdentityExchange = fakeIdentityExchange().exchange
 ) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -196,7 +219,7 @@ export function authWrapper(
 /** `authWrapper` plus the wallet-side providers the login *page* also mounts. */
 export function pageWrapper(
   client: EngineClient,
-  session: CoreKitSession,
+  session: WebCoreKitSession,
   exchange: IdentityExchange = fakeIdentityExchange().exchange
 ) {
   const Auth = authWrapper(client, session, exchange);

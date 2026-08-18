@@ -341,6 +341,11 @@ export class FakeLockManager implements LockManagerLike {
     });
   }
 
+  query(): Promise<{ held: { name: string }[] }> {
+    const held = [...this.locks].filter(([, lock]) => lock.held).map(([name]) => ({ name }));
+    return Promise.resolve({ held });
+  }
+
   /** Settles this name's holder in failure, as a stolen lock does. */
   fail(name: string, error: Error): void {
     const lock = this.lock(name);

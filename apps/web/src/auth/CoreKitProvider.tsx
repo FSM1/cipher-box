@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { errorMessage } from '../lib/errorMessage';
-import type { CoreKitSession } from '@cipherbox/login';
+import type { WebCoreKitSession } from './coreKit';
 
 /** Whether this tab knows if it has a session. */
 export type CoreKitStatus = 'checking' | 'ready' | 'unavailable';
@@ -19,7 +19,7 @@ const RESTORE_FAILED = 'the saved sign-in could not be restored — please sign 
 
 export interface CoreKitContextValue {
   /** `null` until the session is built and its restore attempt has settled. */
-  session: CoreKitSession | null;
+  session: WebCoreKitSession | null;
   status: CoreKitStatus;
   /** Why this tab has no session — a bad build config, silence, or a failed restore. */
   error: string | null;
@@ -29,7 +29,7 @@ const CoreKitContext = createContext<CoreKitContextValue | undefined>(undefined)
 
 export interface CoreKitProviderProps {
   /** Builds this tab's Core Kit session. Called once per tab. */
-  createSession: () => CoreKitSession;
+  createSession: () => WebCoreKitSession;
   children: ReactNode;
 }
 
@@ -46,7 +46,7 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
     error: null,
   });
   const factory = useRef(createSession);
-  const session = useRef<CoreKitSession | null>(null);
+  const session = useRef<WebCoreKitSession | null>(null);
   const restore = useRef<Promise<void> | null>(null);
 
   useEffect(() => {

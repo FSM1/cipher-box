@@ -5,8 +5,18 @@
  * secret, which the login flow transfers to the engine.
  */
 
-import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
+import {
+  COREKIT_STATUS,
+  FactorKeyTypeShareDescription,
+  generateFactorKey,
+  keyToMnemonic,
+  mnemonicToKey,
+  TssShareType,
+  WEB3AUTH_NETWORK,
+  Web3AuthMPCCoreKit,
+} from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
+import BN from 'bn.js';
 import {
   isIdentityMethod,
   type CoreKitSession,
@@ -16,8 +26,43 @@ import {
 import { environment, loginEnv } from '../engine/config';
 import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 
+/**
+ * A login that reached an account with a factor policy on a device holding no
+ * factor. The recovery phrase is the way through it (ADR 0009 D2), so the
+ * partial session stays resident until the member either redeems a phrase or
+ * abandons it — ending it here would make every such login a lockout.
+ */
+export class RecoveryRequiredError extends Error {
+  constructor() {
+    super('this device needs your recovery phrase before it can sign in');
+    this.name = 'RecoveryRequiredError';
+  }
+}
+
+/** The Core Kit surface the web host drives beyond the shared login flow. */
+export interface WebCoreKitSession extends CoreKitSession {
+  /** Whether a login stopped at a factor policy this device holds no factor for. */
+  needsRecovery(): boolean;
+  /** Whether this account already carries a factor policy. */
+  hasRecoveryPhrase(): boolean;
+  /**
+   * Redeems a recovery phrase and mints this device a factor of its own, so the
+   * next sign-in on it is ordinary. A phrase that does not open the account
+   * leaves the session and the store as they were, ready for another attempt.
+   */
+  recoverWithPhrase(phrase: string): Promise<void>;
+  /** Turns the factor policy on; the phrase it returns is shown exactly once. */
+  enrollRecoveryPhrase(): Promise<string>;
+}
+
+/**
+ * Every Core Kit account starts with two factors — the verifier share and the
+ * hashed cloud share — so a policy is on only past them.
+ */
+const UNENROLLED_FACTORS = 2;
+
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */
-class Web3AuthSession implements CoreKitSession {
+class Web3AuthSession implements WebCoreKitSession {
   /** The address the exchange reported; the token deliberately carries no PII. */
   private signedInEmail: string | null = null;
 
@@ -49,16 +94,97 @@ class Web3AuthSession implements CoreKitSession {
       verifierId: credential.verifierId,
       idToken: credential.token,
     });
-    if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
-      // REQUIRED_SHARE: MFA is on and this device holds no factor. Recovery and
-      // device approval are not built yet, so fail rather than half-log-in, and
-      // end the partial session rather than leave it resident on the device.
-      await this.coreKit.logout().catch(() => undefined);
-      await this.clearStore();
-      throw new Error('this device needs approval or a recovery phrase before it can sign in');
-    }
-    await this.coreKit.commitChanges();
     this.signedInEmail = credential.email;
+    if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) await this.useStoredDeviceFactor();
+    if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) throw new RecoveryRequiredError();
+    await this.coreKit.commitChanges();
+  }
+
+  needsRecovery(): boolean {
+    return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
+  }
+
+  hasRecoveryPhrase(): boolean {
+    try {
+      return this.coreKit.getKeyDetails().totalFactors > UNENROLLED_FACTORS;
+    } catch {
+      return false;
+    }
+  }
+
+  async recoverWithPhrase(phrase: string): Promise<void> {
+    if (!this.needsRecovery()) throw new Error('this device is not waiting on a recovery phrase');
+    let factorKey: BN;
+    try {
+      factorKey = new BN(mnemonicToKey(phrase.trim().toLowerCase().replace(/\s+/g, ' ')), 'hex');
+    } catch {
+      // Never re-raise the decoder's message: its input is the phrase.
+      throw new Error('that is not a valid recovery phrase');
+    }
+    try {
+      await this.coreKit.inputFactorKey(factorKey);
+    } catch {
+      // Never re-raise the SDK's message either: it quotes what it was handed.
+      throw new Error('that recovery phrase does not open this account');
+    }
+    if (!this.isLoggedIn()) throw new Error('that recovery phrase does not open this account');
+    await this.mintDeviceFactor();
+    await this.coreKit.commitChanges();
+  }
+
+  async enrollRecoveryPhrase(): Promise<string> {
+    if (!this.isLoggedIn()) throw new Error('sign in before setting up a recovery phrase');
+    // Manual sync: anything still pending has to land before the policy is cut.
+    await this.coreKit.commitChanges();
+    const before = this.accountKey();
+    const factorKeyHex = await this.coreKit.enableMFA({
+      // Web3Auth labels an unnamed factor "Other", which no later read can tell
+      // apart from a device one.
+      shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
+    });
+    await this.coreKit.commitChanges();
+    // The login secret is this vault's root seed, so an account key that moved
+    // under enrollment would leave every published byte unreachable. An
+    // unreadable key is not evidence that it moved, and withholding the phrase
+    // over one would strand a member who now has a policy and nothing to redeem.
+    const after = this.accountKey();
+    if (before !== null && after !== null && after !== before) {
+      throw new Error('the account key changed while enrolling — sign in again before retrying');
+    }
+    return keyToMnemonic(factorKeyHex);
+  }
+
+  /**
+   * The SDK's own reconstruct tries the hashed share first, which enabling the
+   * factor policy deleted, so it stops short even on a device that does hold a
+   * factor. Reading that factor back is what keeps a re-login from looking like
+   * a lockout.
+   */
+  private async useStoredDeviceFactor(): Promise<void> {
+    try {
+      const stored = await this.coreKit.getDeviceFactor();
+      if (stored) await this.coreKit.inputFactorKey(new BN(stored, 'hex'));
+    } catch {
+      // No usable factor here is the recovery path, not a failure.
+    }
+  }
+
+  /** This device's own factor, so the next sign-in on it needs no phrase. */
+  private async mintDeviceFactor(): Promise<void> {
+    const factor = generateFactorKey();
+    await this.coreKit.createFactor({
+      shareType: TssShareType.DEVICE,
+      factorKey: factor.private,
+      shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+    });
+    await this.coreKit.setDeviceFactor(factor.private);
+  }
+
+  /** The account's TSS public key, as a value two reads compare on. */
+  private accountKey(): string | null {
+    const point = this.coreKit.getKeyDetails().tssPubKey;
+    if (!point?.x || !point.y) return null;
+    return `${point.x.toString('hex')}:${point.y.toString('hex')}`;
   }
 
   /**
@@ -81,7 +207,8 @@ class Web3AuthSession implements CoreKitSession {
 
   async logout(): Promise<void> {
     try {
-      if (this.isLoggedIn()) await this.coreKit.logout();
+      // A session held short of reconstruction is still a live credential.
+      if (this.isLoggedIn() || this.needsRecovery()) await this.coreKit.logout();
     } finally {
       this.signedInEmail = null;
       await this.clearStore();
@@ -152,7 +279,7 @@ export function sealedCoreKitStore(): SealedStore {
 export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
   store: SealedStore
-): CoreKitSession {
+): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
   const coreKit = new Web3AuthMPCCoreKit({

@@ -28,6 +28,20 @@ export interface LockManagerLike {
   ): Promise<unknown>;
 }
 
+/** What `query()` reports; only the names are read. */
+export interface LockStateLike {
+  readonly held?: readonly { readonly name?: string }[];
+}
+
+/**
+ * The manager plus the origin-wide read. Read-only, so it answers who holds a
+ * presence name without queueing behind the watch already waiting on it — which
+ * is what lets the leader relay tell a live follower from a departed one.
+ */
+export interface LockReaderLike extends LockManagerLike {
+  query(): Promise<LockStateLike>;
+}
+
 /** Election lifecycle: a tab is a follower until it acquires the lock. */
 export type ElectionRole = 'follower' | 'leader' | 'closed';
 
