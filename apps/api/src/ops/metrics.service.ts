@@ -14,6 +14,7 @@ export class MetricsService {
   private readonly republisherStaleNamesTotal: Counter;
   private readonly republisherLastWalkNames: Gauge;
   private readonly republisherLastWalkRepublished: Gauge;
+  private readonly republisherConfigured: Gauge;
 
   constructor() {
     collectDefaultMetrics({ register: this.registry });
@@ -49,6 +50,11 @@ export class MetricsService {
       help: 'Names successfully re-PUT in the most recent republisher sweep',
       registers: [this.registry],
     });
+    this.republisherConfigured = new Gauge({
+      name: 'republisher_configured',
+      help: 'Whether the republisher has a routing endpoint and its walk can run: 1 configured, 0 skipped',
+      registers: [this.registry],
+    });
   }
 
   observeRequest(method: string, route: string, status: number, durationSeconds: number): void {
@@ -65,8 +71,13 @@ export class MetricsService {
   }
 
   observeRepublisherWalk(namesWalked: number, republished: number): void {
+    this.republisherConfigured.set(1);
     this.republisherLastWalkNames.set(namesWalked);
     this.republisherLastWalkRepublished.set(republished);
+  }
+
+  observeRepublisherWalkSkipped(): void {
+    this.republisherConfigured.set(0);
   }
 
   get contentType(): string {

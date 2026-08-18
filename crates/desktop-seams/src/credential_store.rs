@@ -2,11 +2,19 @@
 //! file-backed test double.
 
 use cipherbox_engine::seams::{CredentialStore, SeamError, SeamResult};
+use zeroize::Zeroizing;
+
+use crate::offload::off_thread;
 
 /// Keyring account label for the rotating refresh token.
 const REFRESH_TOKEN_ACCOUNT: &str = "refresh-token";
 /// Keyring account label for the last-account id.
 const LAST_ACCOUNT_ID_ACCOUNT: &str = "last-account-id";
+
+fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
+    keyring::Entry::new(service, account)
+        .map_err(|err| SeamError::new(format!("keyring entry: {err}")))
+}
 
 /// Refresh-token persistence in the OS keyring (Apple Keychain, Windows
 /// Credential Manager, or the Secret Service on Linux) —
@@ -34,65 +42,75 @@ impl KeyringCredentialStore {
         }
     }
 
-    fn entry(&self, account: &str) -> SeamResult<keyring::Entry> {
-        keyring::Entry::new(&self.service, account)
-            .map_err(|err| SeamError::new(format!("keyring entry: {err}")))
-    }
-
     /// Stores an opaque secret under one account, replacing any previous
     /// value.
-    fn store_secret(&self, account: &str, secret: &[u8]) -> SeamResult<()> {
-        self.entry(account)?
-            .set_secret(secret)
-            .map_err(|err| SeamError::new(format!("keyring set: {err}")))
+    async fn store_secret(&self, account: &'static str, secret: &[u8]) -> SeamResult<()> {
+        let service = self.service.clone();
+        // The worker owns this copy outright, so it is wiped where it dies.
+        let secret = Zeroizing::new(secret.to_vec());
+        off_thread("keyring set", move || {
+            entry(&service, account)?
+                .set_secret(&secret)
+                .map_err(|err| SeamError::new(format!("keyring set: {err}")))
+        })
+        .await
     }
 
     /// Loads an opaque secret, mapping a missing entry to `None`.
-    fn load_secret(&self, account: &str) -> SeamResult<Option<Vec<u8>>> {
-        match self.entry(account)?.get_secret() {
-            Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
-        }
+    async fn load_secret(&self, account: &'static str) -> SeamResult<Option<Vec<u8>>> {
+        let service = self.service.clone();
+        off_thread("keyring get", move || {
+            match entry(&service, account)?.get_secret() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
+            }
+        })
+        .await
     }
 
     /// Deletes an account's secret. Idempotent (a missing entry is success).
-    fn clear_secret(&self, account: &str) -> SeamResult<()> {
-        match self.entry(account)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
-        }
+    async fn clear_secret(&self, account: &'static str) -> SeamResult<()> {
+        let service = self.service.clone();
+        off_thread("keyring delete", move || {
+            match entry(&service, account)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
+            }
+        })
+        .await
     }
 
     /// Persists the last-account id — the only extra datum this store holds
     /// beyond the refresh token, used by the shell to pick the account
     /// directory on next launch (blueprint/desktop.md "last-account id").
     pub async fn store_last_account_id(&self, account_id: &[u8]) -> SeamResult<()> {
-        self.store_secret(LAST_ACCOUNT_ID_ACCOUNT, account_id)
+        self.store_secret(LAST_ACCOUNT_ID_ACCOUNT, account_id).await
     }
 
     /// The persisted last-account id, if any.
     pub async fn load_last_account_id(&self) -> SeamResult<Option<Vec<u8>>> {
-        self.load_secret(LAST_ACCOUNT_ID_ACCOUNT)
+        self.load_secret(LAST_ACCOUNT_ID_ACCOUNT).await
     }
 
     /// Deletes the persisted last-account id. Idempotent.
     pub async fn clear_last_account_id(&self) -> SeamResult<()> {
-        self.clear_secret(LAST_ACCOUNT_ID_ACCOUNT)
+        self.clear_secret(LAST_ACCOUNT_ID_ACCOUNT).await
     }
 }
 
 impl CredentialStore for KeyringCredentialStore {
     async fn store_refresh_token(&self, refresh_token: &[u8]) -> SeamResult<()> {
         self.store_secret(REFRESH_TOKEN_ACCOUNT, refresh_token)
+            .await
     }
 
     async fn load_refresh_token(&self) -> SeamResult<Option<Vec<u8>>> {
-        self.load_secret(REFRESH_TOKEN_ACCOUNT)
+        self.load_secret(REFRESH_TOKEN_ACCOUNT).await
     }
 
     async fn clear_refresh_token(&self) -> SeamResult<()> {
-        self.clear_secret(REFRESH_TOKEN_ACCOUNT)
+        self.clear_secret(REFRESH_TOKEN_ACCOUNT).await
     }
 }
 

@@ -131,6 +131,7 @@ class RecordingAlerter extends RepublisherAlerter {
   resolveFailures: string[] = [];
   staleAlerts: { name: string; ageMs: number }[] = [];
   walks: { names: number; republished: number }[] = [];
+  walkSkips = 0;
 
   resolveFailure(name: string): void {
     this.resolveFailures.push(name);
@@ -140,6 +141,9 @@ class RecordingAlerter extends RepublisherAlerter {
   }
   walkComplete(names: number, republished: number): void {
     this.walks.push({ names, republished });
+  }
+  walkSkipped(): void {
+    this.walkSkips += 1;
   }
 }
 
@@ -193,6 +197,7 @@ describe('RepublisherTask walk', () => {
     expect(cache.rows.get('name-a')?.lastRepublishedAt).toEqual(clock.now());
     expect(alerter.resolveFailures).toEqual([]);
     expect(alerter.walks).toEqual([{ names: 2, republished: 2 }]);
+    expect(alerter.walkSkips).toBe(0);
   });
 
   it('alerts a resolve failure for an unresolvable name and never re-PUTs it', async () => {
@@ -400,6 +405,7 @@ describe('RepublisherTask walk', () => {
       clock: new FakeClock(),
     }).runOnce();
 
+    expect(alerter.walkSkips).toBe(1);
     expect(alerter.resolveFailures).toEqual([]);
     expect(alerter.walks).toEqual([]);
     expect(transport.republished).toEqual([]);

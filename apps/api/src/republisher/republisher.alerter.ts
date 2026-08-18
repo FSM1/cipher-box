@@ -15,6 +15,11 @@ export abstract class RepublisherAlerter {
   abstract staleRepublish(ipnsName: string, ageMs: number): void;
   /** End-of-sweep summary for dashboards. */
   abstract walkComplete(namesWalked: number, republished: number): void;
+  /**
+   * The walk could not run: no routing endpoint is configured (a supported
+   * BYO-only deploy), so nothing was resolved or re-PUT.
+   */
+  abstract walkSkipped(): void;
 }
 
 @Injectable()
@@ -39,5 +44,10 @@ export class LoggingRepublisherAlerter extends RepublisherAlerter {
 
   walkComplete(namesWalked: number, republished: number): void {
     this.metrics.observeRepublisherWalk(namesWalked, republished);
+  }
+
+  walkSkipped(): void {
+    this.metrics.observeRepublisherWalkSkipped();
+    this.logger.warn('republisher walk skipped: no routing endpoint is configured');
   }
 }

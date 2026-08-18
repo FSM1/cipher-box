@@ -12,4 +12,6 @@ pub mod report;
 pub mod runner;
 pub mod scenarios;
 pub mod seams;
+#[cfg(test)]
+mod stub_http;
 pub mod thresholds;

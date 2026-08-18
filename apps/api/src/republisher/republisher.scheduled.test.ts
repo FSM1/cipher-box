@@ -93,6 +93,7 @@ class RecordingAlerter extends RepublisherAlerter {
     this.staleAlerts.push({ name, ageMs });
   }
   walkComplete(): void {}
+  walkSkipped(): void {}
 }
 
 function fakeNameRepo(names: string[]): never {
