@@ -228,6 +228,24 @@ describe('buildCommand', () => {
       ).toThrow('invalid request field settings.keepLatestVersions: number');
     });
 
+    it('refuses a zero retention cap before it builds the provider config', () => {
+      const { wasm, byo } = spyWasm();
+
+      // The builder holds a `NonZeroU64`, so zero throws there — after this
+      // provider config already minted a wasm object holding the token.
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: {
+            pinMode: 'hosted',
+            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: 's3cret' },
+            keepLatestVersions: 0,
+          },
+        })
+      ).toThrow('invalid request field settings.keepLatestVersions: number');
+      expect(byo).toEqual([]);
+    });
+
     it('refuses before it builds the credential-bearing provider config', () => {
       const { wasm, byo } = spyWasm();
 

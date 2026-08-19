@@ -1556,7 +1556,16 @@ async fn live_settings_record<R: RecordTransport>(
     };
     match fanout_get_verify(transport, &name).await {
         Some((live, _)) if live.value != format!("/ipfs/{}", held.head_cid).into_bytes() => {
-            *slot.borrow_mut() = None;
+            // The verdict names the record this pass read, not whatever the slot
+            // holds now: a save that landed across the resolve installed its own
+            // confirmed record, and clearing that one drops it from the renewal.
+            let mut slot = slot.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|current| current.record_bytes == held.record_bytes)
+            {
+                *slot = None;
+            }
             None
         }
         _ => Some(held),
@@ -3916,7 +3925,12 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+
+    use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
+    use crate::settings::settings_name;
+    use crate::testkit::fakes::InMemoryRecordStore;
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     /// A destination the render cannot walk to the root is refused, and one it
@@ -3943,6 +3957,118 @@ mod tests {
             refuse_scope_exit(&rendered, orphan),
             Err(EngineError::ScopeExitRefused { .. })
         ));
+    }
+
+    /// A transport that lands a settings save into `slot` before the resolve it
+    /// wraps can answer — the interleaving a single-threaded executor allows at
+    /// any `.await`.
+    struct SavesAcrossTheResolve {
+        inner: InMemoryRecordStore,
+        slot: Rc<RefCell<Option<HeldRecord>>>,
+        saved: HeldRecord,
+    }
+
+    impl RecordTransport for SavesAcrossTheResolve {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            self.inner.endpoints()
+        }
+
+        async fn get_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            *self.slot.borrow_mut() = Some(self.saved.clone());
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
+        }
+
+        async fn put_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            record: &[u8],
+        ) -> SeamResult<()> {
+            self.inner.put_record(endpoint, routing_key, record).await
+        }
+    }
+
+    const SETTINGS_SECRET: [u8; 32] = [7u8; 32];
+
+    /// A held settings record at `head` and `sequence`, signed by the name's
+    /// own keypair so the resolve verifies it.
+    fn settings_held(head: &str, sequence: u64) -> HeldRecord {
+        const TTL_NANOS: u64 = 2_000_000_000;
+        const EOL: &str = "2099-01-01T00:00:00Z";
+        HeldRecord {
+            routing_key: settings_name(&SETTINGS_SECRET).as_str().to_owned(),
+            record_bytes: IpnsRecord::create_v2(
+                &kdf::settings_ipns_keypair(&SETTINGS_SECRET),
+                format!("/ipfs/{head}").as_bytes(),
+                sequence,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal(),
+            signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
+            head_cid: head.to_owned(),
+            content_cids: Vec::new(),
+        }
+    }
+
+    /// Resolve `superseded` against a plane a second device published over,
+    /// with `saved` landing in the slot across the resolve. Answers what the
+    /// slot holds afterwards.
+    fn resolve_with_a_save_across_it(
+        superseded: HeldRecord,
+        saved: HeldRecord,
+    ) -> Option<HeldRecord> {
+        let name = settings_name(&SETTINGS_SECRET);
+        let inner = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        let live = settings_held("bafyseconddevicehead", 2).record_bytes;
+        for endpoint in inner.endpoints() {
+            inner.seed_record(&endpoint, name.as_str(), live.clone());
+        }
+
+        let slot = Rc::new(RefCell::new(Some(superseded)));
+        let transport = SavesAcrossTheResolve {
+            inner,
+            slot: Rc::clone(&slot),
+            saved,
+        };
+        assert!(block_on(live_settings_record(&transport, &slot)).is_none());
+        slot.borrow().clone()
+    }
+
+    /// The superseded verdict names the record that pass read. A save that
+    /// landed across the resolve installed its own confirmed record, and
+    /// clearing that one would drop the live settings from the keyless re-PUT
+    /// and the EOL renewal for the rest of the session.
+    #[test]
+    fn a_save_that_lands_across_the_resolve_keeps_its_record_in_the_renewal() {
+        let saved = settings_held("bafysavedhead", 3);
+        assert_eq!(
+            resolve_with_a_save_across_it(settings_held("bafysupersededhead", 1), saved.clone())
+                .map(|held| held.record_bytes),
+            Some(saved.record_bytes),
+            "the superseded record was cleared, not the save that replaced it"
+        );
+    }
+
+    /// A head CID does not name a record: the same head re-signed at a higher
+    /// sequence is a different record, and the renewal has to keep it.
+    #[test]
+    fn a_save_across_the_resolve_survives_even_at_the_head_it_replaces() {
+        const HEAD: &str = "bafysupersededhead";
+        let saved = settings_held(HEAD, 3);
+        assert_eq!(
+            resolve_with_a_save_across_it(settings_held(HEAD, 1), saved.clone())
+                .map(|held| held.record_bytes),
+            Some(saved.record_bytes),
+            "a save sharing the inspected head CID is still a different record"
+        );
     }
 
     /// Shaped as the API issues one; the engine signs nothing else.

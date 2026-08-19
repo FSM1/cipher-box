@@ -124,10 +124,14 @@ function byoKind(wasm: EngineWasm, value: unknown): number {
  * A retention cap. Distinct from [`count`]: the builder takes a `u32` and the
  * JS→wasm number ABI *wraps* rather than rejects, so an over-range value would
  * arrive as an unrelated small cap — `2**32 + 1` as "keep only the newest".
+ *
+ * Zero is refused here rather than left to the `NonZeroU64` the builder holds:
+ * the refusal would otherwise land after `byoConfig` minted a wasm object
+ * holding the access token, stranding that allocation with no owner to free it.
  */
 function retentionCap(value: unknown, field: string): number {
   const cap = count(value, field);
-  if (cap > 0xffff_ffff) throw invalidField(field, value);
+  if (cap === 0 || cap > 0xffff_ffff) throw invalidField(field, value);
   return cap;
 }
 
