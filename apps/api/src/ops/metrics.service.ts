@@ -14,6 +14,7 @@ export class MetricsService {
   private readonly republisherStaleNamesTotal: Counter;
   private readonly republisherLastWalkNames: Gauge;
   private readonly republisherLastWalkRepublished: Gauge;
+  private readonly republisherWalksSkippedTotal: Counter;
 
   constructor() {
     collectDefaultMetrics({ register: this.registry });
@@ -49,6 +50,14 @@ export class MetricsService {
       help: 'Names successfully re-PUT in the most recent republisher sweep',
       registers: [this.registry],
     });
+    // A counter, not a "configured" gauge: an unset gauge reads 0, so a
+    // correctly configured deploy would report itself unconfigured until its
+    // first sweep, a cadence away.
+    this.republisherWalksSkippedTotal = new Counter({
+      name: 'republisher_walks_skipped_total',
+      help: 'Republisher sweeps that skipped the walk because no routing endpoint is configured',
+      registers: [this.registry],
+    });
   }
 
   observeRequest(method: string, route: string, status: number, durationSeconds: number): void {
@@ -67,6 +76,10 @@ export class MetricsService {
   observeRepublisherWalk(namesWalked: number, republished: number): void {
     this.republisherLastWalkNames.set(namesWalked);
     this.republisherLastWalkRepublished.set(republished);
+  }
+
+  observeRepublisherWalkSkipped(): void {
+    this.republisherWalksSkippedTotal.inc();
   }
 
   get contentType(): string {

@@ -19,11 +19,12 @@ use crate::plan::{MAX_BLOCK_BYTES, RunPlan};
 use crate::scenarios;
 use crate::seams::{MemoryCredentialStore, build_http};
 
-pub(crate) type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
+pub(crate) type Client<H> = ApiClient<H, MemoryCredentialStore>;
 
-/// One authenticated account driving load.
-pub(crate) struct VirtualClient {
-    pub(crate) client: Client,
+/// One authenticated account driving load. Generic over the transport so a
+/// scenario can be driven over a stub seam; a run binds it to the desktop one.
+pub(crate) struct VirtualClient<H: Http> {
+    pub(crate) client: Client<H>,
     /// The account's identity `publicKey` — its own mailbox address.
     pub(crate) public_key: String,
 }
@@ -84,8 +85,8 @@ pub(crate) async fn measure_served(
 
 /// Fetch one block off the read accelerator, returning the bytes served. Reads
 /// go straight to the gateway: the API process serves no bytes in v2.
-pub(crate) async fn gateway_get(
-    http: &ReqwestHttp,
+pub(crate) async fn gateway_get<H: Http>(
+    http: &H,
     url: &str,
     token: Option<&str>,
 ) -> Result<u64, ApiError> {
@@ -169,12 +170,12 @@ pub(crate) fn leaf_cid(bytes: &[u8]) -> String {
 
 /// Mint `count` accounts through test-login. Handles carry a per-run token so a
 /// crashed run never leaves a later one sharing its accounts and quota.
-async fn provision(
+pub(crate) async fn provision<H: Http + Clone>(
     plan: &RunPlan,
-    http: &ReqwestHttp,
+    http: &H,
     run_id: &str,
     collector: &mut Collector,
-) -> Vec<VirtualClient> {
+) -> Vec<VirtualClient<H>> {
     let mut clients = Vec::new();
     for index in 0..plan.clients {
         let client = ApiClient::new(
@@ -200,7 +201,7 @@ async fn provision(
     clients
 }
 
-async fn teardown(clients: Vec<VirtualClient>, collector: &mut Collector) {
+async fn teardown(clients: Vec<VirtualClient<ReqwestHttp>>, collector: &mut Collector) {
     for virtual_client in clients {
         measure(
             collector,

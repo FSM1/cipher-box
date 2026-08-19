@@ -25,6 +25,8 @@ test-support = []
 
 [dependencies]
 cipherbox-engine.workspace = true
+futures-channel.workspace = true
+zeroize.workspace = true
 # reqwest with ring-backed rustls only — no OpenSSL, no native-tls, no
 # aws-lc-rs/cmake (hard constraint 6). Bundled webpki roots keep it
 # self-contained for the public /routing/v1 and gateway endpoints.

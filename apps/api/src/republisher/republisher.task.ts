@@ -77,6 +77,7 @@ export class RepublisherTask implements PeriodicTask {
     // No routing endpoint (BYO-only deploy) → the walk can neither resolve nor
     // re-PUT; skip it rather than fire a resolve-failure alert for every name.
     if (!this.transport.configured) {
+      this.alerter.walkSkipped();
       return;
     }
 

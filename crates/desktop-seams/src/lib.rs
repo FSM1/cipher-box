@@ -37,6 +37,7 @@ mod credential_store;
 mod floor_store;
 mod fs_util;
 mod http;
+mod offload;
 mod paths;
 mod record_transport;
 mod scheduler;

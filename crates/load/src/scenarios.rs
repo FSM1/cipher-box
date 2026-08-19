@@ -2,8 +2,8 @@
 //! profiles are `--ops-per-client` and `--ramp-ms` on these, not scenarios of
 //! their own (crates/load/README.md).
 
-use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::NameRegistration;
+use cipherbox_engine::seams::Http;
 
 use crate::metrics::Collector;
 use crate::plan::{RunPlan, Scenario};
@@ -21,10 +21,10 @@ const RETIRE_DRAIN_BATCHES: usize = 4;
 /// `--batch-size` does not spend the run's wall clock in per-row OS reads.
 const ADVISORY_CID_BYTES: usize = 64;
 
-pub(crate) async fn drive(
-    virtual_client: &VirtualClient,
+pub(crate) async fn drive<H: Http>(
+    virtual_client: &VirtualClient<H>,
     plan: &RunPlan,
-    http: &ReqwestHttp,
+    http: &H,
     collector: &mut Collector,
 ) {
     match plan.scenario {
@@ -37,8 +37,8 @@ pub(crate) async fn drive(
 }
 
 /// Upload one caller-addressed block, returning its content address.
-async fn upload_block(
-    virtual_client: &VirtualClient,
+async fn upload_block<H: Http>(
+    virtual_client: &VirtualClient<H>,
     plan: &RunPlan,
     collector: &mut Collector,
 ) -> Option<String> {
@@ -55,7 +55,11 @@ async fn upload_block(
 }
 
 /// Hosted content ingress: one request, one caller-addressed block.
-async fn content_ingest(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
+async fn content_ingest<H: Http>(
+    virtual_client: &VirtualClient<H>,
+    plan: &RunPlan,
+    collector: &mut Collector,
+) {
     let mut pinned = Vec::new();
     for _ in 0..plan.ops_per_client {
         if let Some(cid) = upload_block(virtual_client, plan, collector).await {
@@ -68,10 +72,10 @@ async fn content_ingest(virtual_client: &VirtualClient, plan: &RunPlan, collecto
 }
 
 /// Read-accelerator throughput, over a small set of blocks the run seeds.
-async fn gateway_read(
-    virtual_client: &VirtualClient,
+async fn gateway_read<H: Http>(
+    virtual_client: &VirtualClient<H>,
     plan: &RunPlan,
-    http: &ReqwestHttp,
+    http: &H,
     collector: &mut Collector,
 ) {
     let gateway = plan.gateway_url.as_deref().unwrap_or_default();
@@ -102,7 +106,11 @@ async fn gateway_read(
 
 /// Registry cadence under a name wave: bulk registration of freshly derived
 /// names, then the sweep that retires them.
-async fn name_wave(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
+async fn name_wave<H: Http>(
+    virtual_client: &VirtualClient<H>,
+    plan: &RunPlan,
+    collector: &mut Collector,
+) {
     let mut names = Vec::new();
     for _ in 0..plan.ops_per_client {
         let batch: Vec<NameRegistration> = synthetic_ipns_names(plan.batch_size)
@@ -124,7 +132,11 @@ async fn name_wave(virtual_client: &VirtualClient, plan: &RunPlan, collector: &m
 
 /// The interleaved profile: ingest, registration, quota, and a mailbox
 /// round-trip on one account.
-async fn mixed(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
+async fn mixed<H: Http>(
+    virtual_client: &VirtualClient<H>,
+    plan: &RunPlan,
+    collector: &mut Collector,
+) {
     let mut targets = Vec::new();
     for _ in 0..plan.ops_per_client {
         if let Some(cid) = upload_block(virtual_client, plan, collector).await {
@@ -178,7 +190,11 @@ async fn mixed(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut C
 
 /// A BYO account's registry path: its bytes never touch the API, so it only
 /// registers advisory pin rows, which count for liveness and never gate.
-async fn byo_advisory(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
+async fn byo_advisory<H: Http>(
+    virtual_client: &VirtualClient<H>,
+    plan: &RunPlan,
+    collector: &mut Collector,
+) {
     if measure(
         collector,
         "account-byo",
@@ -216,8 +232,8 @@ async fn byo_advisory(virtual_client: &VirtualClient, plan: &RunPlan, collector:
     retire(virtual_client, plan, collector, targets).await;
 }
 
-async fn register(
-    virtual_client: &VirtualClient,
+async fn register<H: Http>(
+    virtual_client: &VirtualClient<H>,
     collector: &mut Collector,
     batch: &[NameRegistration],
 ) -> bool {
@@ -231,8 +247,8 @@ async fn register(
     .is_some()
 }
 
-async fn drain_if_full(
-    virtual_client: &VirtualClient,
+async fn drain_if_full<H: Http>(
+    virtual_client: &VirtualClient<H>,
     plan: &RunPlan,
     collector: &mut Collector,
     targets: &mut Vec<String>,
@@ -243,8 +259,8 @@ async fn drain_if_full(
 }
 
 /// Retire what the run registered, in batches the registry accepts.
-async fn retire(
-    virtual_client: &VirtualClient,
+async fn retire<H: Http>(
+    virtual_client: &VirtualClient<H>,
     plan: &RunPlan,
     collector: &mut Collector,
     targets: Vec<String>,
@@ -258,5 +274,223 @@ async fn retire(
         )
         .await;
         pace(plan).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_engine::seams::HttpMethod;
+
+    use crate::plan::Target;
+    use crate::runner::provision;
+    use crate::stub_http::StubHttp;
+
+    fn plan(scenario: Scenario, ops_per_client: u32, batch_size: u32) -> RunPlan {
+        RunPlan {
+            scenario,
+            target: Target::Local,
+            api_url: "http://localhost:3000".to_owned(),
+            gateway_url: Some("http://localhost:8080".to_owned()),
+            gateway_token: None,
+            test_login_secret: "stub-secret".to_owned(),
+            clients: 1,
+            ops_per_client,
+            block_bytes: 128,
+            batch_size,
+            pace_ms: 0,
+            ramp_ms: 0,
+            report_dir: String::new(),
+        }
+    }
+
+    /// Drive one scenario over `http`, returning the samples it filed. The
+    /// client is minted through the harness's own `provision`, and its traffic
+    /// dropped, so the recording is the scenario's own call sequence.
+    fn drive_over(plan: &RunPlan, http: &StubHttp) -> Collector {
+        let mut collector = Collector::default();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let mut clients = provision(plan, http, "stub", &mut Collector::default()).await;
+                let virtual_client = clients.pop().expect("the stub authenticates one client");
+                http.clear_calls();
+                drive(&virtual_client, plan, http, &mut collector).await;
+            });
+        collector
+    }
+
+    fn drive_against_stub(plan: &RunPlan) -> StubHttp {
+        let http = StubHttp::default();
+        drive_over(plan, &http);
+        http
+    }
+
+    fn uploaded_cids(http: &StubHttp) -> Vec<String> {
+        http.bodies_for("/content/upload")
+            .iter()
+            .map(|block| leaf_cid(block))
+            .collect()
+    }
+
+    fn sorted(mut values: Vec<String>) -> Vec<String> {
+        values.sort();
+        values
+    }
+
+    /// A scenario must outlive nothing it registered: every target it created
+    /// comes back in a retire body before it returns.
+    fn assert_retires(http: &StubHttp, expected: Vec<String>) {
+        assert_eq!(sorted(http.retired()), sorted(expected));
+    }
+
+    fn shape(http: &StubHttp) -> Vec<(HttpMethod, String)> {
+        http.calls()
+            .into_iter()
+            .map(|call| (call.method, call.path))
+            .collect()
+    }
+
+    fn posts(paths: &[&str]) -> Vec<(HttpMethod, String)> {
+        paths
+            .iter()
+            .map(|path| (HttpMethod::Post, (*path).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn content_ingest_uploads_then_retires_every_block_it_pinned() {
+        let http = drive_against_stub(&plan(Scenario::ContentIngest, 3, 8));
+
+        assert_eq!(
+            shape(&http),
+            posts(&[
+                "/content/upload",
+                "/content/upload",
+                "/content/upload",
+                "/registry/retire",
+            ])
+        );
+        assert_retires(&http, uploaded_cids(&http));
+    }
+
+    #[test]
+    fn gateway_read_seeds_blocks_reads_them_back_and_retires_the_seed() {
+        let http = drive_against_stub(&plan(Scenario::GatewayRead, 2, 8));
+
+        let paths = http.paths();
+        assert_eq!(&paths[..2], ["/content/upload", "/content/upload"]);
+        assert!(
+            paths[2..4].iter().all(|path| path.starts_with("/ipfs/")),
+            "{paths:?}"
+        );
+        assert_eq!(paths[4], "/registry/retire");
+        assert_retires(&http, uploaded_cids(&http));
+    }
+
+    #[test]
+    fn a_name_wave_retires_every_name_it_registered() {
+        let http = drive_against_stub(&plan(Scenario::NameWave, 2, 3));
+
+        assert_eq!(
+            shape(&http),
+            posts(&[
+                "/registry/register",
+                "/registry/register",
+                "/registry/retire",
+                "/registry/retire",
+            ])
+        );
+        assert_eq!(http.registered_names().len(), 6);
+        assert_retires(&http, http.registered_targets());
+    }
+
+    // The drain keeps a long wave's memory on the batch size rather than the
+    // run length; it must retire what it drops, not leak it.
+    #[test]
+    fn the_drain_path_retires_mid_run_and_still_leaves_nothing_behind() {
+        let http = drive_against_stub(&plan(Scenario::NameWave, 5, 1));
+
+        let paths = http.paths();
+        let first_retire = paths
+            .iter()
+            .position(|path| path == "/registry/retire")
+            .expect("the drain retired mid-run");
+        let last_register = paths
+            .iter()
+            .rposition(|path| path == "/registry/register")
+            .expect("registered");
+        assert!(first_retire < last_register, "{paths:?}");
+
+        assert_eq!(http.registered_names().len(), 5);
+        assert_retires(&http, http.registered_targets());
+    }
+
+    #[test]
+    fn the_mixed_profile_interleaves_ingest_registry_quota_and_a_mailbox_round_trip() {
+        let http = drive_against_stub(&plan(Scenario::Mixed, 1, 8));
+
+        assert_eq!(
+            shape(&http),
+            [
+                (HttpMethod::Post, "/content/upload".to_owned()),
+                (HttpMethod::Post, "/registry/register".to_owned()),
+                (HttpMethod::Get, "/account/quota".to_owned()),
+                (HttpMethod::Post, "/mailbox/messages".to_owned()),
+                (HttpMethod::Get, "/mailbox/messages".to_owned()),
+                // The ack can only name the id the post came back with.
+                (HttpMethod::Delete, "/mailbox/messages/msg-1".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
+            ]
+        );
+
+        // The block it ingested is the CID it registered, so retiring the
+        // registration's targets retires the pin it created.
+        assert!(http.registered_targets().contains(&uploaded_cids(&http)[0]));
+        assert_retires(&http, http.registered_targets());
+    }
+
+    #[test]
+    fn byo_advisory_flips_the_account_then_retires_its_advisory_rows() {
+        let http = drive_against_stub(&plan(Scenario::ByoAdvisory, 1, 2));
+
+        assert_eq!(
+            shape(&http),
+            [
+                (HttpMethod::Patch, "/account/byo".to_owned()),
+                (HttpMethod::Post, "/registry/register".to_owned()),
+                (HttpMethod::Get, "/account/quota".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
+                (HttpMethod::Post, "/registry/retire".to_owned()),
+            ]
+        );
+
+        // A BYO account's bytes never reach the ingress — it registers advisory
+        // pin rows only, and owes every one of them back.
+        assert!(http.bodies_for("/content/upload").is_empty());
+        assert_eq!(http.registered_names().len(), 2);
+        assert_retires(&http, http.registered_targets());
+    }
+
+    // A 429 is the API keeping its throttling promise, so it must file apart
+    // from a genuine failure end to end, not just at the sample level.
+    #[test]
+    fn a_throttled_upload_is_filed_as_throttled_and_leaves_nothing_to_retire() {
+        let http = StubHttp::default();
+        http.throttle("/content/upload");
+        let collector = drive_over(&plan(Scenario::ContentIngest, 2, 8), &http);
+
+        let upload = collector
+            .summarize(1_000.0)
+            .into_iter()
+            .find(|summary| summary.op == "content-upload")
+            .expect("the upload op was measured");
+        assert_eq!((upload.ok, upload.throttled, upload.failed), (0, 2, 0));
+        assert!(
+            !http.paths().iter().any(|path| path == "/registry/retire"),
+            "a throttled upload pinned nothing, so there is nothing to retire"
+        );
     }
 }
