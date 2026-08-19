@@ -169,8 +169,44 @@ jobs:
         env:
           VITE_E2E_HOOK: 'true'
 
+      # `--with-deps` bundles two independent failure surfaces: a browser
+      # download and an apt install. Either can stall a mirror connection that
+      # has no read timeout, and bundled they are unattributable. Split, cached
+      # and bounded — each attempt is capped so a stall retries instead of
+      # running until someone cancels the job.
+      - name: Resolve the Playwright version
+        id: playwright
+        working-directory: tests/web-e2e
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
       - name: Install Playwright Chromium
-        run: pnpm --filter @cipherbox/web-e2e exec playwright install --with-deps chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 150 pnpm --filter @cipherbox/web-e2e exec playwright install chromium; then
+              exit 0
+            fi
+            echo "::warning::playwright install chromium did not finish within 150s (attempt $attempt)"
+          done
+          exit 1
+
+      - name: Install the Playwright system dependencies
+        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 150 pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::playwright install-deps did not finish within 150s (attempt $attempt)"
+          done
+          exit 1
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
       # suite that needs a live stack.
