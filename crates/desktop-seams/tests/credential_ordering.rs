@@ -20,6 +20,7 @@ use cipherbox_desktop_seams::KeyringCredentialStore;
 use cipherbox_engine::seams::CredentialStore;
 use cipherbox_engine::testkit::block_on;
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, CredentialPersistence};
+use zeroize::Zeroizing;
 
 /// An in-process credential backend that survives between entries.
 ///
@@ -28,7 +29,7 @@ use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi, Crede
 /// assertion over it would hold whatever order the operations ran in.
 #[derive(Clone, Default)]
 struct ProcessKeyring {
-    secrets: Arc<Mutex<HashMap<Account, Vec<u8>>>>,
+    secrets: Arc<Mutex<HashMap<Account, Zeroizing<Vec<u8>>>>>,
 }
 
 /// Keyed the way `keyring::Entry` is: service, then account label.
@@ -45,7 +46,7 @@ impl CredentialApi for ProcessEntry {
             .secrets
             .lock()
             .expect("keyring lock")
-            .insert(self.account.clone(), secret.to_vec());
+            .insert(self.account.clone(), Zeroizing::new(secret.to_vec()));
         Ok(())
     }
 
@@ -55,7 +56,7 @@ impl CredentialApi for ProcessEntry {
             .lock()
             .expect("keyring lock")
             .get(&self.account)
-            .cloned()
+            .map(|secret| secret.to_vec())
             .ok_or(keyring::Error::NoEntry)
     }
 
