@@ -22,13 +22,8 @@ import type {
   WriteTarget,
 } from './worker/protocol.js';
 
-/** The two public keys a verified contact code bound together. */
-export interface ImportedContact {
-  /** Compressed SEC1 identity public key — what a grant names as its recipient. */
-  identityPublicKey: Uint8Array;
-  /** The X25519 encryption subkey that binding tied to the identity key. */
-  encPublicKey: Uint8Array;
-}
+/** The verified contact an import produced, with its two public keys. */
+export type ImportedContact = Extract<CommandOutcomeDescriptor, { kind: 'contactImported' }>;
 
 export class EngineFacade {
   constructor(private readonly transport: EngineTransport) {}
@@ -163,10 +158,7 @@ export class EngineFacade {
     if (outcome.kind !== 'contactImported') {
       throw new Error(`import contact answered ${outcome.kind}`);
     }
-    return {
-      identityPublicKey: outcome.identityPublicKey,
-      encPublicKey: outcome.encPublicKey,
-    };
+    return outcome;
   }
 
   grant(

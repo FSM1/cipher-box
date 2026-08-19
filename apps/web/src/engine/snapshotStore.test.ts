@@ -435,18 +435,21 @@ describe("the drain's over-budget hold", () => {
     expect(heldBytes(store.getSnapshot(), HELD)).toBeNull();
   });
 
-  it('keeps a failed pull from resurrecting a hold the last view never had', async () => {
+  it('keeps a live hold standing when the refresh that would clear it fails', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
 
     engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[0].resolve(view());
+    engine.pulls[0].resolve(held(HELD, 900n).view);
     await flush();
+
+    // Only a snapshot can clear a hold. A refusal is not evidence the drain
+    // started the op, so the last-known-good hold stays on the row.
     engine.emit({ kind: 'snapshotUpdated' });
     engine.pulls[1].reject(new EngineRequestError('at the ceiling', 'tooManyStreams'));
     await flush();
 
-    expect(heldBytes(store.getSnapshot(), HELD)).toBeNull();
+    expect(heldBytes(store.getSnapshot(), HELD)).toBe(900n);
   });
 });
 

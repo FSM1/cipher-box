@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums, StubEngineHost } from '../testkit.js';
+import {
+  emptySnapshot,
+  FAKE_SIWE_NONCE,
+  fakeWasmEnums,
+  StubEngineHost,
+  TEST_ACCOUNT_ID,
+} from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
@@ -413,7 +419,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     transport.subscribe((event) => received.push(event));
 
     // The pump has no engine to read until a start builds one.
-    await transport.start(new ArrayBuffer(32), 'acct01');
+    await transport.start(new ArrayBuffer(32), TEST_ACCOUNT_ID);
     await tick();
     expect(received).toEqual([
       { kind: 'renewalFailed', routingKey: 'k51abc', detail: 'republish rejected' },

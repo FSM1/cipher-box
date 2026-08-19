@@ -48,7 +48,8 @@ describe('makeBrowserSeams', () => {
   it.each([
     ['nothing at all', ''],
     ['a path separator', 'aa/../bb'],
-    ['a store suffix of its own', 'aa-floors-bb-cc'],
+    ['a leading dot, as a staged temp entry has', '.cbtmp.aa11'],
+    ['a case a store name need not preserve', 'AA11'],
     ['more than a public key of hex', 'a'.repeat(200)],
   ])('refuses an account named with %s', (_case, accountId) => {
     expect(() => makeBrowserSeams(CONFIG, accountId)).toThrow(

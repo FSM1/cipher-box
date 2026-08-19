@@ -21,8 +21,6 @@ export class LoginSecretSource implements SecretSource {
   async provideSecret(): Promise<LoginSecret> {
     const exporter = this.exporter;
     if (!exporter) throw new Error('no login session to re-export the secret from');
-    // Named before the export, so a session that cannot name its account leaves
-    // no secret buffer behind.
     const accountId = exporter.accountId();
     return { secret: await exportLoginSecret(exporter), accountId };
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot } from './testkit.js';
+import { emptySnapshot, TEST_ACCOUNT_ID } from './testkit.js';
 import { LocalTransport, type EngineWorkerLike } from './transport.js';
 import type {
   EventDescriptor,
@@ -229,7 +229,7 @@ describe('LocalTransport', () => {
     worker.emit({ type: 'ready' });
 
     const secret = new Uint8Array([1, 2, 3, 4]).buffer;
-    void transport.start(secret, 'acct01');
+    void transport.start(secret, TEST_ACCOUNT_ID);
     await tick();
 
     const posted = worker.posted[0];
@@ -238,7 +238,7 @@ describe('LocalTransport', () => {
   });
 
   it.each([
-    ['the secret', (t: LocalTransport, buffer: ArrayBuffer) => t.start(buffer, 'acct01')],
+    ['the secret', (t: LocalTransport, buffer: ArrayBuffer) => t.start(buffer, TEST_ACCOUNT_ID)],
     ['an upload chunk', (t: LocalTransport, buffer: ArrayBuffer) => t.pushChunk(1n, buffer)],
   ])('wipes %s a torn-down worker never took', async (_case, send) => {
     const transport = new LocalTransport(new FakeWorker());

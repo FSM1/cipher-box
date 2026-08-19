@@ -29,7 +29,7 @@ export class VaultPage {
       const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
       // Its own store namespace, so a second cold start in one context never
       // inherits the first account's epoch floor.
-      await window.__CIPHERBOX_ENGINE__!.signIn(hex, crypto.randomUUID().replaceAll('-', ''));
+      await window.__CIPHERBOX_ENGINE__!.signIn(hex, crypto.randomUUID());
     });
     await this.page.waitForURL('**/files');
   }

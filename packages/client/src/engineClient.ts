@@ -49,11 +49,7 @@ export interface SecretSource {
 /** A login secret and the account it opens. */
 export interface LoginSecret {
   secret: ArrayBuffer;
-  /**
-   * The signed-in account's stable, non-secret public identifier. It namespaces
-   * the durable browser stores, so two accounts on one profile never share the
-   * epoch floor keyed by the constant root scope id.
-   */
+  /** Names the account whose durable stores the engine opens (`makeBrowserSeams`). */
   accountId: string;
 }
 

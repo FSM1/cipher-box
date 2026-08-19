@@ -65,11 +65,7 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
     : (bytes.slice().buffer as ArrayBuffer);
 }
 
-/**
- * A getter the outcome's own `kind` promises, refused when it answers nothing.
- * A build whose engine and glue disagree must fail the call rather than ship a
- * descriptor missing the field its variant is defined by.
- */
+/** A getter the outcome's own `kind` promises, refused when it answers nothing. */
 function present<T>(value: T | undefined, kind: string, field: string): T {
   if (value === undefined) throw new Error(`command outcome ${kind} carries no ${field}`);
   return value;
@@ -122,9 +118,9 @@ export class EngineHost implements EngineHostLike {
   ) {}
 
   /**
-   * The engine for `accountId`, built on first use. Construction is deferred to
-   * `start` because the seams are namespaced per account and the account is not
-   * known until the login secret arrives.
+   * The engine for `accountId`, built by the first `start`. Construction waits
+   * for that call because the seams are namespaced per account, and no account
+   * is known until the login secret arrives.
    */
   private engineFor(accountId: string): WasmEngineHandle {
     const id = text(accountId, 'accountId');

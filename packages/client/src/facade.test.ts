@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EngineFacade } from './facade.js';
-import { emptySnapshot, FAKE_SIWE_NONCE } from './testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, TEST_ACCOUNT_ID } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -107,7 +107,7 @@ describe('EngineFacade', () => {
   it('forwards the login secret to the transport on start', async () => {
     const transport = new FakeTransport();
     const secret = new Uint8Array([9, 9, 9]).buffer;
-    await new EngineFacade(transport).start(secret, 'acct01');
+    await new EngineFacade(transport).start(secret, TEST_ACCOUNT_ID);
     expect(transport.started).toEqual([secret]);
   });
 
@@ -234,7 +234,7 @@ describe('EngineFacade', () => {
 
     await expect(
       new EngineFacade(transport).importContact(new Uint8Array([7, 7]))
-    ).resolves.toEqual({ identityPublicKey, encPublicKey });
+    ).resolves.toEqual({ kind: 'contactImported', identityPublicKey, encPublicKey });
   });
 
   it('refuses an import the engine did not answer with a contact', async () => {

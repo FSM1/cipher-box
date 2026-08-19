@@ -7,6 +7,7 @@
  */
 
 import type { BroadcastChannelLike } from './broadcast.js';
+import type { LoginSecret } from './engineClient.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
@@ -59,6 +60,14 @@ export const fakeWasmEnums = {
 
 /** A nonce inside the EIP-4361 class the engine enforces. */
 export const FAKE_SIWE_NONCE = 'nonce123456789ab';
+
+/** The account a test engine namespaces its durable stores under. */
+export const TEST_ACCOUNT_ID = 'acct01';
+
+/** What a `SecretSource` double re-derives for a failover promotion. */
+export function fakeLoginSecret(bytes: number[] = [1]): LoginSecret {
+  return { secret: Uint8Array.from(bytes).buffer, accountId: TEST_ACCOUNT_ID };
+}
 
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
 export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {

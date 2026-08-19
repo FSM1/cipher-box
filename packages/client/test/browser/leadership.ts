@@ -11,11 +11,8 @@ import { EngineClient } from '../../src/engineClient.js';
 import { collect } from '../../src/testkit.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
 import { awaitElection } from './election.js';
-import { hex, unhex } from './hexUtil.js';
+import { hex, TEST_ACCOUNT_ID, unhex } from './hexUtil.js';
 import { awaitServiceWorkerControl } from './serviceWorker.js';
-
-/** The account the suite's engine namespaces its stores under. */
-const TEST_ACCOUNT_ID = 'browsersuite';
 
 const JOURNAL_DB = 'cb-leadership-journal';
 const JOURNAL_STORE = 'ops';

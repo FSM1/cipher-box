@@ -11,3 +11,6 @@ export function unhex(text: string): Uint8Array {
   for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
   return bytes;
 }
+
+/** The account the browser suite's engines namespace their durable stores under. */
+export const TEST_ACCOUNT_ID = 'browsersuite';

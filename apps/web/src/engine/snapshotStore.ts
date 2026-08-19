@@ -41,9 +41,8 @@ export function isRecoverable(error: SnapshotError): boolean {
 
 /**
  * Bytes the drain must free before it will start `opId`, or `null` when that op
- * is not the one held. The hold is a snapshot field rather than an event
- * because it clears (blueprint/engine.md), so a caller reads it from the
- * current snapshot every paint and never latches it into its own state.
+ * is not the one held. A hold clears, which is why `blueprint/engine.md` makes
+ * it a snapshot field rather than an event.
  */
 export function heldBytes(state: SnapshotState, opId: bigint | null): bigint | null {
   const blocked = state.view?.blocked;

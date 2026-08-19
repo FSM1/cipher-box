@@ -18,6 +18,7 @@ import {
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import BN from 'bn.js';
 import {
+  accountIdFromTssPoint,
   isIdentityMethod,
   RecoveryRequiredError,
   type CoreKitSession,
@@ -232,26 +233,14 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
   }
 
-  /**
-   * The account's public identifier, as the two coordinates of its TSS public
-   * key. Refuses rather than answering blank: a nameless account would share
-   * the default store namespace with every other one on this profile, and the
-   * epoch floor that lands there locks the lower-epoch account out for good.
-   */
   accountId(): string {
-    const key = this.accountKey();
-    if (!key) throw new Error('the account key could not be read on this device');
-    return key;
+    return accountIdFromTssPoint(this.coreKit.getKeyDetails().tssPubKey);
   }
 
-  /** The account's TSS public key; blank when this device cannot read it. */
+  /** The account's key, or blank when this device cannot read it. */
   private accountKey(): string {
     try {
-      const point = this.coreKit.getKeyDetails().tssPubKey;
-      if (!point?.x || !point.y) return '';
-      // Separated, not concatenated: hex drops leading zeroes, so two different
-      // points could otherwise spell one name.
-      return `${point.x.toString('hex')}-${point.y.toString('hex')}`;
+      return this.accountId();
     } catch {
       return '';
     }

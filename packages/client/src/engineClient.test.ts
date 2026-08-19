@@ -11,6 +11,8 @@ import {
   FakeEngineTransport,
   FakeEngineWorker,
   FakeLockManager,
+  fakeLoginSecret,
+  TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EventDescriptor } from './worker/protocol.js';
 
@@ -79,7 +81,7 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab();
     await tick();
-    await leader.facade.start(new Uint8Array([1, 2, 3]).buffer, 'acct01');
+    await leader.facade.start(new Uint8Array([1, 2, 3]).buffer, TEST_ACCOUNT_ID);
 
     await follower.facade.delete(new Uint8Array(16));
     // The command reached the leader's worker (a `command` request was posted).
@@ -109,7 +111,7 @@ describe('EngineClient leadership + transport swap', () => {
         secretCalls += 1;
         return Promise.resolve({
           secret: new Uint8Array([7, 7, 7, 7]).buffer,
-          accountId: 'acct01',
+          accountId: TEST_ACCOUNT_ID,
         });
       },
     };
@@ -118,7 +120,7 @@ describe('EngineClient leadership + transport swap', () => {
     const follower = tab({ secretSource });
     await tick();
     // The follower is an active session (logged in via the leader).
-    await follower.facade.start(new Uint8Array([9]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
     expect(follower.currentRole()).toBe('follower');
 
     // Kill the leader → the follower is promoted.
@@ -140,13 +142,12 @@ describe('EngineClient leadership + transport swap', () => {
   it('refuses a stream handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {
-      provideSecret: (): Promise<LoginSecret> =>
-        Promise.resolve({ secret: new Uint8Array([1]).buffer, accountId: 'acct01' }),
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
     };
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
 
     const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
 
@@ -176,7 +177,7 @@ describe('EngineClient leadership + transport swap', () => {
     const { tab, workers } = origin();
     const leader = tab();
     await tick();
-    await leader.facade.start(new Uint8Array([1]).buffer, 'acct01');
+    await leader.facade.start(new Uint8Array([1]).buffer, TEST_ACCOUNT_ID);
 
     const handle = await leader.beginWrite({ node: new Uint8Array(16) }, 4);
     const chunk = Uint8Array.of(9, 9, 9, 9).buffer;
@@ -196,7 +197,9 @@ describe('EngineClient leadership + transport swap', () => {
     await client.dispose();
     const secret = Uint8Array.of(1, 2, 3, 4);
 
-    await expect(client.start(secret.buffer as ArrayBuffer, 'acct01')).rejects.toThrow('closed');
+    await expect(client.start(secret.buffer as ArrayBuffer, TEST_ACCOUNT_ID)).rejects.toThrow(
+      'closed'
+    );
 
     expect(secret).toEqual(new Uint8Array(4));
   });
@@ -204,13 +207,12 @@ describe('EngineClient leadership + transport swap', () => {
   it('refuses a write handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {
-      provideSecret: (): Promise<LoginSecret> =>
-        Promise.resolve({ secret: new Uint8Array([1]).buffer, accountId: 'acct01' }),
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
     };
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
 
     const stale = await follower.beginWrite({ node: new Uint8Array(16).fill(1) }, 4);
 
@@ -249,13 +251,12 @@ describe('EngineClient leadership + transport swap', () => {
   it('keeps the UI event subscription alive across a leadership swap', async () => {
     const { tab, workers } = origin();
     const secretSource = {
-      provideSecret: (): Promise<LoginSecret> =>
-        Promise.resolve({ secret: new Uint8Array([1]).buffer, accountId: 'acct01' }),
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
     };
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
 
     const received: EventDescriptor[] = [];
     follower.facade.subscribe((event) => received.push(event));
@@ -287,7 +288,7 @@ describe('EngineClient leadership + transport swap', () => {
     // scrubs the buffer it decided not to use, and the BroadcastTransport — a
     // callee — never receives it (its `start` takes no secret argument).
     const secret = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
-    await follower.facade.start(secret, 'acct01');
+    await follower.facade.start(secret, TEST_ACCOUNT_ID);
     expect([...new Uint8Array(secret)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
 
     await leader.dispose();
@@ -298,7 +299,8 @@ describe('EngineClient leadership + transport swap', () => {
     const { tab } = origin();
     const secret = new Uint8Array([7, 7, 7, 7]).buffer;
     const secretSource = {
-      provideSecret: (): Promise<LoginSecret> => Promise.resolve({ secret, accountId: 'acct01' }),
+      provideSecret: (): Promise<LoginSecret> =>
+        Promise.resolve({ secret, accountId: TEST_ACCOUNT_ID }),
     };
     const errors: Error[] = [];
 
@@ -316,7 +318,7 @@ describe('EngineClient leadership + transport swap', () => {
       onError: (error) => errors.push(error),
     });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
 
     await leader.dispose();
     await tick();
@@ -336,14 +338,13 @@ describe('EngineClient leadership + transport swap', () => {
     const secretSource = {
       provideSecret: (): Promise<LoginSecret> =>
         new Promise<LoginSecret>((resolve) => {
-          releaseSecret = () =>
-            resolve({ secret: new Uint8Array([1]).buffer, accountId: 'acct01' });
+          releaseSecret = () => resolve(fakeLoginSecret());
         }),
     };
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
 
     // Promote the follower, but stall it on the pending re-derived secret.
     await leader.dispose();
@@ -399,13 +400,12 @@ describe('EngineClient leadership + transport swap', () => {
   it('rejects a command in flight at a leadership swap so the UI can retry', async () => {
     const { tab } = origin();
     const secretSource = {
-      provideSecret: (): Promise<LoginSecret> =>
-        Promise.resolve({ secret: new Uint8Array([1]).buffer, accountId: 'acct01' }),
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
     };
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, 'acct01');
+    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
 
     // Issue a follower command, then kill the leader before it can respond. The
     // command rejects retryably (the leader stepped down / the transport closed)

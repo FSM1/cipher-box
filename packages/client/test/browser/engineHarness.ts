@@ -7,10 +7,7 @@
 import { EngineFacade } from '../../src/facade.js';
 import { LocalTransport } from '../../src/transport.js';
 import type { EventDescriptor, PendingClass } from '../../src/worker/protocol.js';
-import { hex } from './hexUtil.js';
-
-/** The account the suite's engine namespaces its stores under. */
-const TEST_ACCOUNT_ID = 'browsersuite';
+import { hex, TEST_ACCOUNT_ID } from './hexUtil.js';
 
 export interface RealEngineResult {
   beforeStart: string;

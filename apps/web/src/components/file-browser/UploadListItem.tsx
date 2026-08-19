@@ -58,7 +58,6 @@ export function UploadListItem({
       className={`file-list-item upload-row upload-row--${phase}${held ? ' upload-row--held' : ''}`}
       data-testid="upload-row"
       data-phase={phase}
-      data-held={held ? 'true' : undefined}
       role="listitem"
     >
       <div className="file-list-item-row-top">

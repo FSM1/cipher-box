@@ -168,8 +168,7 @@
   color: var(--color-warning);
 }
 
-/* A hold is the drain waiting for room, not a verdict on the write, so it reads
-   apart from both the error surface and a plain queued row. */
+/* A hold is a wait, not a verdict, so it reads apart from the error surface. */
 .upload-row-hold {
   grid-column: 1 / -1;
   margin: 4px 0 0;

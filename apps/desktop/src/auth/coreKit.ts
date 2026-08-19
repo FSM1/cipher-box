@@ -6,6 +6,7 @@
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import {
+  accountIdFromTssPoint,
   isIdentityMethod,
   type CoreKitSession,
   type IdentityCredential,
@@ -116,15 +117,8 @@ class ShellSession implements CoreKitSession {
     return this.coreKit._UNSAFE_exportTssKey();
   }
 
-  /**
-   * The account's public identifier, as the two coordinates of its TSS public
-   * key. Separated, not concatenated: hex drops leading zeroes, so two
-   * different points could otherwise spell one name.
-   */
   accountId(): string {
-    const point = this.coreKit.getKeyDetails().tssPubKey;
-    if (!point?.x || !point.y) throw new Error('the account key could not be read on this device');
-    return `${point.x.toString('hex')}-${point.y.toString('hex')}`;
+    return accountIdFromTssPoint(this.coreKit.getKeyDetails().tssPubKey);
   }
 }
 
