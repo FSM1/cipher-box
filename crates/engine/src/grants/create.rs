@@ -656,6 +656,10 @@ mod tests {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         publish_result: Result<(), ScopeRootPublishError>,
         publish_calls: Rc<RefCell<usize>>,
+        /// Every read-seam entry: the sweep's three resolver calls and the
+        /// cascade re-seal resolve. A refusal that must land before the
+        /// convergence gate leaves this at zero.
+        resolve_calls: Rc<RefCell<usize>>,
         fail_after: Option<(usize, ScopeRootPublishError)>,
         /// Interior nodes **inside** the granted folder: id → published epoch.
         interior: Rc<RefCell<Vec<InteriorNodeState>>>,
@@ -676,6 +680,7 @@ mod tests {
                 published: Rc::new(RefCell::new(Vec::new())),
                 publish_result,
                 publish_calls: Rc::new(RefCell::new(0)),
+                resolve_calls: Rc::new(RefCell::new(0)),
                 fail_after: None,
                 interior: Rc::new(RefCell::new(Vec::new())),
                 outside: Rc::new(RefCell::new(Vec::new())),
@@ -724,6 +729,14 @@ mod tests {
             self.unreadable = Some(node_id);
             self
         }
+
+        fn count_resolve(&self) {
+            *self.resolve_calls.borrow_mut() += 1;
+        }
+
+        fn resolve_calls(&self) -> usize {
+            *self.resolve_calls.borrow()
+        }
     }
 
     impl SweepResolver for FakeNet {
@@ -731,6 +744,7 @@ mod tests {
             &self,
             scope: &ChildScopeRef,
         ) -> Result<SweptScope, SweepResolveFailure> {
+            self.count_resolve();
             if scope.scope_id != PARENT_SCOPE {
                 return Err(SweepResolveFailure::Rejected);
             }
@@ -753,6 +767,7 @@ mod tests {
             &self,
             _scope_id: &[u8; 16],
         ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
+            self.count_resolve();
             Ok(None)
         }
 
@@ -761,6 +776,7 @@ mod tests {
             _scope: &ChildScopeRef,
             child: &NodeRef,
         ) -> Result<SweptChild, SweepResolveFailure> {
+            self.count_resolve();
             if self.unresolvable == Some(child.node_id) {
                 return Err(SweepResolveFailure::Unavailable);
             }
@@ -844,6 +860,7 @@ mod tests {
 
     impl CascadeResealResolver for FakeNet {
         async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
+            self.count_resolve();
             if scope.scope_id != DESCENDANT_SCOPE {
                 return Err(ResolveFailure::Rejected);
             }
@@ -1547,14 +1564,21 @@ mod tests {
 
     #[test]
     fn a_self_grant_is_refused_before_any_network_effect() {
-        let (outcome, published, hub) = run_for(7, &[], FakeNet::new(Ok(())), &[], &owner_enc());
+        let net = FakeNet::new(Ok(()));
+        let (outcome, published, hub) = run_for(7, &[], net.clone(), &[], &owner_enc());
 
         let err = outcome.expect_err("a self-grant is refused");
         assert_eq!(err, CreateGrantError::RecipientIsTheOwner);
         assert_eq!(err.check(), "recipient-is-the-owner");
+        // The sweep's first act is a `resolve_scope`, so a zero read count is
+        // what pins the refusal ahead of the convergence gate; `published` alone
+        // cannot, since a sweep over an empty subtree publishes nothing.
+        assert_eq!(net.resolve_calls(), 0, "no read seam is consulted");
         assert!(published.is_empty(), "nothing reaches the network");
+        // Raw `poll`, not `poll_verified`: an unopenable blob must count as a
+        // post, not be filtered away into a false pass.
         let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
-        let items = block_on(poll_verified(&recip_box, &owner_enc(), V)).unwrap();
+        let items = block_on(recip_box.poll()).unwrap();
         assert!(items.is_empty(), "no share pointer is posted");
     }
 
