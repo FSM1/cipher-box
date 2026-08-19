@@ -35,12 +35,13 @@ export class EngineFacade {
 
   /**
    * Cold start: hands the login secret to the engine once, transferred (the
-   * caller's `secret` buffer is detached by the transfer). Resolves when the
-   * engine has run its cold-start sequence (vault-pointer resolve, floor
-   * cold-seed, root adoption, first snapshot event).
+   * caller's `secret` buffer is detached by the transfer). `accountId` names
+   * whose durable state the engine opens. Resolves when the engine has run its
+   * cold-start sequence (vault-pointer resolve, floor cold-seed, root adoption,
+   * first snapshot event).
    */
-  start(secret: ArrayBuffer): Promise<void> {
-    return this.transport.start(secret);
+  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+    return this.transport.start(secret, accountId);
   }
 
   /**

@@ -165,8 +165,11 @@ describe('EngineProvider', () => {
     const source = result.current!;
     expect(sources).toEqual([source]);
 
-    source.use({ _UNSAFE_exportTssKey: () => Promise.resolve('00'.repeat(32)) });
-    await expect(source.provideSecret()).resolves.toBeInstanceOf(ArrayBuffer);
+    source.use({
+      _UNSAFE_exportTssKey: () => Promise.resolve('00'.repeat(32)),
+      accountId: () => 'acct01',
+    });
+    await expect(source.provideSecret()).resolves.toMatchObject({ accountId: 'acct01' });
 
     // The re-export capability dies with the client that could have used it.
     unmount();

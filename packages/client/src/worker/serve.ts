@@ -47,7 +47,7 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
     try {
       switch (request.type) {
         case 'start':
-          await host.start(request.secret);
+          await host.start(request.secret, request.accountId);
           break;
         case 'command': {
           const result = await host.command(request.command);

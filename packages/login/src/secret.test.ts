@@ -11,23 +11,26 @@ const SECRET_BYTES = Uint8Array.from({ length: 32 }, (_, i) =>
   Number.parseInt(SECRET_HEX.slice(i * 2, i * 2 + 2), 16)
 );
 
-function exporter(key: string | Error): LoginSecretExporter {
+function exporter(key: string | Error, accountId = 'acct01'): LoginSecretExporter {
   return {
     _UNSAFE_exportTssKey: () => (key instanceof Error ? Promise.reject(key) : Promise.resolve(key)),
+    accountId: () => accountId,
   };
 }
 
 /** A facade whose `start` behaviour the test scripts; records what it was handed. */
 function fakeFacade(start: (secret: ArrayBuffer) => Promise<void>) {
   const received: ArrayBuffer[] = [];
+  const accounts: string[] = [];
   const facade: LoginFacade = {
-    start(secret) {
+    start(secret, accountId) {
       received.push(secret);
+      accounts.push(accountId);
       return start(secret);
     },
     logout: () => Promise.resolve(),
   };
-  return { facade, received };
+  return { facade, received, accounts };
 }
 
 /** `postMessage(msg, [secret])` detaches the sender's buffer; so does this. */
@@ -77,6 +80,29 @@ describe('handOffLoginSecret', () => {
     await handOffLoginSecret(facade, exporter(SECRET_HEX));
 
     expect(Uint8Array.from(seen)).toEqual(SECRET_BYTES);
+  });
+
+  it('names the account whose durable state the engine is to open', async () => {
+    const { facade, accounts } = fakeFacade(transferring);
+
+    await handOffLoginSecret(facade, exporter(SECRET_HEX, 'aa11-bb22'));
+
+    expect(accounts).toEqual(['aa11-bb22']);
+  });
+
+  it('never exports the secret for a session that cannot name its account', async () => {
+    const { facade, received } = fakeFacade(transferring);
+    const nameless = {
+      ...exporter(SECRET_HEX),
+      accountId: () => {
+        throw new Error('the account key could not be read');
+      },
+    };
+
+    await expect(handOffLoginSecret(facade, nameless)).rejects.toThrow(
+      'the account key could not be read'
+    );
+    expect(received).toEqual([]);
   });
 
   it('tolerates the buffer the transport already detached', async () => {

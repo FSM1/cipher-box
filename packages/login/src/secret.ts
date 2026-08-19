@@ -7,6 +7,13 @@
 /** The Core Kit surface this handoff drives, as a seam. */
 export interface LoginSecretExporter {
   _UNSAFE_exportTssKey(): Promise<string>;
+  /**
+   * The signed-in account's stable, non-secret public identifier. A host that
+   * keeps durable per-account state namespaces it by this; one that derives the
+   * namespace below the facade ignores it. Refuses rather than answering blank:
+   * a shared namespace is what strands a second account on the device.
+   */
+  accountId(): string;
 }
 
 /**
@@ -14,7 +21,7 @@ export interface LoginSecretExporter {
  * per host: a WASM worker on web, Tauri IPC on desktop.
  */
 export interface LoginFacade {
-  start(secret: ArrayBuffer): Promise<void>;
+  start(secret: ArrayBuffer, accountId: string): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -59,9 +66,12 @@ export async function handOffLoginSecret(
   facade: LoginFacade,
   exporter: LoginSecretExporter
 ): Promise<void> {
+  // Read before the export: a session that cannot name its account must not
+  // leave a secret buffer to scrub on the way out.
+  const accountId = exporter.accountId();
   const secret = await exportLoginSecret(exporter);
   try {
-    await facade.start(secret);
+    await facade.start(secret, accountId);
   } finally {
     if (secret.byteLength > 0) new Uint8Array(secret).fill(0);
   }

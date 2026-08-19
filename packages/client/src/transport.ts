@@ -34,7 +34,7 @@ export interface EngineTransport {
    * it (security rule 7). A retry must therefore re-read its source rather than
    * re-send the buffer a retryable rejection handed back.
    */
-  start(secret: ArrayBuffer): Promise<void>;
+  start(secret: ArrayBuffer, accountId: string): Promise<void>;
   /**
    * Sends one command and resolves with what it produced; `transfer` lists any
    * owned buffers to move, not copy.
@@ -123,11 +123,11 @@ export class LocalTransport extends CorrelatedTransport {
     this.ready.catch(() => undefined);
   }
 
-  start(secret: ArrayBuffer): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string): Promise<void> {
     const transfer = [secret];
     return this.dispatch(
       this.ready,
-      (id) => this.worker.postMessage({ type: 'start', id, secret }, transfer),
+      (id) => this.worker.postMessage({ type: 'start', id, secret, accountId }, transfer),
       transfer
     );
   }

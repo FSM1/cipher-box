@@ -9,6 +9,9 @@ import { LocalTransport } from '../../src/transport.js';
 import type { EventDescriptor, PendingClass } from '../../src/worker/protocol.js';
 import { hex } from './hexUtil.js';
 
+/** The account the suite's engine namespaces its stores under. */
+const TEST_ACCOUNT_ID = 'browsersuite';
+
 export interface RealEngineResult {
   beforeStart: string;
   startOk: boolean;
@@ -104,7 +107,7 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
 
   // A valid secp256k1 identity scalar: 32 bytes, non-zero, well below the curve order n.
   const secret = new Uint8Array(32).fill(1).buffer;
-  await facade.start(secret);
+  await facade.start(secret, TEST_ACCOUNT_ID);
   result.startOk = true;
   result.secretDetached = secret.byteLength === 0;
 
@@ -132,7 +135,7 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
 window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
   const { facade, transport } = facadeOver(realWorker());
   try {
-    await facade.start(new Uint8Array(32).fill(1).buffer);
+    await facade.start(new Uint8Array(32).fill(1).buffer, TEST_ACCOUNT_ID);
 
     // Metadata-only creates: pending overlay entries with no content plane.
     const root = new Uint8Array(16);

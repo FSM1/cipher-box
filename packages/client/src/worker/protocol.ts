@@ -220,7 +220,7 @@ export type EventDescriptor =
 
 /** A UI → worker request. `id` correlates the eventual response. */
 export type WorkerRequest =
-  | { type: 'start'; id: number; secret: ArrayBuffer }
+  | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string }
   | { type: 'command'; id: number; command: CommandDescriptor }
   | { type: 'beginWrite'; id: number; target: WriteTarget; size: number }
   | { type: 'pushChunk'; id: number; handle: WriteHandle; chunk: ArrayBuffer }

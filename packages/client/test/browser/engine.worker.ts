@@ -21,12 +21,15 @@ async function boot(): Promise<void> {
   const wasm = glue as unknown as EngineWasm;
   const { origin } = scope.location;
   const apiBaseUrl = `${origin}/mock-api/engine`;
-  const seams = makeBrowserSeams({
+  const seamConfig = {
     recordEndpoints: [`${origin}/routing`],
     apiBaseUrl,
     dbPrefix: `engine-${Date.now()}`,
+  };
+  const host = new EngineHost(wasm, (accountId) => makeBrowserSeams(seamConfig, accountId), {
+    apiBaseUrl,
+    profile: 'ci',
   });
-  const host = new EngineHost(wasm, seams, { apiBaseUrl, profile: 'ci' });
   serveEngine(scope, host);
 }
 

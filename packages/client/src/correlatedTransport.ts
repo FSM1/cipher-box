@@ -159,7 +159,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   // can never arrive.
   protected terminalError: Error | null = null;
 
-  abstract start(secret: ArrayBuffer): Promise<void>;
+  abstract start(secret: ArrayBuffer, accountId: string): Promise<void>;
   abstract command(
     command: CommandDescriptor,
     transfer: Transferable[]

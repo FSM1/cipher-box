@@ -36,7 +36,7 @@ export interface IntrospectedView {
 
 export interface EngineIntrospection {
   /** Cold-starts the engine from a 32-byte hex login secret. */
-  signIn(loginSecretHex: string): Promise<void>;
+  signIn(loginSecretHex: string, accountId: string): Promise<void>;
   /** The engine's view of the vault root. */
   snapshot(): Promise<IntrospectedView>;
   /** One node's plaintext as the engine reads it back, hex like every other tap. */
@@ -64,9 +64,10 @@ export function installIntrospection(client: EngineClient): EngineClient {
   });
 
   window.__CIPHERBOX_ENGINE__ = {
-    async signIn(loginSecretHex) {
+    async signIn(loginSecretHex, accountId) {
       await handOffLoginSecret(client.facade, {
         _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
+        accountId: () => accountId,
       });
       authStore.signedIn(null);
     },

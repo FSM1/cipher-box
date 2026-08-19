@@ -126,7 +126,7 @@ describe('installIntrospection', () => {
       (engine.client.facade as unknown as { start: unknown }).start = start;
       installIntrospection(engine.client);
 
-      await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32));
+      await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32), 'e2eaccount');
 
       expect(start).toHaveBeenCalledOnce();
       // The chrome names no login method: an injected cold start is none of them.
@@ -138,9 +138,9 @@ describe('installIntrospection', () => {
       (engine.client.facade as unknown as { start: unknown }).start = vi.fn();
       installIntrospection(engine.client);
 
-      await expect(window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(31))).rejects.toThrow(
-        'not a 32-byte scalar'
-      );
+      await expect(
+        window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(31), 'e2eaccount')
+      ).rejects.toThrow('not a 32-byte scalar');
       expect(authStore.getState().isAuthenticated).toBe(false);
     });
   });

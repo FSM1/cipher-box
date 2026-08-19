@@ -107,7 +107,7 @@ describe('EngineFacade', () => {
   it('forwards the login secret to the transport on start', async () => {
     const transport = new FakeTransport();
     const secret = new Uint8Array([9, 9, 9]).buffer;
-    await new EngineFacade(transport).start(secret);
+    await new EngineFacade(transport).start(secret, 'acct01');
     expect(transport.started).toEqual([secret]);
   });
 

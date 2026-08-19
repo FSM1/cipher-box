@@ -404,11 +404,16 @@ describe('serveEngine event pump over the real EngineHost', () => {
     } as unknown as EngineWasm;
 
     const { scope, worker, toUi } = loopback();
-    serveEngine(scope, new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' }));
+    serveEngine(
+      scope,
+      new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' })
+    );
     const transport = new LocalTransport(worker);
     const received: EventDescriptor[] = [];
     transport.subscribe((event) => received.push(event));
 
+    // The pump has no engine to read until a start builds one.
+    await transport.start(new ArrayBuffer(32), 'acct01');
     await tick();
     expect(received).toEqual([
       { kind: 'renewalFailed', routingKey: 'k51abc', detail: 'republish rejected' },

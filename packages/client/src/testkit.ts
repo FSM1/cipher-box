@@ -84,7 +84,7 @@ const notStubbed = (method: string): Promise<never> =>
  * in each double.
  */
 export class StubEngineHost implements EngineHostLike {
-  start(_secret: ArrayBuffer): Promise<void> {
+  start(_secret: ArrayBuffer, _accountId: string): Promise<void> {
     return notStubbed('start');
   }
 

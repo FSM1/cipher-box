@@ -36,6 +36,10 @@ function recordingWasm(): { wasm: EngineWasm; constructed: Constructed[] } {
           storageHeadroomBytes,
         });
       }
+
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
     },
   } as unknown as EngineWasm;
   return { wasm, constructed };
@@ -77,58 +81,92 @@ function permissiveHost(): { host: EngineHost; calls: unknown[][] } {
     },
     NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
   } as unknown as EngineWasm;
-  return { host: new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' }), calls };
+  const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+  // The engine is built by `start`, so the host under test is a started one.
+  void host.start(new ArrayBuffer(32), 'acct01');
+  calls.length = 0;
+  return { host, calls };
 }
 
 /** A host whose WASM `pushChunk` hands the view it was given to `onPush`. */
 function pushingHost(onPush: (chunk: Uint8Array) => Promise<void>): EngineHost {
   const wasm = {
     EngineHandle: class {
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
+
       pushChunk(_handle: bigint, chunk: Uint8Array): Promise<void> {
         return onPush(chunk);
       }
     },
   } as unknown as EngineWasm;
-  return new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' });
+  const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+  void host.start(new ArrayBuffer(32), 'acct01');
+  return host;
 }
 
 describe('EngineHost', () => {
-  it('hands the engine the API base URL so cold start can log in', () => {
+  it('builds no engine until a start names the account whose stores it opens', async () => {
     const { wasm, constructed } = recordingWasm();
-
-    new EngineHost(
+    const named: string[] = [];
+    const host = new EngineHost(
       wasm,
-      { seam: true },
-      {
-        apiBaseUrl: 'https://api.example.test',
-        profile: 'ci',
-        storageHeadroomBytes: 1024,
-      }
+      (accountId) => {
+        named.push(accountId);
+        return { accountId };
+      },
+      { apiBaseUrl: 'https://api.example.test', profile: 'ci', storageHeadroomBytes: 1024 }
     );
 
+    expect(constructed).toEqual([]);
+    expect(named).toEqual([]);
+
+    await host.start(new ArrayBuffer(32), 'acct01');
+
+    expect(named).toEqual(['acct01']);
     expect(constructed[0]).toMatchObject({
-      seams: { seam: true },
+      seams: { accountId: 'acct01' },
       profile: 'ci',
       apiBaseUrl: 'https://api.example.test',
       storageHeadroomBytes: 1024,
     });
   });
 
+  it('refuses every call until the engine has been started', async () => {
+    const { wasm } = recordingWasm();
+    const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+
+    await expect(host.snapshot(null)).rejects.toMatchObject({ code: 'notStarted' });
+  });
+
+  it('refuses a second account rather than reopening the first account stores', async () => {
+    const { wasm, constructed } = recordingWasm();
+    const host = new EngineHost(wasm, (accountId) => ({ accountId }), {
+      apiBaseUrl: 'https://api.example.test',
+    });
+    await host.start(new ArrayBuffer(32), 'acct01');
+    const secret = new Uint8Array(32).fill(9);
+
+    await expect(host.start(secret.buffer as ArrayBuffer, 'acct02')).rejects.toMatchObject({
+      code: 'alreadyStarted',
+    });
+    expect(constructed).toHaveLength(1);
+    // The refused start left this frame the secret's terminal owner.
+    expect(secret).toEqual(new Uint8Array(32));
+  });
+
   // `EngineWasm` is hand-written, so a positional slot shift is invisible to
   // `tsc`; assert the trailing arguments together instead.
-  it('forwards the content gateway configuration', () => {
+  it('forwards the content gateway configuration', async () => {
     const { wasm, constructed } = recordingWasm();
 
-    new EngineHost(
-      wasm,
-      {},
-      {
-        apiBaseUrl: 'https://api.example.test',
-        acceleratorBaseUrl: 'https://accelerator.example.test',
-        publicGateways: ['https://gateway.example.test'],
-        storageHeadroomBytes: 2048,
-      }
-    );
+    await new EngineHost(wasm, () => ({}), {
+      apiBaseUrl: 'https://api.example.test',
+      acceleratorBaseUrl: 'https://accelerator.example.test',
+      publicGateways: ['https://gateway.example.test'],
+      storageHeadroomBytes: 2048,
+    }).start(new ArrayBuffer(32), 'acct01');
 
     expect(constructed[0]).toMatchObject({
       acceleratorBaseUrl: 'https://accelerator.example.test',
@@ -137,10 +175,13 @@ describe('EngineHost', () => {
     });
   });
 
-  it('leaves the gateway dormant when no endpoint is configured', () => {
+  it('leaves the gateway dormant when no endpoint is configured', async () => {
     const { wasm, constructed } = recordingWasm();
 
-    new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' });
+    await new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' }).start(
+      new ArrayBuffer(32),
+      'acct01'
+    );
 
     expect(constructed[0].acceleratorBaseUrl).toBeUndefined();
     expect(constructed[0].publicGateways).toBeUndefined();
@@ -231,7 +272,7 @@ describe('EngineHost request fields', () => {
   it('refuses a transferred payload that is not a buffer', async () => {
     const { host, calls } = permissiveHost();
 
-    await expect(host.start('hunter2' as unknown as ArrayBuffer)).rejects.toThrow(
+    await expect(host.start('hunter2' as unknown as ArrayBuffer, 'acct01')).rejects.toThrow(
       'invalid request field secret: string'
     );
     // A view is not the transfer the wire declares, and `new Uint8Array(view)`
@@ -312,6 +353,10 @@ function commandingHost(outcome: WasmCommandOutcome): EngineHost {
   const wasm = {
     ...fakeWasmEnums,
     EngineHandle: class {
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
+
       command(): Promise<WasmCommandOutcome> {
         return Promise.resolve(outcome);
       }
@@ -319,7 +364,9 @@ function commandingHost(outcome: WasmCommandOutcome): EngineHost {
     Command: { manualRefresh: () => ({}), importContact: (code: Uint8Array) => ({ code }) },
     NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
   } as unknown as EngineWasm;
-  return new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' });
+  const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+  void host.start(new ArrayBuffer(32), 'acct01');
+  return host;
 }
 
 describe('EngineHost command outcomes', () => {

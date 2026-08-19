@@ -115,6 +115,17 @@ class ShellSession implements CoreKitSession {
   _UNSAFE_exportTssKey(): Promise<string> {
     return this.coreKit._UNSAFE_exportTssKey();
   }
+
+  /**
+   * The account's public identifier, as the two coordinates of its TSS public
+   * key. Separated, not concatenated: hex drops leading zeroes, so two
+   * different points could otherwise spell one name.
+   */
+  accountId(): string {
+    const point = this.coreKit.getKeyDetails().tssPubKey;
+    if (!point?.x || !point.y) throw new Error('the account key could not be read on this device');
+    return `${point.x.toString('hex')}-${point.y.toString('hex')}`;
+  }
 }
 
 /** Builds the shell's Core Kit session from the build-time environment. */

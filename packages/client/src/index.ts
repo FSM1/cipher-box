@@ -23,7 +23,12 @@ export type { EngineTransport, EngineWorkerLike, EngineEventListener } from './t
 // Tab leadership, the broadcast transport, and the transport-swapping client:
 // one facade per tab, leader or follower, over the origin's single engine.
 export { EngineClient } from './engineClient.js';
-export type { EngineClientConfig, EngineClientRole, SecretSource } from './engineClient.js';
+export type {
+  EngineClientConfig,
+  EngineClientRole,
+  LoginSecret,
+  SecretSource,
+} from './engineClient.js';
 export { spawnEngineWorker } from './spawnEngineWorker.js';
 export type { EngineHostConfig } from './spawnEngineWorker.js';
 export { LeaderElection } from './leadership.js';
