@@ -46,7 +46,10 @@ export interface SecretSource {
   provideSecret(): Promise<LoginSecret>;
 }
 
-/** A login secret and the account it opens. */
+/**
+ * The two travel together because a failover cold start must not open one
+ * account's durable stores under another account's secret.
+ */
 export interface LoginSecret {
   secret: ArrayBuffer;
   /** Names the account whose durable stores the engine opens (`makeBrowserSeams`). */

@@ -92,8 +92,12 @@ describe('handOffLoginSecret', () => {
 
   it('never exports the secret for a session that cannot name its account', async () => {
     const { facade, received } = fakeFacade(transferring);
+    let exports = 0;
     const nameless = {
-      ...exporter(SECRET_HEX),
+      _UNSAFE_exportTssKey: () => {
+        exports += 1;
+        return Promise.resolve(SECRET_HEX);
+      },
       accountId: () => {
         throw new Error('the account key could not be read');
       },
@@ -102,6 +106,9 @@ describe('handOffLoginSecret', () => {
     await expect(handOffLoginSecret(facade, nameless)).rejects.toThrow(
       'the account key could not be read'
     );
+    // The buffer the export would mint has no owner to scrub it, so the name
+    // must be read first: `received` alone cannot tell the two orders apart.
+    expect(exports).toBe(0);
     expect(received).toEqual([]);
   });
 
