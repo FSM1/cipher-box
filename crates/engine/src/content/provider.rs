@@ -279,7 +279,7 @@ fn headers(config: &ByoIpfsConfig, content_type: Option<String>) -> Vec<(String,
 /// Why a provider connection test did not succeed. The first four are policy
 /// verdicts reached before any request is issued, kept distinct so a host can
 /// say which rule refused the config instead of showing a bare failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderError {
     /// The endpoint is not an absolute `http(s)` URL whose authority is
     /// host-and-port bytes. It is spliced into a request URL, so a `file:`,

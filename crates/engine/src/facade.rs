@@ -77,7 +77,7 @@ use crate::sync::provision::{
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use cipherbox_core::hex::lower as hex_lower;
 
-pub use crate::sync::drain::BlockedOp;
+pub use crate::sync::drain::{BlockedOp, SettingsHold};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
@@ -293,6 +293,10 @@ pub struct SessionStatus {
     /// this is a state that *clears*, and a lost "resumed" would strand a host
     /// on a blockage that is gone.
     pub blocked: Option<BlockedOp>,
+    /// The settings-refused hold, if the drain has one. Read for the same
+    /// reason as `blocked`, and it names the rule so a host can tell the member
+    /// which part of their own provider config to fix.
+    pub settings_hold: Option<SettingsHold>,
     /// How many durable queue entries this session holds but cannot read
     /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
     /// device is not empty, never whose work it holds — and it exists so an
@@ -324,6 +328,8 @@ pub struct SnapshotView {
     pub dead_letters: Vec<DeadLetter>,
     /// See [`SessionStatus::blocked`].
     pub blocked: Option<BlockedOp>,
+    /// See [`SessionStatus::settings_hold`].
+    pub settings_hold: Option<SettingsHold>,
     /// See [`SessionStatus::retained_records`].
     pub retained_records: usize,
     /// See [`SessionStatus::staleness`].
@@ -1769,6 +1775,10 @@ pub struct Engine<T: SeamTypes> {
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
     blocked: Rc<RefCell<Option<BlockedOp>>>,
+    /// The drain's settings-refused hold, on the same in-memory terms as
+    /// [`blocked`](Self::blocked): a restart re-derives it from the next drain
+    /// attempt's own verdict.
+    settings_hold: Rc<RefCell<Option<SettingsHold>>>,
     /// Pinned bytes a published prune still owes the registry, written by the
     /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
     /// In-memory: the durable record is the retire ledger, which every pass re-reads.
@@ -1855,6 +1865,7 @@ impl<T: SeamTypes> Engine<T> {
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
+                settings_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
@@ -2378,6 +2389,7 @@ where {
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
         let blocked = self.blocked.clone();
+        let settings_hold = self.settings_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let content_profile = self.content_profile;
         let orphan_heads = self.orphan_heads.clone();
@@ -2579,6 +2591,7 @@ where {
                         base: &base,
                         held: &held,
                         blocked: &blocked,
+                        settings_hold: &settings_hold,
                         pending_reclaim: &pending_reclaim,
                         orphan_heads: &orphan_heads,
                         cancels: &cancels,
@@ -3382,6 +3395,7 @@ where {
         Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
+            settings_hold: *self.settings_hold.borrow(),
             retained_records,
             staleness: self.staleness_now(),
         })
@@ -3461,6 +3475,7 @@ where {
             ancestors,
             dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
+            settings_hold: *self.settings_hold.borrow(),
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
@@ -4776,6 +4791,28 @@ mod tests {
                 check: "dag-root-too-large"
             })
         );
+    }
+
+    /// A hold is a state that *clears*, so it is read off both surfaces rather
+    /// than evented: a lost "released" would strand a host on a refusal the
+    /// member has already fixed in their settings.
+    #[test]
+    fn a_settings_refused_hold_reaches_both_read_surfaces() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "photo.bin", NodeKind::File);
+        let hold = SettingsHold {
+            op_id: OpId(1),
+            node: root,
+            refusal: crate::content::ProviderError::InsecureTransport,
+        };
+        *engine.settings_hold.borrow_mut() = Some(hold);
+
+        assert_eq!(
+            block_on(engine.snapshot(root)).unwrap().settings_hold,
+            Some(hold)
+        );
+        assert_eq!(block_on(engine.status()).unwrap().settings_hold, Some(hold));
     }
 
     #[test]

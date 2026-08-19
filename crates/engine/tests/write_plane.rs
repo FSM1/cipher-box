@@ -61,10 +61,11 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
-    DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Event, EventStream,
-    GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause,
-    Placement, PlacementRefusal, PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity,
-    StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, reseal_scope_root, stage_op,
+    DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
+    OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordSeal, ResealSeeds,
+    ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
+    reseal_scope_root, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -579,9 +580,16 @@ fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
 }
 
 fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, EventStream) {
+    engine_with(device, Box::new(SeededEntropy::new(entropy_seed)))
+}
+
+fn engine_with(
+    device: &FakeDevice,
+    entropy: Box<dyn Entropy>,
+) -> (Engine<FakeSeamTypes>, EventStream) {
     Engine::new(
         device.seam_set(),
-        Box::new(SeededEntropy::new(entropy_seed)),
+        entropy,
         SyncTimingProfile::CI,
         ContentProfile::CI,
         StoragePolicy::CI,
@@ -721,12 +729,44 @@ fn boot(
     device: &FakeDevice,
     entropy_seed: u64,
 ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    boot_with(
+        world,
+        blocks,
+        device,
+        Box::new(SeededEntropy::new(entropy_seed)),
+    )
+}
+
+/// The same, over a caller-supplied entropy source.
+fn boot_with(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    entropy: Box<dyn Entropy>,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
     serve_http(device, blocks, 400);
-    let (mut engine, events) = engine_on(device, entropy_seed);
+    let (mut engine, events) = engine_with(device, entropy);
     block_on(engine.start(secret())).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
     poll_each(&mut tasks);
     (engine, events, tasks)
+}
+
+/// A real seeded source that can be silenced mid-scenario: once armed it
+/// reports success having written nothing, which is the seam failure every
+/// fresh draw in the engine is required to refuse.
+struct SilenceableEntropy {
+    inner: SeededEntropy,
+    silent: Arc<AtomicBool>,
+}
+
+impl Entropy for SilenceableEntropy {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        match self.silent.load(Ordering::Relaxed) {
+            true => Ok(()),
+            false => self.inner.fill(dest),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2012,6 +2052,94 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
             op_id,
             reason: DeadLetterReason::AttemptsExhausted
         }]
+    );
+}
+
+/// A head over the block ceiling is refused identically on every retry: a fresh
+/// nonce moves the sealed bytes and never their count, so no re-author shrinks
+/// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
+/// reported anywhere, so it spends the budget like any other pre-PUT refusal
+/// and every op behind it drains.
+#[test]
+fn an_authored_head_over_the_block_ceiling_dead_letters_at_the_budget() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    // A child ref carries its name verbatim, so a name past the 2 MiB IPFS
+    // block ceiling is a parent folder record this engine can author and its
+    // own ingress can never hold.
+    let CommandOutcome::Queued { op_id } = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "n".repeat(2 * 1024 * 1024 + 4096),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create queues") else {
+        panic!("a create queues an intent op");
+    };
+
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert!(
+        passes > 1,
+        "a size refusal is charged against the budget, not permanent on sight"
+    );
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the head no retry could publish leaves the queue"
+    );
+}
+
+/// The drain's seal nonce is a fresh draw or nothing. A seam reporting success
+/// having written nothing would seal every body on the engine's highest-volume
+/// plane under one fixed nonce, and two seals under one key at one nonce is a
+/// confidentiality break — so the pass halts with the op still queued.
+#[test]
+fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let silent = Arc::new(AtomicBool::new(false));
+    let (mut engine, _events, mut tasks) = boot_with(
+        &world,
+        &blocks,
+        &alice,
+        Box::new(SilenceableEntropy {
+            inner: SeededEntropy::new(42),
+            silent: silent.clone(),
+        }),
+    );
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create queues");
+    silent.store(true, Ordering::Relaxed);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "no record is sealed under a nonce the seam never wrote"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "the op is held for a later draw, not abandoned"
     );
 }
 
