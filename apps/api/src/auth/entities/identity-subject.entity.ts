@@ -1,7 +1,9 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
 /** The provider that vouched for the person (ADR 0008 D1/D2). */
-export type IdentitySubjectKind = 'google' | 'email' | 'wallet';
+export const IDENTITY_SUBJECT_KINDS = ['google', 'email', 'wallet'] as const;
+
+export type IdentitySubjectKind = (typeof IDENTITY_SUBJECT_KINDS)[number];
 
 /**
  * The stable CipherBox subject a verified provider identity maps to.

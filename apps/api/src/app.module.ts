@@ -5,6 +5,7 @@ import { AuthModule } from './auth/auth.module';
 import { resolveDbPoolSize } from './common/db-pool';
 import { RuntimeModule } from './common/runtime.module';
 import { ContentModule } from './content/content.module';
+import { DeviceApprovalModule } from './device-approval/device-approval.module';
 import { MailboxModule } from './mailbox/mailbox.module';
 import { OpsModule } from './ops/ops.module';
 import { RegistryModule } from './registry/registry.module';
@@ -38,6 +39,7 @@ import { RepublisherModule } from './republisher/republisher.module';
     MailboxModule,
     RegistryModule,
     ContentModule,
+    DeviceApprovalModule,
     RepublisherModule,
   ],
 })

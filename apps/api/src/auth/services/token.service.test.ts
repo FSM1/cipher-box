@@ -98,3 +98,99 @@ describe('TokenService refresh rotation', () => {
     expect(repo.rows).toHaveLength(0);
   });
 });
+
+describe('TokenService scoped tokens', () => {
+  const jwtService = new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } });
+
+  function build(config: Record<string, string | undefined>): {
+    service: TokenService;
+    repo: FakeRepository<RefreshToken>;
+  } {
+    const repo = new FakeRepository<RefreshToken>();
+    const service = new TokenService(
+      jwtService,
+      new FakeClock(),
+      new FakeEntropy(),
+      fakeConfig(config).service,
+      repo as unknown as Repository<RefreshToken>
+    );
+    return { service, repo };
+  }
+
+  async function claims(accessToken: string): Promise<Record<string, number | string>> {
+    return jwtService.verifyAsync(accessToken);
+  }
+
+  it('mints a verifiable token carrying the subject and scope, and no account publicKey', async () => {
+    const { service } = build({});
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+
+    const decoded = await claims(scoped.accessToken);
+    // The whole claim set, not a subset: the account pseudonym must not ride
+    // along on a token whose holder has proven only control of an identity.
+    expect(Object.keys(decoded).sort()).toEqual(['exp', 'iat', 'scope', 'sub']);
+    expect(decoded.sub).toBe(USER_ID);
+    expect(decoded.scope).toBe('device-approval');
+    expect(decoded).not.toHaveProperty('publicKey');
+  });
+
+  it('carries no account publicKey even when a full session for the same user does', async () => {
+    const { service } = build({});
+    const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+
+    expect(await claims(pair.accessToken)).toMatchObject({ publicKey: PUBLIC_KEY });
+    expect(await claims(scoped.accessToken)).not.toHaveProperty('publicKey');
+  });
+
+  it('starts no refresh family — a capability cannot extend its own reach', async () => {
+    const { service, repo } = build({});
+    await service.createScopedToken(USER_ID, 'device-approval');
+    expect(repo.rows).toHaveLength(0);
+  });
+
+  it('reports the TTL it actually signed, not the ambient access-token TTL', async () => {
+    const { service } = build({});
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+    const { iat, exp } = await claims(scoped.accessToken);
+
+    expect(scoped.expiresIn).toBe(600);
+    expect(Number(exp) - Number(iat)).toBe(scoped.expiresIn);
+  });
+
+  it('honours SCOPED_TOKEN_TTL_SECONDS', async () => {
+    const { service } = build({ SCOPED_TOKEN_TTL_SECONDS: '120' });
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+    const { iat, exp } = await claims(scoped.accessToken);
+
+    expect(scoped.expiresIn).toBe(120);
+    expect(Number(exp) - Number(iat)).toBe(120);
+  });
+
+  it('accepts the ceiling itself, so the bound is inclusive', async () => {
+    const { service } = build({ SCOPED_TOKEN_TTL_SECONDS: '3600' });
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+    const { iat, exp } = await claims(scoped.accessToken);
+
+    expect(scoped.expiresIn).toBe(3600);
+    expect(Number(exp) - Number(iat)).toBe(3600);
+  });
+
+  it.each(['not-a-number', '0', '-60', '30.5', '', '3601', '86400'])(
+    'falls back to the default TTL for the misconfigured value %j',
+    async (raw) => {
+      const { service } = build({ SCOPED_TOKEN_TTL_SECONDS: raw });
+      const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+      const { iat, exp } = await claims(scoped.accessToken);
+
+      expect(scoped.expiresIn).toBe(600);
+      expect(Number(exp) - Number(iat)).toBe(600);
+    }
+  );
+
+  it('leaves a full-session access token unscoped', async () => {
+    const { service } = build({});
+    const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
+    expect(await claims(pair.accessToken)).not.toHaveProperty('scope');
+  });
+});

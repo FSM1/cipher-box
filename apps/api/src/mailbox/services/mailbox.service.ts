@@ -18,6 +18,7 @@ import {
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
+import { UUID_RE } from '../../common/patterns';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
 
 /** Spec-fixed hard bound on the sealed blob (blueprint/api.md: <= ~8 KB). */
@@ -35,14 +36,6 @@ const DEFAULT_SWEEP_BATCH_SIZE = 1000;
  * pathological backlog, leaving any remainder for the next scheduled run.
  */
 export const SWEEP_MAX_BATCHES = 1000;
-
-/**
- * Canonical RFC 4122 UUID — the form `gen_random_uuid()` mints for the id
- * column. Ids are always server-minted uuids, so any other shape can never
- * name a row; matching this before the ack delete keeps a malformed id from
- * reaching the `uuid`-typed column (Postgres would raise 22P02 → a 500).
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PostMessageInput {
   recipientPublicKey: string;

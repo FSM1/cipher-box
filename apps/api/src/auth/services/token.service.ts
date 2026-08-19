@@ -5,13 +5,33 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { IsNull, LessThan, Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
+import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
+import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
 }
+
+export interface ScopedToken {
+  accessToken: string;
+  expiresIn: number;
+}
+
+/**
+ * Long enough for a rendezvous to run and the device to reconstruct behind it,
+ * short enough that a leak is stale; via SCOPED_TOKEN_TTL_SECONDS.
+ */
+const DEFAULT_SCOPED_TTL_SECONDS = 600;
+
+/**
+ * Ceiling on the configured scoped TTL. The token is non-refreshable precisely
+ * so a leak expires, so a misconfigured value must fail closed to the default
+ * rather than turn the capability into a long-lived bearer credential.
+ */
+const MAX_SCOPED_TTL_SECONDS = 3600;
 
 /**
  * Short-lived access JWT + rotating refresh token (blueprint/api.md,
@@ -27,6 +47,7 @@ export interface TokenPair {
 export class TokenService {
   private readonly logger = new Logger(TokenService.name);
   private readonly refreshTtlMs: number;
+  private readonly scopedTtlSeconds: number;
 
   constructor(
     private readonly jwtService: JwtService,
@@ -38,6 +59,11 @@ export class TokenService {
   ) {
     const days = Number(configService.get('REFRESH_TOKEN_TTL_DAYS') ?? 7);
     this.refreshTtlMs = days * 24 * 60 * 60 * 1000;
+    this.scopedTtlSeconds = positiveIntConfig(
+      configService.get('SCOPED_TOKEN_TTL_SECONDS'),
+      DEFAULT_SCOPED_TTL_SECONDS,
+      MAX_SCOPED_TTL_SECONDS
+    );
   }
 
   /** Issue an access JWT and start a fresh refresh-token family. */
@@ -45,6 +71,26 @@ export class TokenService {
     const accessToken = await this.signAccessToken(userId, publicKey);
     const refreshToken = await this.mintRefreshToken(userId, this.entropy.randomUuid());
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * A capability, not a session: the token carries a `scope` claim the guard
+   * reads, and no refresh-token family is started — so a device that cannot yet
+   * reconstruct its key reaches the routes naming that scope and nothing else,
+   * and cannot extend its own reach past one short TTL.
+   *
+   * It deliberately omits the account `publicKey` a full session carries. Its
+   * holder has proven control of an identity provider, not of the vault key the
+   * publicKey is derived from, and that key is the account's network-wide
+   * pseudonym — handing it over would link the two for a party that cannot
+   * otherwise connect them.
+   */
+  async createScopedToken(userId: string, scope: TokenScope): Promise<ScopedToken> {
+    const accessToken = await this.jwtService.signAsync(
+      { sub: userId, scope },
+      { expiresIn: this.scopedTtlSeconds }
+    );
+    return { accessToken, expiresIn: this.scopedTtlSeconds };
   }
 
   /**

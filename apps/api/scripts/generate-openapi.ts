@@ -22,6 +22,11 @@ import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { TokenService } from '../src/auth/services/token.service';
 import { ContentController } from '../src/content/content.controller';
 import { ContentService } from '../src/content/content.service';
+import { DeviceApprovalSessionController } from '../src/device-approval/device-approval-session.controller';
+import { DeviceApprovalController } from '../src/device-approval/device-approval.controller';
+import { DeviceController } from '../src/device-approval/device.controller';
+import { AccountDeviceService } from '../src/device-approval/services/account-device.service';
+import { DeviceApprovalService } from '../src/device-approval/services/device-approval.service';
 import { HealthController } from '../src/health/health.controller';
 import { IdentityController } from '../src/auth/identity.controller';
 import { IdentityExchangeService } from '../src/auth/services/identity-exchange.service';
@@ -47,6 +52,9 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     RegistryController,
     AccountController,
     ContentController,
+    DeviceController,
+    DeviceApprovalSessionController,
+    DeviceApprovalController,
     RecoveryController,
   ],
   providers: [
@@ -60,6 +68,8 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     { provide: RegistryService, useValue: {} },
     { provide: AccountService, useValue: {} },
     { provide: ContentService, useValue: {} },
+    { provide: AccountDeviceService, useValue: {} },
+    { provide: DeviceApprovalService, useValue: {} },
     { provide: RecordCacheService, useValue: {} },
     { provide: JwtService, useValue: {} },
     { provide: ConfigService, useValue: new ConfigService() },

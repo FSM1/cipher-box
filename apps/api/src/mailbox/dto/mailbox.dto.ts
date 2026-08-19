@@ -1,8 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, Matches, MaxLength } from 'class-validator';
+import { BASE64_RE } from '../../common/patterns';
 
 const HEX_PUBLIC_KEY = /^(02|03)[0-9a-fA-F]{64}$|^04[0-9a-fA-F]{128}$/;
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._~-]{1,128}$/;
 
 /**
@@ -26,7 +26,7 @@ export class PostMessageDto {
   })
   @IsString()
   @MaxLength(MAX_BLOB_BASE64_LENGTH)
-  @Matches(BASE64, { message: 'blob must be base64' })
+  @Matches(BASE64_RE, { message: 'blob must be base64' })
   blob!: string;
 
   @ApiProperty({
