@@ -38,25 +38,30 @@ use crate::content::{
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, SharedEntropy};
 use crate::gate::{GateError, floor};
 use crate::grants::{Contact, ContactStore, ContactStoreError, StagingContactStore};
+use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, eol_renew_pass,
-    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
+    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::OwnerSessionKeys;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    FloorStore, OpId, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, StagingStore,
-    UnixMillis,
+    FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
+    StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{PlacementDecision, PlacementRefusal, decide_placement, load_settings};
+use crate::settings::{
+    PlacementDecision, PlacementRefusal, SettingsPublishError, VaultSettings, decide_placement,
+    load_settings, placement_of, publish_settings,
+};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
@@ -558,6 +563,15 @@ pub enum Command {
         node: NodeId,
     },
 
+    // --- vault settings ---
+    /// Publish the account's vault settings record — the member's placement,
+    /// provider and retention choice. A confirmed publish binds this session
+    /// and enrols the name for renewal.
+    SaveVaultSettings {
+        /// The settings to seal and publish.
+        settings: VaultSettings,
+    },
+
     // --- auth ---
     /// Exchange a host-collected SIWE wallet signature (secondary method;
     /// the engine performs the exchange through its API client).
@@ -590,6 +604,7 @@ impl Command {
             Command::CreateInviteLink { .. } => "createInviteLink",
             Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
+            Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLogin { .. } => "siweLogin",
             Command::Logout => "logout",
         }
@@ -952,6 +967,44 @@ impl EngineError {
             },
             GateError::Seam(seam) => EngineError::ContentUnavailable {
                 message: seam.message().to_owned(),
+            },
+        }
+    }
+
+    /// Map a settings-publish failure. The split is retryability: a refusal
+    /// that is deterministic in the settings offered is an input the host must
+    /// change, and reporting it as availability would leave a host retrying a
+    /// save that can never land.
+    fn from_settings_publish(err: SettingsPublishError) -> Self {
+        match err {
+            SettingsPublishError::Placement(refusal) => EngineError::NoPlacement { refusal },
+            SettingsPublishError::Byo(e) => EngineError::MalformedInput { check: e.check() },
+            SettingsPublishError::Codec(e) => EngineError::MalformedInput { check: e.check() },
+            // The sealed record does not reopen under the key its own reader
+            // re-derives, or is past the block ceiling: an encoder verdict on
+            // these bytes, not an outage (security rule 8).
+            SettingsPublishError::Preflight(_) => EngineError::MalformedInput {
+                check: "settings-record-preflight",
+            },
+            SettingsPublishError::Entropy(e) => EngineError::from_entropy(e),
+            // The API answered about a block other than the one uploaded, so
+            // publishing on its answer would sign a pointer to bytes nothing
+            // confirmed — a fail-closed verdict, never an outage to retry.
+            SettingsPublishError::Publish(RecordPublishError::HeadCidMismatch { .. }) => {
+                EngineError::TrustViolation {
+                    message: "the API echoed a different address for the settings head block"
+                        .to_owned(),
+                }
+            }
+            SettingsPublishError::Publish(_) => EngineError::Seam {
+                message: "the settings record did not reach the record plane".to_owned(),
+            },
+            SettingsPublishError::Unconfirmed => EngineError::Seam {
+                message: "the settings publish was not confirmed on re-resolve".to_owned(),
+            },
+            SettingsPublishError::Floor(e) => EngineError::from_seam(e),
+            SettingsPublishError::Revision => EngineError::Seam {
+                message: "the durable settings revision counter did not advance".to_owned(),
             },
         }
     }
@@ -1480,6 +1533,45 @@ impl From<Refused> for EngineError {
 /// Map a content-sealing failure onto the facade error: entropy is fail-closed
 /// availability, and an assembly refusal is a version this build's own reader
 /// would reject.
+/// The settings record this session published, unless the record plane now
+/// serves a different one.
+///
+/// The resolve tick replaces each held record in place, so nothing in that map
+/// can go stale under the renewal; the settings slot has no such refresher. A
+/// second device that saved after this session did leaves this record
+/// superseded, and a sub-EOL renewal would re-sign it at `floor + 1` with a
+/// fresh validity — which wins record selection and rolls the account back to
+/// the body this session published, credentials and placement included.
+///
+/// Only a positively observed *different* record supersedes: a plane this pass
+/// cannot read is availability, and the renewal itself refuses to renew what it
+/// cannot resolve.
+async fn live_settings_record<R: RecordTransport>(
+    transport: &R,
+    slot: &RefCell<Option<HeldRecord>>,
+) -> Option<HeldRecord> {
+    let held = slot.borrow().clone()?;
+    let Ok(name) = IpnsName::parse(&held.routing_key) else {
+        return None;
+    };
+    match fanout_get_verify(transport, &name).await {
+        Some((live, _)) if live.value != format!("/ipfs/{}", held.head_cid).into_bytes() => {
+            // The verdict names the record this pass read, not whatever the slot
+            // holds now: a save that landed across the resolve installed its own
+            // confirmed record, and clearing that one drops it from the renewal.
+            let mut slot = slot.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|current| current.record_bytes == held.record_bytes)
+            {
+                *slot = None;
+            }
+            None
+        }
+        _ => Some(held),
+    }
+}
+
 fn seal_error(error: SealError) -> EngineError {
     match error {
         SealError::Entropy(error) => EngineError::from_entropy(error),
@@ -1640,6 +1732,11 @@ pub struct Engine<T: SeamTypes> {
     /// gate-passing record here, and the cold-start liveness loop keyless
     /// re-PUTs the map's values on the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
+    /// The vault settings record this session published, in its own slot rather
+    /// than in [`held_records`](Self::held_records): that map is keyed by node
+    /// id and the settings record has none, so a synthetic id would put it in a
+    /// slot a resolved record could claim and evict its renewal.
+    settings_record: Rc<RefCell<Option<HeldRecord>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
     /// classifies at read time off the same cell.
@@ -1705,9 +1802,9 @@ pub struct Engine<T: SeamTypes> {
     /// — the config it holds carries the member's provider bearer.
     placement: Rc<RefCell<Option<PlacementDecision>>>,
     /// Whether this session has already held the account's `byo` flag to the
-    /// vaulted mode. Once a session: the flag is account-wide and the mode is
-    /// fixed at [`start`](Self::start), so re-deriving it per write would only
-    /// let two devices flap it.
+    /// vaulted mode. Latched per placement decision, not per write: the flag is
+    /// account-wide, so re-deriving it on every write would let two devices flap
+    /// it — a saved settings change is the one event that re-arms it.
     byo_reconciled: Cell<bool>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
@@ -1749,6 +1846,7 @@ impl<T: SeamTypes> Engine<T> {
                 // the base snapshot; children come from the pending-op overlay.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
+                settings_record: Rc::new(RefCell::new(None)),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -1786,8 +1884,6 @@ impl<T: SeamTypes> Engine<T> {
     /// the identity is built.
     pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
     where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -1991,6 +2087,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
         }
+        if let Ok(mut settings) = self.settings_record.try_borrow_mut() {
+            *settings = None;
+        }
         // Each open stream pins a version's content key; releasing the table's
         // `Rc`s here is what makes this the terminal owner (security rule 7).
         if let Ok(mut streams) = self.streams.try_borrow_mut() {
@@ -2171,10 +2270,7 @@ impl<T: SeamTypes> Engine<T> {
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         root_scope_id: [u8; 16],
     ) -> Result<ProvisionOutcome, ProvisionError>
-    where
-        T::RecordTransport: Clone + 'static,
-        T::Scheduler: Clone + 'static,
-    {
+where {
         let session = self.session.as_ref().expect("session set by start");
         let owner_identity = session.owner_identity();
         let publisher = VaultProvisionNet {
@@ -2214,8 +2310,6 @@ impl<T: SeamTypes> Engine<T> {
     /// parked; the alive latch then stops it.
     fn spawn_liveness_loop(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>)
     where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -2225,6 +2319,7 @@ impl<T: SeamTypes> Engine<T> {
         let floors = self.seams.floor_store.clone();
         let profile = self.profile;
         let held = self.held_records.clone();
+        let settings_record = self.settings_record.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
@@ -2232,7 +2327,9 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+                let settings = live_settings_record(&transport, &settings_record).await;
+                let records: Vec<HeldRecord> =
+                    held.borrow().values().cloned().chain(settings).collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
                 // as an Event — never a silent failure (blueprint/engine.md).
@@ -2262,8 +2359,6 @@ impl<T: SeamTypes> Engine<T> {
         root_name: Option<IpnsName>,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
     ) where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -2665,6 +2760,10 @@ impl<T: SeamTypes> Engine<T> {
                 })
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
+            Command::SaveVaultSettings { settings } => {
+                self.save_vault_settings(&settings).await?;
+                Ok(CommandOutcome::Done)
+            }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
@@ -2676,6 +2775,35 @@ impl<T: SeamTypes> Engine<T> {
                 command: other.name(),
             }),
         }
+    }
+
+    /// Seal and publish the vault settings record, then adopt what it
+    /// published: the renewal enrolment [`publish_settings`] states the need
+    /// for, and the placement this session writes under.
+    async fn save_vault_settings(&self, settings: &VaultSettings) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let held = publish_settings(
+            &self.seams.record_transport,
+            api,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &mut SharedEntropy(&self.entropy),
+            &self.orphan_heads,
+            session.login_secret(),
+            settings,
+        )
+        .await
+        .map_err(EngineError::from_settings_publish)?;
+        *self.settings_record.borrow_mut() = Some(held);
+        // The confirm re-resolve read back our own bytes, so this device has
+        // adopted what it published: the session's byte destinations follow, or
+        // an `External` save keeps feeding the hosted leg until the next start.
+        *self.placement.borrow_mut() = Some(placement_of(settings));
+        self.byo_reconciled.set(false);
+        Ok(())
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch
@@ -3797,7 +3925,12 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+
+    use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
+    use crate::settings::settings_name;
+    use crate::testkit::fakes::InMemoryRecordStore;
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     /// A destination the render cannot walk to the root is refused, and one it
@@ -3824,6 +3957,118 @@ mod tests {
             refuse_scope_exit(&rendered, orphan),
             Err(EngineError::ScopeExitRefused { .. })
         ));
+    }
+
+    /// A transport that lands a settings save into `slot` before the resolve it
+    /// wraps can answer — the interleaving a single-threaded executor allows at
+    /// any `.await`.
+    struct SavesAcrossTheResolve {
+        inner: InMemoryRecordStore,
+        slot: Rc<RefCell<Option<HeldRecord>>>,
+        saved: HeldRecord,
+    }
+
+    impl RecordTransport for SavesAcrossTheResolve {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            self.inner.endpoints()
+        }
+
+        async fn get_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            *self.slot.borrow_mut() = Some(self.saved.clone());
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
+        }
+
+        async fn put_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            record: &[u8],
+        ) -> SeamResult<()> {
+            self.inner.put_record(endpoint, routing_key, record).await
+        }
+    }
+
+    const SETTINGS_SECRET: [u8; 32] = [7u8; 32];
+
+    /// A held settings record at `head` and `sequence`, signed by the name's
+    /// own keypair so the resolve verifies it.
+    fn settings_held(head: &str, sequence: u64) -> HeldRecord {
+        const TTL_NANOS: u64 = 2_000_000_000;
+        const EOL: &str = "2099-01-01T00:00:00Z";
+        HeldRecord {
+            routing_key: settings_name(&SETTINGS_SECRET).as_str().to_owned(),
+            record_bytes: IpnsRecord::create_v2(
+                &kdf::settings_ipns_keypair(&SETTINGS_SECRET),
+                format!("/ipfs/{head}").as_bytes(),
+                sequence,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal(),
+            signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
+            head_cid: head.to_owned(),
+            content_cids: Vec::new(),
+        }
+    }
+
+    /// Resolve `superseded` against a plane a second device published over,
+    /// with `saved` landing in the slot across the resolve. Answers what the
+    /// slot holds afterwards.
+    fn resolve_with_a_save_across_it(
+        superseded: HeldRecord,
+        saved: HeldRecord,
+    ) -> Option<HeldRecord> {
+        let name = settings_name(&SETTINGS_SECRET);
+        let inner = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        let live = settings_held("bafyseconddevicehead", 2).record_bytes;
+        for endpoint in inner.endpoints() {
+            inner.seed_record(&endpoint, name.as_str(), live.clone());
+        }
+
+        let slot = Rc::new(RefCell::new(Some(superseded)));
+        let transport = SavesAcrossTheResolve {
+            inner,
+            slot: Rc::clone(&slot),
+            saved,
+        };
+        assert!(block_on(live_settings_record(&transport, &slot)).is_none());
+        slot.borrow().clone()
+    }
+
+    /// The superseded verdict names the record that pass read. A save that
+    /// landed across the resolve installed its own confirmed record, and
+    /// clearing that one would drop the live settings from the keyless re-PUT
+    /// and the EOL renewal for the rest of the session.
+    #[test]
+    fn a_save_that_lands_across_the_resolve_keeps_its_record_in_the_renewal() {
+        let saved = settings_held("bafysavedhead", 3);
+        assert_eq!(
+            resolve_with_a_save_across_it(settings_held("bafysupersededhead", 1), saved.clone())
+                .map(|held| held.record_bytes),
+            Some(saved.record_bytes),
+            "the superseded record was cleared, not the save that replaced it"
+        );
+    }
+
+    /// A head CID does not name a record: the same head re-signed at a higher
+    /// sequence is a different record, and the renewal has to keep it.
+    #[test]
+    fn a_save_across_the_resolve_survives_even_at_the_head_it_replaces() {
+        const HEAD: &str = "bafysupersededhead";
+        let saved = settings_held(HEAD, 3);
+        assert_eq!(
+            resolve_with_a_save_across_it(settings_held(HEAD, 1), saved.clone())
+                .map(|held| held.record_bytes),
+            Some(saved.record_bytes),
+            "a save sharing the inspected head CID is still a different record"
+        );
     }
 
     /// Shaped as the API issues one; the engine signs nothing else.

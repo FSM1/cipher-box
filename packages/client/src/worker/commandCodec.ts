@@ -23,8 +23,10 @@ import type {
   WasmBlockedOp,
   WasmCommand,
   WasmEvent,
+  WasmByoIpfsConfig,
   WasmNodeId,
   WasmSnapshotView,
+  WasmVaultSettings,
 } from './engineWasm.js';
 
 /**
@@ -104,6 +106,62 @@ function permission(wasm: EngineWasm, value: unknown): number {
   throw invalidField('permission', value);
 }
 
+function pinMode(wasm: EngineWasm, value: unknown): number {
+  if (value === 'hosted') return wasm.PinMode.Hosted;
+  if (value === 'external') return wasm.PinMode.External;
+  if (value === 'dual') return wasm.PinMode.Dual;
+  throw invalidField('settings.pinMode', value);
+}
+
+function byoKind(wasm: EngineWasm, value: unknown): number {
+  if (value === 'kubo') return wasm.ByoKind.Kubo;
+  if (value === 'psa') return wasm.ByoKind.Psa;
+  if (value === 'pinata') return wasm.ByoKind.Pinata;
+  throw invalidField('settings.byo.kind', value);
+}
+
+/**
+ * A retention cap. Distinct from [`count`]: the builder takes a `u32` and the
+ * JS→wasm number ABI *wraps* rather than rejects, so an over-range value would
+ * arrive as an unrelated small cap — `2**32 + 1` as "keep only the newest".
+ *
+ * Zero is refused here rather than left to the `NonZeroU64` the builder holds:
+ * the refusal would otherwise land after `byoConfig` minted a wasm object
+ * holding the access token, stranding that allocation with no owner to free it.
+ */
+function retentionCap(value: unknown, field: string): number {
+  const cap = count(value, field);
+  if (cap === 0 || cap > 0xffff_ffff) throw invalidField(field, value);
+  return cap;
+}
+
+function byoConfig(wasm: EngineWasm, value: unknown): WasmByoIpfsConfig {
+  const config = record(value, 'settings.byo');
+  const endpoint = text(config.endpoint, 'settings.byo.endpoint');
+  const kind = byoKind(wasm, config.kind);
+  const token = config.accessToken ?? undefined;
+  return new wasm.ByoIpfsConfig(
+    endpoint,
+    kind,
+    token === undefined ? undefined : text(token, 'settings.byo.accessToken')
+  );
+}
+
+/**
+ * Every scalar is checked before the first wasm object is built: a `new` that a
+ * later refusal abandons strands its allocation — and the credential inside it
+ * — in linear memory until the finalization registry runs.
+ */
+function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
+  const settings = record(value, 'settings');
+  const mode = pinMode(wasm, settings.pinMode);
+  const rawKeep = settings.keepLatestVersions ?? undefined;
+  const keep =
+    rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
+  const byo = settings.byo ?? undefined;
+  return new wasm.VaultSettings(mode, byo === undefined ? undefined : byoConfig(wasm, byo), keep);
+}
+
 /**
  * Exhaustiveness bound: adding a command kind without a builder fails the
  * build, and a sender off the union gets a refusal rather than the `undefined`
@@ -172,6 +230,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
       return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
+    case 'saveVaultSettings':
+      return wasm.Command.saveVaultSettings(vaultSettings(wasm, descriptor.settings));
     case 'siweLogin':
       return wasm.Command.siweLogin(
         text(descriptor.message, 'message'),

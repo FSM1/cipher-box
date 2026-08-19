@@ -10,9 +10,10 @@
 
 use core::future::poll_fn;
 use core::num::NonZeroU64;
-use core::task::Poll;
+use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::task::Wake;
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -22,16 +23,18 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
+use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
-    EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler, SeamError,
-    SeamResult, SnapshotCache, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler,
+    SeamError, SeamResult, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    DefaultsReason, Gateway, GatewayConfig, OrphanHeads, ProviderError, RetentionPolicy,
-    SessionBearer, SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings,
-    load_settings, publish_settings, settings_name,
+    ApiBaseUrl, Command, CommandOutcome, ContentProfile, DefaultsReason, Engine, EngineError,
+    EventStream, Gateway, GatewayConfig, LoginSecret, NodeId, OrphanHeads, ProviderError,
+    RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError, StoragePolicy,
+    SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -52,6 +55,14 @@ struct Blocks {
     refuse_register: Arc<Mutex<bool>>,
     /// Every retire request body, verbatim.
     retired: Arc<Mutex<Vec<String>>>,
+    /// Every `PATCH /account/byo` body, verbatim, and the flag the account now
+    /// carries — the quota probe answers off it, so a reconciliation that
+    /// landed is not offered again.
+    byo_patches: Arc<Mutex<Vec<String>>>,
+    byo_account: Arc<Mutex<bool>>,
+    /// Answer the head-block upload with an address other than the one the
+    /// bytes hash to.
+    echo_other_address: Arc<Mutex<bool>>,
 }
 
 impl Blocks {
@@ -67,6 +78,21 @@ impl Blocks {
 
     fn retired(&self) -> Vec<String> {
         self.retired.lock().expect("lock").clone()
+    }
+
+    /// Start the account already flagged BYO, so the first hosted write has a
+    /// disagreement to reconcile.
+    fn on_a_byo_account(self) -> Self {
+        *self.byo_account.lock().expect("lock") = true;
+        self
+    }
+
+    fn byo_patches(&self) -> Vec<String> {
+        self.byo_patches.lock().expect("lock").clone()
+    }
+
+    fn echo_other_address(&self) {
+        *self.echo_other_address.lock().expect("lock") = true;
     }
 
     /// The one block on the plane, for a fixture that uploaded exactly one.
@@ -88,7 +114,12 @@ impl Blocks {
         if url.ends_with("/content/upload") {
             let block = request.body.clone().unwrap_or_default();
             let size = block.len();
-            let cid = self.put(block);
+            let mut cid = self.put(block.clone());
+            if *self.echo_other_address.lock().expect("lock") {
+                let mut other = block;
+                other.push(0);
+                cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &other));
+            }
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
         }
         if url.ends_with("/registry/retire") {
@@ -104,6 +135,20 @@ impl Blocks {
                 headers: Vec::new(),
                 body: Vec::new(),
             });
+        }
+        if url.ends_with("/account/quota") {
+            let advisory = *self.byo_account.lock().expect("lock");
+            return ok(format!(
+                "{{\"usedBytes\":0,\"limitBytes\":1000000000,\"advisory\":{advisory}}}"
+            )
+            .into_bytes());
+        }
+        if url.ends_with("/account/byo") {
+            let body = String::from_utf8(request.body.clone().unwrap_or_default())
+                .unwrap_or_else(|_| String::new());
+            *self.byo_account.lock().expect("lock") = body.contains("true");
+            self.byo_patches.lock().expect("lock").push(body);
+            return ok(Vec::new());
         }
         if url.contains("/registry/") {
             return ok(Vec::new());
@@ -1785,4 +1830,312 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
     ));
     assert!(blocks.retired().is_empty(), "nothing was retired");
     assert!(orphans.pending().is_empty(), "nothing is pending either");
+}
+
+// ---------------------------------------------------------------------------
+// The facade caller: a host saves settings through `Command::SaveVaultSettings`,
+// and the confirmed record joins the session's renewal set.
+// ---------------------------------------------------------------------------
+
+fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+    Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(21)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::offline(),
+        GatewayConfig::disabled(),
+    )
+}
+
+/// Poll every spawned loop until each is parked on a timer again.
+fn poll_until_parked(tasks: &mut [BoxedTask]) {
+    struct Woken(Mutex<bool>);
+    impl Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            *self.0.lock().expect("lock") = true;
+        }
+    }
+    let flag = Arc::new(Woken(Mutex::new(false)));
+    let waker = Waker::from(flag.clone());
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        *flag.0.lock().expect("lock") = false;
+        for task in tasks.iter_mut() {
+            let _ = task.as_mut().poll(&mut cx);
+        }
+        if !*flag.0.lock().expect("lock") {
+            return;
+        }
+    }
+}
+
+/// A cold-started engine whose block plane is wired for a whole scenario, with
+/// its spawned loops parked at their first sleep.
+fn boot(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    serve_http(device, blocks, 40);
+    let (mut engine, events) = engine_on(device);
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_until_parked(&mut tasks);
+    (engine, events, tasks)
+}
+
+#[test]
+fn saving_vault_settings_through_the_facade_publishes_the_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: configured(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let name = settings_name(&SECRET);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_some(),
+            "the settings record published to every endpoint",
+        );
+    }
+}
+
+#[test]
+fn a_settings_save_before_start_is_not_started() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let (mut engine, _events) = engine_on(&device);
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: configured(),
+        })),
+        Err(EngineError::NotStarted)
+    );
+}
+
+/// A mode with no usable byte destination is refused before anything is sealed
+/// — the host must change the settings, so it is never reported as an outage a
+/// retry could clear.
+#[test]
+fn a_settings_save_naming_no_byte_destination_is_refused_as_a_placement() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            pin_mode: PinMode::External,
+            byo: None,
+            retention: RetentionPolicy::KeepAll,
+        },
+    }));
+
+    assert!(
+        matches!(outcome, Err(EngineError::NoPlacement { .. })),
+        "got {outcome:?}",
+    );
+    let name = settings_name(&SECRET);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "nothing was published",
+        );
+    }
+}
+
+/// A save must enrol the name in the liveness loop's set — `publish_settings`
+/// states why nothing else keeps it alive.
+#[test]
+fn a_saved_settings_record_is_kept_alive_by_the_liveness_loop() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the save publishes");
+
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    let published = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the settings record published");
+
+    // Clobber what every endpoint serves; only a re-PUT of the held record can
+    // put the published bytes back.
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
+    }
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_until_parked(&mut tasks);
+
+    for endpoint in &endpoints {
+        assert_eq!(
+            world.record_store.record_at(endpoint, name.as_str()),
+            Some(published.clone()),
+            "the hourly pass re-PUT the settings record",
+        );
+    }
+}
+
+/// The renewal set is session state: it dies with the engine rather than
+/// outliving it in a parked loop (security rule 7).
+#[test]
+fn a_dropped_engine_stops_renewing_its_settings_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the save publishes");
+
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    drop(engine);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
+    }
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_until_parked(&mut tasks);
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[0], name.as_str()),
+        Some(b"not the record".to_vec()),
+        "a dropped engine re-PUTs nothing",
+    );
+}
+
+/// The held map is refreshed in place by the resolve tick; the settings slot is
+/// not, so a renewal that did not check would re-sign this session's body over
+/// a second device's newer one — at a winning sequence and a fresh validity.
+#[test]
+fn a_renewal_never_re_signs_a_settings_record_a_second_device_superseded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the save publishes");
+
+    // A second device of the account saves after this session did, at the same
+    // sequence and inside the renewal window.
+    seed_settings_until(
+        &device,
+        &blocks,
+        b"a-second-devices-body",
+        1,
+        "1970-01-20T00:00:00Z",
+    );
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    let superseding = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the second device's record is live");
+
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_until_parked(&mut tasks);
+
+    for endpoint in &endpoints {
+        assert_eq!(
+            world.record_store.record_at(endpoint, name.as_str()),
+            Some(superseding.clone()),
+            "the renewal must not re-sign the superseded body",
+        );
+    }
+}
+
+/// A saved placement is the member's answer to "where do my bytes go", so it
+/// has to bind this session and not just the next start — including the
+/// account-wide BYO flag the hosted ingress gates on.
+#[test]
+fn a_saved_placement_binds_the_running_session() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default().on_a_byo_account();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    // Cold start found no record, so this session places on the hosted leg and
+    // the first write reconciles the account off its stale BYO flag.
+    open_and_drop_a_write(&mut engine);
+    assert_eq!(blocks.byo_patches(), vec![r#"{"byo":false}"#.to_owned()]);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: external_only(),
+    }))
+    .expect("the save publishes");
+    open_and_drop_a_write(&mut engine);
+
+    assert_eq!(
+        blocks.byo_patches(),
+        vec![r#"{"byo":false}"#.to_owned(), r#"{"byo":true}"#.to_owned()],
+        "the saved External placement rebound the session and re-armed the flag",
+    );
+}
+
+/// Open a write and abandon it: the quota pre-flight the open runs is what
+/// reads the session's placement.
+fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) {
+    let handle = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: NodeId([0u8; 16]),
+            name: "placement-probe.txt".to_owned(),
+        },
+        4,
+    ))
+    .expect("the write opens");
+    block_on(engine.abort_write(handle));
+}
+
+/// The API answering about a block other than the one uploaded is a fail-closed
+/// verdict on that answer, never an outage a host should retry.
+#[test]
+fn a_settings_save_the_api_answered_about_another_block_is_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+    blocks.echo_other_address();
+
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }));
+
+    assert!(
+        matches!(outcome, Err(EngineError::TrustViolation { .. })),
+        "got {outcome:?}",
+    );
 }

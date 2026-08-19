@@ -42,7 +42,8 @@ use crate::gate::floor;
 use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
-use crate::net::publish::{PublishOutcome, PublishReceipt};
+use crate::net::liveness::HeldRecord;
+use crate::net::publish::PublishOutcome;
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
@@ -462,6 +463,12 @@ async fn next_revision<F: FloorStore>(
 /// Seal `settings` and publish them at [`settings_name`] through the shared
 /// publish port, so the record inherits register-first, seq-CAS, and confirm
 /// like every other record.
+///
+/// Returns the confirmed record as a [`HeldRecord`], so the caller can enrol it
+/// in the session's renewal set: the settings record carries a client-signed
+/// 90-day EOL and the API republisher is keyless, so a name nobody renews
+/// lapses on its own and every device without a cached copy then refuses the
+/// placement decision fail-closed.
 #[allow(clippy::too_many_arguments)]
 pub async fn publish_settings<T, H, C, F, Sn, Sch>(
     transport: &T,
@@ -474,7 +481,7 @@ pub async fn publish_settings<T, H, C, F, Sn, Sch>(
     orphans: &OrphanHeads,
     login_secret: &[u8],
     settings: &VaultSettings,
-) -> Result<PublishReceipt, SettingsPublishError>
+) -> Result<HeldRecord, SettingsPublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -547,7 +554,14 @@ where
     floor::advance_sequence_on_unseal(floors, &revision_adopted_key(&name), revision)
         .await
         .map_err(SettingsPublishError::Floor)?;
-    Ok(receipt)
+    Ok(HeldRecord {
+        routing_key: name.as_str().to_owned(),
+        record_bytes: receipt.record_bytes,
+        signer,
+        head_cid: head.cid().to_owned(),
+        // The settings record anchors its sealed body and nothing else.
+        content_cids: Vec::new(),
+    })
 }
 
 /// Resolve the vault settings record, bounded by

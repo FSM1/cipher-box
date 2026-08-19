@@ -314,6 +314,24 @@ pub enum ProviderError {
     AddressMismatch,
 }
 
+impl ProviderError {
+    /// The stable check name a host branches on. Never carries the endpoint or
+    /// the credential.
+    pub fn check(&self) -> &'static str {
+        match self {
+            ProviderError::InvalidEndpoint => "byo-endpoint-invalid",
+            ProviderError::InsecureTransport => "byo-endpoint-insecure",
+            ProviderError::BlockedAddress => "byo-endpoint-blocked",
+            ProviderError::InvalidCredential => "byo-credential-invalid",
+            ProviderError::Unreachable => "byo-unreachable",
+            ProviderError::NoVerdict => "byo-no-verdict",
+            ProviderError::Rejected { .. } => "byo-rejected",
+            ProviderError::MalformedBlockAddress => "byo-block-address-malformed",
+            ProviderError::AddressMismatch => "byo-address-mismatch",
+        }
+    }
+}
+
 /// Test that a member's BYO provider is reachable and authenticated, engine-side
 /// over the Http seam. Issues the provider's standard health/auth probe and
 /// treats any 2xx as success.

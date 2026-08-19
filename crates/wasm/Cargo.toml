@@ -24,6 +24,10 @@ conformance = ["cipherbox-engine/test-kit"]
 [dependencies]
 cipherbox-engine.workspace = true
 wasm-bindgen = "0.2"
+# Credentials the boundary carries — the accelerator bearer token and a member's
+# BYO provider token — reach the engine in a zeroizing buffer, never a plain
+# `String`.
+zeroize.workspace = true
 
 # Browser wasm host deps: the engine worker host (`src/host.rs`) and the shared
 # seam adapters (`src/seams_bridge.rs`) marshal JS values, drive engine futures,
@@ -40,9 +44,6 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # while `start`/`command` serialize as the single writer; a Mutex bounds
 # `nextEvent` to one outstanding stream read.
 async-lock = "3"
-# Wraps the accelerator bearer token in a zeroizing buffer before it reaches the
-# engine's `GatewaySource` — the credential never sits in a plain `String`.
-zeroize.workspace = true
 
 # The boundary tests run under wasm-bindgen-test-runner. Core is a test-only
 # dependency: the contact-code round-trip needs a signed bundle to import, and

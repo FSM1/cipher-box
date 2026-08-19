@@ -20,9 +20,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use cipherbox_engine::Contact;
+use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
+use cipherbox_engine::{Contact, PinMode as EnginePinMode, RetentionPolicy};
+use core::num::NonZeroU64;
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod seams_bridge;
@@ -140,6 +143,117 @@ impl From<Permission> for facade::Permission {
             Permission::Read => facade::Permission::Read,
             Permission::Write => facade::Permission::Write,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vault settings — the member's placement, provider and retention choice, as a
+// host builds it for `Command.saveVaultSettings`. Write-only across the
+// boundary: no getter reads a config back out, so a stored provider credential
+// never crosses back into JS.
+// ---------------------------------------------------------------------------
+
+/// Where a version's bytes are pinned.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinMode {
+    /// CipherBox's hosted pin store (the cold-start default).
+    Hosted,
+    /// The member's own provider only.
+    External,
+    /// Both legs.
+    Dual,
+}
+
+impl From<PinMode> for EnginePinMode {
+    fn from(mode: PinMode) -> Self {
+        match mode {
+            PinMode::Hosted => EnginePinMode::Hosted,
+            PinMode::External => EnginePinMode::External,
+            PinMode::Dual => EnginePinMode::Dual,
+        }
+    }
+}
+
+/// The kind of member-supplied IPFS provider, which fixes the reachability
+/// probe.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByoKind {
+    /// A Kubo RPC endpoint.
+    Kubo,
+    /// An IPFS Pinning Service API endpoint.
+    Psa,
+    /// A Pinata endpoint.
+    Pinata,
+}
+
+impl From<ByoKind> for EngineByoKind {
+    fn from(kind: ByoKind) -> Self {
+        match kind {
+            ByoKind::Kubo => EngineByoKind::Kubo,
+            ByoKind::Psa => EngineByoKind::Psa,
+            ByoKind::Pinata => EngineByoKind::Pinata,
+        }
+    }
+}
+
+/// A member's own IPFS provider. The engine validates the endpoint and the
+/// credential before either reaches a request.
+#[wasm_bindgen]
+pub struct ByoIpfsConfig {
+    inner: EngineByo,
+}
+
+#[wasm_bindgen]
+impl ByoIpfsConfig {
+    /// Builds a provider config. `accessToken` is `undefined` for a provider
+    /// that needs none; when present it lands in a zeroizing buffer.
+    #[wasm_bindgen(constructor)]
+    pub fn new(endpoint: String, kind: ByoKind, access_token: Option<String>) -> ByoIpfsConfig {
+        Self {
+            inner: EngineByo {
+                endpoint,
+                kind: kind.into(),
+                access_token: access_token.map(Zeroizing::new),
+            },
+        }
+    }
+}
+
+/// The owner's client configuration, as `Command.saveVaultSettings` seals it
+/// into the vault settings record.
+#[wasm_bindgen]
+pub struct VaultSettings {
+    inner: cipherbox_engine::VaultSettings,
+}
+
+#[wasm_bindgen]
+impl VaultSettings {
+    /// Builds the settings to publish. `byo` is `undefined` when the member
+    /// runs no provider of their own; `keepLatestVersions` is `undefined` to
+    /// keep every version, and `0` is refused rather than read as "keep none",
+    /// which would retire the live version of every file.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        pin_mode: PinMode,
+        byo: Option<ByoIpfsConfig>,
+        keep_latest_versions: Option<u32>,
+    ) -> Result<VaultSettings, JsError> {
+        let retention = match keep_latest_versions {
+            None => RetentionPolicy::KeepAll,
+            Some(n) => RetentionPolicy::KeepLatest(
+                NonZeroU64::new(u64::from(n))
+                    .ok_or_else(|| JsError::new("keepLatestVersions must be > 0"))?,
+            ),
+        };
+        Ok(Self {
+            inner: cipherbox_engine::VaultSettings {
+                pin_mode: pin_mode.into(),
+                byo: byo.map(|config| config.inner),
+                retention,
+            },
+        })
     }
 }
 
@@ -687,6 +801,14 @@ impl Command {
     pub fn rotate_now(node: &NodeId) -> Command {
         Self::wrap(facade::Command::RotateNow {
             node: node.facade(),
+        })
+    }
+
+    /// Publish the account's vault settings record.
+    #[wasm_bindgen(js_name = saveVaultSettings)]
+    pub fn save_vault_settings(settings: VaultSettings) -> Command {
+        Self::wrap(facade::Command::SaveVaultSettings {
+            settings: settings.inner,
         })
     }
 

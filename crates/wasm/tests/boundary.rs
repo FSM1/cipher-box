@@ -11,8 +11,8 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{
-    Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase, PendingClass, Permission,
-    SnapshotView, Staleness,
+    ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase,
+    PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -400,5 +400,39 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     assert_eq!(
         get(&crumb, "id").unchecked_into::<Uint8Array>().to_vec(),
         vec![1u8; 16]
+    );
+}
+
+/// The refusal builds a `JsError`, so it is only reachable on this target.
+#[wasm_bindgen_test]
+fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
+    assert!(
+        VaultSettings::new(PinMode::Hosted, None, Some(0)).is_err(),
+        "0 must not be read as a retention policy"
+    );
+    assert!(VaultSettings::new(PinMode::Hosted, None, Some(1)).is_ok());
+    assert!(
+        VaultSettings::new(PinMode::Hosted, None, None).is_ok(),
+        "no cap keeps every version"
+    );
+}
+
+/// The builder's name is the settings command's whole readable surface.
+#[wasm_bindgen_test]
+fn a_vault_settings_command_carries_the_stable_builder_name() {
+    let settings = VaultSettings::new(
+        PinMode::Dual,
+        Some(ByoIpfsConfig::new(
+            "https://kubo.example".to_owned(),
+            ByoKind::Kubo,
+            Some("s3cret".to_owned()),
+        )),
+        Some(3),
+    )
+    .expect("a positive cap builds");
+
+    assert_eq!(
+        Command::save_vault_settings(settings).name(),
+        "saveVaultSettings"
     );
 }

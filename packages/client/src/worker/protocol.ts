@@ -116,6 +116,28 @@ export interface SnapshotDescriptor {
   staleness: Staleness;
 }
 
+/** Where a version's bytes are pinned (mirrors the facade `PinMode`). */
+export type PinMode = 'hosted' | 'external' | 'dual';
+
+/** The kind of member-supplied IPFS provider (mirrors the facade `ByoKind`). */
+export type ByoKind = 'kubo' | 'psa' | 'pinata';
+
+/** A member's own IPFS provider, as data. */
+export interface ByoIpfsConfigDescriptor {
+  endpoint: string;
+  kind: ByoKind;
+  /** `null` for a provider that needs no credential. */
+  accessToken: string | null;
+}
+
+/** The member's placement, provider and retention choice, as data. */
+export interface VaultSettingsDescriptor {
+  pinMode: PinMode;
+  byo: ByoIpfsConfigDescriptor | null;
+  /** Newest-n retention; `null` keeps every version within quota. */
+  keepLatestVersions: number | null;
+}
+
 /**
  * One write intent, as data. Each variant's `kind` matches the facade command
  * builder name (`crates/wasm` `Command`), so the worker maps it mechanically.
@@ -140,6 +162,7 @@ export type CommandDescriptor =
   | { kind: 'createInviteLink'; node: Uint8Array; permission: Permission }
   | { kind: 'acceptShare'; sealedSharePointer: Uint8Array }
   | { kind: 'rotateNow'; node: Uint8Array }
+  | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   | { kind: 'logout' };
 
