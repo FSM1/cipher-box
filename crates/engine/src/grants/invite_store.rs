@@ -303,15 +303,6 @@ impl<St: StagingStore, E: Entropy> InviteStore for StagingInviteStore<'_, St, E>
     }
 }
 
-/// Encode the durable record set to det-CBOR, links in tag order and claims in
-/// claim-id order so one set has one spelling.
-///
-/// Rejects every bound, a duplicate tag, a repeated conversion and a zero
-/// deadline release-active — the invariants [`decode_records`] hard-rejects
-/// (AGENTS.md rule 8). A zero deadline is `mint_invite_grant`'s
-/// [`InviteError::InvalidExpiry`](super::InviteError::InvalidExpiry): storing
-/// one would durably record a link the reader must refuse to distinguish from
-/// "no deadline".
 /// One conversion, as the stored body spells it.
 fn encode_claim(claim: &ConvertedClaimRecord) -> Value {
     let mut m = Map::new();
@@ -336,6 +327,15 @@ fn check_claims_unique(
     Ok(())
 }
 
+/// Encode the durable record set to det-CBOR, links in tag order and claims in
+/// claim-id order so one set has one spelling.
+///
+/// Rejects every bound, a duplicate tag, a repeated conversion and a zero
+/// deadline release-active — the invariants [`decode_records`] hard-rejects
+/// (AGENTS.md rule 8). A zero deadline is `mint_invite_grant`'s
+/// [`InviteError::InvalidExpiry`](super::InviteError::InvalidExpiry): storing
+/// one would durably record a link the reader must refuse to distinguish from
+/// "no deadline".
 fn encode_records(records: &InviteRecords) -> Result<Vec<u8>, InviteRecordsCodecError> {
     within("links", records.links.len(), MAX_INVITE_RECORDS)?;
     within("claims", records.claims.len(), MAX_CONVERTED_CLAIMS)?;
