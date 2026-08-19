@@ -38,7 +38,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use core::fmt;
 use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_seed};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
@@ -352,10 +352,8 @@ where
     // 4) Mint at read epoch 1 with a FRESH RANDOM override seed (never
     // KDF-derived). The new scope adopts the folder's descendant scope roots as
     // its direct-child-scope index (they now live inside the granted scope).
-    let mut override_seed = Zeroizing::new([0u8; SECRET_LEN]);
-    entropy
-        .fill(override_seed.as_mut_slice())
-        .map_err(CreateGrantError::Entropy)?;
+    let override_seed: Zeroizing<[u8; SECRET_LEN]> =
+        fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
 
     let grantee_section = {
         let identity = ScopeRootIdentity {
@@ -576,7 +574,7 @@ mod tests {
         SweptChild, SweptNode, SweptScope,
     };
     use crate::testkit::fakes::InMemoryMailboxHub;
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob,
@@ -1061,11 +1059,17 @@ mod tests {
         Vec<ResealedScopeRoot>,
         InMemoryMailboxHub,
     ) {
-        run_for(entropy_seed, subtree, net, parent_grants, &recipient_enc())
+        run_for(
+            SeededEntropy::new(entropy_seed),
+            subtree,
+            net,
+            parent_grants,
+            &recipient_enc(),
+        )
     }
 
-    fn run_for(
-        entropy_seed: u64,
+    fn run_for<E: Entropy>(
+        mut entropy: E,
         subtree: &[ChildScopeRef],
         net: FakeNet,
         parent_grants: &[GrantRow],
@@ -1109,7 +1113,6 @@ mod tests {
             .collect();
 
         let outcome = {
-            let mut entropy = SeededEntropy::new(entropy_seed);
             let grantee = GranteeScopePlan {
                 v: V,
                 scope_id: GRANTEE_SCOPE,
@@ -1169,6 +1172,33 @@ mod tests {
         };
         let published = net.published.borrow().clone();
         (outcome, published, hub)
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_cuts_no_grant_scope() {
+        // The grant scope is minted at read epoch 1 under a fresh random override
+        // seed. An all-zero one hands every reader of the shared folder its
+        // structure keys, so the draw is refused before anything is published.
+        let (outcome, published, hub) = run_for(
+            SilentEntropy,
+            &[],
+            FakeNet::new(Ok(())),
+            &[],
+            &recipient_enc(),
+        );
+
+        assert!(matches!(
+            outcome.expect_err("the zero draw is refused"),
+            CreateGrantError::Entropy(_),
+        ));
+        assert!(published.is_empty(), "no scope root is minted");
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        assert!(
+            block_on(poll_verified(&recip_box, &recipient_enc(), V))
+                .unwrap()
+                .is_empty(),
+            "and nothing is delivered",
+        );
     }
 
     #[test]
@@ -1565,7 +1595,8 @@ mod tests {
     #[test]
     fn a_self_grant_is_refused_before_any_network_effect() {
         let net = FakeNet::new(Ok(()));
-        let (outcome, published, hub) = run_for(7, &[], net.clone(), &[], &owner_enc());
+        let (outcome, published, hub) =
+            run_for(SeededEntropy::new(7), &[], net.clone(), &[], &owner_enc());
 
         let err = outcome.expect_err("a self-grant is refused");
         assert_eq!(err, CreateGrantError::RecipientIsTheOwner);

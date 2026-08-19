@@ -42,7 +42,7 @@ use super::reseal::{
     CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
     reseal_scope_root,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, fresh_seed};
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 
 /// A fully re-sealed scope-root record handed to the [`ScopeRootPublisher`]: its
@@ -241,10 +241,8 @@ where
     // Mint the fresh random override seed at the scope root (the read-plane cut).
     // `rotate_scope` is this seed's terminal owner: `Zeroizing` wipes it on every
     // return path, including the error paths and a panic unwind.
-    let mut new_override_seed = Zeroizing::new([0u8; SECRET_LEN]);
-    entropy
-        .fill(new_override_seed.as_mut())
-        .map_err(|e| RotateError::Reseal(ResealError::Entropy(e)))?;
+    let new_override_seed: Zeroizing<[u8; SECRET_LEN]> =
+        fresh_seed(entropy).map_err(|e| RotateError::Reseal(ResealError::Entropy(e)))?;
 
     let seeds = ResealSeeds {
         override_seed: &new_override_seed,
@@ -303,7 +301,7 @@ mod tests {
     use super::*;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
         sign_grant_set,
@@ -413,6 +411,21 @@ mod tests {
         usize,
         Option<u64>,
     ) {
+        run_rotation_with(SeededEntropy::new(9), publish_result)
+    }
+
+    /// [`run_rotation`] over a caller-chosen entropy seam.
+    #[allow(clippy::type_complexity)]
+    fn run_rotation_with<E: Entropy>(
+        mut entropy: E,
+        publish_result: Result<(), ScopeRootPublishError>,
+    ) -> (
+        Result<RotationOutcome, RotateError>,
+        Vec<ResealedScopeRoot>,
+        Option<Option<u64>>,
+        usize,
+        Option<u64>,
+    ) {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let (commitment, sig, ledger) = fx.committed();
@@ -429,7 +442,6 @@ mod tests {
         let current_seed = [0xaa; 32];
 
         let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(9);
             let plan = RotateScopePlan {
                 identity: ScopeRootIdentity {
                     v: 2,
@@ -466,6 +478,23 @@ mod tests {
         let seen = seen.borrow().clone();
         let floor_snap = *floor_at_publish.borrow();
         (outcome, seen, floor_snap, spawned, final_floor)
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_cuts_no_epoch_and_publishes_nothing() {
+        // An all-zero override seed does not weaken the new epoch, it publishes
+        // the old one: the fresh history link seals the pre-rotation seed under a
+        // structure key anyone can re-derive from thirty-two zero bytes. The draw
+        // is refused release-active, before the re-seal.
+        let (outcome, seen, _, spawned, floor) = run_rotation_with(SilentEntropy, Ok(()));
+
+        assert!(matches!(
+            outcome.expect_err("the zero draw is refused"),
+            RotateError::Reseal(ResealError::Entropy(_)),
+        ));
+        assert!(seen.is_empty(), "nothing is published under a zero seed");
+        assert_eq!(spawned, 0, "and no lazy wave is enqueued behind it");
+        assert_eq!(floor, None, "the revocation floor never moved");
     }
 
     #[test]

@@ -83,6 +83,24 @@ pub fn fresh_ephemeral<E: Entropy + ?Sized>(
     Ok(ephemeral)
 }
 
+/// A fresh `N`-byte key seed, or a closed failure.
+///
+/// Same refusal as [`fresh_ephemeral`], for the sharpest reason of the three: an
+/// all-zero override seed does not merely weaken the new epoch, it publishes the
+/// previous one — the rotation seals its history link under the new seed's
+/// structure key, so a seed anyone can guess hands out the epoch the rotation
+/// was cutting.
+pub fn fresh_seed<const N: usize, E: Entropy + ?Sized>(
+    entropy: &mut E,
+) -> Result<Zeroizing<[u8; N]>, EntropyError> {
+    let mut seed = Zeroizing::new([0u8; N]);
+    entropy.fill(seed.as_mut_slice())?;
+    if seed.iter().all(|byte| *byte == 0) {
+        return Err(EntropyError::new("entropy seam produced an all-zero seed"));
+    }
+    Ok(seed)
+}
+
 /// A fresh AEAD nonce, or a closed failure.
 ///
 /// Same refusal as [`fresh_ephemeral`], for the sharper reason: a seam that
@@ -121,6 +139,7 @@ mod fresh_draw_tests {
     fn a_seam_that_writes_nothing_is_refused() {
         assert!(fresh_ephemeral(&mut Silent).is_err());
         assert!(fresh_nonce(&mut Silent).is_err());
+        assert!(fresh_seed::<32, _>(&mut Silent).is_err());
     }
 
     #[test]
@@ -139,6 +158,12 @@ mod fresh_draw_tests {
                 .message(),
             "no entropy",
         );
+        assert_eq!(
+            fresh_seed::<32, _>(&mut Broken)
+                .expect_err("the seam failure propagates")
+                .message(),
+            "no entropy",
+        );
     }
 
     #[test]
@@ -148,6 +173,12 @@ mod fresh_draw_tests {
         assert!(ephemeral.iter().any(|byte| *byte != 0));
         assert!(
             fresh_nonce(&mut seeded)
+                .expect("fresh")
+                .iter()
+                .any(|b| *b != 0)
+        );
+        assert!(
+            fresh_seed::<32, _>(&mut seeded)
                 .expect("fresh")
                 .iter()
                 .any(|b| *b != 0)

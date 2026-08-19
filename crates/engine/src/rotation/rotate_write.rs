@@ -67,7 +67,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 
 use super::eager_set::ResolveFailure;
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_seed};
 use crate::sync::pointer::{PointerError, SessionRole, seal_repoint};
 use cipherbox_core::hex::lower as hex_lower;
 
@@ -198,7 +198,20 @@ pub trait WriteWavePublisher {
 
     /// Batch-retire interior old names at wave completion. MUST run only **after**
     /// the root re-point, and MUST NOT include the old root name (it lingers).
+    /// The wave's one irreversible step, so an implementor MUST re-read the
+    /// read-epoch floor here and refuse on a rise: a rotation adopted mid-wave
+    /// puts the moved copies below it, and tombstoning the old names then strands
+    /// the subtree at both names.
     async fn retire(&self, old_names: &[IpnsName]) -> Result<(), WritePublishError>;
+
+    /// Refuse a re-point this build's own cold-seed gate would reject, **before**
+    /// the owner signs it — the produce side of
+    /// [`floor::cold_seed_checked`](crate::gate::floor::cold_seed_checked),
+    /// including its narrowing to the vault-anchor scope.
+    async fn check_repoint_publishable(
+        &self,
+        repoint: &RepointObject,
+    ) -> Result<(), WritePublishError>;
 
     /// Publish the owner-signed re-point `block` on one of the three channels.
     async fn publish_repoint(
@@ -539,13 +552,7 @@ where
             }
             seed
         }
-        None => {
-            let mut seed = Zeroizing::new([0u8; SECRET_LEN]);
-            entropy
-                .fill(seed.as_mut())
-                .map_err(WriteRotateError::Entropy)?;
-            seed
-        }
+        None => fresh_seed(entropy).map_err(WriteRotateError::Entropy)?,
     };
 
     // 4) Enumerate the subtree from published records. BFS yields the root first,
@@ -601,6 +608,14 @@ where
         plan.current_write_epoch,
         plan.min_read_epoch,
     )?;
+    publisher
+        .check_repoint_publishable(&repoint)
+        .await
+        .map_err(|error| WriteRotateError::Publish {
+            stage: repoint_stage(RepointChannel::ScopePointer),
+            node_id: scope_id,
+            error,
+        })?;
     let pointer_read_key = kdf::pointer_read_key(plan.owner_pointer_seed, &scope_id);
     let block = seal_repoint(
         SessionRole::Owner,
@@ -751,7 +766,7 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{PreservedFields, sign_grant_set};
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
@@ -936,6 +951,7 @@ mod tests {
         state: WaveState,
         fail_republish_after: Option<usize>,
         refuse_channel: Option<RepointChannel>,
+        refuse_repoint_check: bool,
     }
 
     impl FakePublisher {
@@ -944,6 +960,7 @@ mod tests {
                 state,
                 fail_republish_after: None,
                 refuse_channel: None,
+                refuse_repoint_check: false,
             }
         }
         fn failing_after(state: WaveState, n: usize) -> Self {
@@ -955,6 +972,14 @@ mod tests {
         fn refusing(state: WaveState, channel: RepointChannel) -> Self {
             Self {
                 refuse_channel: Some(channel),
+                ..Self::new(state)
+            }
+        }
+        /// The floor-blind analogue: a publisher whose pre-sign re-point gate
+        /// refuses, as `WriteWaveNet`'s does on a read-epoch floor rise.
+        fn refusing_repoint_check(state: WaveState) -> Self {
+            Self {
+                refuse_repoint_check: true,
                 ..Self::new(state)
             }
         }
@@ -1005,6 +1030,16 @@ mod tests {
                 self.state.retired.borrow_mut().insert(n.clone());
             }
             self.state.events.borrow_mut().push(Event::Retire(names));
+            Ok(())
+        }
+
+        async fn check_repoint_publishable(
+            &self,
+            _repoint: &RepointObject,
+        ) -> Result<(), WritePublishError> {
+            if self.refuse_repoint_check {
+                return Err(WritePublishError::Rejected);
+            }
             Ok(())
         }
 
@@ -1060,6 +1095,81 @@ mod tests {
             min_read_epoch: 7,
             current_root_name: current_root,
         }
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_moves_no_name() {
+        // An all-zero `writeScopeSeed` makes every per-name `ipnsKeypair` in the
+        // scope derivable, so anyone could sign records at the names this wave
+        // would move to. Refused release-active, before the first republish.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let error = block_on(rotate_scope_write(
+            &mut SilentEntropy,
+            &resolver,
+            &publisher,
+            &plan(&owner, &c, &sig, &current_root),
+        ))
+        .expect_err("the zero draw is refused");
+
+        assert!(matches!(error, WriteRotateError::Entropy(_)));
+        assert!(
+            error.is_retryable(),
+            "an entropy failure is availability, not a verdict",
+        );
+        assert!(
+            state.events.borrow().is_empty(),
+            "no name moves under a derivable write scope seed",
+        );
+    }
+
+    #[test]
+    fn a_refused_repoint_check_signs_and_publishes_nothing() {
+        // The gate runs before `seal_repoint`, so a re-point this build's own
+        // cold-seed gate would reject is never owner-signed — and the wave stops
+        // short of the retire, leaving every old name live.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::refusing_repoint_check(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let error = block_on(async {
+            let mut e = SeededEntropy::new(1);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("the re-point is refused");
+
+        assert!(matches!(
+            error,
+            WriteRotateError::Publish {
+                error: WritePublishError::Rejected,
+                ..
+            },
+        ));
+        assert!(
+            !error.is_retryable(),
+            "the publisher's own fail-closed verdict is never laundered into a stall",
+        );
+        let events = state.events.borrow();
+        assert!(
+            !events
+                .iter()
+                .any(|ev| matches!(ev, Event::Repoint(_) | Event::Retire(_))),
+            "nothing is re-pointed and nothing is tombstoned",
+        );
     }
 
     #[test]

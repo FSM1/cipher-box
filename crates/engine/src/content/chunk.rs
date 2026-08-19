@@ -11,7 +11,7 @@ use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::profile::ContentProfile;
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_seed};
 
 /// The sealed byte overhead one leaf adds to its plaintext chunk:
 /// `nonce(24) || ciphertext || tag(16)`, with ciphertext length equal to
@@ -33,8 +33,7 @@ impl ContentKey {
     /// buffer self-zeroizes on every return path (incl. the error path, where
     /// it may hold partially-written key bytes).
     pub fn generate(entropy: &mut impl Entropy) -> Result<Self, EntropyError> {
-        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
-        entropy.fill(bytes.as_mut())?;
+        let bytes: Zeroizing<[u8; KEY_LEN]> = fresh_seed(entropy)?;
         Ok(Self(*bytes))
     }
 
@@ -115,11 +114,19 @@ pub fn seal_one_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::SeededEntropy;
+    use crate::testkit::{SeededEntropy, SilentEntropy};
     use cipherbox_core::content::{open_chunk, verify_cid};
 
     fn ci() -> ContentProfile {
         ContentProfile::CI
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_mints_no_content_key() {
+        // A seam that reports success having written nothing would seal every
+        // chunk of the version under thirty-two zero bytes — the version's
+        // plaintext readable by anyone. Refused before the key exists.
+        assert!(ContentKey::generate(&mut SilentEntropy).is_err());
     }
 
     #[test]
