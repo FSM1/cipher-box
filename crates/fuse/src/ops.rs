@@ -83,6 +83,16 @@ impl Pending {
     }
 }
 
+/// How a block-fetching path uses the chunk cache: a path that will come back
+/// to these bytes retains and promotes them; a one-shot pass reads through,
+/// leaving neither the budget nor the recency order spent on blocks it will
+/// never ask for again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retain {
+    Hot,
+    Scan,
+}
+
 /// The operation core for one mount session: the engine it projects, the host
 /// adapter it pushes invalidation to, and the session's inode and handle maps.
 pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
@@ -321,11 +331,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
                         .await?;
                     let taken = take_from(&mut out, &block, within, want);
                     let whole = block.len() as u64 == block_bytes;
-                    // Caching an empty block past the end would grow the table
-                    // without spending a byte of the budget that bounds it.
-                    if !block.is_empty() {
-                        self.cache.insert((stream, index), block);
-                    }
+                    self.cache.insert((stream, index), block);
                     (taken, whole)
                 }
             };
@@ -377,7 +383,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             if within == 0 && take as u64 == block_bytes {
                 self.spill_mut(handle)?.put(index, &rest[..take])?;
             } else {
-                let mut block = self.version_block(handle, index).await?;
+                let mut block = self.version_block(handle, index, Retain::Scan).await?;
                 block[within..within + take].copy_from_slice(&rest[..take]);
                 self.spill_mut(handle)?.put(index, &block)?;
             }
@@ -558,7 +564,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         while offset < len {
             let index = offset / block_bytes;
             let take = block_bytes.min(len - offset) as usize;
-            let block = self.version_block(handle, index).await?;
+            let block = self.version_block(handle, index, Retain::Scan).await?;
             self.engine.push_chunk(write, &block[..take]).await?;
             offset += take as u64;
         }
@@ -581,7 +587,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             let index = cursor / block_bytes;
             let within = (cursor - index * block_bytes) as usize;
             let want = (end - cursor) as usize;
-            let block = self.version_block(handle, index).await?;
+            let block = self.version_block(handle, index, Retain::Hot).await?;
             cursor += take_from(&mut out, &block, within, want) as u64;
         }
         Ok(core::mem::take(&mut *out))
@@ -590,10 +596,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// Block `index` of the version a handle's writes are building: its spill
     /// block if it took one, else the base version's bytes, else the zeros a
     /// hole reads as. Always a whole block wide.
+    ///
+    /// The base block is cached whole and clamped at use: the truncate floor is
+    /// per-handle `Pending` state, not a property of the stream every handle on
+    /// the file shares.
     async fn version_block(
         &mut self,
         handle: HandleId,
         index: u64,
+        retain: Retain,
     ) -> Result<Zeroizing<Vec<u8>>, VfsError> {
         let block_bytes = self.cache.block_bytes();
         let pending = self.pending.get_mut(&handle).ok_or(VfsError::BadHandle)?;
@@ -610,11 +621,22 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         // Clamped to the floor a truncate left: past it the version's own bytes
         // are gone, and the file reads as the hole they left.
-        let want = block_bytes.min(base_len - at);
+        let want = block_bytes.min(base_len - at) as usize;
         let stream = self.stream_for(handle).await?;
-        let base = Zeroizing::new(self.engine.read_stream(stream, at, want).await?);
-        let take = base.len().min(out.len());
-        out[..take].copy_from_slice(&base[..take]);
+        let held = match retain {
+            Retain::Hot => self.cache.get((stream, index)),
+            Retain::Scan => self.cache.peek((stream, index)),
+        };
+        if let Some(block) = held {
+            clamp_into(&mut out, block, want);
+            return Ok(out);
+        }
+        let mut base = Zeroizing::new(self.engine.read_stream(stream, at, block_bytes).await?);
+        clamp_into(&mut out, &base, want);
+        if retain == Retain::Hot {
+            self.cache
+                .insert((stream, index), core::mem::take(&mut *base));
+        }
         Ok(out)
     }
 
@@ -818,6 +840,13 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         Ok(())
     }
+}
+
+/// Copy the first `want` bytes of `block` over the head of `out`, leaving the
+/// rest of `out` as the zeros a truncate's floor reads as.
+fn clamp_into(out: &mut [u8], block: &[u8], want: usize) {
+    let take = want.min(block.len());
+    out[..take].copy_from_slice(&block[..take]);
 }
 
 /// Append at most `want` bytes of `block` from `within` onto `out`, reporting

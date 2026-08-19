@@ -1799,6 +1799,100 @@ mod published {
     }
 
     #[test]
+    fn a_sub_block_write_merges_over_the_block_the_read_path_cached() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        block_on(mount.core.read(handle, 0, 4)).expect("the read caches the chunk it framed");
+        let after_read = block_fetches(&mount.device);
+
+        block_on(mount.core.write(handle, 1, b"a")).expect("the write merges into that chunk");
+
+        assert_eq!(
+            block_fetches(&mount.device),
+            after_read,
+            "the merge re-fetched a base block the mount was already holding"
+        );
+    }
+
+    #[test]
+    fn reading_through_pending_writes_fetches_each_base_block_once() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        // One sub-block write, so every later read renders through the pending
+        // overlay and every untouched block still comes off the base version.
+        block_on(mount.core.write(handle, 1, b"a")).expect("the write lands");
+
+        let whole = plaintext.len() as u32;
+        let first = block_on(mount.core.read(handle, 0, whole)).expect("the first pass");
+        let after_first = block_fetches(&mount.device);
+        let second = block_on(mount.core.read(handle, 0, whole)).expect("the second pass");
+
+        assert_eq!(first, second, "both passes render the same file");
+        assert_eq!(
+            block_fetches(&mount.device),
+            after_first,
+            "the second pass re-fetched base blocks the first had already cached"
+        );
+    }
+
+    #[test]
+    fn a_cached_base_block_is_still_clamped_to_the_floor_a_shrink_left() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let ino = mount.ino;
+        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.read(handle, 0, chunk() as u32)).expect("the read caches the chunk");
+
+        block_on(mount.core.truncate(ino, 4, Some(handle))).expect("the shrink");
+        block_on(mount.core.write(handle, 6, b"xy")).expect("the write past the gap");
+        block_on(mount.core.release(handle)).expect("the release commits");
+        advance_and_pump(&mut mount);
+
+        let mut expected = plaintext[..4].to_vec();
+        expected.extend_from_slice(b"\0\0xy");
+        let reader = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(reader, 0, 16)).expect("the read"),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_commit_walk_leaves_a_readers_hot_blocks_in_the_cache() {
+        let plaintext = clip_bytes();
+        let budget = CacheBudget::for_profile(ContentProfile::CI, 5).expect("five chunks");
+        let mut mount = mount_published(&plaintext, budget);
+        let reader = opened(&mut mount);
+        for index in 0..3 {
+            block_on(mount.core.read(reader, index * chunk(), chunk() as u32))
+                .expect("the reader's chunks");
+        }
+
+        let writer =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.write(writer, 1, b"a")).expect("the write lands");
+        block_on(mount.core.release(writer)).expect("the release commits the whole version");
+        advance_and_pump(&mut mount);
+
+        let before = block_fetches(&mount.device);
+        for index in 0..3 {
+            block_on(mount.core.read(reader, index * chunk(), chunk() as u32))
+                .expect("the reader's chunks re-serve");
+        }
+        assert_eq!(
+            block_fetches(&mount.device),
+            before,
+            "the commit walk evicted the reader's hot blocks"
+        );
+    }
+
+    #[test]
     fn unmounting_releases_every_stream_and_the_plaintext_they_cached() {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
