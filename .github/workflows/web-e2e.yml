@@ -210,26 +210,21 @@ jobs:
           echo "::error::playwright install chromium stalled on every attempt"
           exit 1
 
-      # Deliberately no retry: Playwright runs this under sudo, so a killed
-      # attempt leaves a root-owned `apt-get` holding the dpkg lock that this
-      # shell cannot reap, and the next attempt dies on that lock instead of the
-      # original stall. One attempt, bounded generously — a slow mirror is slow,
-      # not stuck.
+      # The runner image already carries Chromium's shared libraries, so this
+      # is a no-op on a healthy runner — a passing run installs nothing and
+      # takes seconds. It stays only to cover an image that drops one.
+      #
+      # So a stall here must not gate the suite: apt is bounded, never retried
+      # (Playwright runs it under sudo, and a killed attempt leaves a root-owned
+      # apt-get holding the dpkg lock that the next attempt dies on), and a
+      # failure warns rather than fails. If a library really is missing, the
+      # smoke slice says so in the browser launch error.
       - name: Install the Playwright system dependencies
-        timeout-minutes: 12
+        timeout-minutes: 6
         run: |
-          install_status=0
-          timeout --kill-after=30 600 \
-            pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium || install_status=$?
-          if [ "$install_status" -eq 0 ]; then
-            exit 0
-          fi
-          if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
-            echo "::error::playwright install-deps did not finish within 600s"
-          else
-            echo "::error::playwright install-deps failed with status $install_status"
-          fi
-          exit 1
+          timeout --kill-after=30 240 \
+            pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium \
+            || echo "::warning::playwright install-deps did not complete; the smoke slice shows whether a library is actually missing"
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
       # suite that needs a live stack.
