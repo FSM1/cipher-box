@@ -34,11 +34,11 @@ use zeroize::Zeroizing;
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
-    RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
-    pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
+    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, ProviderError,
+    Refused, RootManifest, SealError, SessionBearer, StagingLedger, open_content_range,
+    open_content_root, pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, EntropyError};
 use crate::gate::{GateError, floor};
 use crate::grants::{Contact, ContactStore, ContactStoreError, StagingContactStore};
 use crate::net::retire::{OrphanHeads, retire};
@@ -56,7 +56,10 @@ use crate::seams::{
     UnixMillis,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{PlacementDecision, PlacementRefusal, decide_placement, load_settings};
+use crate::settings::{
+    PlacementDecision, PlacementRefusal, SettingsPublishError, VaultSettings, decide_placement,
+    load_settings, publish_settings,
+};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
@@ -558,6 +561,16 @@ pub enum Command {
         node: NodeId,
     },
 
+    // --- vault settings ---
+    /// Publish the account's vault settings record — the member's placement,
+    /// provider and retention choice. The record carries a client-signed EOL
+    /// the API republisher cannot extend, so a confirmed publish also enrols
+    /// the name in this session's renewal set.
+    SaveVaultSettings {
+        /// The settings to seal and publish.
+        settings: VaultSettings,
+    },
+
     // --- auth ---
     /// Exchange a host-collected SIWE wallet signature (secondary method;
     /// the engine performs the exchange through its API client).
@@ -590,6 +603,7 @@ impl Command {
             Command::CreateInviteLink { .. } => "createInviteLink",
             Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
+            Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLogin { .. } => "siweLogin",
             Command::Logout => "logout",
         }
@@ -641,6 +655,17 @@ impl CommandOutcome {
             CommandOutcome::Queued { op_id } => Some(*op_id),
             _ => None,
         }
+    }
+}
+
+/// The engine's shared entropy cell as an [`Entropy`] source that re-borrows
+/// per draw. A `RefMut` held across an `.await` would panic the moment a
+/// spawned loop drew from the same cell.
+struct SharedEntropy<'a>(&'a RefCell<Box<dyn Entropy>>);
+
+impl Entropy for SharedEntropy<'_> {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        self.0.borrow_mut().fill(dest)
     }
 }
 
@@ -956,6 +981,37 @@ impl EngineError {
         }
     }
 
+    /// Map a settings-publish failure. The split is retryability: a refusal
+    /// that is deterministic in the settings offered is an input the host must
+    /// change, and reporting it as availability would leave a host retrying a
+    /// save that can never land.
+    fn from_settings_publish(err: SettingsPublishError) -> Self {
+        match err {
+            SettingsPublishError::Placement(refusal) => EngineError::NoPlacement { refusal },
+            SettingsPublishError::Byo(provider) => EngineError::MalformedInput {
+                check: byo_check(provider),
+            },
+            SettingsPublishError::Codec(e) => EngineError::MalformedInput { check: e.check() },
+            // The sealed record does not reopen under the key its own reader
+            // re-derives, or is past the block ceiling: an encoder verdict on
+            // these bytes, not an outage (security rule 8).
+            SettingsPublishError::Preflight(_) => EngineError::MalformedInput {
+                check: "settings-record-preflight",
+            },
+            SettingsPublishError::Entropy(e) => EngineError::from_entropy(e),
+            SettingsPublishError::Publish(_) => EngineError::Seam {
+                message: "the settings record did not reach the record plane".to_owned(),
+            },
+            SettingsPublishError::Unconfirmed => EngineError::Seam {
+                message: "the settings publish was not confirmed on re-resolve".to_owned(),
+            },
+            SettingsPublishError::Floor(e) => EngineError::from_seam(e),
+            SettingsPublishError::Revision => EngineError::Seam {
+                message: "the durable settings revision counter did not advance".to_owned(),
+            },
+        }
+    }
+
     /// Map a cold-start failure onto the facade error: every trust arm (forged
     /// pointer, regressed floor, rejected root) collapses to the single
     /// fail-closed [`ColdStart`](EngineError::ColdStart) — never retryable
@@ -968,6 +1024,19 @@ impl EngineError {
                 message: trust.to_string(),
             },
         }
+    }
+}
+
+/// The `check` name a static BYO-config refusal reports. Only the arms
+/// `validate_byo_config` can produce are named; the reachability verdicts come
+/// from a probe this path never runs.
+fn byo_check(err: ProviderError) -> &'static str {
+    match err {
+        ProviderError::InvalidEndpoint => "byo-endpoint-invalid",
+        ProviderError::InsecureTransport => "byo-endpoint-insecure",
+        ProviderError::BlockedAddress => "byo-endpoint-blocked",
+        ProviderError::InvalidCredential => "byo-credential-invalid",
+        _ => "byo-config-invalid",
     }
 }
 
@@ -1640,6 +1709,11 @@ pub struct Engine<T: SeamTypes> {
     /// gate-passing record here, and the cold-start liveness loop keyless
     /// re-PUTs the map's values on the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
+    /// The vault settings record this session published, in its own slot rather
+    /// than in [`held_records`](Self::held_records): that map is keyed by node
+    /// id and the settings record has none, so a synthetic id would put it in a
+    /// slot a resolved record could claim and evict its renewal.
+    settings_record: Rc<RefCell<Option<HeldRecord>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
     /// classifies at read time off the same cell.
@@ -1749,6 +1823,7 @@ impl<T: SeamTypes> Engine<T> {
                 // the base snapshot; children come from the pending-op overlay.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
+                settings_record: Rc::new(RefCell::new(None)),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -1991,6 +2066,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
         }
+        if let Ok(mut settings) = self.settings_record.try_borrow_mut() {
+            *settings = None;
+        }
         // Each open stream pins a version's content key; releasing the table's
         // `Rc`s here is what makes this the terminal owner (security rule 7).
         if let Ok(mut streams) = self.streams.try_borrow_mut() {
@@ -2225,6 +2303,7 @@ impl<T: SeamTypes> Engine<T> {
         let floors = self.seams.floor_store.clone();
         let profile = self.profile;
         let held = self.held_records.clone();
+        let settings_record = self.settings_record.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
         self.seams.scheduler.spawn(Box::pin(async move {
@@ -2232,7 +2311,12 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+                let records: Vec<HeldRecord> = held
+                    .borrow()
+                    .values()
+                    .cloned()
+                    .chain(settings_record.borrow().iter().cloned())
+                    .collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
                 // as an Event — never a silent failure (blueprint/engine.md).
@@ -2665,6 +2749,10 @@ impl<T: SeamTypes> Engine<T> {
                 })
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
+            Command::SaveVaultSettings { settings } => {
+                self.save_vault_settings(&settings).await?;
+                Ok(CommandOutcome::Done)
+            }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
@@ -2676,6 +2764,34 @@ impl<T: SeamTypes> Engine<T> {
                 command: other.name(),
             }),
         }
+    }
+
+    /// Seal and publish the vault settings record, then enrol the confirmed
+    /// record in this session's renewal set.
+    ///
+    /// The enrolment is the whole reason a settings save is a facade command
+    /// rather than a bare `publish_settings` call: the record's EOL is
+    /// client-signed and the API republisher is keyless, so nothing but this
+    /// session extends it.
+    async fn save_vault_settings(&self, settings: &VaultSettings) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let held = publish_settings(
+            &self.seams.record_transport,
+            api,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &mut SharedEntropy(&self.entropy),
+            &self.orphan_heads,
+            session.login_secret(),
+            settings,
+        )
+        .await
+        .map_err(EngineError::from_settings_publish)?;
+        *self.settings_record.borrow_mut() = Some(held);
+        Ok(())
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch

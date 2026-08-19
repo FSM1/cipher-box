@@ -10,9 +10,10 @@
 
 use core::future::poll_fn;
 use core::num::NonZeroU64;
-use core::task::Poll;
+use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::task::Wake;
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -22,16 +23,18 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
+use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
-    EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler, SeamError,
-    SeamResult, SnapshotCache, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler,
+    SeamError, SeamResult, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
-use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    DefaultsReason, Gateway, GatewayConfig, OrphanHeads, ProviderError, RetentionPolicy,
-    SessionBearer, SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings,
-    load_settings, publish_settings, settings_name,
+    ApiBaseUrl, Command, CommandOutcome, ContentProfile, DefaultsReason, Engine, EngineError,
+    EventStream, Gateway, GatewayConfig, LoginSecret, OrphanHeads, ProviderError, RetentionPolicy,
+    SessionBearer, SettingsLoad, SettingsPublishError, StoragePolicy, SyncTimingProfile,
+    VaultSettings, load_settings, publish_settings, settings_name,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -1785,4 +1788,208 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
     ));
     assert!(blocks.retired().is_empty(), "nothing was retired");
     assert!(orphans.pending().is_empty(), "nothing is pending either");
+}
+
+// ---------------------------------------------------------------------------
+// The facade caller: a host saves settings through `Command::SaveVaultSettings`,
+// and the confirmed record joins the session's renewal set.
+// ---------------------------------------------------------------------------
+
+fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+    Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(21)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::offline(),
+        GatewayConfig::disabled(),
+    )
+}
+
+/// Poll every spawned loop until each is parked on a timer again.
+fn poll_each(tasks: &mut [BoxedTask]) {
+    struct Woken(Mutex<bool>);
+    impl Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            *self.0.lock().expect("lock") = true;
+        }
+    }
+    let flag = Arc::new(Woken(Mutex::new(false)));
+    let waker = Waker::from(flag.clone());
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        *flag.0.lock().expect("lock") = false;
+        for task in tasks.iter_mut() {
+            let _ = task.as_mut().poll(&mut cx);
+        }
+        if !*flag.0.lock().expect("lock") {
+            return;
+        }
+    }
+}
+
+/// A cold-started engine whose block plane is wired for a whole scenario, with
+/// its spawned loops parked at their first sleep.
+fn boot(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    serve_http(device, blocks, 40);
+    let (mut engine, events) = engine_on(device);
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    (engine, events, tasks)
+}
+
+#[test]
+fn saving_vault_settings_through_the_facade_publishes_the_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: configured(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let name = settings_name(&SECRET);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_some(),
+            "the settings record published to every endpoint",
+        );
+    }
+}
+
+#[test]
+fn a_settings_save_before_start_is_not_started() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let (mut engine, _events) = engine_on(&device);
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: configured(),
+        })),
+        Err(EngineError::NotStarted)
+    );
+}
+
+/// A mode with no usable byte destination is refused before anything is sealed
+/// — the host must change the settings, so it is never reported as an outage a
+/// retry could clear.
+#[test]
+fn a_settings_save_naming_no_byte_destination_is_refused_as_a_placement() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    let outcome = block_on(engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            pin_mode: PinMode::External,
+            byo: None,
+            retention: RetentionPolicy::KeepAll,
+        },
+    }));
+
+    assert!(
+        matches!(outcome, Err(EngineError::NoPlacement { .. })),
+        "got {outcome:?}",
+    );
+    let name = settings_name(&SECRET);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "nothing was published",
+        );
+    }
+}
+
+/// The settings record's EOL is client-signed and the API republisher is
+/// keyless, so the session that published it is the only thing that keeps it
+/// alive: a save must enrol the name in the liveness loop's set.
+#[test]
+fn a_saved_settings_record_is_kept_alive_by_the_liveness_loop() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the save publishes");
+
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    let published = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the settings record published");
+
+    // Clobber what every endpoint serves; only a re-PUT of the held record can
+    // put the published bytes back.
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
+    }
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_each(&mut tasks);
+
+    for endpoint in &endpoints {
+        assert_eq!(
+            world.record_store.record_at(endpoint, name.as_str()),
+            Some(published.clone()),
+            "the hourly pass re-PUT the settings record",
+        );
+    }
+}
+
+/// The renewal set is session state: it dies with the engine rather than
+/// outliving it in a parked loop (security rule 7).
+#[test]
+fn a_dropped_engine_stops_renewing_its_settings_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, mut tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the save publishes");
+
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    drop(engine);
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
+    }
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_each(&mut tasks);
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[0], name.as_str()),
+        Some(b"not the record".to_vec()),
+        "a dropped engine re-PUTs nothing",
+    );
 }

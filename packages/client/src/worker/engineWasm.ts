@@ -17,6 +17,12 @@ export type WasmNodeId = object;
 /** Opaque wasm-bindgen `Command` handle. */
 export type WasmCommand = object;
 
+/** Opaque wasm-bindgen `ByoIpfsConfig` handle. */
+export type WasmByoIpfsConfig = object;
+
+/** Opaque wasm-bindgen `VaultSettings` handle. */
+export type WasmVaultSettings = object;
+
 /** wasm-bindgen `Event` — key-free view state; a getter is `undefined` off-variant. */
 export interface WasmEvent {
   readonly kind: string;
@@ -133,9 +139,16 @@ export interface EngineWasm {
     createInviteLink(node: WasmNodeId, permission: number): WasmCommand;
     acceptShare(sealedSharePointer: Uint8Array): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;
+    saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
     siweLogin(message: string, signature: Uint8Array): WasmCommand;
     logout(): WasmCommand;
   };
+  ByoIpfsConfig: new (endpoint: string, kind: number, accessToken?: string) => WasmByoIpfsConfig;
+  VaultSettings: new (
+    pinMode: number,
+    byo?: WasmByoIpfsConfig,
+    keepLatestVersions?: number
+  ) => WasmVaultSettings;
   NodeKind: { readonly File: number; readonly Folder: number };
   PendingClass: {
     readonly None: number;
@@ -143,6 +156,8 @@ export interface EngineWasm {
     readonly Content: number;
   };
   Permission: { readonly Read: number; readonly Write: number };
+  PinMode: { readonly Hosted: number; readonly External: number; readonly Dual: number };
+  ByoKind: { readonly Kubo: number; readonly Psa: number; readonly Pinata: number };
   OpPhase: {
     readonly DownloadStarted: number;
     readonly DownloadCompleted: number;

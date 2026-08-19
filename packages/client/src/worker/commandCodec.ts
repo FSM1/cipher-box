@@ -23,8 +23,10 @@ import type {
   WasmBlockedOp,
   WasmCommand,
   WasmEvent,
+  WasmByoIpfsConfig,
   WasmNodeId,
   WasmSnapshotView,
+  WasmVaultSettings,
 } from './engineWasm.js';
 
 /**
@@ -104,6 +106,52 @@ function permission(wasm: EngineWasm, value: unknown): number {
   throw invalidField('permission', value);
 }
 
+function pinMode(wasm: EngineWasm, value: unknown): number {
+  if (value === 'hosted') return wasm.PinMode.Hosted;
+  if (value === 'external') return wasm.PinMode.External;
+  if (value === 'dual') return wasm.PinMode.Dual;
+  throw invalidField('settings.pinMode', value);
+}
+
+function byoKind(wasm: EngineWasm, value: unknown): number {
+  if (value === 'kubo') return wasm.ByoKind.Kubo;
+  if (value === 'psa') return wasm.ByoKind.Psa;
+  if (value === 'pinata') return wasm.ByoKind.Pinata;
+  throw invalidField('settings.byo.kind', value);
+}
+
+/**
+ * An optional wire field. `null` is how the protocol spells "absent" and the
+ * wasm builders take `undefined`; every other value falls through to the
+ * checker the caller applies.
+ */
+function optional(value: unknown): unknown {
+  return value === null ? undefined : value;
+}
+
+function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
+  const settings = record(value, 'settings');
+  const rawByo = optional(settings.byo);
+  let byo: WasmByoIpfsConfig | undefined;
+  if (rawByo !== undefined) {
+    const config = record(rawByo, 'settings.byo');
+    const token = optional(config.accessToken);
+    byo = new wasm.ByoIpfsConfig(
+      text(config.endpoint, 'settings.byo.endpoint'),
+      byoKind(wasm, config.kind),
+      token === undefined ? undefined : text(token, 'settings.byo.accessToken')
+    );
+  }
+  const keep = optional(settings.keepLatestVersions);
+  // A `0` reaches the builder, which refuses it: "keep none" would retire the
+  // live version of every file.
+  return new wasm.VaultSettings(
+    pinMode(wasm, settings.pinMode),
+    byo,
+    keep === undefined ? undefined : count(keep, 'settings.keepLatestVersions')
+  );
+}
+
 /**
  * Exhaustiveness bound: adding a command kind without a builder fails the
  * build, and a sender off the union gets a refusal rather than the `undefined`
@@ -172,6 +220,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
       return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
+    case 'saveVaultSettings':
+      return wasm.Command.saveVaultSettings(vaultSettings(wasm, descriptor.settings));
     case 'siweLogin':
       return wasm.Command.siweLogin(
         text(descriptor.message, 'message'),

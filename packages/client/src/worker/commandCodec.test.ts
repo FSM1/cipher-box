@@ -146,6 +146,93 @@ describe('buildCommand', () => {
       'invalid request field opId: number'
     );
   });
+
+  describe('saveVaultSettings', () => {
+    /** Records what the settings builders were constructed with. */
+    const spyWasm = (): { wasm: EngineWasm; byo: unknown[][]; settings: unknown[][] } => {
+      const byo: unknown[][] = [];
+      const settings: unknown[][] = [];
+      const wasm = {
+        ...fakeWasmEnums,
+        ByoIpfsConfig: class {
+          constructor(...args: unknown[]) {
+            byo.push(args);
+          }
+        },
+        VaultSettings: class {
+          constructor(...args: unknown[]) {
+            settings.push(args);
+          }
+        },
+        Command: { saveVaultSettings: (value: unknown) => ({ value }) },
+      } as unknown as EngineWasm;
+      return { wasm, byo, settings };
+    };
+
+    it('carries the provider config and the retention count through', () => {
+      const { wasm, byo, settings } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: {
+          pinMode: 'dual',
+          byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: 's3cret' },
+          keepLatestVersions: 3,
+        },
+      });
+
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, 's3cret']]);
+      expect(settings).toHaveLength(1);
+      expect(settings[0][0]).toBe(fakeWasmEnums.PinMode.Dual);
+      expect(settings[0][2]).toBe(3);
+    });
+
+    it('spells an absent provider and an absent retention cap as undefined', () => {
+      const { wasm, byo, settings } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: { pinMode: 'hosted', byo: null, keepLatestVersions: null },
+      });
+
+      expect(byo).toEqual([]);
+      expect(settings[0][1]).toBeUndefined();
+      expect(settings[0][2]).toBeUndefined();
+      // A null credential is absent too, never the string "null".
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: {
+          pinMode: 'external',
+          byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: null },
+          keepLatestVersions: null,
+        },
+      });
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined]]);
+    });
+
+    it('rejects an unknown pin mode or provider kind rather than defaulting one', () => {
+      const { wasm } = spyWasm();
+      const refusesSettings =
+        (settings: unknown): (() => unknown) =>
+        () =>
+          buildCommand(wasm, { kind: 'saveVaultSettings', settings } as CommandDescriptor);
+
+      expect(
+        refusesSettings({ pinMode: 'somewhere-else', byo: null, keepLatestVersions: null })
+      ).toThrow('invalid request field settings.pinMode: string');
+      expect(
+        refusesSettings({
+          pinMode: 'dual',
+          byo: { endpoint: 'https://kubo.example', kind: 'ipfs-cluster', accessToken: null },
+          keepLatestVersions: null,
+        })
+      ).toThrow('invalid request field settings.byo.kind: string');
+      expect(refusesSettings(null)).toThrow('invalid request field settings: null');
+      expect(refusesSettings({ pinMode: 'hosted', byo: null, keepLatestVersions: -1 })).toThrow(
+        'invalid request field settings.keepLatestVersions: number'
+      );
+    });
+  });
 });
 
 describe('readEvent', () => {

@@ -91,14 +91,18 @@ pub type SeamResult<T> = Result<T, SeamError>;
 pub trait SeamTypes {
     /// Durable floor storage ([`FloorStore`]).
     type FloorStore: FloorStore;
-    /// Dumb `/routing/v1` byte mover ([`RecordTransport`]).
-    type RecordTransport: RecordTransport;
+    /// Dumb `/routing/v1` byte mover ([`RecordTransport`]). `Clone + 'static`
+    /// because the publish port hands a handle to the background re-PUT it
+    /// spawns on the scheduler.
+    type RecordTransport: RecordTransport + Clone + 'static;
     /// Plain HTTP ([`Http`]).
     type Http: Http;
     /// Sealed-blob mailbox transport ([`Mailbox`]).
     type Mailbox: Mailbox;
-    /// Timers, background tasks, wall clock ([`Scheduler`]).
-    type Scheduler: Scheduler;
+    /// Timers, background tasks, wall clock ([`Scheduler`]). `Clone + 'static`
+    /// for the same reason as [`RecordTransport`](Self::RecordTransport): the
+    /// spawned task owns a handle of its own.
+    type Scheduler: Scheduler + Clone + 'static;
     /// Durable op queue and staged bytes ([`StagingStore`]).
     type StagingStore: StagingStore;
     /// Durable last-known-good cache ([`SnapshotCache`]).
