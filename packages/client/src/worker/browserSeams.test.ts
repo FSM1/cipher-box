@@ -45,6 +45,17 @@ describe('makeBrowserSeams', () => {
     expect(names).toEqual(['engine-7-aa11-floors']);
   });
 
+  it('accepts the account id a real login produces', async () => {
+    const names = openedDatabases();
+    // Two 64-character secp256k1 coordinates and a separator.
+    const real = `${'ab'.repeat(32)}-${'cd'.repeat(32)}`;
+
+    void makeBrowserSeams(CONFIG, real).floorStore.epochFloor(new Uint8Array(16));
+    await Promise.resolve();
+
+    expect(names).toEqual([`cipherbox-${real}-floors`]);
+  });
+
   it.each([
     ['nothing at all', ''],
     ['a path separator', 'aa/../bb'],

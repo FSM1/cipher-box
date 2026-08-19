@@ -24,8 +24,12 @@ export interface BrowserSeamsConfig {
   dbPrefix?: string;
 }
 
-/** Store names are built from the account id, so it is bounded and path-free. */
-const ACCOUNT_ID = /^[0-9a-z][0-9a-z-]{0,127}$/;
+/**
+ * Store names are built from the account id, so it is bounded and path-free.
+ * The bound clears a secp256k1 point written as two 64-character hex
+ * coordinates and a separator.
+ */
+const ACCOUNT_ID = /^[0-9a-z][0-9a-z-]{0,159}$/;
 
 /** The seam bag the WASM `EngineHandle` constructor reads. */
 export interface BrowserSeams {
