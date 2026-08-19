@@ -198,7 +198,11 @@ describe('buildCommand', () => {
       expect(byo).toEqual([]);
       expect(settings[0][1]).toBeUndefined();
       expect(settings[0][2]).toBeUndefined();
-      // A null credential is absent too, never the string "null".
+    });
+
+    it('spells a null credential as absent, never as the string "null"', () => {
+      const { wasm, byo } = spyWasm();
+
       buildCommand(wasm, {
         kind: 'saveVaultSettings',
         settings: {
@@ -207,7 +211,37 @@ describe('buildCommand', () => {
           keepLatestVersions: null,
         },
       });
+
       expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined]]);
+    });
+
+    it('refuses a retention cap past the u32 the builder takes', () => {
+      const { wasm } = spyWasm();
+
+      // The number ABI wraps rather than rejects, so 2**32 + 1 would arrive as
+      // "keep only the newest" — a cap that retires every other version.
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: { pinMode: 'hosted', byo: null, keepLatestVersions: 2 ** 32 + 1 },
+        })
+      ).toThrow('invalid request field settings.keepLatestVersions: number');
+    });
+
+    it('refuses before it builds the credential-bearing provider config', () => {
+      const { wasm, byo } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: {
+            pinMode: 'nowhere',
+            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: 's3cret' },
+            keepLatestVersions: null,
+          },
+        } as unknown as CommandDescriptor)
+      ).toThrow('invalid request field settings.pinMode: string');
+      expect(byo).toEqual([]);
     });
 
     it('rejects an unknown pin mode or provider kind rather than defaulting one', () => {

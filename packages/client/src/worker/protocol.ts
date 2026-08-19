@@ -130,11 +130,7 @@ export interface ByoIpfsConfigDescriptor {
   accessToken: string | null;
 }
 
-/**
- * The member's placement, provider and retention choice, as data. Write-only:
- * the engine never projects settings back out through this layer, so a stored
- * provider credential is carried here on the way in and nowhere on the way out.
- */
+/** The member's placement, provider and retention choice, as data. */
 export interface VaultSettingsDescriptor {
   pinMode: PinMode;
   byo: ByoIpfsConfigDescriptor | null;

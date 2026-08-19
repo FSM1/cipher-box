@@ -34,31 +34,33 @@ use zeroize::Zeroizing;
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, ProviderError,
-    Refused, RootManifest, SealError, SessionBearer, StagingLedger, open_content_range,
-    open_content_root, pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
+    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
+    RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
+    pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, SharedEntropy};
 use crate::gate::{GateError, floor};
 use crate::grants::{Contact, ContactStore, ContactStoreError, StagingContactStore};
+use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, eol_renew_pass,
-    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
+    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::OwnerSessionKeys;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    FloorStore, OpId, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, StagingStore,
-    UnixMillis,
+    FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
+    StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
     PlacementDecision, PlacementRefusal, SettingsPublishError, VaultSettings, decide_placement,
-    load_settings, publish_settings,
+    load_settings, placement_of, publish_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -563,9 +565,8 @@ pub enum Command {
 
     // --- vault settings ---
     /// Publish the account's vault settings record — the member's placement,
-    /// provider and retention choice. The record carries a client-signed EOL
-    /// the API republisher cannot extend, so a confirmed publish also enrols
-    /// the name in this session's renewal set.
+    /// provider and retention choice. A confirmed publish binds this session
+    /// and enrols the name for renewal.
     SaveVaultSettings {
         /// The settings to seal and publish.
         settings: VaultSettings,
@@ -655,17 +656,6 @@ impl CommandOutcome {
             CommandOutcome::Queued { op_id } => Some(*op_id),
             _ => None,
         }
-    }
-}
-
-/// The engine's shared entropy cell as an [`Entropy`] source that re-borrows
-/// per draw. A `RefMut` held across an `.await` would panic the moment a
-/// spawned loop drew from the same cell.
-struct SharedEntropy<'a>(&'a RefCell<Box<dyn Entropy>>);
-
-impl Entropy for SharedEntropy<'_> {
-    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-        self.0.borrow_mut().fill(dest)
     }
 }
 
@@ -988,9 +978,7 @@ impl EngineError {
     fn from_settings_publish(err: SettingsPublishError) -> Self {
         match err {
             SettingsPublishError::Placement(refusal) => EngineError::NoPlacement { refusal },
-            SettingsPublishError::Byo(provider) => EngineError::MalformedInput {
-                check: byo_check(provider),
-            },
+            SettingsPublishError::Byo(e) => EngineError::MalformedInput { check: e.check() },
             SettingsPublishError::Codec(e) => EngineError::MalformedInput { check: e.check() },
             // The sealed record does not reopen under the key its own reader
             // re-derives, or is past the block ceiling: an encoder verdict on
@@ -999,6 +987,15 @@ impl EngineError {
                 check: "settings-record-preflight",
             },
             SettingsPublishError::Entropy(e) => EngineError::from_entropy(e),
+            // The API answered about a block other than the one uploaded, so
+            // publishing on its answer would sign a pointer to bytes nothing
+            // confirmed — a fail-closed verdict, never an outage to retry.
+            SettingsPublishError::Publish(RecordPublishError::HeadCidMismatch { .. }) => {
+                EngineError::TrustViolation {
+                    message: "the API echoed a different address for the settings head block"
+                        .to_owned(),
+                }
+            }
             SettingsPublishError::Publish(_) => EngineError::Seam {
                 message: "the settings record did not reach the record plane".to_owned(),
             },
@@ -1024,19 +1021,6 @@ impl EngineError {
                 message: trust.to_string(),
             },
         }
-    }
-}
-
-/// The `check` name a static BYO-config refusal reports. Only the arms
-/// `validate_byo_config` can produce are named; the reachability verdicts come
-/// from a probe this path never runs.
-fn byo_check(err: ProviderError) -> &'static str {
-    match err {
-        ProviderError::InvalidEndpoint => "byo-endpoint-invalid",
-        ProviderError::InsecureTransport => "byo-endpoint-insecure",
-        ProviderError::BlockedAddress => "byo-endpoint-blocked",
-        ProviderError::InvalidCredential => "byo-credential-invalid",
-        _ => "byo-config-invalid",
     }
 }
 
@@ -1549,6 +1533,36 @@ impl From<Refused> for EngineError {
 /// Map a content-sealing failure onto the facade error: entropy is fail-closed
 /// availability, and an assembly refusal is a version this build's own reader
 /// would reject.
+/// The settings record this session published, unless the record plane now
+/// serves a different one.
+///
+/// The resolve tick replaces each held record in place, so nothing in that map
+/// can go stale under the renewal; the settings slot has no such refresher. A
+/// second device that saved after this session did leaves this record
+/// superseded, and a sub-EOL renewal would re-sign it at `floor + 1` with a
+/// fresh validity — which wins record selection and rolls the account back to
+/// the body this session published, credentials and placement included.
+///
+/// Only a positively observed *different* record supersedes: a plane this pass
+/// cannot read is availability, and the renewal itself refuses to renew what it
+/// cannot resolve.
+async fn live_settings_record<R: RecordTransport>(
+    transport: &R,
+    slot: &RefCell<Option<HeldRecord>>,
+) -> Option<HeldRecord> {
+    let held = slot.borrow().clone()?;
+    let Ok(name) = IpnsName::parse(&held.routing_key) else {
+        return None;
+    };
+    match fanout_get_verify(transport, &name).await {
+        Some((live, _)) if live.value != format!("/ipfs/{}", held.head_cid).into_bytes() => {
+            *slot.borrow_mut() = None;
+            None
+        }
+        _ => Some(held),
+    }
+}
+
 fn seal_error(error: SealError) -> EngineError {
     match error {
         SealError::Entropy(error) => EngineError::from_entropy(error),
@@ -1779,9 +1793,9 @@ pub struct Engine<T: SeamTypes> {
     /// — the config it holds carries the member's provider bearer.
     placement: Rc<RefCell<Option<PlacementDecision>>>,
     /// Whether this session has already held the account's `byo` flag to the
-    /// vaulted mode. Once a session: the flag is account-wide and the mode is
-    /// fixed at [`start`](Self::start), so re-deriving it per write would only
-    /// let two devices flap it.
+    /// vaulted mode. Latched per placement decision, not per write: the flag is
+    /// account-wide, so re-deriving it on every write would let two devices flap
+    /// it — a saved settings change is the one event that re-arms it.
     byo_reconciled: Cell<bool>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
@@ -1861,8 +1875,6 @@ impl<T: SeamTypes> Engine<T> {
     /// the identity is built.
     pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
     where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -2249,10 +2261,7 @@ impl<T: SeamTypes> Engine<T> {
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         root_scope_id: [u8; 16],
     ) -> Result<ProvisionOutcome, ProvisionError>
-    where
-        T::RecordTransport: Clone + 'static,
-        T::Scheduler: Clone + 'static,
-    {
+where {
         let session = self.session.as_ref().expect("session set by start");
         let owner_identity = session.owner_identity();
         let publisher = VaultProvisionNet {
@@ -2292,8 +2301,6 @@ impl<T: SeamTypes> Engine<T> {
     /// parked; the alive latch then stops it.
     fn spawn_liveness_loop(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>)
     where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -2311,12 +2318,9 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let records: Vec<HeldRecord> = held
-                    .borrow()
-                    .values()
-                    .cloned()
-                    .chain(settings_record.borrow().iter().cloned())
-                    .collect();
+                let settings = live_settings_record(&transport, &settings_record).await;
+                let records: Vec<HeldRecord> =
+                    held.borrow().values().cloned().chain(settings).collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
                 // as an Event — never a silent failure (blueprint/engine.md).
@@ -2346,8 +2350,6 @@ impl<T: SeamTypes> Engine<T> {
         root_name: Option<IpnsName>,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
     ) where
-        T::Scheduler: Clone + 'static,
-        T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
@@ -2766,13 +2768,9 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// Seal and publish the vault settings record, then enrol the confirmed
-    /// record in this session's renewal set.
-    ///
-    /// The enrolment is the whole reason a settings save is a facade command
-    /// rather than a bare `publish_settings` call: the record's EOL is
-    /// client-signed and the API republisher is keyless, so nothing but this
-    /// session extends it.
+    /// Seal and publish the vault settings record, then adopt what it
+    /// published: the renewal enrolment [`publish_settings`] states the need
+    /// for, and the placement this session writes under.
     async fn save_vault_settings(&self, settings: &VaultSettings) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -2791,6 +2789,11 @@ impl<T: SeamTypes> Engine<T> {
         .await
         .map_err(EngineError::from_settings_publish)?;
         *self.settings_record.borrow_mut() = Some(held);
+        // The confirm re-resolve read back our own bytes, so this device has
+        // adopted what it published: the session's byte destinations follow, or
+        // an `External` save keeps feeding the hosted leg until the next start.
+        *self.placement.borrow_mut() = Some(placement_of(settings));
+        self.byo_reconciled.set(false);
         Ok(())
     }
 

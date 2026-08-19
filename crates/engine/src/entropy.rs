@@ -7,6 +7,7 @@
 //! injected — engine logic never calls an RNG directly — so tests substitute
 //! the test kit's seeded source and every seed and nonce becomes reproducible.
 
+use core::cell::RefCell;
 use core::fmt;
 
 use cipherbox_core::suite::aead::NONCE_LEN;
@@ -63,6 +64,20 @@ pub trait Entropy {
 impl<E: Entropy + ?Sized> Entropy for Box<E> {
     fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
         (**self).fill(dest)
+    }
+}
+
+/// A shared [`Entropy`] cell as an [`Entropy`] source that re-borrows per draw.
+///
+/// The engine holds one boxed source behind a [`RefCell`] shared with every
+/// spawned loop, and an async port that takes `&mut dyn Entropy` would
+/// otherwise hold the `RefMut` across each `.await` — a panic the moment a
+/// loop drew from the same cell.
+pub(crate) struct SharedEntropy<'a>(pub &'a RefCell<Box<dyn Entropy>>);
+
+impl Entropy for SharedEntropy<'_> {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        self.0.borrow_mut().fill(dest)
     }
 }
 

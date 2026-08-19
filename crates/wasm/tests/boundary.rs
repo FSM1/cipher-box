@@ -403,10 +403,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     );
 }
 
-/// "Keep none" is not a retention policy — it would retire the live version of
-/// every file — so the builder refuses `0` rather than mapping it to a
-/// `NonZeroU64` default. The refusal builds a `JsError`, so it is only
-/// reachable on this target.
+/// The refusal builds a `JsError`, so it is only reachable on this target.
 #[wasm_bindgen_test]
 fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
     assert!(
@@ -420,8 +417,7 @@ fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
     );
 }
 
-/// A settings save carries the member's provider credential in, and nothing
-/// back out: the builder's name is the whole readable surface.
+/// The builder's name is the settings command's whole readable surface.
 #[wasm_bindgen_test]
 fn a_vault_settings_command_carries_the_stable_builder_name() {
     let settings = VaultSettings::new(

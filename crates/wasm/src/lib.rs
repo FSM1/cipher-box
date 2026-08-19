@@ -208,8 +208,7 @@ pub struct ByoIpfsConfig {
 #[wasm_bindgen]
 impl ByoIpfsConfig {
     /// Builds a provider config. `accessToken` is `undefined` for a provider
-    /// that needs none; when present it lands in a zeroizing buffer and is
-    /// never readable back across the boundary.
+    /// that needs none; when present it lands in a zeroizing buffer.
     #[wasm_bindgen(constructor)]
     pub fn new(endpoint: String, kind: ByoKind, access_token: Option<String>) -> ByoIpfsConfig {
         Self {

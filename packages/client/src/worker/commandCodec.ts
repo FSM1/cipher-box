@@ -121,35 +121,41 @@ function byoKind(wasm: EngineWasm, value: unknown): number {
 }
 
 /**
- * An optional wire field. `null` is how the protocol spells "absent" and the
- * wasm builders take `undefined`; every other value falls through to the
- * checker the caller applies.
+ * A retention cap. Distinct from [`count`]: the builder takes a `u32` and the
+ * JS→wasm number ABI *wraps* rather than rejects, so an over-range value would
+ * arrive as an unrelated small cap — `2**32 + 1` as "keep only the newest".
  */
-function optional(value: unknown): unknown {
-  return value === null ? undefined : value;
+function retentionCap(value: unknown, field: string): number {
+  const cap = count(value, field);
+  if (cap > 0xffff_ffff) throw invalidField(field, value);
+  return cap;
 }
 
+function byoConfig(wasm: EngineWasm, value: unknown): WasmByoIpfsConfig {
+  const config = record(value, 'settings.byo');
+  const endpoint = text(config.endpoint, 'settings.byo.endpoint');
+  const kind = byoKind(wasm, config.kind);
+  const token = config.accessToken ?? undefined;
+  return new wasm.ByoIpfsConfig(
+    endpoint,
+    kind,
+    token === undefined ? undefined : text(token, 'settings.byo.accessToken')
+  );
+}
+
+/**
+ * Every scalar is checked before the first wasm object is built: a `new` that a
+ * later refusal abandons strands its allocation — and the credential inside it
+ * — in linear memory until the finalization registry runs.
+ */
 function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
   const settings = record(value, 'settings');
-  const rawByo = optional(settings.byo);
-  let byo: WasmByoIpfsConfig | undefined;
-  if (rawByo !== undefined) {
-    const config = record(rawByo, 'settings.byo');
-    const token = optional(config.accessToken);
-    byo = new wasm.ByoIpfsConfig(
-      text(config.endpoint, 'settings.byo.endpoint'),
-      byoKind(wasm, config.kind),
-      token === undefined ? undefined : text(token, 'settings.byo.accessToken')
-    );
-  }
-  const keep = optional(settings.keepLatestVersions);
-  // A `0` reaches the builder, which refuses it: "keep none" would retire the
-  // live version of every file.
-  return new wasm.VaultSettings(
-    pinMode(wasm, settings.pinMode),
-    byo,
-    keep === undefined ? undefined : count(keep, 'settings.keepLatestVersions')
-  );
+  const mode = pinMode(wasm, settings.pinMode);
+  const rawKeep = settings.keepLatestVersions ?? undefined;
+  const keep =
+    rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
+  const byo = settings.byo ?? undefined;
+  return new wasm.VaultSettings(mode, byo === undefined ? undefined : byoConfig(wasm, byo), keep);
 }
 
 /**
