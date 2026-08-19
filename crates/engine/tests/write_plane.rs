@@ -16,8 +16,8 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, Version as CoreVersion,
-    decode_envelope, open_read_body,
+    ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
+    Version as CoreVersion, decode_envelope, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -32,7 +32,10 @@ use cipherbox_engine::content::{
 };
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::OrphanHeads;
-use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
+use cipherbox_engine::net::author::{
+    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
+    author_scope_root_with_section,
+};
 use cipherbox_engine::net::{
     ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, StagingRetireLedger, resolve,
 };
@@ -52,15 +55,16 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, ContentProfile, DeadLetter,
-    DeadLetterReason, DefaultsReason, Engine, EngineError, Event, EventStream, GatewayConfig,
-    LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement,
-    PlacementRefusal, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
+    DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Event, EventStream,
+    GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause,
+    Placement, PlacementRefusal, PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity,
+    StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, reseal_scope_root, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -69,6 +73,11 @@ const SCOPE: [u8; 16] = [0u8; 16];
 const ROOT: NodeId = NodeId(SCOPE);
 /// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
 const POINTER_PAYLOAD_VERSION: u64 = 1;
+/// The override seed a rotation mints for `SCOPE`'s second read epoch.
+const ROTATED_READ_SCOPE_SEED: [u8; 32] = [0xA5; 32];
+/// The stable per-scope pointer read key the owner-root fixture's grant blobs
+/// carry.
+const POINTER_READ_KEY: [u8; 32] = [0x88; 32];
 const TTL_NANOS: u64 = 2_000_000_000;
 /// The destination set the upload mark opens on.
 const DESTINATIONS_LEN: usize = Destinations::LEN;
@@ -734,9 +743,15 @@ fn write_signer(node: NodeId) -> Ed25519Signer {
     kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes())
 }
 
-/// A node's per-node read key (`nodeSeed(readScopeSeed, id)` → `readKey`).
+/// A node's per-node read key (`nodeSeed(scopeSeed, id)` → `readKey`) under
+/// `scope_seed` — the epoch's seed is the only thing that moves it.
+fn read_key_under(scope_seed: &[u8; 32], node: NodeId) -> [u8; 32] {
+    *kdf::read_key(kdf::node_seed(scope_seed, &node.0).as_bytes()).as_bytes()
+}
+
+/// A node's per-node read key under the account's first read-scope seed.
 fn read_key_of(node: NodeId) -> [u8; 32] {
-    *kdf::read_key(kdf::node_seed(&READ_SCOPE_SEED, &node.0).as_bytes()).as_bytes()
+    read_key_under(&READ_SCOPE_SEED, node)
 }
 
 /// The `(sequence, headCid)` of the record currently published under `node`'s
@@ -3657,6 +3672,109 @@ fn a_planted_focus_record_never_renders() {
     }
 }
 
+/// Rotate `SCOPE`'s read plane: the vault root republishes at the next read
+/// epoch under a freshly minted override seed, carrying the history link a
+/// current-seed holder walks backward through (CONTEXT.md "History link"). The
+/// write plane stands still, so the root keeps its name and its write epoch.
+fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
+    let owner_identity = owner_identity();
+    let owner_verifier = owner_identity.verifying_key();
+    let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
+    let owner_enc = kdf::enc_subkey(&SECRET);
+    let owner_enc_pub = owner_enc.public();
+    let name = write_name(ROOT);
+
+    let commitment = GrantSetCommitment {
+        ipns_name: name.as_str().as_bytes().to_vec(),
+        owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        entries: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    let commitment_sig = sign_grant_set(&owner_identity, &commitment)
+        .expect("the owner signs its own grant set")
+        .to_compact();
+    let section = reseal_scope_root(
+        &mut SeededEntropy::new(EPOCH + 1),
+        &ScopeRootIdentity {
+            v: ENVELOPE_V,
+            scope_id: SCOPE,
+            ipns_name: name.as_str().as_bytes(),
+            owner_enc_pub: &owner_enc_pub,
+            owner_enc_secret: None,
+            parent_node_seed: None,
+            owes_ascent_link: false,
+            pseudonym_signer: &owner_pseudonym,
+        },
+        &ResealSeeds {
+            override_seed: &ROTATED_READ_SCOPE_SEED,
+            read_epoch: EPOCH + 1,
+            prev: Some(PrevEpochSeed {
+                seed: &READ_SCOPE_SEED,
+                epoch: EPOCH,
+            }),
+            write_scope_seed: &WRITE_SCOPE_SEED,
+            write_epoch: EPOCH,
+            write_history: WriteHistory::Carried(&[]),
+            pointer_read_key: &POINTER_READ_KEY,
+        },
+        &CommittedSet {
+            commitment: &commitment,
+            commitment_sig: &commitment_sig,
+            grant_ledger: &[],
+            direct_child_scope_index: &[],
+        },
+        &[],
+    )
+    .expect("the root re-seals at the next read epoch");
+
+    // A cut re-seals the scope root and nothing else: its children keep the
+    // records — and the epoch — they already published under.
+    let head = author_scope_root_with_section(
+        EnvelopeAuthoring {
+            node_id: ROOT.0,
+            scope_id: SCOPE,
+            epoch: EPOCH + 1,
+            read_key: &read_key_under(&ROTATED_READ_SCOPE_SEED, ROOT),
+            nonce: &[0x7E; 24],
+            body: &ReadBody::Folder {
+                created_at: 0,
+                modified_at: 0,
+                children: published_children(records, blocks, ROOT),
+                unknown: PreservedFields::new(),
+            },
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        },
+        &name,
+        &section,
+        &owner_verifier,
+    )
+    .expect("the rotated root authors");
+    publish_next_record(records, blocks, ROOT, &head);
+}
+
+/// The lazy wave reaches `folder`: republish exactly the children it lists
+/// today, re-sealed at the scope's current epoch under the rotation's seed.
+fn sweep_folder(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId) {
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: folder.0,
+        scope_id: SCOPE,
+        epoch: EPOCH + 1,
+        read_key: &read_key_under(&ROTATED_READ_SCOPE_SEED, folder),
+        nonce: &[0x6D; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: published_children(records, blocks, folder),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the sweep authors a valid record");
+    publish_next_record(records, blocks, folder, &head);
+}
+
 /// Epoch lag is sweep-pending staleness, not abuse (CONTEXT.md "Epoch lag"): a
 /// focused folder the lazy wave has not swept yet rejects fail-closed, but the
 /// owner's own rotation must not read as an attack on the host's abuse channel.
@@ -3664,7 +3782,7 @@ fn a_planted_focus_record_never_renders() {
 fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
     let DeepCreate {
         world,
-        bob,
+        blocks,
         mut engine_b,
         mut events_b,
         mut tasks_b,
@@ -3674,9 +3792,16 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
     assert_eq!(listed_names(&engine_b, photos), ["2026"]);
 
-    // A rotation raised the scope's read-epoch floor past the epoch this folder
-    // still publishes under.
-    block_on(bob.floor_store.raise_epoch_floor(&SCOPE, EPOCH + 1)).unwrap();
+    // A real rotation: the root republishes at the next read epoch under a
+    // fresh seed, which is what raises this device's read-epoch floor. `photos`
+    // is not swept, so its own writer keeps publishing at the old epoch.
+    rotate_read_epoch(&world.record_store, &blocks);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref([0x27; 16], "2027", CoreNodeKind::Folder),
+    );
     let _ = events_so_far(&mut events_b);
     tick(&world, &engine_b, &mut tasks_b);
 
@@ -3690,6 +3815,17 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
             .iter()
             .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
         "an unswept folder is not an attacker"
+    );
+
+    // The control: the same children, re-sealed at the current epoch, do
+    // render — so the leg above ran and rejected.
+    sweep_folder(&world.record_store, &blocks, photos);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026", "2027"],
+        "the wave's re-seal at the current epoch is adopted"
     );
 }
 

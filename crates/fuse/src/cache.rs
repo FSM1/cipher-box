@@ -4,7 +4,9 @@
 //!
 //! Blocks are keyed by the engine [`StreamHandle`] that produced them. A stream
 //! pins one head version for its whole life, so a block cached under its handle
-//! can never be served as a slice of a different version.
+//! can never be served as a slice of a different version. They are held whole:
+//! a truncate floor belongs to the handle that set it, not to the stream, so a
+//! reader clamps at use rather than the cache clamping at store.
 //!
 //! Every block is owned here and nowhere else, so this cache is the terminal
 //! owner that zeroizes it (security rule 7). Zeroization rides `Drop`, not an
@@ -131,6 +133,13 @@ impl ChunkCache {
         self.retained
     }
 
+    /// Serve a block without moving it in the recency order — what a one-shot
+    /// pass reads through, so walking a whole file cannot re-rank a reader's
+    /// hot blocks behind the blocks that walk touched once.
+    pub fn peek(&self, key: BlockKey) -> Option<&[u8]> {
+        Some(self.blocks.get(&key)?.plaintext.as_slice())
+    }
+
     /// Serve a block, making it the most recently used.
     pub fn get(&mut self, key: BlockKey) -> Option<&[u8]> {
         let tick = self.next_tick;
@@ -144,13 +153,15 @@ impl ChunkCache {
 
     /// Retain `plaintext` under `key`, evicting until it fits. A block larger
     /// than the whole budget is dropped rather than cached: the ceiling is the
-    /// mount's promise, not a target to overshoot.
+    /// mount's promise, not a target to overshoot. An empty block — the answer
+    /// past the end of a version — is dropped too: it would grow the table
+    /// without spending a byte of the budget that bounds it.
     pub fn insert(&mut self, key: BlockKey, plaintext: Vec<u8>) {
         // Wrapped before any early return: a block this cache refuses is still
         // plaintext it took ownership of, and must leave memory zeroed.
         let plaintext = Zeroizing::new(plaintext);
         let len = plaintext.len();
-        if len > self.budget.max_bytes {
+        if len == 0 || len > self.budget.max_bytes {
             return;
         }
         self.drop_block(key);
@@ -304,6 +315,34 @@ mod tests {
         assert!(cache.get((STREAM, 0)).is_some());
         assert!(cache.get((STREAM, 2)).is_some());
         assert!(cache.get((STREAM, 3)).is_some());
+    }
+
+    #[test]
+    fn an_empty_block_is_never_retained() {
+        let mut cache = ChunkCache::new(tiny());
+        cache.insert((STREAM, 0), Vec::new());
+        assert_eq!(cache.get((STREAM, 0)), None);
+    }
+
+    #[test]
+    fn peeking_serves_a_block_without_reordering_the_recency_it_evicts_by() {
+        let mut cache = ChunkCache::new(tiny());
+        for index in 0..3 {
+            cache.insert((STREAM, index), block(index as u8, 16));
+        }
+
+        // Newest-first, so a serve that promoted would leave the block the
+        // walk saw last as the eviction candidate instead of the oldest.
+        for index in (0..3).rev() {
+            assert!(cache.peek((STREAM, index)).is_some());
+        }
+        cache.insert((STREAM, 3), block(3, 16));
+
+        assert_eq!(
+            cache.get((STREAM, 0)),
+            None,
+            "the peek pass promoted the oldest block instead of leaving it first out"
+        );
     }
 
     #[test]
