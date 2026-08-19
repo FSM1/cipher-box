@@ -614,7 +614,7 @@ fn real_keyring_credential_store_passes_the_credential_store_kit() {
     let service = format!("com.cipherbox.desktop.test.{}.{nonce}", std::process::id());
 
     block_on(conformance::credential_store::check(async || {
-        KeyringCredentialStore::new(service.clone())
+        KeyringCredentialStore::new(service.clone()).expect("keyring worker started")
     }));
 }
 
@@ -634,7 +634,7 @@ fn real_keyring_credential_store_persists_last_account_id() {
     );
 
     block_on(async {
-        let store = KeyringCredentialStore::new(service);
+        let store = KeyringCredentialStore::new(service).expect("keyring worker started");
         assert_eq!(store.load_last_account_id().await.unwrap(), None);
         store.store_last_account_id(b"acct-xyz").await.unwrap();
         assert_eq!(

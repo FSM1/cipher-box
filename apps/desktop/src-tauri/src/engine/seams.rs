@@ -53,6 +53,6 @@ pub fn seam_set(
         scheduler: TokioScheduler::new(),
         staging_store: FileStagingStore::open(account_dir.join("staging"))?,
         snapshot_cache: FileSnapshotCache::open(account_dir.join("cache"))?,
-        credential_store: KeyringCredentialStore::new(keyring_service),
+        credential_store: KeyringCredentialStore::new(keyring_service)?,
     })
 }

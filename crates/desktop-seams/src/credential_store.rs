@@ -1,10 +1,12 @@
 //! Desktop [`CredentialStore`]: the OS keyring, plus a feature-gated
 //! file-backed test double.
 
+use std::sync::Arc;
+
 use cipherbox_engine::seams::{CredentialStore, SeamError, SeamResult};
 use zeroize::Zeroizing;
 
-use crate::offload::off_thread;
+use crate::offload::Offload;
 
 /// Keyring account label for the rotating refresh token.
 const REFRESH_TOKEN_ACCOUNT: &str = "refresh-token";
@@ -26,20 +28,25 @@ fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
 /// the short-lived access JWT (which lives in engine memory only). Both
 /// values are stored as opaque secret bytes.
 ///
-/// `Debug` is derived and safe: the struct carries only the service name, a
-/// non-secret; no token is ever held in memory by this handle.
+/// `Debug` is derived and safe: the struct carries only the service name and a
+/// queue handle, both non-secret; no token is ever held in memory by this
+/// handle.
 #[derive(Debug, Clone)]
 pub struct KeyringCredentialStore {
     service: String,
+    offload: Arc<Offload>,
 }
 
 impl KeyringCredentialStore {
     /// A credential store under one keyring service name (e.g.
-    /// `"com.cipherbox.desktop"`). One store per running app.
-    pub fn new(service: impl Into<String>) -> Self {
-        Self {
+    /// `"com.cipherbox.desktop"`). One store per running app: clones share the
+    /// one worker queue, which is what keeps a logout delete ordered behind a
+    /// write the keyring is still prompting for.
+    pub fn new(service: impl Into<String>) -> SeamResult<Self> {
+        Ok(Self {
             service: service.into(),
-        }
+            offload: Arc::new(Offload::start("keyring")?),
+        })
     }
 
     /// Stores an opaque secret under one account, replacing any previous
@@ -48,37 +55,40 @@ impl KeyringCredentialStore {
         let service = self.service.clone();
         // The worker owns this copy outright, so it is wiped where it dies.
         let secret = Zeroizing::new(secret.to_vec());
-        off_thread("keyring set", move || {
-            entry(&service, account)?
-                .set_secret(&secret)
-                .map_err(|err| SeamError::new(format!("keyring set: {err}")))
-        })
-        .await
+        self.offload
+            .run("keyring set", move || {
+                entry(&service, account)?
+                    .set_secret(&secret)
+                    .map_err(|err| SeamError::new(format!("keyring set: {err}")))
+            })
+            .await
     }
 
     /// Loads an opaque secret, mapping a missing entry to `None`.
     async fn load_secret(&self, account: &'static str) -> SeamResult<Option<Vec<u8>>> {
         let service = self.service.clone();
-        off_thread("keyring get", move || {
-            match entry(&service, account)?.get_secret() {
-                Ok(secret) => Ok(Some(secret)),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
-            }
-        })
-        .await
+        self.offload
+            .run("keyring get", move || {
+                match entry(&service, account)?.get_secret() {
+                    Ok(secret) => Ok(Some(secret)),
+                    Err(keyring::Error::NoEntry) => Ok(None),
+                    Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
+                }
+            })
+            .await
     }
 
     /// Deletes an account's secret. Idempotent (a missing entry is success).
     async fn clear_secret(&self, account: &'static str) -> SeamResult<()> {
         let service = self.service.clone();
-        off_thread("keyring delete", move || {
-            match entry(&service, account)?.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
-            }
-        })
-        .await
+        self.offload
+            .run("keyring delete", move || {
+                match entry(&service, account)?.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                    Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
+                }
+            })
+            .await
     }
 
     /// Persists the last-account id — the only extra datum this store holds
@@ -111,6 +121,20 @@ impl CredentialStore for KeyringCredentialStore {
 
     async fn clear_refresh_token(&self) -> SeamResult<()> {
         self.clear_secret(REFRESH_TOKEN_ACCOUNT).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyringCredentialStore;
+    use std::sync::Arc;
+
+    #[test]
+    fn a_cloned_store_shares_one_ordering_queue() {
+        let store =
+            KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
+        let handed_to_the_shell = store.clone();
+        assert!(Arc::ptr_eq(&store.offload, &handed_to_the_shell.offload));
     }
 }
 
