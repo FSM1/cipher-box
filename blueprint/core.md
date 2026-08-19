@@ -190,7 +190,7 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   A **rotation** holds the one key that starts that walk — the previous epoch's
   seed — so it keeps the newest 64 links (`MAX_RETAINED_HISTORY_LINKS`) that
   actually walk and drops the rest. Order is therefore proven, not assumed, and
-  the chain is bounded by design rather than by the 4 MiB block ceiling; the two
+  the chain is bounded by design rather than by the 2 MiB block ceiling; the two
   constants are coupled, retention staying under the decode bound so that bound
   remains a malformed-input guard an honest rotator never approaches. An
   unwalkable remainder is **truncated, never refused**: the carried set is

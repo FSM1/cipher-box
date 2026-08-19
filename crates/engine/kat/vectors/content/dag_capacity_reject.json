@@ -2,8 +2,8 @@
   {
     "name": "flat-dag-ceiling-one-link-past",
     "chunkSize": 1048536,
-    "leafCount": 110376,
-    "size": 115733209536,
+    "leafCount": 55188,
+    "size": 57866604768,
     "check": "dag-root-too-large",
     "class": "over-cap"
   }
