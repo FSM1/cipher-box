@@ -559,6 +559,13 @@ mod tests {
             Err(DagError::RootTooLarge { size, limit }) => {
                 assert!(size > limit, "reported size exceeds the cap");
                 assert_eq!(limit, 2 * 1024 * 1024);
+                // The reservation arithmetic must refuse the same root, at the
+                // same size, or a version the encoder will not emit still books
+                // staging budget.
+                assert_eq!(
+                    root_block_len(count as u64 * chunk_size, &profile),
+                    Err(DagError::RootTooLarge { size, limit })
+                );
             }
             other => panic!("expected RootTooLarge, got {other:?}"),
         }
@@ -566,19 +573,16 @@ mod tests {
 
     #[test]
     fn assemble_accepts_a_root_just_under_the_block_cap() {
-        // A link count chosen to land inside the 2 MiB cap but within a tenth of
-        // it, so the accepting side of the guard is exercised at the boundary
-        // rather than far below it.
         let profile = ContentProfile::CI;
         let chunk_size = profile.chunk_size() as u64;
         let count = 54_000;
         let leaves = dummy_leaves(count);
         let dag = assemble(&leaves, count as u64 * chunk_size, &profile).unwrap();
-        assert!(dag.root_block.len() <= 2 * 1024 * 1024);
+        assert!(dag.root_block.len() <= MAX_RESOLVED_RECORD_BYTES);
         assert!(
-            dag.root_block.len() > 2 * 1024 * 1024 * 9 / 10,
-            "a root {} bytes under the cap does not exercise its boundary",
-            2 * 1024 * 1024 - dag.root_block.len()
+            dag.root_block.len() > MAX_RESOLVED_RECORD_BYTES * 9 / 10,
+            "a root {} bytes under the cap does not exercise the boundary",
+            MAX_RESOLVED_RECORD_BYTES - dag.root_block.len()
         );
         assert!(verify_cid(&dag.content_cid, &dag.root_block).is_ok());
     }
@@ -616,30 +620,24 @@ mod tests {
 
     /// The arithmetic sizing and the real encoder must never drift: the staging
     /// reservation is exact only if this holds at every leaf count where a CBOR
-    /// head width changes, and only if the two refuse the same over-cap roots.
+    /// head width changes.
     #[test]
     fn root_block_len_matches_the_assembled_root() {
         for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
             let chunk = profile.chunk_size() as u64;
-            // Every CBOR head width the links array and the `size` uint cross:
-            // 1, 2, 3 and 5 bytes, plus counts either side of the block cap.
-            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 54_000, 65_535, 65_536] {
+            // Every CBOR head width the links array and the `size` uint cross
+            // below the cap, up to the widest reachable one.
+            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 54_000] {
                 let size = leaves * chunk;
-                let predicted = root_block_len(size, &profile);
-                let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile);
-                match (predicted, assembled) {
-                    (Ok(predicted), Ok(dag)) => assert_eq!(
-                        predicted,
-                        dag.root_block.len() as u64,
-                        "{leaves} leaves at chunk {chunk}"
-                    ),
-                    (Err(DagError::RootTooLarge { .. }), Err(DagError::RootTooLarge { .. })) => {}
-                    (predicted, assembled) => panic!(
-                        "{leaves} leaves at chunk {chunk}: sizing said {predicted:?}, \
-                         the encoder said {:?}",
-                        assembled.map(|dag| dag.root_block.len())
-                    ),
-                }
+                let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile)
+                    .expect("assembles")
+                    .root_block
+                    .len() as u64;
+                assert_eq!(
+                    root_block_len(size, &profile).unwrap(),
+                    assembled,
+                    "{leaves} leaves at chunk {chunk}"
+                );
             }
             // A short tail exercises a `size` that is not a chunk multiple.
             let size = 2 * chunk + 1;
