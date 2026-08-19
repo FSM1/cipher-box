@@ -35,9 +35,7 @@ struct Leak {
 thread_local! {
     /// The whole watch is thread-local: the allocator is process-wide, so
     /// global state would let a block the read path never owned decide the
-    /// verdict. This scoping assumes the single-threaded drive `block_on`
-    /// gives — were the read to move onto a worker, the scan would stop
-    /// seeing it.
+    /// verdict. `block_on` drives the read on the armed thread.
     static WATCHING: Cell<bool> = const { Cell::new(false) };
     /// The byte the armed scenario's marker is made of.
     static MARKER_BYTE: Cell<u8> = const { Cell::new(0) };
