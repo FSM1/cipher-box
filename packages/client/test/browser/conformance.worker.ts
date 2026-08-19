@@ -175,7 +175,8 @@ const STAGED_AFTER_KIT: Record<string, number> = {
   'failed-first-put': 0,
 };
 
-/** One pass of the staging-store kit under `arm`, over its own set of stores. */
+/** Stores are per-fault: the kit asserts on leftover staged counts, so another
+ * fault's debris would read as this pass's. */
 async function runStagingConformance(fault: string, arm: () => void): Promise<void> {
   const storeName = (backing: string): string => `conf-staging-${fault}-${backing}`;
   const backings = stagingStoreBackings();
