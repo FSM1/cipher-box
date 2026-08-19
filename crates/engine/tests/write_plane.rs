@@ -2058,10 +2058,11 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
 /// A head over the block ceiling is refused identically on every retry: a fresh
 /// nonce moves the sealed bytes and never their count, so no re-author shrinks
 /// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
-/// reported anywhere, so it spends the budget like any other pre-PUT refusal
-/// and every op behind it drains.
+/// reported anywhere, so it spends the budget and every op behind it drains —
+/// but only the record was over the ceiling, so ending it keeps the version it
+/// would have named rather than unpinning and erasing it.
 #[test]
-fn an_authored_head_over_the_block_ceiling_dead_letters_at_the_budget() {
+fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -2071,14 +2072,15 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_at_the_budget() {
     // A child ref carries its name verbatim, so a name past the 2 MiB IPFS
     // block ceiling is a parent folder record this engine can author and its
     // own ingress can never hold.
-    let CommandOutcome::Queued { op_id } = block_on(engine.command(Command::Create {
-        parent: ROOT,
-        name: "n".repeat(2 * 1024 * 1024 + 4096),
-        kind: NodeKind::Folder,
-    }))
-    .expect("the create queues") else {
-        panic!("a create queues an intent op");
-    };
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "n".repeat(2 * 1024 * 1024 + 4096),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
 
     let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
@@ -2097,6 +2099,11 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_at_the_budget() {
             .unwrap()
             .is_empty(),
         "the head no retry could publish leaves the queue"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "the version the oversized record would have named stays pinned — only \
+         the record was over the ceiling, and unpinning it is loss no retry undoes"
     );
 }
 
@@ -2139,7 +2146,7 @@ fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
             .unwrap()
             .len(),
         1,
-        "the op is held for a later draw, not abandoned"
+        "the op keeps its place for a later draw"
     );
 }
 

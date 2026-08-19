@@ -258,6 +258,11 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             node: facade::NodeId([6u8; 16]),
             needed_bytes: u64::MAX,
         }),
+        settings_hold: Some(facade::SettingsHold {
+            op_id: OpId(13),
+            node: facade::NodeId([7u8; 16]),
+            refusal: cipherbox_engine::ProviderError::BlockedAddress,
+        }),
         retained_records: 0,
         staleness: facade::Staleness::Fresh,
     })
@@ -335,6 +340,22 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             .unchecked_into::<Uint8Array>()
             .to_vec(),
         vec![6u8; 16]
+    );
+
+    let held = get(&view, "settingsHold");
+    assert_eq!(
+        get(&held, "opId").js_typeof(),
+        JsValue::from_str("bigint"),
+        "a held op's opId must cross as a JS bigint, never a number"
+    );
+    assert_eq!(
+        get(&held, "node").unchecked_into::<Uint8Array>().to_vec(),
+        vec![7u8; 16]
+    );
+    assert_eq!(
+        get(&held, "check"),
+        JsValue::from_str("byo-endpoint-blocked"),
+        "the refusing rule crosses by its stable check name"
     );
 
     let children = get(&view, "children");

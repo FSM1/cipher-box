@@ -4798,9 +4798,8 @@ mod tests {
     /// member has already fixed in their settings.
     #[test]
     fn a_settings_refused_hold_reaches_both_read_surfaces() {
-        let (mut engine, _events) = started();
+        let (engine, _events) = started();
         let root = engine.root();
-        create(&mut engine, root, "photo.bin", NodeKind::File);
         let hold = SettingsHold {
             op_id: OpId(1),
             node: root,
