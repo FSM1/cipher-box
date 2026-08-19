@@ -101,6 +101,23 @@ describe('IdentityTokenService', () => {
     );
   });
 
+  it('verifies its own token on the injected clock, and refuses it once expired', async () => {
+    const clock = new FakeClock();
+    const service = await bootedService(
+      { NODE_ENV: 'production', IDENTITY_JWT_PRIVATE_KEY: encodedPem },
+      clock
+    );
+    const { token } = await service.sign({ subject: 'subject-id', method: 'google' });
+
+    await expect(service.verify(token)).resolves.toEqual({
+      subject: 'subject-id',
+      method: 'google',
+    });
+
+    clock.advanceMs(300_001);
+    await expect(service.verify(token)).rejects.toThrow(jose.errors.JWTExpired);
+  });
+
   it('expires the token on the injected clock, not the wall clock', async () => {
     const clock = new FakeClock();
     const service = await bootedService(

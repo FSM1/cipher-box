@@ -38,6 +38,9 @@ const MAX_TTL_MS = 60 * 60 * 1000;
 /** Concurrent pending rendezvous per account; via DEVICE_APPROVAL_PENDING_CAP. */
 const DEFAULT_PENDING_CAP = 5;
 
+/** Ceiling on the configured cap; an over-range value falls back to the default. */
+const MAX_PENDING_CAP = 50;
+
 /** A sealed 32-byte factor is ~125 bytes under any sane AEAD; this is slack, not a budget. */
 const MAX_SEALED_FACTOR_BYTES = 1024;
 
@@ -113,7 +116,8 @@ export class DeviceApprovalService {
     );
     this.pendingCap = positiveIntConfig(
       configService.get('DEVICE_APPROVAL_PENDING_CAP'),
-      DEFAULT_PENDING_CAP
+      DEFAULT_PENDING_CAP,
+      MAX_PENDING_CAP
     );
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     this.sweepBatchSize = positiveIntConfig(

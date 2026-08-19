@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
@@ -79,9 +79,7 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   beforeAll(async () => {
     db = await createIntegrationDatabase({ poolMax: 10 });
-    // Anchored at wall-clock now: identity tokens are verified by `jose` against
-    // the real clock, so a frozen epoch far from it would expire on issue.
-    clock = new FakeClock(new Date());
+    clock = new FakeClock();
     ctx = await createHttpIntegrationApp({
       db,
       // The rendezvous surfaces cap at 3 requests/min; the throttler is not under
@@ -120,13 +118,22 @@ describe('device-approval HTTP surface (real Postgres)', () => {
 
   beforeEach(async () => {
     await db.dataSource.query(
-      'TRUNCATE TABLE users, account_devices, device_approvals, refresh_tokens CASCADE'
+      'TRUNCATE TABLE users, identity_subjects, account_devices, device_approvals, refresh_tokens CASCADE'
     );
   });
 
   const http = () => ctx.http;
 
+  /**
+   * A token for a subject this API has resolved, as `POST /auth/identity/*`
+   * always mints: `account_devices.identity_subject_id` references the row.
+   */
   async function identityToken(subject: string): Promise<string> {
+    await db.dataSource.query(
+      `INSERT INTO identity_subjects (id, kind, identifier_hash) VALUES ($1, 'google', $2)
+       ON CONFLICT ("id") DO NOTHING`,
+      [subject, createHash('sha256').update(subject).digest('hex')]
+    );
     return (await identityTokens.sign({ subject, method: 'google' })).token;
   }
 

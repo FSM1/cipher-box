@@ -1366,12 +1366,15 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
 /// device-approval surface is spoken by the host application over plain HTTP,
 /// before the engine has a session to speak through, so the engine's API client
 /// does not own it and the contract is proven the way a client speaks it.
+///
+/// A 429 is named here as `expect_auth` names it: every route below documents
+/// one, so a throttled run would otherwise fail as the refusal under test.
 async fn post_json(base: &str, path: &str, bearer: Option<&str>, body: serde_json::Value) -> u16 {
     let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
     if let Some(token) = bearer {
         headers.push(("authorization".to_string(), format!("Bearer {token}")));
     }
-    ReqwestHttp::new()
+    let status = ReqwestHttp::new()
         .send(HttpRequest {
             method: HttpMethod::Post,
             url: format!("{base}{path}"),
@@ -1382,7 +1385,13 @@ async fn post_json(base: &str, path: &str, bearer: Option<&str>, body: serde_jso
         })
         .await
         .expect("the API answers")
-        .status
+        .status;
+    assert_ne!(
+        status, 429,
+        "{path}: the API rate-limited the suite (429). Raise the throttle limits on the API \
+         under test."
+    );
+    status
 }
 
 /// The access token of a fresh test-login session, read straight off the wire —
@@ -1404,6 +1413,11 @@ async fn test_login_access_token(base: &str, handle: &str) -> String {
         })
         .await
         .expect("the API answers");
+    assert_ne!(
+        response.status, 429,
+        "test login: the API rate-limited the suite (429) on the per-IP auth bucket. Raise \
+         THROTTLE_AUTH_LIMIT on the API under test."
+    );
     assert_eq!(
         response.status, 200,
         "test login is available on the contract stack"

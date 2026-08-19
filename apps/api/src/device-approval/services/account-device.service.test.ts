@@ -1,6 +1,7 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { QueryFailedError } from 'typeorm';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityTokenService } from '../../auth/services/identity-token.service';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -9,6 +10,13 @@ import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { deviceRegistrationPayload } from '../device-signature';
 import { AccountDevice } from '../entities/account-device.entity';
 import { AccountDeviceService, RegisterDeviceInput } from './account-device.service';
+
+/** The service's own default; an over-range DEVICE_REGISTRY_CAP falls back to it. */
+const DEFAULT_DEVICE_CAP = 20;
+
+function queryFailure(driverError: Record<string, string>): QueryFailedError {
+  return new QueryFailedError('INSERT', [], driverError as never);
+}
 
 describe('AccountDeviceService', () => {
   let devices: FakeRepository<AccountDevice>;
@@ -210,6 +218,42 @@ describe('AccountDeviceService', () => {
         service.register(account, registration(createTestDeviceKey(), account))
       ).rejects.toBeInstanceOf(ConflictException);
       expect(devices.rows).toHaveLength(2);
+    });
+
+    it('holds the default cap when the configured one is over range', async () => {
+      build({ DEVICE_REGISTRY_CAP: '100000' });
+      token = mintIdentityToken();
+      for (let i = 0; i < DEFAULT_DEVICE_CAP; i += 1) {
+        await service.register(account, registration(createTestDeviceKey(), account));
+      }
+
+      await expect(
+        service.register(account, registration(createTestDeviceKey(), account))
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(devices.rows).toHaveLength(DEFAULT_DEVICE_CAP);
+    });
+
+    it('answers a lost public-key race from the committed winner', async () => {
+      await service.register(account, registration(device, account, { label: 'first' }));
+      const winner = devices.rows[0];
+      vi.spyOn(devices, 'save').mockRejectedValueOnce(
+        queryFailure({ code: '23505', constraint: 'uq_account_devices_public_key' })
+      );
+
+      const answered = await service.register(account, registration(device, account));
+      expect(answered.id).toBe(winner.id);
+      expect(devices.rows).toHaveLength(1);
+    });
+
+    it('surfaces a constraint violation that is not that race, rather than reporting success', async () => {
+      const failure = queryFailure({
+        code: '23503',
+        constraint: 'FK_3456d8a033130685cb3653fdab9',
+      });
+      vi.spyOn(devices, 'save').mockRejectedValueOnce(failure);
+
+      await expect(service.register(account, registration(device, account))).rejects.toBe(failure);
+      expect(devices.rows).toHaveLength(0);
     });
 
     it('lets an already-registered key re-touch at the cap', async () => {

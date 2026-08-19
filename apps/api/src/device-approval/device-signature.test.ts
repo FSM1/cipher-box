@@ -22,7 +22,12 @@ const LOW_ORDER_PUBLIC_KEYS: Array<[string, string]> = [
   ['the all-zero encoding', '00'.repeat(32)],
   ['the sign-flipped zero encoding', `${'00'.repeat(31)}80`],
   ['an order-8 point', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a'],
+  ['its negation', 'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa'],
   ['the other order-8 point', '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05'],
+  [
+    'the negation of the other order-8 point',
+    '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+  ],
   ['the order-2 point y = p - 1', `ec${'ff'.repeat(30)}7f`],
 ];
 

@@ -29,6 +29,9 @@ function sealedBytes(length: number): string {
 }
 
 const TTL_MS = 5 * 60 * 1000;
+
+/** The service's own default; an over-range DEVICE_APPROVAL_PENDING_CAP falls back to it. */
+const DEFAULT_PENDING_CAP = 5;
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_USER_ID = '22222222-2222-4222-8222-222222222222';
 
@@ -216,6 +219,17 @@ describe('DeviceApprovalService', () => {
       expect(approvals.rows).toHaveLength(2);
     });
 
+    it('holds the default cap when the configured one is over range', async () => {
+      build({ DEVICE_APPROVAL_PENDING_CAP: '100000' });
+      for (let i = 0; i < DEFAULT_PENDING_CAP; i += 1) {
+        await openRendezvous(requester, newEphemeralKey());
+      }
+      await expect(openRendezvous(requester, newEphemeralKey())).rejects.toBeInstanceOf(
+        ConflictException
+      );
+      expect(approvals.rows).toHaveLength(DEFAULT_PENDING_CAP);
+    });
+
     it('purges expired rows before counting, so a cap full of stale rows still accepts', async () => {
       build({ DEVICE_APPROVAL_PENDING_CAP: '2' });
       await openRendezvous(requester, newEphemeralKey());
@@ -288,6 +302,21 @@ describe('DeviceApprovalService', () => {
     it('deletes and disowns a rendezvous past its expiry', async () => {
       const { requestId } = await openRendezvous();
       clock.advanceMs(TTL_MS);
+      await expect(service.status(USER_ID, requestId)).rejects.toBeInstanceOf(NotFoundException);
+      expect(approvals.rows).toHaveLength(0);
+    });
+
+    it('never serves the sealed bytes of an answered rendezvous once it expires', async () => {
+      const { requestId } = await openRendezvous();
+      const sealed = sealedBytes(125);
+      await service.respond(USER_ID, requestId, {
+        decision: 'approve',
+        devicePublicKey: approver.publicKey,
+        sealedFactor: sealed,
+        signature: signResponse(approver, requestId, 'approve', ephemeral, sealed),
+      });
+      clock.advanceMs(TTL_MS);
+
       await expect(service.status(USER_ID, requestId)).rejects.toBeInstanceOf(NotFoundException);
       expect(approvals.rows).toHaveLength(0);
     });

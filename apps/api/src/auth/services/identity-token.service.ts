@@ -102,7 +102,13 @@ export class IdentityTokenService implements OnModuleInit {
     const { payload } = await jose.jwtVerify(
       token,
       await jose.importJWK(this.publicJwk, ALGORITHM),
-      { issuer: IDENTITY_TOKEN_ISSUER, audience: IDENTITY_TOKEN_AUDIENCE, algorithms: [ALGORITHM] }
+      {
+        issuer: IDENTITY_TOKEN_ISSUER,
+        audience: IDENTITY_TOKEN_AUDIENCE,
+        algorithms: [ALGORITHM],
+        // Expiry reads the injected clock, the same seam `sign` stamps from.
+        currentDate: this.clock.now(),
+      }
     );
     const subject = payload.sub;
     const method = payload.method;

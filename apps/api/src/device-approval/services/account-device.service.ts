@@ -13,10 +13,16 @@ import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { UUID_RE } from '../../common/patterns';
 import { deviceRegistrationPayload, verifyDeviceSignature } from '../device-signature';
-import { AccountDevice } from '../entities/account-device.entity';
+import { ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE, AccountDevice } from '../entities/account-device.entity';
 
 /** Bounds the table and the approval-prompt fan-out; via DEVICE_REGISTRY_CAP. */
 const DEFAULT_DEVICE_CAP = 20;
+
+/** Ceiling on the configured cap; an over-range value falls back to the default. */
+const MAX_DEVICE_CAP = 100;
+
+/** Postgres `unique_violation`. */
+const UNIQUE_VIOLATION = '23505';
 
 export interface RegisterDeviceInput {
   publicKey: string;
@@ -54,7 +60,8 @@ export class AccountDeviceService {
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     this.deviceCap = positiveIntConfig(
       configService.get('DEVICE_REGISTRY_CAP'),
-      DEFAULT_DEVICE_CAP
+      DEFAULT_DEVICE_CAP,
+      MAX_DEVICE_CAP
     );
   }
 
@@ -87,7 +94,7 @@ export class AccountDeviceService {
       // The unique public-key index is the durable backstop under a concurrent
       // double-register: the loser's transaction aborts, so re-read the committed
       // winner on a fresh statement and answer as the unraced path would have.
-      if (error instanceof QueryFailedError) {
+      if (isPublicKeyConflict(error)) {
         const winner = await this.deviceRepository.findOne({
           where: { publicKey: input.publicKey },
         });
@@ -192,6 +199,15 @@ export class AccountDeviceService {
   async isRegistered(userId: string, publicKey: string): Promise<boolean> {
     return (await this.deviceRepository.count({ where: { userId, publicKey } })) > 0;
   }
+}
+
+/** The lost race above and nothing else; any other fault must surface, not read as success. */
+function isPublicKeyConflict(error: unknown): boolean {
+  if (!(error instanceof QueryFailedError)) return false;
+  const driver = error.driverError as { code?: string; constraint?: string } | undefined;
+  return (
+    driver?.code === UNIQUE_VIOLATION && driver?.constraint === ACCOUNT_DEVICE_PUBLIC_KEY_UNIQUE
+  );
 }
 
 function present(row: AccountDevice): RegisteredDevice {

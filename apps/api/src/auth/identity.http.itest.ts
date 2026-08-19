@@ -104,7 +104,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
   beforeEach(async () => {
     mail.delivered = [];
     await db.dataSource.query('TRUNCATE TABLE users CASCADE');
-    await db.dataSource.query('TRUNCATE TABLE identity_subjects');
+    await db.dataSource.query('TRUNCATE TABLE identity_subjects CASCADE');
   });
 
   const http = () => ctx.http;

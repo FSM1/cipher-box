@@ -28,9 +28,15 @@ export class AddDeviceApprovals1787155468460 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "account_devices" ADD CONSTRAINT "FK_7db6ef5ecebaf3f47b7db0486a6" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`
     );
+    await queryRunner.query(
+      `ALTER TABLE "account_devices" ADD CONSTRAINT "FK_3456d8a033130685cb3653fdab9" FOREIGN KEY ("identity_subject_id") REFERENCES "identity_subjects"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(
+      `ALTER TABLE "account_devices" DROP CONSTRAINT "FK_3456d8a033130685cb3653fdab9"`
+    );
     await queryRunner.query(
       `ALTER TABLE "account_devices" DROP CONSTRAINT "FK_7db6ef5ecebaf3f47b7db0486a6"`
     );
