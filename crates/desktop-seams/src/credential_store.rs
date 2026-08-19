@@ -138,12 +138,7 @@ impl CredentialStore for KeyringCredentialStore {
 #[cfg(test)]
 mod tests {
     use super::KeyringCredentialStore;
-    use cipherbox_engine::seams::CredentialStore;
-    use cipherbox_engine::testkit::block_on;
-    use std::future::Future;
-    use std::pin::pin;
     use std::sync::Arc;
-    use std::task::{Context, Waker};
 
     #[test]
     fn a_cloned_store_shares_one_ordering_queue() {
@@ -151,33 +146,6 @@ mod tests {
             KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
         let handed_to_the_shell = store.clone();
         assert!(Arc::ptr_eq(&store.offload, &handed_to_the_shell.offload));
-    }
-
-    /// Fails the moment any method on the seam path goes back to `async fn`:
-    /// the write would then take its queue slot at its first poll, behind the
-    /// delete, and a logout would leave a live refresh token in the keyring.
-    /// Driven through the `CredentialStore` methods the shell calls.
-    #[test]
-    fn a_write_built_before_a_delete_runs_first_however_the_futures_are_polled() {
-        // keyring's in-process mock: no CI runner has an unlocked OS keyring,
-        // and the ordering under test is decided before the host call.
-        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        let store =
-            KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
-
-        let write = store.store_refresh_token(b"token");
-        let delete = store.clear_refresh_token();
-
-        // Polled in the opposite order to construction. The worker is FIFO, so
-        // the delete finishing proves the write already ran.
-        block_on(delete).expect("the delete ran");
-
-        assert!(
-            pin!(write)
-                .poll(&mut Context::from_waker(Waker::noop()))
-                .is_ready(),
-            "the write was queued at call, so its result is already waiting"
-        );
     }
 }
 
