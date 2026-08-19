@@ -80,6 +80,32 @@ pub struct EngineHandle {
     events: Rc<Mutex<EventStream>>,
 }
 
+/// The web storage policy for the headroom figure the host measured
+/// (`navigator.storage.estimate()` quota minus usage). The split itself is
+/// computed here so one headroom figure yields one budget on every platform.
+///
+/// An absent or nonsensical figure is `UNMEASURED`, not a measured zero: both
+/// admit no upload (there is no floor-up), but only one of them means the
+/// origin is full, and the rejection says which. So a measurement is taken only
+/// as a whole byte count the engine can hold — a fractional or out-of-range one
+/// is a broken measurement, and truncating or saturating it would publish a
+/// budget nothing measured.
+///
+/// The timing profile has no say here: a measured byte count belongs to no
+/// named set, so a browser on the CI cadence still stages against the quota it
+/// has.
+fn web_storage_policy(headroom_bytes: Option<f64>) -> StoragePolicy {
+    /// `2^64`, exactly representable as `f64`; the least value `as u64` saturates.
+    const OVER_U64: f64 = 18_446_744_073_709_551_616.0;
+    match headroom_bytes {
+        // Rejects NaN and both infinities by the range comparisons alone.
+        Some(bytes) if bytes >= 0.0 && bytes < OVER_U64 && bytes.fract() == 0.0 => {
+            StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
+        }
+        _ => StoragePolicy::UNMEASURED,
+    }
+}
+
 #[wasm_bindgen]
 impl EngineHandle {
     /// Builds the engine over the browser seams. `seams` is a plain object with
@@ -136,20 +162,7 @@ impl EngineHandle {
             _ => SyncTimingProfile::PRODUCTION,
         };
 
-        // The host measures origin headroom (`navigator.storage.estimate()`
-        // quota minus usage) and hands it in; the split itself is computed here
-        // so one headroom figure yields one budget on every platform. An absent
-        // or nonsensical figure is `UNMEASURED`, not a measured zero: both admit
-        // no upload (there is no floor-up), but only one of them means the
-        // origin is full, and the rejection says which. The timing profile has
-        // no say here: a measured byte count belongs to no named set, so a
-        // browser on the CI cadence still stages against the quota it has.
-        let storage_policy = match storage_headroom_bytes {
-            Some(bytes) if bytes.is_finite() && bytes >= 0.0 => {
-                StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
-            }
-            _ => StoragePolicy::UNMEASURED,
-        };
+        let storage_policy = web_storage_policy(storage_headroom_bytes);
 
         // With no accelerator base URL and no fallbacks the gateway is empty and
         // reads fail closed as `Unavailable` (availability, never a trust
@@ -487,6 +500,7 @@ mod tests {
     use cipherbox_core::kdf;
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_engine::Headroom;
     use cipherbox_engine::facade::CommandOutcome as Outcome;
     use cipherbox_engine::import_contact;
     use cipherbox_engine::seams::OpId;
@@ -511,6 +525,43 @@ mod tests {
         let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
         let code = ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public());
         Outcome::ContactImported(import_contact(&code.encode()).expect("the code imports"))
+    }
+
+    /// A byte figure that is not a whole number of bytes, or that the engine
+    /// cannot hold, is a broken measurement — not a small or an enormous one.
+    /// Truncating or saturating it would report `Measured` over a number the
+    /// host never measured, and an over-budget rejection would then say "full"
+    /// about an origin nobody sized.
+    #[wasm_bindgen_test]
+    fn only_a_whole_in_range_headroom_reads_as_measured() {
+        for reported in [
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(-1.0),
+            Some(1_048_576.5),
+            // 2^64 and up: `as u64` would clamp these to `u64::MAX`.
+            Some(18_446_744_073_709_551_616.0),
+            Some(1e30),
+        ] {
+            assert_eq!(
+                web_storage_policy(reported),
+                StoragePolicy::UNMEASURED,
+                "{reported:?} is not a byte count"
+            );
+        }
+
+        let measured = web_storage_policy(Some(4_294_967_296.0));
+        assert_eq!(measured.headroom, Headroom::Measured);
+        assert_eq!(
+            measured,
+            StoragePolicy::measured(StoragePlatform::WEB, 4_294_967_296)
+        );
+        assert_eq!(
+            web_storage_policy(Some(0.0)),
+            StoragePolicy::measured(StoragePlatform::WEB, 0)
+        );
     }
 
     /// `command()` resolves with the id an `opProgress`/`deadLetter` event

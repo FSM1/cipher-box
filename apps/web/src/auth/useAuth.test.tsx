@@ -95,6 +95,24 @@ describe('useAuth recovery phrase', () => {
     expect(result.current.auth.recoveryRequired).toBe(false);
   });
 
+  it('holds the enrollment answer where every surface reads it, not per hook instance', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
+    const { result } = mount(engine, coreKit);
+    const menu = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    expect(menu.result.current.auth.recoveryEnrolled).toBe(false);
+
+    await act(async () => {
+      await result.current.auth.enrollRecoveryPhrase();
+    });
+
+    // The menu that offers enrollment is a different consumer from the dialog
+    // that performs it; one still offering it would enroll a second time.
+    expect(menu.result.current.auth.recoveryEnrolled).toBe(true);
+  });
+
   it('ends the partial session when the member abandons the prompt', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({ needsRecovery: true });

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { normalizeRecoveryPhrase, RECOVERY_PHRASE_WORDS } from '../../auth/coreKit';
 import { useAuth } from '../../auth/useAuth';
 import { LoginError } from './LoginError';
@@ -13,10 +13,20 @@ export function RecoveryPhraseLogin() {
   const field = useRef<HTMLTextAreaElement>(null);
   const [malformed, setMalformed] = useState<string | null>(null);
 
+  // The panel replaces the login methods in place and `isBusy` disables the
+  // field, so focus lands on the body unless it is put back each time.
+  useEffect(() => {
+    if (!isBusy) field.current?.focus();
+  }, [isBusy]);
+
   const submit = async () => {
     const input = field.current;
     if (!input) return;
     const phrase = normalizeRecoveryPhrase(input.value);
+    // Read once and dropped, whatever the attempt turns out to be: a browser's
+    // crash-recovery snapshot persists form-field values to the profile
+    // directory, and retyping is cheaper than a phrase written to disk.
+    input.value = '';
     if (phrase.split(' ').filter(Boolean).length !== RECOVERY_PHRASE_WORDS) {
       setMalformed(`a recovery phrase is ${String(RECOVERY_PHRASE_WORDS)} words`);
       return;
@@ -26,11 +36,6 @@ export function RecoveryPhraseLogin() {
       await loginWithRecoveryPhrase(phrase);
     } catch {
       // `useAuth` already surfaces the failure as `error`.
-    } finally {
-      // Cleared on every settled attempt, including a refusal: a browser's
-      // crash-recovery snapshot persists form-field values to the profile
-      // directory, and retyping is cheaper than a phrase written to disk.
-      input.value = '';
     }
   };
 

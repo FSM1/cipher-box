@@ -56,11 +56,10 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { isAuthenticated, recoveryRequired } = useAuthState();
+  const { isAuthenticated, recoveryRequired, recoveryEnrolled } = useAuthState();
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recoveryEnrolled, setRecoveryEnrolled] = useState(false);
 
   const isReady = client !== null && session !== null && status === 'ready';
   const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
@@ -121,7 +120,8 @@ export function useAuth(): Auth {
   const loginWithRecoveryPhrase = useCallback(
     async (phrase: string): Promise<void> => {
       await flow.recoverWithPhrase(phrase);
-      setRecoveryEnrolled(true);
+      // A phrase that opened the account is proof of the policy it answered.
+      authStore.recoveryEnrollment(true);
     },
     [flow]
   );
@@ -137,7 +137,7 @@ export function useAuth(): Auth {
     setError(null);
     try {
       const enrolled = await session.enrollRecoveryPhrase();
-      setRecoveryEnrolled(true);
+      authStore.recoveryEnrollment(true);
       return enrolled;
     } catch (failure) {
       setError(errorMessage(failure));
@@ -150,7 +150,7 @@ export function useAuth(): Auth {
   // The policy is read once a session settles, not per render: the SDK answers
   // it by decompressing the account's public key.
   useEffect(() => {
-    setRecoveryEnrolled(isAuthenticated && (session?.hasRecoveryPhrase() ?? false));
+    authStore.recoveryEnrollment(isAuthenticated && (session?.hasRecoveryPhrase() ?? false));
   }, [isAuthenticated, session]);
 
   // A Core Kit session that survived the reload still has to hand the engine its

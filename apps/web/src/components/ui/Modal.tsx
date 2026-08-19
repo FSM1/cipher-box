@@ -16,6 +16,12 @@ interface ModalProps {
    * rejection into whatever dialog had replaced it.
    */
   busy?: boolean;
+  /**
+   * Whether the dialog may be dismissed at all. A step holding something the
+   * member cannot be shown a second time clears this, and Escape, the backdrop,
+   * and the close control all stop discarding it.
+   */
+  dismissible?: boolean;
   children: ReactNode;
 }
 
@@ -24,7 +30,16 @@ interface ModalProps {
  * Tab cycle that cannot leave the dialog. Callers mount it to open it, so
  * unmounting is what resets a dialog's own state.
  */
-export function Modal({ onClose, title, className, error, busy = false, children }: ModalProps) {
+export function Modal({
+  onClose,
+  title,
+  className,
+  error,
+  busy = false,
+  dismissible = true,
+  children,
+}: ModalProps) {
+  const refuseClose = busy || !dismissible;
   const dialogRef = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
   const titleId = useId();
@@ -32,8 +47,8 @@ export function Modal({ onClose, title, className, error, busy = false, children
   // pull focus out of the field being typed in every time a pull lands.
   const close = useRef(onClose);
   close.current = onClose;
-  const locked = useRef(busy);
-  locked.current = busy;
+  const locked = useRef(refuseClose);
+  locked.current = refuseClose;
 
   const focusable = useCallback(
     () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])],
@@ -72,7 +87,7 @@ export function Modal({ onClose, title, className, error, busy = false, children
         className={`modal-backdrop${className ? ` ${className}` : ''}`}
         data-testid="modal-backdrop"
         onMouseDown={(event) => {
-          if (!busy && event.target === event.currentTarget) onClose();
+          if (!refuseClose && event.target === event.currentTarget) onClose();
         }}
       >
         <div
@@ -90,7 +105,7 @@ export function Modal({ onClose, title, className, error, busy = false, children
               type="button"
               className="modal-close"
               onClick={onClose}
-              disabled={busy}
+              disabled={refuseClose}
               aria-label="close"
             >
               &times;

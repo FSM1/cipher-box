@@ -27,8 +27,18 @@ export function RecoveryPhraseSetup({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // Past the cut the hashed cloud share is gone and these words are the
+  // account's only spare key, so no dismissal discards them unacknowledged.
+  const dismissible = step !== 'reveal' || held;
+
   return (
-    <Modal onClose={onClose} title="recovery phrase" error={error} busy={isBusy}>
+    <Modal
+      onClose={onClose}
+      title="recovery phrase"
+      error={error}
+      busy={isBusy}
+      dismissible={dismissible}
+    >
       {step === 'explain' && (
         <div className="dialog-content" data-testid="recovery-setup-explain">
           <p className="dialog-message">

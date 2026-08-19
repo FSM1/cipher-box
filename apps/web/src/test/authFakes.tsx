@@ -99,6 +99,8 @@ export function fakeCoreKitSession(
     needsRecovery?: boolean;
     /** Whether this account already carries a factor policy. */
     enrolled?: boolean;
+    /** What an enrollment could not confirm after the policy was cut. */
+    enrollWarning?: string;
   } = {}
 ) {
   const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0, phrases: [], enrollments: 0 };
@@ -129,7 +131,7 @@ export function fakeCoreKitSession(
     },
     enrollRecoveryPhrase() {
       calls.enrollments += 1;
-      return Promise.resolve({ phrase: FAKE_PHRASE, warning: null });
+      return Promise.resolve({ phrase: FAKE_PHRASE, warning: options.enrollWarning ?? null });
     },
     method: () => method,
     email: options.email ?? (() => email),

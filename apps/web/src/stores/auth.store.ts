@@ -20,6 +20,12 @@ export interface AuthState {
    * one answer, and a route change cannot lose the prompt over a live session.
    */
   readonly recoveryRequired: boolean;
+  /**
+   * This account carries a factor policy. Shared for the same reason, and one
+   * more: the menu that offers enrollment and the dialog that performs it are
+   * separate consumers, and a menu still offering it would enroll twice.
+   */
+  readonly recoveryEnrolled: boolean;
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
@@ -27,6 +33,7 @@ const SIGNED_OUT: AuthState = Object.freeze({
   email: null,
   method: null,
   recoveryRequired: false,
+  recoveryEnrolled: false,
 });
 
 let state: AuthState = SIGNED_OUT;
@@ -39,7 +46,8 @@ function set(next: AuthState): void {
     next.isAuthenticated === state.isAuthenticated &&
     next.email === state.email &&
     next.method === state.method &&
-    next.recoveryRequired === state.recoveryRequired
+    next.recoveryRequired === state.recoveryRequired &&
+    next.recoveryEnrolled === state.recoveryEnrolled
   ) {
     return;
   }
@@ -64,6 +72,7 @@ export const authStore = {
       email: method === 'wallet' ? null : email,
       method,
       recoveryRequired: false,
+      recoveryEnrolled: false,
     });
   },
   signedOut(): void {
@@ -76,6 +85,16 @@ export const authStore = {
   /** That prompt is resolved — redeemed, or abandoned. */
   recoveryResolved(): void {
     set({ ...state, recoveryRequired: false });
+  },
+  /**
+   * What the account's factor policy reads as. Latches on for the session:
+   * Web3Auth's own factor list can still answer "none" for a while after an
+   * enrollment lands, and taking that answer would offer enrollment again on an
+   * account that is already enrolled. A sign-in or sign-out clears it, so the
+   * next session reads the policy afresh.
+   */
+  recoveryEnrollment(enrolled: boolean): void {
+    set({ ...state, recoveryEnrolled: state.recoveryEnrolled || enrolled });
   },
 };
 

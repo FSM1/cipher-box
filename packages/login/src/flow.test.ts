@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createLoginFlow, type LoginFlow } from './flow';
 import type { LoginSecretExporter } from './secret';
-import { RecoveryRequiredError } from './session';
+import { RecoveryRequiredError, type CoreKitSession } from './session';
 import {
   fakeAccount,
   fakeExchange,
@@ -90,6 +90,20 @@ describe('the recovery phrase step', () => {
 
     expect(loggedIn(parts)).toEqual([]);
     expect(parts.progress.failures).toHaveLength(1);
+  });
+
+  // Desktop's session has no phrase redemption of its own, so the seam is
+  // optional and the flow has to refuse rather than call through undefined.
+  it('refuses a phrase on a host whose session cannot redeem one', async () => {
+    const bare = fakeSession({ needsRecovery: true });
+    delete (bare.session as Partial<CoreKitSession>).recoverWithPhrase;
+    const parts = build({ session: bare });
+
+    await expect(parts.flow.recoverWithPhrase(FAKE_PHRASE)).rejects.toThrow(
+      'recovery is not available on this device'
+    );
+
+    expect(parts.facade.calls.secrets).toEqual([]);
   });
 
   it('leaves the login held when the phrase does not open the account', async () => {

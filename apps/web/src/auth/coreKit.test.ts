@@ -33,11 +33,14 @@ const sdk = vi.hoisted(() => ({
   opensWith: undefined as string | undefined,
   inputs: [] as string[],
   created: [] as Record<string, unknown>[],
-  setDeviceFactors: 0,
+  /** The `replaceExisting` flag each `setDeviceFactor` carried. */
+  setDeviceFactors: [] as unknown[],
   commits: 0,
   /** Which `commitChanges` call rejects, 1-based; `0` for none. */
   commitFailsAfter: 0,
   shareDescriptions: {} as Record<string, string[]>,
+  /** Set to make the SDK's own factor read throw, as an unreachable one does. */
+  keyDetailsError: undefined as Error | undefined,
   /** What `getKeyDetails` reports, so an enrollment can be seen to move it. */
   accountKey: 'aa',
   accountKeyAfterEnroll: undefined as string | undefined,
@@ -92,11 +95,12 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.created.push(params);
         return Promise.resolve('factor');
       }
-      setDeviceFactor(): Promise<void> {
-        sdk.setDeviceFactors += 1;
+      setDeviceFactor(_factorKey: unknown, replaceExisting?: unknown): Promise<void> {
+        sdk.setDeviceFactors.push(replaceExisting);
         return Promise.resolve();
       }
       getKeyDetails(): Record<string, unknown> {
+        if (sdk.keyDetailsError) throw sdk.keyDetailsError;
         const key = sdk.accountKey;
         return {
           shareDescriptions: sdk.shareDescriptions,
@@ -149,10 +153,11 @@ beforeEach(() => {
   sdk.opensWith = undefined;
   sdk.inputs = [];
   sdk.created = [];
-  sdk.setDeviceFactors = 0;
+  sdk.setDeviceFactors = [];
   sdk.commits = 0;
   sdk.commitFailsAfter = 0;
   sdk.shareDescriptions = {};
+  sdk.keyDetailsError = undefined;
   sdk.accountKey = 'aa';
   sdk.accountKeyAfterEnroll = undefined;
   sdk.enableMfaParams = undefined;
@@ -296,8 +301,25 @@ describe('the recovery phrase as a login', () => {
     expect(sdk.inputs).toEqual([FACTOR_HEX]);
     expect(created.isLoggedIn()).toBe(true);
     expect(sdk.created).toEqual([expect.objectContaining({ shareType: TssShareType.DEVICE })]);
-    expect(sdk.setDeviceFactors).toBe(1);
+    // Replacing: a stored factor whose commit failed would otherwise refuse
+    // every later mint and leave this device unable to finish a recovery.
+    expect(sdk.setDeviceFactors).toEqual([true]);
     expect(sdk.commits).toBeGreaterThan(0);
+  });
+
+  it('opens the account even when the factor it mints for this device cannot be synced', async () => {
+    const created = await heldAtPolicy();
+    sdk.opensWith = FACTOR_HEX;
+    // A login held at the policy commits nothing, so the sync after the mint is
+    // the first commit this session makes.
+    sdk.commitFailsAfter = 1;
+
+    await expect(created.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
+
+    // The account is open from here: raising would leave a live session this
+    // device's own guard refuses to retry.
+    expect(created.isLoggedIn()).toBe(true);
+    expect(sdk.created).toHaveLength(1);
   });
 
   it('refuses a wrong phrase without ending the session or clearing the store', async () => {
@@ -399,9 +421,15 @@ describe('recovery phrase enrollment', () => {
     expect(created.hasRecoveryPhrase()).toBe(true);
   });
 
-  it('reports no phrase when the descriptions cannot be read at all', () => {
+  it('reports no phrase for a description entry it cannot parse', () => {
     const created = session();
     sdk.shareDescriptions = { ab: ['not json'] };
+    expect(created.hasRecoveryPhrase()).toBe(false);
+  });
+
+  it('reports no phrase when the SDK will not hand over the factor list at all', () => {
+    const created = session();
+    sdk.keyDetailsError = new Error('the key details are unreadable');
     expect(created.hasRecoveryPhrase()).toBe(false);
   });
 });
