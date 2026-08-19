@@ -13,6 +13,7 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import type { EngineHostLike } from './worker/engineHost.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -87,7 +88,7 @@ export class StubEngineHost implements EngineHostLike {
     return notStubbed('start');
   }
 
-  command(_command: CommandDescriptor): Promise<void> {
+  command(_command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     return notStubbed('command');
   }
 
@@ -432,7 +433,8 @@ export class FakeEngineTransport implements EngineTransport {
   /** What `openContentStream` hands back. */
   streamHandle: StreamHandle = 1n;
   commitOpId = 42n;
-  respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
+  respond: (command: CommandDescriptor) => Promise<CommandOutcomeDescriptor> = () =>
+    Promise.resolve({ kind: 'done' });
   respondSnapshot: (folder: Uint8Array | null) => Promise<SnapshotDescriptor> = (folder) =>
     Promise.resolve(emptySnapshot(folder ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
@@ -451,7 +453,7 @@ export class FakeEngineTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  command(command: CommandDescriptor): Promise<void> {
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     this.commands.push(command);
     return this.respond(command);
   }

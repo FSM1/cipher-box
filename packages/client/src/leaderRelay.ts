@@ -37,6 +37,7 @@ import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
 import type {
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -357,9 +358,7 @@ export class LeaderRelay {
       case 'cb:portCommand': {
         const { command } = message as Extract<PortRequest, { type: 'cb:portCommand' }>;
         if (!hasKind(command)) return this.refuse(entry, requestId, message);
-        void this.answerPort(entry, requestId, () =>
-          this.transport.command(command, []).then(() => undefined)
-        );
+        void this.answerPort(entry, requestId, () => this.transport.command(command, []));
         return true;
       }
       case 'cb:portWrite': {
@@ -383,7 +382,9 @@ export class LeaderRelay {
   private async answerPort(
     entry: PortEntry,
     requestId: number,
-    step: () => Promise<SnapshotDescriptor | ArrayBuffer | string | bigint | undefined>
+    step: () => Promise<
+      SnapshotDescriptor | CommandOutcomeDescriptor | ArrayBuffer | string | bigint | undefined
+    >
   ): Promise<void> {
     try {
       const result = await step();

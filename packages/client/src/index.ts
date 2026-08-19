@@ -14,6 +14,7 @@ export const CLIENT_PACKAGE = '@cipherbox/client';
 // and imports its collaborators by relative path, so nothing outside this
 // package consumes the worker-realm internals through the barrel.
 export { EngineFacade } from './facade.js';
+export type { ImportedContact } from './facade.js';
 export { EngineRequestError, overBudgetRemedy } from './correlatedTransport.js';
 export type { OverBudgetRemedy } from './correlatedTransport.js';
 export { LocalTransport } from './transport.js';
@@ -48,6 +49,7 @@ export { fromHex, toHex } from './seams/bytes.js';
 // The wire descriptors the UI exchanges with the engine over the transport.
 export type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   Permission,
   NodeKind,

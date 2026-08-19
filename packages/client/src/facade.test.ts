@@ -5,6 +5,7 @@ import { emptySnapshot, FAKE_SIWE_NONCE } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -32,9 +33,12 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
+  /** What the next `command` resolves with; the engine answers `done` by default. */
+  outcome: CommandOutcomeDescriptor = { kind: 'done' };
+
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
     this.commands.push({ command, transfer });
-    return Promise.resolve();
+    return Promise.resolve(this.outcome);
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
@@ -220,6 +224,36 @@ describe('EngineFacade', () => {
 
     await expect(facade.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
     expect(transport.siweChallenges).toBe(1);
+  });
+
+  it('hands the caller the two public keys an import verified', async () => {
+    const transport = new FakeTransport();
+    const identityPublicKey = new Uint8Array(33).fill(4);
+    const encPublicKey = new Uint8Array(32).fill(5);
+    transport.outcome = { kind: 'contactImported', identityPublicKey, encPublicKey };
+
+    await expect(
+      new EngineFacade(transport).importContact(new Uint8Array([7, 7]))
+    ).resolves.toEqual({ identityPublicKey, encPublicKey });
+  });
+
+  it('refuses an import the engine did not answer with a contact', async () => {
+    const transport = new FakeTransport();
+    transport.outcome = { kind: 'queued', opId: 3n };
+
+    await expect(new EngineFacade(transport).importContact(new Uint8Array([7, 7]))).rejects.toThrow(
+      'import contact answered queued'
+    );
+  });
+
+  it('resolves a queued command with the op id its events will repeat', async () => {
+    const transport = new FakeTransport();
+    transport.outcome = { kind: 'queued', opId: 11n };
+
+    await expect(new EngineFacade(transport).delete(new Uint8Array(16))).resolves.toEqual({
+      kind: 'queued',
+      opId: 11n,
+    });
   });
 
   it('delegates event subscription to the transport', () => {

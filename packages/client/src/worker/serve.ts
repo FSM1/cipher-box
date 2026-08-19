@@ -49,9 +49,11 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         case 'start':
           await host.start(request.secret);
           break;
-        case 'command':
-          await host.command(request.command);
-          break;
+        case 'command': {
+          const result = await host.command(request.command);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'pushChunk':
           await host.pushChunk(request.handle, request.chunk);
           break;

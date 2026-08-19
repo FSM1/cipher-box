@@ -6,13 +6,14 @@
 
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
-import type { EngineWasm } from './engineWasm.js';
+import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
@@ -33,7 +34,8 @@ import {
  */
 export interface EngineHostLike {
   start(secret: ArrayBuffer): Promise<void>;
-  command(command: CommandDescriptor): Promise<void>;
+  /** Runs one command; resolves with what it produced. */
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   /** Takes ownership of `chunk`: the host is its terminal owner, so it scrubs the
@@ -60,6 +62,34 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
     ? (bytes.buffer as ArrayBuffer)
     : (bytes.slice().buffer as ArrayBuffer);
+}
+
+/**
+ * A getter the outcome's own `kind` promises, refused when it answers nothing.
+ * A build whose engine and glue disagree must fail the call rather than ship a
+ * descriptor missing the field its variant is defined by.
+ */
+function present<T>(value: T | undefined, kind: string, field: string): T {
+  if (value === undefined) throw new Error(`command outcome ${kind} carries no ${field}`);
+  return value;
+}
+
+/** Reads a wasm-bindgen `CommandOutcome`'s getters into a descriptor. */
+function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
+  const kind = outcome.kind;
+  switch (kind) {
+    case 'done':
+      return { kind: 'done' };
+    case 'queued':
+      return { kind: 'queued', opId: present(outcome.opId, kind, 'opId') };
+    case 'contactImported':
+      return {
+        kind: 'contactImported',
+        identityPublicKey: present(outcome.identityPublicKey, kind, 'identityPublicKey'),
+        encPublicKey: present(outcome.encPublicKey, kind, 'encPublicKey'),
+      };
+  }
+  throw new Error(`unknown command outcome ${kind}`);
 }
 
 /** What the engine instance itself is configured with, beyond its seams. */
@@ -110,8 +140,13 @@ export class EngineHost implements EngineHostLike {
     return this.scrubbing(buffer(secret, 'secret'), (view) => this.handle.start(view));
   }
 
-  async command(command: CommandDescriptor): Promise<void> {
-    await this.handle.command(buildCommand(this.wasm, command));
+  async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    const outcome = await this.handle.command(buildCommand(this.wasm, command));
+    try {
+      return readOutcome(outcome);
+    } finally {
+      outcome.free();
+    }
   }
 
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {

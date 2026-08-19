@@ -5,6 +5,8 @@ import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
 import type {
+  CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   WorkerMessage,
@@ -68,6 +70,7 @@ class ReadHost extends StubEngineHost {
   readonly chunks: Array<{ handle: bigint; bytes: number[] }> = [];
   readonly commits: bigint[] = [];
   readonly aborts: bigint[] = [];
+  readonly commands: CommandDescriptor[] = [];
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
@@ -79,8 +82,12 @@ class ReadHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  command(): Promise<void> {
-    return Promise.resolve();
+  /** What the next `command` resolves with; a queued op answers with its id. */
+  outcome: CommandOutcomeDescriptor = { kind: 'done' };
+
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    this.commands.push(command);
+    return Promise.resolve(this.outcome);
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<bigint> {
@@ -223,7 +230,9 @@ describe('serveEngine read requests', () => {
       code: 'contentUnavailable',
     });
     // The failures were per-request, never fatal: the next read still answers.
-    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toBeUndefined();
+    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toEqual({
+      kind: 'done',
+    });
   });
 
   it('correlates concurrent command, snapshot, and download answered out of order', async () => {
@@ -369,7 +378,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     ];
     const handle: WasmEngineHandle = {
       start: () => Promise.resolve(undefined),
-      command: () => Promise.resolve(undefined),
+      command: () => Promise.resolve({ kind: 'done', free: () => undefined }),
       beginWrite: () => Promise.resolve(1n),
       pushChunk: () => Promise.resolve(undefined),
       commitWrite: () => Promise.resolve(1n),
@@ -416,6 +425,8 @@ describe('serveEngine event pump over the real EngineHost', () => {
     ]);
     expect(toUi.some((entry) => entry.message.type === 'fatal')).toBe(false);
     // The transport is alive: a post-event command still round-trips.
-    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toBeUndefined();
+    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toEqual({
+      kind: 'done',
+    });
   });
 });

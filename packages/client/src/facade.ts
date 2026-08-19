@@ -13,6 +13,7 @@
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   NodeKind,
   Permission,
   SnapshotDescriptor,
@@ -20,6 +21,14 @@ import type {
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
+
+/** The two public keys a verified contact code bound together. */
+export interface ImportedContact {
+  /** Compressed SEC1 identity public key — what a grant names as its recipient. */
+  identityPublicKey: Uint8Array;
+  /** The X25519 encryption subkey that binding tied to the identity key. */
+  encPublicKey: Uint8Array;
+}
 
 export class EngineFacade {
   constructor(private readonly transport: EngineTransport) {}
@@ -86,7 +95,7 @@ export class EngineFacade {
   }
 
   /** Creates an empty node. File content is written through a write handle. */
-  create(parent: Uint8Array, name: string, kind: NodeKind): Promise<void> {
+  create(parent: Uint8Array, name: string, kind: NodeKind): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'create', parent, name, nodeKind: kind });
   }
 
@@ -115,15 +124,15 @@ export class EngineFacade {
     return this.transport.abortWrite(handle);
   }
 
-  delete(node: Uint8Array): Promise<void> {
+  delete(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'delete', node });
   }
 
-  rename(node: Uint8Array, newName: string): Promise<void> {
+  rename(node: Uint8Array, newName: string): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'rename', node, newName });
   }
 
-  relink(node: Uint8Array, newParent: Uint8Array): Promise<void> {
+  relink(node: Uint8Array, newParent: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'relink', node, newParent });
   }
 
@@ -132,47 +141,64 @@ export class EngineFacade {
    * with `notAnUpload` when the op carries no content, and with
    * `tooLateToCancel` once the version's record is publishing.
    */
-  cancelUpload(opId: bigint): Promise<void> {
+  cancelUpload(opId: bigint): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'cancelUpload', opId });
   }
 
-  setFocus(node: Uint8Array | null): Promise<void> {
+  setFocus(node: Uint8Array | null): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'setFocus', node });
   }
 
-  manualRefresh(): Promise<void> {
+  manualRefresh(): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'manualRefresh' });
   }
 
-  importContact(contactCode: Uint8Array): Promise<void> {
-    return this.command({ kind: 'importContact', contactCode });
+  /**
+   * Imports a contact code. Resolving with the contact's keys *is* the proof its
+   * binding signature verified — the engine mints a contact no other way.
+   */
+  async importContact(contactCode: Uint8Array): Promise<ImportedContact> {
+    const outcome = await this.command({ kind: 'importContact', contactCode });
+    if (outcome.kind !== 'contactImported') {
+      throw new Error(`import contact answered ${outcome.kind}`);
+    }
+    return {
+      identityPublicKey: outcome.identityPublicKey,
+      encPublicKey: outcome.encPublicKey,
+    };
   }
 
   grant(
     node: Uint8Array,
     recipientIdentityPublicKey: Uint8Array,
     permission: Permission
-  ): Promise<void> {
+  ): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'grant', node, recipientIdentityPublicKey, permission });
   }
 
-  revoke(node: Uint8Array, recipientIdentityPublicKey: Uint8Array): Promise<void> {
+  revoke(
+    node: Uint8Array,
+    recipientIdentityPublicKey: Uint8Array
+  ): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'revoke', node, recipientIdentityPublicKey });
   }
 
-  downgrade(node: Uint8Array, recipientIdentityPublicKey: Uint8Array): Promise<void> {
+  downgrade(
+    node: Uint8Array,
+    recipientIdentityPublicKey: Uint8Array
+  ): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'downgrade', node, recipientIdentityPublicKey });
   }
 
-  createInviteLink(node: Uint8Array, permission: Permission): Promise<void> {
+  createInviteLink(node: Uint8Array, permission: Permission): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'createInviteLink', node, permission });
   }
 
-  acceptShare(sealedSharePointer: Uint8Array): Promise<void> {
+  acceptShare(sealedSharePointer: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'acceptShare', sealedSharePointer });
   }
 
-  rotateNow(node: Uint8Array): Promise<void> {
+  rotateNow(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'rotateNow', node });
   }
 
@@ -181,11 +207,14 @@ export class EngineFacade {
     return this.transport.siweChallenge();
   }
 
-  siweLogin(message: string, signature: Uint8Array): Promise<void> {
+  siweLogin(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'siweLogin', message, signature });
   }
 
-  private command(descriptor: CommandDescriptor, transfer: Transferable[] = []): Promise<void> {
+  private command(
+    descriptor: CommandDescriptor,
+    transfer: Transferable[] = []
+  ): Promise<CommandOutcomeDescriptor> {
     return this.transport.command(descriptor, transfer);
   }
 }

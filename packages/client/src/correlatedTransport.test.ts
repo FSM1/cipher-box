@@ -7,7 +7,11 @@ import {
   isRecoverableEngineError,
   overBudgetRemedy,
 } from './correlatedTransport.js';
-import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
+import type {
+  CommandOutcomeDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+} from './worker/protocol.js';
 
 function unsupported(): never {
   throw new Error('outside this probe');
@@ -54,7 +58,7 @@ class ProbeTransport extends CorrelatedTransport {
   start(): Promise<void> {
     return unsupported();
   }
-  command(): Promise<void> {
+  command(): Promise<CommandOutcomeDescriptor> {
     return unsupported();
   }
   beginWrite(): Promise<WriteHandle> {

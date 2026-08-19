@@ -14,6 +14,7 @@
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -159,7 +160,10 @@ export abstract class CorrelatedTransport implements EngineTransport {
   protected terminalError: Error | null = null;
 
   abstract start(secret: ArrayBuffer): Promise<void>;
-  abstract command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  abstract command(
+    command: CommandDescriptor,
+    transfer: Transferable[]
+  ): Promise<CommandOutcomeDescriptor>;
   abstract beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   abstract pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   abstract commitWrite(handle: WriteHandle): Promise<bigint>;

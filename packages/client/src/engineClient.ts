@@ -29,6 +29,7 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import { LocalTransport } from './transport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -174,7 +175,7 @@ export class EngineClient implements EngineTransport {
     });
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
     return this.current.command(command, transfer);
   }
 

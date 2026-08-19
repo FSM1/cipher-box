@@ -88,6 +88,18 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.commands.map((c) => c.kind)).toEqual(['delete']);
   });
 
+  it('carries a command outcome back over the private port', async () => {
+    const { engine, follower } = wire();
+    const identityPublicKey = new Uint8Array(33).fill(6);
+    const encPublicKey = new Uint8Array(32).fill(7);
+    engine.respond = () =>
+      Promise.resolve({ kind: 'contactImported', identityPublicKey, encPublicKey });
+
+    await expect(
+      follower.command({ kind: 'importContact', contactCode: new Uint8Array([1, 2]) }, [])
+    ).resolves.toEqual({ kind: 'contactImported', identityPublicKey, encPublicKey });
+  });
+
   it('takes no secret: start just awaits a live leader, wire carries only a hello', async () => {
     const bus = new FakeBus();
     const posted: unknown[] = [];
@@ -139,7 +151,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // Plus every EventDescriptor variant, including the byte- and string-bearing
     // ones the relay forwards verbatim.
-    engine.respond = () => Promise.resolve();
+    engine.respond = () => Promise.resolve({ kind: 'done' });
     engine.emit({ kind: 'snapshotUpdated' });
     engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
     engine.emit({ kind: 'withheldUpdateEscalation', ipnsName: new Uint8Array([1, 2, 3]) });
@@ -305,7 +317,7 @@ describe('broadcast transport ↔ leader relay', () => {
   it('collapses a burst of union changes onto one trailing pass', async () => {
     const { engine, follower, relay } = wire();
     let settle = (): void => undefined;
-    engine.respond = () => new Promise<void>((resolve) => (settle = () => resolve()));
+    engine.respond = () => new Promise((resolve) => (settle = () => resolve({ kind: 'done' })));
     const forced = (): number => engine.commands.filter((c) => c.kind === 'manualRefresh').length;
 
     relay.reportLocalFocus('leader', new Uint8Array([1]));
@@ -322,7 +334,7 @@ describe('broadcast transport ↔ leader relay', () => {
     await tick();
     expect(forced()).toBe(1);
 
-    engine.respond = () => Promise.resolve();
+    engine.respond = () => Promise.resolve({ kind: 'done' });
     settle();
     await tick();
     expect(forced()).toBe(2);
@@ -331,7 +343,7 @@ describe('broadcast transport ↔ leader relay', () => {
   it('drops the trailing pass a step-down overtook', async () => {
     const { engine, follower, relay } = wire();
     let settle = (): void => undefined;
-    engine.respond = () => new Promise<void>((resolve) => (settle = () => resolve()));
+    engine.respond = () => new Promise((resolve) => (settle = () => resolve({ kind: 'done' })));
     const forced = (): number => engine.commands.filter((c) => c.kind === 'manualRefresh').length;
 
     relay.reportLocalFocus('leader', new Uint8Array([1]));
@@ -341,7 +353,7 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(forced()).toBe(1);
 
     relay.close();
-    engine.respond = () => Promise.resolve();
+    engine.respond = () => Promise.resolve({ kind: 'done' });
     settle();
     await tick();
 

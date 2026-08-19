@@ -12,6 +12,7 @@
 import { CorrelatedTransport } from './correlatedTransport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -34,8 +35,11 @@ export interface EngineTransport {
    * re-send the buffer a retryable rejection handed back.
    */
   start(secret: ArrayBuffer): Promise<void>;
-  /** Sends one command; `transfer` lists any owned buffers to move, not copy. */
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  /**
+   * Sends one command and resolves with what it produced; `transfer` lists any
+   * owned buffers to move, not copy.
+   */
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor>;
   /** Opens a write handle for `size` plaintext bytes of streamed content. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   /** Feeds the next slice to an open handle (the buffer is moved, not copied). */
@@ -128,8 +132,8 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
-    return this.dispatch(
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
+    return this.request<CommandOutcomeDescriptor>(
       this.ready,
       (id) => this.worker.postMessage({ type: 'command', id, command }, transfer),
       transfer

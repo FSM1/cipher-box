@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeWasmEnums } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
-import type { EngineWasm } from './engineWasm.js';
+import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
 import type { WriteTarget } from './protocol.js';
 
 /** The arguments one `EngineHandle` construction crossed the WASM boundary with. */
@@ -290,4 +290,79 @@ describe('EngineHost request fields', () => {
       expect(calls).toEqual([]);
     }
   );
+});
+
+/** A wasm `CommandOutcome` that records whether the host released it. */
+function outcomeHandle(fields: Record<string, unknown>): {
+  outcome: WasmCommandOutcome;
+  freed: () => number;
+} {
+  let frees = 0;
+  const outcome = {
+    ...fields,
+    free: () => {
+      frees += 1;
+    },
+  } as unknown as WasmCommandOutcome;
+  return { outcome, freed: () => frees };
+}
+
+/** A host whose WASM `command` answers with `outcome`. */
+function commandingHost(outcome: WasmCommandOutcome): EngineHost {
+  const wasm = {
+    ...fakeWasmEnums,
+    EngineHandle: class {
+      command(): Promise<WasmCommandOutcome> {
+        return Promise.resolve(outcome);
+      }
+    },
+    Command: { manualRefresh: () => ({}), importContact: (code: Uint8Array) => ({ code }) },
+    NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+  } as unknown as EngineWasm;
+  return new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' });
+}
+
+describe('EngineHost command outcomes', () => {
+  it('carries the imported contact keys back and releases the boundary object', async () => {
+    const identityPublicKey = new Uint8Array(33).fill(2);
+    const encPublicKey = new Uint8Array(32).fill(3);
+    const { outcome, freed } = outcomeHandle({
+      kind: 'contactImported',
+      identityPublicKey,
+      encPublicKey,
+    });
+
+    await expect(
+      commandingHost(outcome).command({ kind: 'importContact', contactCode: new Uint8Array([1]) })
+    ).resolves.toEqual({ kind: 'contactImported', identityPublicKey, encPublicKey });
+    expect(freed()).toBe(1);
+  });
+
+  it('keeps the queued op id flowing', async () => {
+    const { outcome, freed } = outcomeHandle({ kind: 'queued', opId: 9007199254740993n });
+
+    await expect(commandingHost(outcome).command({ kind: 'manualRefresh' })).resolves.toEqual({
+      kind: 'queued',
+      opId: 9007199254740993n,
+    });
+    expect(freed()).toBe(1);
+  });
+
+  it('refuses an outcome missing the field its own kind names, still releasing it', async () => {
+    const { outcome, freed } = outcomeHandle({ kind: 'queued' });
+
+    await expect(commandingHost(outcome).command({ kind: 'manualRefresh' })).rejects.toThrow(
+      'command outcome queued carries no opId'
+    );
+    expect(freed()).toBe(1);
+  });
+
+  it('refuses an outcome kind this build does not know, still releasing it', async () => {
+    const { outcome, freed } = outcomeHandle({ kind: 'teleported' });
+
+    await expect(commandingHost(outcome).command({ kind: 'manualRefresh' })).rejects.toThrow(
+      'unknown command outcome teleported'
+    );
+    expect(freed()).toBe(1);
+  });
 });
