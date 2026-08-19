@@ -422,11 +422,14 @@ fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
 fn a_vault_settings_command_carries_the_stable_builder_name() {
     let settings = VaultSettings::new(
         PinMode::Dual,
-        Some(ByoIpfsConfig::new(
-            "https://kubo.example".to_owned(),
-            ByoKind::Kubo,
-            Some("s3cret".to_owned()),
-        )),
+        Some(
+            ByoIpfsConfig::new(
+                "https://kubo.example".to_owned(),
+                ByoKind::Kubo,
+                Some(b"s3cret".to_vec()),
+            )
+            .expect("UTF-8 token bytes build"),
+        ),
         Some(3),
     )
     .expect("a positive cap builds");
@@ -434,5 +437,20 @@ fn a_vault_settings_command_carries_the_stable_builder_name() {
     assert_eq!(
         Command::save_vault_settings(settings).name(),
         "saveVaultSettings"
+    );
+}
+
+/// A bearer is sent as bytes so the host can scrub it, but the provider header
+/// it becomes is text. Bytes that are not text are refused rather than coerced:
+/// a lossy decode would author a credential the member never typed.
+#[wasm_bindgen_test]
+fn a_provider_token_that_is_not_utf8_is_refused() {
+    assert!(
+        ByoIpfsConfig::new(
+            "https://kubo.example".to_owned(),
+            ByoKind::Kubo,
+            Some(vec![0xff, 0xfe]),
+        )
+        .is_err()
     );
 }

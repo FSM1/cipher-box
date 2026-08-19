@@ -139,12 +139,17 @@ function byoConfig(wasm: EngineWasm, value: unknown): WasmByoIpfsConfig {
   const config = record(value, 'settings.byo');
   const endpoint = text(config.endpoint, 'settings.byo.endpoint');
   const kind = byoKind(wasm, config.kind);
-  const token = config.accessToken ?? undefined;
-  return new wasm.ByoIpfsConfig(
-    endpoint,
-    kind,
-    token === undefined ? undefined : text(token, 'settings.byo.accessToken')
-  );
+  const raw = config.accessToken ?? undefined;
+  const token = raw === undefined ? undefined : bytes(raw, 'settings.byo.accessToken');
+  try {
+    return new wasm.ByoIpfsConfig(endpoint, kind, token);
+  } finally {
+    // A command descriptor is structured-cloned across the worker boundary, so
+    // this view is the worker's own copy and the engine below has already
+    // copied what it keeps into a zeroizing buffer. Scrubbing on the throwing
+    // path too: a refused build leaves the credential no less resident.
+    token?.fill(0);
+  }
 }
 
 /**

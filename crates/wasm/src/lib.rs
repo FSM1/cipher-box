@@ -214,16 +214,34 @@ pub struct ByoIpfsConfig {
 #[wasm_bindgen]
 impl ByoIpfsConfig {
     /// Builds a provider config. `accessToken` is `undefined` for a provider
-    /// that needs none; when present it lands in a zeroizing buffer.
+    /// that needs none; when present it arrives as bytes and lands in a
+    /// zeroizing buffer.
+    ///
+    /// Bytes rather than a `String` so the host holds the credential in
+    /// something it can scrub: a JS string cannot be overwritten, and
+    /// wasm-bindgen would materialize one on both sides of the boundary.
     #[wasm_bindgen(constructor)]
-    pub fn new(endpoint: String, kind: ByoKind, access_token: Option<String>) -> ByoIpfsConfig {
-        Self {
+    pub fn new(
+        endpoint: String,
+        kind: ByoKind,
+        access_token: Option<Vec<u8>>,
+    ) -> Result<ByoIpfsConfig, JsError> {
+        let access_token = match access_token {
+            None => None,
+            Some(bytes) => {
+                let bytes = Zeroizing::new(bytes);
+                let token = core::str::from_utf8(&bytes)
+                    .map_err(|_| JsError::new("accessToken must be UTF-8"))?;
+                Some(Zeroizing::new(token.to_owned()))
+            }
+        };
+        Ok(Self {
             inner: EngineByo {
                 endpoint,
                 kind: kind.into(),
-                access_token: access_token.map(Zeroizing::new),
+                access_token,
             },
-        }
+        })
     }
 }
 
