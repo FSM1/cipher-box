@@ -20,8 +20,11 @@
 use std::collections::BTreeMap;
 
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission};
+use cipherbox_core::seal::{
+    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, SignedGrantBlob,
+};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::UnixMillis;
@@ -52,8 +55,20 @@ pub fn recipient_blinded_tag(
     sharer_enc_pub: &X25519Public,
     scope_root_ipns_name: &[u8],
 ) -> Option<[u8; 32]> {
+    Some(recipient_self_location(my_enc_secret, sharer_enc_pub, scope_root_ipns_name)?.1)
+}
+
+/// [`recipient_blinded_tag`] plus the pairwise secret it derived from — the one
+/// ECDH a recipient needs for both its tag and its writer pseudonym, mirroring
+/// the single derivation [`mint_grant_row`] makes on the owner's side.
+pub fn recipient_self_location(
+    my_enc_secret: &X25519Secret,
+    sharer_enc_pub: &X25519Public,
+    scope_root_ipns_name: &[u8],
+) -> Option<(SecretBytes, [u8; 32])> {
     let shared = my_enc_secret.diffie_hellman(sharer_enc_pub)?;
-    Some(kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name))
+    let tag = kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name);
+    Some((shared, tag))
 }
 
 /// Whether `entry` is filed under the tag its own `recipientEncPk` derives at
@@ -85,6 +100,15 @@ pub fn self_locate<'a>(
     blobs: &'a [PublishedGrantBlob],
     tag: &[u8; 32],
 ) -> Option<&'a PublishedGrantBlob> {
+    blobs.iter().find(|b| &b.tag == tag)
+}
+
+/// [`self_locate`] over a grant section's signed blobs, for the readers that
+/// hold the record itself rather than the published projection of it.
+pub fn self_locate_signed<'a>(
+    blobs: &'a [SignedGrantBlob],
+    tag: &[u8; 32],
+) -> Option<&'a SignedGrantBlob> {
     blobs.iter().find(|b| &b.tag == tag)
 }
 

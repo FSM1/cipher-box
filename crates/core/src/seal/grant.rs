@@ -536,9 +536,8 @@ pub fn seal_ascent_link(
 
 /// Seal an ascent link to an ascent public half the caller already holds — the
 /// re-seal a holder with no ancestor seed performs (blueprint/engine.md
-/// "rotateScope": a grantee scope-exit rotation re-seals the ascent link to its
-/// public half). Otherwise identical to [`seal_ascent_link`], whose derivation
-/// this is the second half of.
+/// "rotateScope"). Otherwise identical to [`seal_ascent_link`], whose
+/// derivation this is the second half of.
 pub fn seal_ascent_link_to(
     ascent_public: &X25519Public,
     ephemeral_scalar: &[u8; 32],

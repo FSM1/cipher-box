@@ -2,17 +2,14 @@
 //! engine.md "Resolve/publish pipeline", "Adoption gate and floors").
 //!
 //! The resolve pipeline routes every fetched record through [`Adopter::adopt`];
-//! this is the concrete implementation for a scope root. It assembles the
+//! this is the concrete implementation for a scope root, on either entry arm
+//! ([`SeedSource`]). It assembles the
 //! content-plane [`Candidate`] — recover the head CID anchor from the signed
 //! record, fetch the head block fail-closed on a CID mismatch, decode the
 //! envelope and its grant section — then builds the reader's [`ReaderContext`]
 //! and calls [`gate::adopt`](crate::gate::adopt). The adopter adds **no** trust
 //! logic: it only assembles inputs; every trust decision (commitment, structure
 //! signatures, seed cross-checks, read-body unseal, floor law) stays in the gate.
-//!
-//! Both entry arms run here: the vault owner opens the record's owner blob, and a
-//! grantee opens the one grant blob filed under its own blinded tag
-//! ([`SeedSource`]). The gate is the same either way.
 //!
 //! Cold-start scope: read-plane assembly plus owner cold-start write-plane
 //! recovery (E8) — the owner-write-blob hands the owner the write-scope seed it
@@ -27,9 +24,10 @@ use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, GrantSection, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerWriteBlob, decode_envelope, decode_grant_section,
-    grant_section_bytes, open_grant_blob, open_owner_blob, open_owner_write_blob, open_read_body,
+    AadContext, Envelope, GrantSection, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerWriteBlob, decode_envelope,
+    decode_grant_section, grant_section_bytes, open_grant_blob, open_owner_blob,
+    open_owner_write_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -42,7 +40,7 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, floor,
 };
-use crate::grants::recipient_blinded_tag;
+use crate::grants::{recipient_blinded_tag, self_locate_signed};
 use crate::seams::{FloorStore, Http, SeamError};
 
 /// Where a reader's copy of a scope root's read seed lives in the record it is
@@ -474,7 +472,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         match &self.seeds {
             SeedSource::Owner(enc_secret) => {
                 let blob = &section.owner_blob;
-                let aad = owner_blob_aad(env);
+                let aad = blob_aad(env, STRUCT_TAG_OWNER_BLOB);
                 let payload = open_owner_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext)?;
                 Ok(OpenedSeeds {
                     read_scope_seed: Zeroizing::new(*payload.override_seed()),
@@ -494,18 +492,30 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
                 let tag =
                     recipient_blinded_tag(enc_secret, owner_enc_pub, name.as_str().as_bytes())
                         .ok_or(TrustViolation::HpkeNonContributory)?;
-                let blob = section
-                    .grant_blobs
+                // A blob at your tag is not enough: the tag must be in the
+                // owner-signed commitment, whose permission — not the blob's own
+                // contents — is authority (CONTEXT.md "Grant blob"; the same
+                // check `grants/accept.rs` makes on first entry). Stage 2 anchors
+                // that commitment to the owner identity a beat later, and a
+                // record failing either is rejected whole.
+                let committed = section
+                    .commitment
+                    .entries
                     .iter()
-                    .find(|b| b.tag == tag)
+                    .find(|entry| entry.tag == tag)
+                    .ok_or(TrustViolation::CommitmentInvalid)?;
+                let blob = self_locate_signed(&section.grant_blobs, &tag)
                     .ok_or(TrustViolation::HpkeOpenFailed)?;
-                let aad = grant_blob_aad(env);
+                let aad = blob_aad(env, STRUCT_TAG_GRANT_BLOB);
                 let payload = open_grant_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext)?;
                 Ok(OpenedSeeds {
                     read_scope_seed: Zeroizing::new(*payload.read_scope_seed()),
-                    grant_write_scope_seed: payload
-                        .write_scope_seed()
-                        .map(|seed| Zeroizing::new(*seed)),
+                    grant_write_scope_seed: match committed.permission {
+                        Permission::Write => {
+                            payload.write_scope_seed().map(|seed| Zeroizing::new(*seed))
+                        }
+                        Permission::Read => None,
+                    },
                     blob: SeedBlob::Grantee {
                         enc_secret,
                         enc: blob.enc,
@@ -652,25 +662,14 @@ pub(crate) async fn assemble_head_envelope<H: Http>(
     Ok((sequence, envelope))
 }
 
-/// The structured AAD an owner blob is sealed under.
-fn owner_blob_aad(env: &Envelope) -> AadContext {
+/// The structured AAD a seed-bearing structure of `env` is sealed under.
+fn blob_aad(env: &Envelope, struct_tag: u8) -> AadContext {
     AadContext {
         v: env.v,
         id: env.id,
         scope: env.scope,
         epoch: env.epoch,
-        struct_tag: STRUCT_TAG_OWNER_BLOB,
-    }
-}
-
-/// The structured AAD a grant blob is sealed under.
-fn grant_blob_aad(env: &Envelope) -> AadContext {
-    AadContext {
-        v: env.v,
-        id: env.id,
-        scope: env.scope,
-        epoch: env.epoch,
-        struct_tag: STRUCT_TAG_GRANT_BLOB,
+        struct_tag,
     }
 }
 

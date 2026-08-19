@@ -50,7 +50,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
-use crate::gate::committed_write_pseudonyms;
+use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
@@ -77,10 +77,18 @@ pub enum AscentAuthority<'a> {
     /// The parent node seed: derive the keypair, seal to it, and reopen the
     /// result as an ancestor reader would ([`verify_ascent_link`]).
     ParentSeed(&'a [u8; SECRET_LEN]),
-    /// The published ascent public half. A holder with no ancestor seed cannot
-    /// reopen what it seals, so the fresh seed reaches the ancestor's descent
-    /// only if this public half is the one that descent re-derives — which its
-    /// own next read is what proves.
+    /// The public half the record being replaced already publishes — all a
+    /// holder with no ancestor seed has to seal to.
+    ///
+    /// No structure signature covers `ascentPublic` (blueprint/core.md
+    /// "Structure signatures"), and this arm cannot reopen what it seals, so the
+    /// fresh seed reaches the ancestor only if that public half is the one the
+    /// ancestor's own descent re-derives. A holder of the scope's write seed can
+    /// therefore redirect the *next* re-seal on this arm; the ancestor's next
+    /// read rejects the whole record on the ascent mismatch, so it is detected
+    /// rather than prevented. Closing it needs `ascentPublic` inside the
+    /// structure-signature preimage — a core wire change, not landed. Not a
+    /// residual of this arm alone: nothing else re-seals without the seed.
     CarriedPublic(&'a [u8; 32]),
 }
 
@@ -525,9 +533,10 @@ pub fn reseal_scope_root<E: Entropy>(
     // set is the gate's own stage-3 authority set, so an owner and a committed
     // write grantee are admitted on exactly the terms a reader will re-check.
     // Pseudonym pubkeys are public, so a plain byte compare is correct.
-    if !committed_write_pseudonyms(committed.commitment)
-        .contains(&identity.pseudonym_signer.verifying_key().to_bytes())
-    {
+    if !is_committed_write_pseudonym(
+        committed.commitment,
+        &identity.pseudonym_signer.verifying_key().to_bytes(),
+    ) {
         return Err(ResealError::SignerNotCommitted);
     }
 
@@ -539,6 +548,19 @@ pub fn reseal_scope_root<E: Entropy>(
     if !identity.owes_ascent_link && identity.ascent.is_some() {
         return Err(ResealError::AscentLinkNotOwed);
     }
+
+    // Fail-closed BEFORE any seal: a public half no key can open could never
+    // serve the descent the ascent link exists for
+    // ([`ResealError::UnusableAscentPublic`]).
+    let ascent_recipient = match identity.ascent {
+        Some(AscentAuthority::ParentSeed(parent_node_seed)) => {
+            Some(kdf::ascent_keypair(parent_node_seed).public())
+        }
+        Some(AscentAuthority::CarriedPublic(public)) => {
+            Some(X25519Public::from_bytes(*public).ok_or(ResealError::UnusableAscentPublic)?)
+        }
+        None => None,
+    };
 
     // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
     // bounds (AGENTS.md rule 8). The ledger is bounded alongside the commitment
@@ -669,22 +691,12 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Ascent link: the override seed sealed to the parent-derived keypair
     // (interior scope roots only). ---
-    let ascent_link = match identity.ascent {
-        Some(authority) => {
-            // Fail closed before any entropy is drawn (see
-            // `ResealError::UnusableAscentPublic`).
-            let recipient = match authority {
-                AscentAuthority::ParentSeed(parent_node_seed) => {
-                    kdf::ascent_keypair(parent_node_seed).public()
-                }
-                AscentAuthority::CarriedPublic(public) => {
-                    X25519Public::from_bytes(*public).ok_or(ResealError::UnusableAscentPublic)?
-                }
-            };
+    let ascent_link = match (identity.ascent, &ascent_recipient) {
+        (Some(authority), Some(recipient)) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
             let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
-            let link = seal_ascent_link_to(&recipient, &ephemeral, &ctx, &payload);
+            let link = seal_ascent_link_to(recipient, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
             if let AscentAuthority::ParentSeed(parent_node_seed) = authority {
@@ -699,7 +711,7 @@ pub fn reseal_scope_root<E: Entropy>(
                 unknown: PreservedFields::new(),
             })
         }
-        None => None,
+        _ => None,
     };
 
     // --- History links: a rotation keeps the retained window's walkable suffix
@@ -1035,6 +1047,85 @@ mod tests {
 
     fn blob_sig(sig: &[u8; 64]) -> Ed25519Signature {
         Ed25519Signature::from_bytes(*sig)
+    }
+
+    #[test]
+    fn a_re_seal_to_a_carried_public_half_still_opens_by_the_ancestors_descent() {
+        // A grantee holds no ancestor seed, so it seals to the public half the
+        // record it is replacing publishes; the ancestor must still descend.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let carried = kdf::ascent_keypair(&fx.parent_node_seed)
+            .public()
+            .to_bytes();
+        let mut id = identity(&fx, &owner_pub, b"scope-root-name", None);
+        id.ascent = Some(AscentAuthority::CarriedPublic(&carried));
+        id.owes_ascent_link = true;
+        let override_seed = [0x9d; 32];
+
+        let section = reseal_scope_root(
+            &mut SeededEntropy::new(5),
+            &id,
+            &seeds(
+                &override_seed,
+                4,
+                None,
+                &fx.write_scope_seed,
+                &fx.pointer_read_key,
+            ),
+            &committed_set(&commitment, &sig, &ledger),
+            &[],
+        )
+        .expect("the re-seal completes without an ancestor seed");
+
+        let link = section.ascent_link.expect("a link is owed and minted");
+        let ctx = ctx_for(V, SCOPE, 4, STRUCT_TAG_ASCENT_LINK);
+        let opened = open_ascent_link(
+            &fx.parent_node_seed,
+            &ctx,
+            &cipherbox_core::seal::AscentLink {
+                ascent_public: link.ascent_public,
+                enc: link.enc,
+                ciphertext: link.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("the ancestor's own descent opens it");
+        assert!(ct_eq(opened.override_seed(), &override_seed));
+    }
+
+    #[test]
+    fn an_ascent_public_half_no_key_can_open_is_refused_before_any_seal() {
+        // Release-active: a link sealed to bytes that are not an X25519 point
+        // could never serve the descent it exists for.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        // Not the canonical encoding of a prime-order point, so
+        // `X25519Public::from_bytes` refuses to address it.
+        let unusable = [0xff; 32];
+        let mut id = identity(&fx, &owner_pub, b"scope-root-name", None);
+        id.ascent = Some(AscentAuthority::CarriedPublic(&unusable));
+        id.owes_ascent_link = true;
+
+        assert_eq!(
+            reseal_scope_root(
+                &mut UndrawnEntropy,
+                &id,
+                &seeds(
+                    &[0x9d; 32],
+                    4,
+                    None,
+                    &fx.write_scope_seed,
+                    &fx.pointer_read_key
+                ),
+                &committed_set(&commitment, &sig, &ledger),
+                &[],
+            )
+            .unwrap_err(),
+            ResealError::UnusableAscentPublic,
+        );
     }
 
     #[test]

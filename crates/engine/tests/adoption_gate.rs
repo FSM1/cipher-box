@@ -314,6 +314,26 @@ impl Fixture {
         }
     }
 
+    /// A grant blob addressed to `grantee` carrying this scope's seed — the arm
+    /// a share recipient enters by, holding no ancestor seed at all.
+    fn grantee_seed_blob<'a>(&self, grantee: &'a X25519Secret) -> SeedBlob<'a> {
+        let aad = AadContext {
+            v: V,
+            id: self.root_id,
+            scope: self.scope_id,
+            epoch: self.epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        let payload = GrantBlobPayload::new(self.scope_seed, None, self.epoch, [0x5a; 32]);
+        let blob = seal_grant_blob(&grantee.public(), &EPH_GRANT, &aad, &payload).unwrap();
+        SeedBlob::Grantee {
+            enc_secret: grantee,
+            enc: blob.enc,
+            ciphertext: blob.ciphertext,
+            aad,
+        }
+    }
+
     fn reader(&self) -> ReaderContext<'_> {
         ReaderContext {
             owner_identity: &self.owner_identity_verifier,
@@ -1195,6 +1215,51 @@ fn ascent_present_without_reader_seed_fails_closed() {
     let mut candidate = fx.candidate(1);
     candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
     let reader = fx.reader();
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
+}
+
+#[test]
+fn a_grantee_holding_no_ancestor_seed_adopts_past_an_ascent_link() {
+    // A reader entering by its own grant blob descends from nobody, so the
+    // ascent link is not its authority — the grant blob's own read-key
+    // cross-check at stage 6 is.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
+    let grantee = X25519Secret::from_scalar([0xC7; 32]);
+    let reader = ReaderContext {
+        owner_identity: &fx.owner_identity_verifier,
+        scope_id: fx.scope_id,
+        read_key: &fx.read_key,
+        parent_node_seed: None,
+        seed_blob: Some(fx.grantee_seed_blob(&grantee)),
+    };
+
+    assert!(block_on(adopt(&floors, &reader, &candidate)).is_ok());
+}
+
+#[test]
+fn a_grantee_that_does_hold_an_ancestor_seed_still_verifies_the_ascent_link() {
+    // The skip is keyed on descending from nobody, not on the blob variant, so a
+    // reader holding an ancestor seed cannot enter by a grant blob to dodge it.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
+    let grantee = X25519Secret::from_scalar([0xC7; 32]);
+    let wrong_seed = [0xCD; 32];
+    let reader = ReaderContext {
+        owner_identity: &fx.owner_identity_verifier,
+        scope_id: fx.scope_id,
+        read_key: &fx.read_key,
+        parent_node_seed: Some(&wrong_seed),
+        seed_blob: Some(fx.grantee_seed_blob(&grantee)),
+    };
+
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
