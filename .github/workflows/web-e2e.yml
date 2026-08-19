@@ -210,30 +210,25 @@ jobs:
           echo "::error::playwright install chromium stalled on every attempt"
           exit 1
 
+      # Deliberately no retry: Playwright runs this under sudo, so a killed
+      # attempt leaves a root-owned `apt-get` holding the dpkg lock that this
+      # shell cannot reap, and the next attempt dies on that lock instead of the
+      # original stall. One attempt, bounded generously — a slow mirror is slow,
+      # not stuck.
       - name: Install the Playwright system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: |
-          # The marker records the install's own status, so a stall is told
-          # apart from the command exiting 124 on its own. `--kill-after`
-          # matters most: without it `timeout` waits forever on a child that
-          # ignores SIGTERM, which is the stall this step exists to bound.
-          marker="$RUNNER_TEMP/playwright-deps-status"
-          for attempt in 1 2 3; do
-            rm -f "$marker"
-            # shellcheck disable=SC2016  # the inner shell expands $? and $1, not this one
-            timeout --kill-after=30 150 bash -c \
-              'pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium; echo "$?" > "$1"' _ "$marker" || true
-            if [ -f "$marker" ]; then
-              install_status=$(cat "$marker")
-              if [ "$install_status" -eq 0 ]; then
-                exit 0
-              fi
-              echo "::error::playwright install-deps failed with status $install_status"
-              exit "$install_status"
-            fi
-            echo "::warning::playwright install-deps stalled past 150s (attempt $attempt of 3)"
-          done
-          echo "::error::playwright install-deps stalled on every attempt"
+          install_status=0
+          timeout --kill-after=30 600 \
+            pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium || install_status=$?
+          if [ "$install_status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+            echo "::error::playwright install-deps did not finish within 600s"
+          else
+            echo "::error::playwright install-deps failed with status $install_status"
+          fi
           exit 1
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
