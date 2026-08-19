@@ -367,14 +367,6 @@
    Error banner and footer
    ========================================================================== */
 
-.login-error p {
-  margin: 0;
-}
-
-.login-error p + p {
-  margin-top: var(--spacing-xs);
-}
-
 .login-error {
   margin-top: var(--spacing-xs);
   padding: var(--spacing-xs) var(--spacing-sm);
@@ -384,6 +376,14 @@
   background-color: rgb(239 68 68 / 8%);
   border: 1px solid rgb(239 68 68 / 20%);
   text-align: center;
+}
+
+.login-error p {
+  margin: 0;
+}
+
+.login-error p + p {
+  margin-top: var(--spacing-xs);
 }
 
 .login-footer {

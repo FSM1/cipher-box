@@ -521,12 +521,12 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     // The second tab signs in as another account. One origin hosts one engine,
     // so there is none here for it — and it is told which account holds it.
     const refusal = await follower.start(OTHER_ACCOUNT_ID);
-    expect(refusal).toContain('another account is signed in');
+    expect(refusal).toContain('held by another account');
 
     // Nothing the refused tab asks for reaches the engine holding the first
     // account: its snapshot fails rather than rendering that vault's children.
     const view = await follower.snapshot('00'.repeat(16));
-    expect(view.error).toContain('another account is signed in');
+    expect(view.error).toContain('held by another account');
     expect(view.children).toBeUndefined();
     expect(await follower.createFile('from-the-wrong-account.txt')).not.toBe('ok');
 
@@ -548,7 +548,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
 
     // The leader never signed in, so it holds no keys to serve anyone with. A
     // start that resolved here would report a session the origin cannot back.
-    expect(await follower.start(TEST_ACCOUNT_ID)).toContain('is not signed in');
+    expect(await follower.start(TEST_ACCOUNT_ID)).toContain('held by no account');
 
     // ...and the same tab starts cleanly once the host tab holds that account.
     expect(await leader.start(TEST_ACCOUNT_ID)).toBe('ok');

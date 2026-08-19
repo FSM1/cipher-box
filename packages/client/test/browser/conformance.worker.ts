@@ -279,7 +279,9 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   };
   const live = 'liveaccount';
   const gone = 'goneaccount';
-  const suffixes = ['floors', 'staging', 'snapshot-cache'];
+  // What a drained departed account gives back: its cache, and its staged bytes.
+  const reclaimable = ['snapshot-cache'];
+  const kept = ['floors', 'staging'];
   const named = (account: string, suffix: string): string =>
     `${config.dbPrefix}-${account}-${suffix}`;
   const stagedDir = (account: string): string => `${named(account, 'staging')}-staged`;
@@ -287,9 +289,13 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   // The departed account's residue, seeded and then closed: its stores are shut
   // exactly as an account nobody is signed into leaves them.
   const root = await navigator.storage.getDirectory();
-  for (const suffix of suffixes) {
+  for (const suffix of [...reclaimable, ...kept]) {
     const db = await openDatabase(named(gone, suffix), 1, (opened) => {
-      opened.createObjectStore('records');
+      // The op queue's own store, left empty: a drained queue holds nothing a
+      // second account's login must preserve.
+      opened.createObjectStore(suffix === 'staging' ? 'ops' : 'records', {
+        autoIncrement: suffix === 'staging',
+      });
     });
     db.close();
   }
@@ -308,7 +314,7 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   await seams.snapshotCache.put(new Uint8Array(8).fill(5), new Uint8Array([7, 7]));
 
   const reclaimed = (await reclaimOtherAccountStores(config, live)).sort();
-  const expected = [...suffixes.map((suffix) => named(gone, suffix)), stagedDir(gone)].sort();
+  const expected = [...reclaimable.map((suffix) => named(gone, suffix)), stagedDir(gone)].sort();
   if (reclaimed.join('|') !== expected.join('|')) {
     throw new Error(
       `storeReclaim: reclaimed ${reclaimed.join(',')}, expected ${expected.join(',')}`
@@ -316,12 +322,18 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   }
 
   const remaining = (await indexedDB.databases()).map((database) => database.name);
-  for (const suffix of suffixes) {
+  for (const suffix of reclaimable) {
     if (remaining.includes(named(gone, suffix))) {
       throw new Error(`storeReclaim: ${named(gone, suffix)} survived the sweep`);
     }
     if (!remaining.includes(named(live, suffix))) {
       throw new Error(`storeReclaim: ${named(live, suffix)} was reclaimed with the others`);
+    }
+  }
+  // Floors are rollback protection and the op queue is acked work: neither goes.
+  for (const suffix of kept) {
+    if (!remaining.includes(named(gone, suffix))) {
+      throw new Error(`storeReclaim: a departed account lost its ${suffix} store`);
     }
   }
   for await (const name of root.keys()) {

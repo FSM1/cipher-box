@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { shortAccountId } from './accountId';
+import { shortAccountId } from './format';
 
 describe('shortAccountId', () => {
   it('takes both ends of a real account id, so two are told apart', () => {

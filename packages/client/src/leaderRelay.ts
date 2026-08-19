@@ -50,6 +50,8 @@ interface PortEntry {
   readonly port: MessagePortLike;
   readonly listener: (event: MessageEvent) => void;
   clientId: string | null;
+  /** The account this port greeted under; only that engine may answer on it. */
+  accountId: string | null;
   /** Reclaims a port that never named itself, so an unnamed one cannot pile up. */
   readonly naming: ReturnType<typeof setTimeout>;
 }
@@ -190,14 +192,18 @@ export class LeaderRelay {
   }
 
   /**
-   * Names the account this leadership's engine cold-started for. Until it is
-   * called the relay serves no follower that has one, and after it only
-   * followers on the same account: the origin hosts a single engine, so it also
-   * hosts a single account (blueprint/web-client.md "Engine hosting and tab
-   * leadership").
+   * Names the account this leadership's engine cold-started for. The origin
+   * hosts a single engine, so it hosts a single account (blueprint/web-client.md
+   * "Engine hosting and tab leadership"): this relay serves only followers that
+   * greet under the same one, and a port adopted under the account it held
+   * before is retired here rather than left to answer for the new one.
    */
-  serves(accountId: string): void {
+  serves(accountId: string | null): void {
+    if (this.account === accountId) return;
     this.account = accountId;
+    for (const entry of [...this.ports]) {
+      if (entry.clientId !== null && entry.accountId !== accountId) this.detachPort(entry);
+    }
   }
 
   /** Folds the leader tab's own open folder into the focus-window union. */
@@ -308,6 +314,7 @@ export class LeaderRelay {
     const entry: PortEntry = {
       port,
       clientId: null,
+      accountId: null,
       listener: (event) => this.onPortMessage(entry, event.data),
       naming: setTimeout(() => this.detachPort(entry), this.namingTimeoutMs),
     };
@@ -351,6 +358,7 @@ export class LeaderRelay {
       this.detachPortOf(clientId);
       clearTimeout(entry.naming);
       entry.clientId = clientId;
+      entry.accountId = accountId;
       this.watchPresence(clientId);
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
       return true;

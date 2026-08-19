@@ -43,12 +43,11 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
 }
 
 /**
- * This account's seams, plus the sweep that reclaims the stores of accounts that
- * signed in on this profile before it. It runs alongside the cold start rather
- * than gating it: the bytes it frees are charged against the origin quota this
- * worker already measured, so they are the *next* start's headroom.
+ * Opens this account's seams and sweeps the stores of every account the profile
+ * no longer holds. The sweep runs alongside the cold start: the origin quota was
+ * already measured, so the bytes it frees are the *next* start's headroom.
  */
-function seamsFor(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
+function openAccount(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
   void reclaimOtherAccountStores(config, accountId);
   return makeBrowserSeams(config, accountId);
 }
@@ -60,7 +59,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const headroom = measureStorageHeadroomBytes();
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
-    const host = new EngineHost(wasm, (accountId) => seamsFor(config, accountId), {
+    const host = new EngineHost(wasm, (accountId) => openAccount(config, accountId), {
       apiBaseUrl: config.apiBaseUrl,
       acceleratorBaseUrl: config.acceleratorBaseUrl,
       publicGateways: config.publicGateways,

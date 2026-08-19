@@ -16,6 +16,11 @@ import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
 import type { WebCollected } from './webCollector';
 
+/** The origin's engine belongs to another account; `heldBy` names it. */
+export interface HeldElsewhere {
+  heldBy: string | null;
+}
+
 export interface Auth {
   isAuthenticated: boolean;
   /** True while the tab is still assembling its engine or Core Kit session. */
@@ -29,12 +34,8 @@ export interface Auth {
   isBusy: boolean;
   /** The last failure, already stripped of anything secret-shaped. */
   error: string | null;
-  /**
-   * The origin's one engine belongs to another account, so this tab was refused
-   * rather than served that account's vault. `heldBy` names it, or is `null`
-   * when the tab hosting the engine has started none.
-   */
-  heldElsewhere: { heldBy: string | null } | null;
+  /** Set when this tab was refused rather than served another account's vault. */
+  heldElsewhere: HeldElsewhere | null;
   /** Exchanges a Google ID token collected on this host. */
   loginWithGoogle(idToken: string): Promise<void>;
   /** Asks CipherBox to deliver a verification code. */
@@ -67,7 +68,7 @@ export function useAuth(): Auth {
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [heldElsewhere, setHeldElsewhere] = useState<{ heldBy: string | null } | null>(null);
+  const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
   const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');

@@ -110,7 +110,8 @@ describe('one engine per origin is one account per origin', () => {
 
     expect(refusal).toBeInstanceOf(EngineHeldElsewhereError);
     expect((refusal as EngineHeldElsewhereError).heldBy).toBe(TEST_ACCOUNT_ID);
-    expect((refusal as EngineHeldElsewhereError).code).toBe('engineHeldElsewhere');
+    // Transport-level: the engine refused nothing, so it lends no code.
+    expect((refusal as EngineHeldElsewhereError).code).toBeUndefined();
     // A refused start reached the leader's engine for nothing at all.
     expect(engine.commands).toEqual([]);
     expect(engine.snapshots).toEqual([]);
@@ -120,8 +121,8 @@ describe('one engine per origin is one account per origin', () => {
     const { engine, relay, follower } = wire();
     engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(7)));
     relay.serves(TEST_ACCOUNT_ID);
-    await expect(follower.start(new ArrayBuffer(0), OTHER_ACCOUNT_ID)).rejects.toThrow(
-      /another account/
+    await expect(follower.start(new ArrayBuffer(0), OTHER_ACCOUNT_ID)).rejects.toBeInstanceOf(
+      EngineHeldElsewhereError
     );
 
     await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
@@ -161,6 +162,20 @@ describe('one engine per origin is one account per origin', () => {
     await expect(follower.start(new ArrayBuffer(0), OTHER_ACCOUNT_ID)).rejects.toBeInstanceOf(
       EngineHeldElsewhereError
     );
+  });
+
+  it('retires a port adopted before the leader engine named an account', async () => {
+    const { engine, relay, follower } = wire();
+    // Adopted while neither side had an account, which is the one pairing that
+    // matches without naming one.
+    await follower.snapshot(null);
+    expect(engine.snapshots).toHaveLength(1);
+
+    relay.serves(TEST_ACCOUNT_ID);
+    await tick();
+
+    await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
+    expect(engine.snapshots).toHaveLength(1);
   });
 
   it('names no account on the origin-wide channel, only on the private port', async () => {

@@ -71,11 +71,13 @@ describe('makeBrowserSeams', () => {
 
 /**
  * A stub origin: `existing` names every database on it, `staged` every OPFS
- * entry. Records what the sweep asked to delete, which is what these assert.
+ * entry, and `queued` how many ops each account's op queue still holds. Records
+ * what the sweep asked to delete, which is what these assert.
  */
 function stubOrigin(
   existing: string[],
-  staged: string[] = []
+  staged: string[] = [],
+  queued: Record<string, number> = {}
 ): { deleted: string[]; removed: string[] } {
   const deleted: string[] = [];
   const removed: string[] = [];
@@ -84,6 +86,24 @@ function stubOrigin(
     deleteDatabase: (name: string) => {
       deleted.push(name);
       const request: { onsuccess?: () => void } = {};
+      queueMicrotask(() => request.onsuccess?.());
+      return request as unknown as IDBOpenDBRequest;
+    },
+    open: (name: string) => {
+      const count = { result: queued[name] ?? 0, onsuccess: undefined as (() => void) | undefined };
+      const request: { onsuccess?: () => void; result?: unknown } = {
+        result: {
+          transaction: () => ({
+            objectStore: () => ({
+              count: () => {
+                queueMicrotask(() => count.onsuccess?.());
+                return count;
+              },
+            }),
+          }),
+          close: () => undefined,
+        },
+      };
       queueMicrotask(() => request.onsuccess?.());
       return request as unknown as IDBOpenDBRequest;
     },
@@ -108,34 +128,69 @@ function stubOrigin(
 describe('reclaimOtherAccountStores', () => {
   const live = 'aa11';
   const gone = 'bb22';
-  const liveStores = [
-    `cipherbox-${live}-floors`,
-    `cipherbox-${live}-staging`,
-    `cipherbox-${live}-snapshot-cache`,
-  ];
-  const goneStores = [
-    `cipherbox-${gone}-floors`,
-    `cipherbox-${gone}-staging`,
-    `cipherbox-${gone}-snapshot-cache`,
-  ];
+  const liveStores = [`cipherbox-${live}-staging`, `cipherbox-${live}-snapshot-cache`];
+  const goneStores = [`cipherbox-${gone}-staging`, `cipherbox-${gone}-snapshot-cache`];
+  // Floors are rollback protection, durable across logout, and are never swept.
+  const floorStores = [`cipherbox-${live}-floors`, `cipherbox-${gone}-floors`];
 
-  it('deletes every other account store and staged directory, and no live one', async () => {
+  it('takes a drained account snapshot cache and staged bytes, and no live one', async () => {
     const origin = stubOrigin(
-      [...liveStores, ...goneStores],
+      [...liveStores, ...goneStores, ...floorStores],
       [`cipherbox-${live}-staging-staged`, `cipherbox-${gone}-staging-staged`]
     );
 
     const reclaimed = await reclaimOtherAccountStores(CONFIG, live);
 
-    expect(reclaimed.sort()).toEqual([...goneStores, `cipherbox-${gone}-staging-staged`].sort());
-    expect(origin.deleted.sort()).toEqual([...goneStores].sort());
+    expect(reclaimed.sort()).toEqual(
+      [`cipherbox-${gone}-snapshot-cache`, `cipherbox-${gone}-staging-staged`].sort()
+    );
+    expect(origin.deleted).toEqual([`cipherbox-${gone}-snapshot-cache`]);
     expect(origin.removed).toEqual([`cipherbox-${gone}-staging-staged`]);
+  });
+
+  it('leaves the staged bytes of an account whose op queue is not drained', async () => {
+    const origin = stubOrigin(
+      [...liveStores, ...goneStores],
+      [`cipherbox-${gone}-staging-staged`],
+      { [`cipherbox-${gone}-staging`]: 2 }
+    );
+
+    const reclaimed = await reclaimOtherAccountStores(CONFIG, live);
+
+    // A second account's login must not destroy an unpublished queue, and its
+    // staged root counts as referenced for just as long.
+    expect(reclaimed).not.toContain(`cipherbox-${gone}-staging-staged`);
+    expect(origin.removed).toEqual([]);
+    expect(origin.deleted).toEqual([`cipherbox-${gone}-snapshot-cache`]);
+  });
+
+  it('never deletes an op queue, drained or not', async () => {
+    const origin = stubOrigin([...liveStores, ...goneStores], [], {
+      [`cipherbox-${gone}-staging`]: 0,
+    });
+
+    await reclaimOtherAccountStores(CONFIG, live);
+
+    expect(origin.deleted).not.toContain(`cipherbox-${gone}-staging`);
+  });
+
+  it('sweeps nothing at all for an account id it cannot spell a store name from', async () => {
+    const origin = stubOrigin(
+      [...liveStores, ...goneStores, ...floorStores],
+      [`cipherbox-${live}-staging-staged`, `cipherbox-${gone}-staging-staged`]
+    );
+
+    // `live` matches nothing, so every real namespace would read as foreign.
+    expect(await reclaimOtherAccountStores(CONFIG, 'NOT-AN-ACCOUNT')).toEqual([]);
+    expect(origin.deleted).toEqual([]);
+    expect(origin.removed).toEqual([]);
   });
 
   it('leaves alone every name that is not one account namespace of this deployment', async () => {
     const origin = stubOrigin(
       [
         ...liveStores,
+        ...floorStores,
         'cb-leadership-journal',
         'cipherbox-floors', // no account segment at all
         'cipherbox-AA11-floors', // outside the account-id class
@@ -152,11 +207,23 @@ describe('reclaimOtherAccountStores', () => {
   it('keeps the live account whole even where another account id spells its store name', async () => {
     // `cipherbox-aa11-snapshot-cache` reads as account `aa11-snapshot` too; the
     // live names are the exact ones `makeBrowserSeams` opens, never a parse.
-    const origin = stubOrigin(liveStores, [`cipherbox-${live}-staging-staged`]);
+    const origin = stubOrigin(
+      [...liveStores, ...floorStores],
+      [`cipherbox-${live}-staging-staged`]
+    );
 
     expect(await reclaimOtherAccountStores(CONFIG, live)).toEqual([]);
     expect(origin.deleted).toEqual([]);
     expect(origin.removed).toEqual([]);
+  });
+
+  it('never sweeps a floor store, whichever account it belongs to', async () => {
+    const origin = stubOrigin([...liveStores, ...goneStores, ...floorStores]);
+
+    const reclaimed = await reclaimOtherAccountStores(CONFIG, live);
+
+    expect(reclaimed).not.toContain(`cipherbox-${gone}-floors`);
+    expect(origin.deleted).not.toContain(`cipherbox-${gone}-floors`);
   });
 
   it('reclaims nothing where the browser cannot enumerate its databases', async () => {
@@ -165,26 +232,18 @@ describe('reclaimOtherAccountStores', () => {
     await expect(reclaimOtherAccountStores(CONFIG, live)).resolves.toEqual([]);
   });
 
-  it('reports only what it actually reclaimed when a delete is blocked', async () => {
-    stubOrigin([...liveStores, ...goneStores]);
+  it('reports nothing for a delete it could not see complete', async () => {
     vi.stubGlobal('indexedDB', {
       databases: () =>
         Promise.resolve([...liveStores, ...goneStores].map((name) => ({ name, version: 1 }))),
-      deleteDatabase: (name: string) => {
-        const request: { onsuccess?: () => void; onblocked?: () => void } = {};
+      deleteDatabase: (_name: string) => {
+        const request: { onblocked?: () => void } = {};
         // A store another tab still holds open blocks rather than clears.
-        queueMicrotask(() =>
-          (name.endsWith('-staging') ? request.onblocked : request.onsuccess)?.()
-        );
+        queueMicrotask(() => request.onblocked?.());
         return request as unknown as IDBOpenDBRequest;
       },
     });
 
-    const reclaimed = await reclaimOtherAccountStores(CONFIG, live);
-
-    expect(reclaimed).not.toContain(`cipherbox-${gone}-staging`);
-    expect(reclaimed.sort()).toEqual(
-      [`cipherbox-${gone}-floors`, `cipherbox-${gone}-snapshot-cache`].sort()
-    );
+    await expect(reclaimOtherAccountStores(CONFIG, live)).resolves.toEqual([]);
   });
 });

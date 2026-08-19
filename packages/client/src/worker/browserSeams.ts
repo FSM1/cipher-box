@@ -4,7 +4,7 @@
  * are the constructor contract the WASM `EngineHandle` reads.
  */
 
-import { deleteDatabase } from '../seams/idb.js';
+import { deleteDatabase, openDatabase, requestResult } from '../seams/idb.js';
 import {
   ApiMailbox,
   FetchHttp,
@@ -13,6 +13,9 @@ import {
   IdbSnapshotCache,
   NoopCredentialStore,
   OpfsStagingStore,
+  STAGED_DIR_SUFFIX,
+  STAGING_DB_VERSION,
+  STAGING_OPS_STORE,
   WorkerScheduler,
 } from '../seams/index.js';
 
@@ -34,11 +37,18 @@ const ACCOUNT_ID = /^[0-9a-z][0-9a-z-]{0,159}$/;
 
 const DEFAULT_DB_PREFIX = 'cipherbox';
 
-/** The IndexedDB databases one account's seams open, by name suffix. */
-const STORE_SUFFIXES = ['floors', 'staging', 'snapshot-cache'] as const;
-
-/** OPFS holds an account's staged bytes beside its staging database's name. */
-const STAGED_SUFFIX = '-staged';
+/**
+ * What the sweep reclaims for an account the profile no longer holds, by name
+ * suffix. Two of an account's four stores are deliberately absent: the `floors`
+ * database is rollback protection, durable across logout by design
+ * (`IdbFloorStore`) and what bounds replay on a device with none to compare
+ * against (blueprint/engine.md "Floor law"); the `staging` database is the
+ * durable op queue, whose records were acked to that account's UI. Neither is
+ * bytes worth reclaiming, and an op whose staged body is gone dead-letters where
+ * its own account can see it — which a deleted queue never would.
+ */
+const RECLAIMED_DATABASES = ['snapshot-cache'] as const;
+const RECLAIMED_DIRECTORIES = [`staging${STAGED_DIR_SUFFIX}`] as const;
 
 /** The seam bag the WASM `EngineHandle` constructor reads. */
 export interface BrowserSeams {
@@ -52,16 +62,13 @@ export interface BrowserSeams {
   credentialStore: NoopCredentialStore;
 }
 
-function storeNames(dbPrefix: string, accountId: string): string[] {
-  return STORE_SUFFIXES.map((suffix) => `${dbPrefix}-${accountId}-${suffix}`);
-}
-
 /** Whether `name` is `<dbPrefix>-<accountId>-<suffix>` for some account id. */
-function namesAccountStore(dbPrefix: string, name: string): boolean {
+function namesAccountStore(dbPrefix: string, name: string, suffixes: readonly string[]): boolean {
   const head = `${dbPrefix}-`;
-  return STORE_SUFFIXES.some((suffix) => {
+  if (!name.startsWith(head)) return false;
+  return suffixes.some((suffix) => {
     const tail = `-${suffix}`;
-    if (!name.startsWith(head) || !name.endsWith(tail)) return false;
+    if (!name.endsWith(tail)) return false;
     return ACCOUNT_ID.test(name.slice(head.length, name.length - tail.length));
   });
 }
@@ -89,46 +96,94 @@ export function makeBrowserSeams(config: BrowserSeamsConfig, accountId: string):
 }
 
 /**
- * Deletes the durable stores every account *but* `accountId` left on this
- * origin, and resolves with the names it reclaimed.
+ * Reclaims what every account *but* `accountId` left on this origin, and
+ * resolves with the names it took.
  *
  * An abandoned account's staged op bodies are upload-sized and are charged
  * against the same origin quota the live account measures its staging budget
  * from (`measureStorageHeadroomBytes`), so without this one sign-in taxes every
- * later one for good. Best-effort per store: one still open elsewhere blocks
- * its delete, and the next cold start sweeps again.
+ * later one for good. They go only once that account's op queue has drained:
+ * a second account's login must never destroy an unpublished queue, and its
+ * staged root counts as referenced for exactly as long (`CONTEXT.md` "Retained
+ * record"). Best-effort per store — an unconfirmed delete is not reported, and
+ * the next cold start sweeps again.
  */
 export async function reclaimOtherAccountStores(
   config: BrowserSeamsConfig,
   accountId: string
 ): Promise<string[]> {
+  // A name this sweep cannot spell is one it must not sweep against: the live
+  // account's own stores are excluded by name, and nothing else bounds it.
+  if (!ACCOUNT_ID.test(accountId)) return [];
   const dbPrefix = config.dbPrefix ?? DEFAULT_DB_PREFIX;
-  // The live account's names, spelled exactly as `makeBrowserSeams` opens them
-  // — never parsed back out of a walked name, which two account ids could spell.
-  const live = new Set(storeNames(dbPrefix, accountId));
-  const reclaimed: string[] = [];
+  const prefix = `${dbPrefix}-${accountId}`;
+  // Spelled exactly as this account opens them — never parsed back out of a
+  // walked name, which two account ids could spell.
+  const live = new Set(
+    [...RECLAIMED_DATABASES, ...RECLAIMED_DIRECTORIES].map((suffix) => `${prefix}-${suffix}`)
+  );
+  const foreign = (name: string, suffixes: readonly string[]): boolean =>
+    !live.has(name) && namesAccountStore(dbPrefix, name, suffixes);
 
-  for (const name of await databaseNames()) {
-    if (live.has(name) || !namesAccountStore(dbPrefix, name)) continue;
-    if (await succeeds(deleteDatabase(name))) reclaimed.push(name);
-  }
+  const [root, names] = await Promise.all([stagedRoot(), databaseNames()]);
+  const entries = root ? await directoryNames(root) : [];
+  const staged = entries.filter((name) => foreign(name, RECLAIMED_DIRECTORIES));
+  const drained = await Promise.all(staged.map((name) => queueDrained(backingQueue(name), names)));
 
-  const root = await stagedRoot();
-  if (root) {
-    for (const name of await stagedDirectoryNames(root)) {
-      const backing = name.slice(0, -STAGED_SUFFIX.length);
-      if (live.has(backing) || !namesAccountStore(dbPrefix, backing)) continue;
-      if (await succeeds(root.removeEntry(name, { recursive: true }))) reclaimed.push(name);
-    }
-  }
-  return reclaimed;
+  const [databases, directories] = await Promise.all([
+    reclaim(
+      names.filter((name) => foreign(name, RECLAIMED_DATABASES)),
+      deleteDatabase
+    ),
+    root
+      ? reclaim(
+          staged.filter((_name, index) => drained[index]),
+          (name) => root.removeEntry(name, { recursive: true })
+        )
+      : [],
+  ]);
+  return [...databases, ...directories];
 }
 
-function succeeds(step: Promise<unknown>): Promise<boolean> {
-  return step.then(
-    () => true,
-    () => false
+/** The op-queue database behind a staged directory. */
+function backingQueue(directory: string): string {
+  return directory.slice(0, -STAGED_DIR_SUFFIX.length);
+}
+
+/**
+ * Whether that account's op queue holds nothing. A queue with no database never
+ * held anything; one this sweep cannot read is not one it can prove is drained,
+ * so it answers no and the bytes stay.
+ */
+async function queueDrained(dbName: string, databases: string[]): Promise<boolean> {
+  if (!databases.includes(dbName)) return true;
+  try {
+    const db = await openDatabase(dbName, STAGING_DB_VERSION, () => undefined);
+    try {
+      const tx = db.transaction(STAGING_OPS_STORE, 'readonly');
+      return (await requestResult(tx.objectStore(STAGING_OPS_STORE).count())) === 0;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Removes each name, answering with the ones it saw go; the rest wait for a later sweep. */
+async function reclaim(
+  names: string[],
+  remove: (name: string) => Promise<unknown>
+): Promise<string[]> {
+  const gone = await Promise.all(
+    names.map((name) =>
+      remove(name).then(
+        () => true,
+        () => false
+      )
+    )
   );
+  return names.filter((_name, index) => gone[index]);
 }
 
 /** Every database on this origin, or none where the browser cannot enumerate them. */
@@ -145,13 +200,11 @@ async function stagedRoot(): Promise<FileSystemDirectoryHandle | null> {
   return navigator.storage.getDirectory().catch(() => null);
 }
 
-/** The staged directories on this origin; a walk that faults yields what it saw. */
-async function stagedDirectoryNames(root: FileSystemDirectoryHandle): Promise<string[]> {
+/** The OPFS root's entries; a walk that faults yields what it saw. */
+async function directoryNames(root: FileSystemDirectoryHandle): Promise<string[]> {
   const names: string[] = [];
   try {
-    for await (const name of root.keys()) {
-      if (name.endsWith(STAGED_SUFFIX)) names.push(name);
-    }
+    for await (const name of root.keys()) names.push(name);
   } catch {
     // best-effort, like every other step of the sweep
   }
