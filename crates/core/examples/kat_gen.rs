@@ -28,34 +28,34 @@ use cipherbox_core::content::{
     encode_content_cid_str, open_chunk, seal_chunk, verify_cid,
 };
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, MAX_IPNS_NAME_BYTES};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
     ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
-    HistoryLinkPayload, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
-    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
-    OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields, ReadBody,
-    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
-    WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
-    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
-    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
-    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
-    encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob,
-    open_history_link, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
-    open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad, seal_ascent_link,
-    seal_content_key, seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob,
-    seal_owner_history_link, seal_owner_local, seal_owner_write_blob, seal_read_body,
-    seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
+    HistoryLinkPayload, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader,
+    OverrideSeedPayload, OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission,
+    PreservedFields, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    SettingsRecordHeader, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
+    StructureSigInput, Version, WriteBody, build_aad, content_key_aad, decode_ascent_link,
+    decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
+    encode_read_body, encode_write_body, op_record_aad, open_ascent_link, open_content_key,
+    open_grant_blob, open_history_link, open_op_record, open_owner_blob, open_owner_history_link,
+    open_owner_local, open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad,
+    seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link, seal_op_record,
+    seal_owner_blob, seal_owner_history_link, seal_owner_local, seal_owner_write_blob,
+    seal_read_body, seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
     structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
@@ -4823,22 +4823,27 @@ fn ledger_entry_map(identity: Vec<u8>, enc: Vec<u8>, permission: &str, tag: Vec<
 }
 
 fn build_write_body_reject() -> Vec<RejectVector> {
-    // A write-body with the given grant ledger and write-history-link value; the
-    // child-scope index is always empty. Each case builds its whole map, so no
-    // key is ever inserted twice.
-    let body = |ledger: Vec<Value>, write_history_link: Value| {
+    // A whole write-body map, so no key is ever inserted twice.
+    let body = |children: Vec<Value>, ledger: Vec<Value>, write_history_link: Value| {
         map_of(vec![
-            ("directChildScopeIndex", Value::Array(vec![])),
+            ("directChildScopeIndex", Value::Array(children)),
             ("grantLedger", Value::Array(ledger)),
             ("writeHistoryLink", write_history_link),
         ])
     };
     let good_entry = || ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]);
+    let child = |ipns_name: Vec<u8>| {
+        map_of(vec![
+            ("ipnsName", Value::Bytes(ipns_name)),
+            ("scopeId", Value::Bytes(vec![0x55; 16])),
+        ])
+    };
 
     let cases: Vec<(&str, Value, &str, &str)> = vec![
         (
             "ledger-invalid-permission",
             body(
+                vec![],
                 vec![ledger_entry_map(
                     vec![0x02; 33],
                     vec![0x11; 32],
@@ -4853,6 +4858,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
         (
             "identity-pk-wrong-length",
             body(
+                vec![],
                 vec![ledger_entry_map(
                     vec![0x02; 32],
                     vec![0x11; 32],
@@ -4875,7 +4881,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
         ),
         (
             "write-history-link-wrong-type",
-            body(vec![good_entry()], Value::Unsigned(0)),
+            body(vec![], vec![good_entry()], Value::Unsigned(0)),
             "unexpected-type",
             "malformed",
         ),
@@ -4884,6 +4890,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             // every clock — the opposite of the absent field's "no deadline".
             "ledger-zero-expiry",
             body(
+                vec![],
                 vec![map_of(vec![
                     ("expiresAt", Value::Unsigned(0)),
                     ("permission", Value::Text("read".to_string())),
@@ -4902,6 +4909,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             // injecting a second ledger row for a victim's tag.
             "ledger-duplicate-tag",
             body(
+                vec![],
                 vec![
                     ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]),
                     ledger_entry_map(vec![0x03; 33], vec![0x99; 32], "write", vec![0x21; 32]),
@@ -4914,8 +4922,34 @@ fn build_write_body_reject() -> Vec<RejectVector> {
         (
             "write-history-link-over-bound",
             body(
+                vec![],
                 vec![good_entry()],
                 Value::Bytes(vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES + 1]),
+            ),
+            "too-many-structures",
+            "malformed",
+        ),
+        (
+            // Empty entries keep a 1025-entry vector small and pin the check
+            // order: were the count bound to move after the entry walk, this
+            // would reject as `missing-field` instead.
+            "child-scope-index-over-bound",
+            body(
+                (0..=MAX_DIRECT_CHILD_SCOPES)
+                    .map(|_| map_of(vec![]))
+                    .collect(),
+                vec![good_entry()],
+                Value::Bytes(vec![]),
+            ),
+            "too-many-structures",
+            "malformed",
+        ),
+        (
+            "child-scope-ipns-name-over-bound",
+            body(
+                vec![child(vec![0x6b; MAX_IPNS_NAME_BYTES + 1])],
+                vec![good_entry()],
+                Value::Bytes(vec![]),
             ),
             "too-many-structures",
             "malformed",

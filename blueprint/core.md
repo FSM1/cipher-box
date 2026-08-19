@@ -133,7 +133,13 @@ node UUID.
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
   child-scope index enumerates directly-descendant scope roots for the F-4
-  rotation cascade (FSM1/cipher-box-next#38 D6). Interior nodes publish no write-body at all.
+  rotation cascade (FSM1/cipher-box-next#38 D6). That index is writer-authored
+  and owner-signature-free like the history link, so it is bounded fail-closed at
+  decode and encode at 1024 entries, each entry's opaque `ipnsName` at the name
+  codec's own ceiling (`too-many-structures`) — unbounded, a committed writer
+  grows it until the head block the revoking rotation re-seals it into no longer
+  fits the block ceiling every read enforces. Interior nodes publish no
+  write-body at all.
   The write-plane history link departs from the read plane's ratchet
   construction and carries its own struct tag, `write-history-link` (`0x0e`): it
   is **HPKE auth-mode sealed by the owner to the owner**

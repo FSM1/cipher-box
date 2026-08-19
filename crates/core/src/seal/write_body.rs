@@ -22,6 +22,7 @@ use core::num::NonZeroU64;
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed};
+use crate::ipns::MAX_IPNS_NAME_BYTES;
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
@@ -179,13 +180,23 @@ impl ChildScopeRef {
         }
     }
 
+    /// The one release-active invariant on the type, so decode and every encode
+    /// path enforce it identically (AGENTS.md rule 8). The name is opaque bytes
+    /// here, bounded at the name codec's own ceiling rather than a second number
+    /// of this module's choosing.
+    fn validate(&self) -> Result<(), CodecError> {
+        assert_unknown_disjoint(&self.unknown, CHILD_SCOPE_KNOWN)?;
+        assert_within_bound("ipnsName", self.ipns_name.len(), MAX_IPNS_NAME_BYTES)
+    }
+
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let scope_id = bytes_fixed::<16>(req(map, "scopeId")?, "scopeId")?;
-        let ipns_name = req(map, "ipnsName")?.as_bytes()?.to_vec();
+        let ipns_name = req(map, "ipnsName")?.as_bytes()?;
+        assert_within_bound("ipnsName", ipns_name.len(), MAX_IPNS_NAME_BYTES)?;
         Ok(Self {
             scope_id,
-            ipns_name,
+            ipns_name: ipns_name.to_vec(),
             unknown: collect_unknown(map, CHILD_SCOPE_KNOWN),
         })
     }
@@ -231,6 +242,15 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 /// fields.
 pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
 
+/// The frozen bound on [`WriteBody::direct_child_scope_index`]'s entry count.
+///
+/// Any committed writer authors the index and no owner signature covers it, so
+/// it is bounded rather than trusted (blueprint/core.md "Write-body"). The
+/// ceiling is headroom over any plausible share fan-out from one root, sized
+/// like [`MAX_GRANT_BLOBS`](super::MAX_GRANT_BLOBS); a root's direct children
+/// are not counted against that ceiling, so it is not a transitive guarantee.
+pub const MAX_DIRECT_CHILD_SCOPES: usize = 1024;
+
 /// Decode a write-body plaintext (strict det-CBOR, unknown fields preserved).
 ///
 /// Scope-root-only by construction; this codec cannot enforce that — whether a
@@ -242,7 +262,7 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
-    // Bound the writer-authored blob before the ledger walk allocates for it.
+    // Bound both writer-authored collections before the ledger walk allocates.
     let write_history_link = req(map, "writeHistoryLink")?.as_bytes()?;
     assert_within_bound(
         "writeHistoryLink",
@@ -250,14 +270,20 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
         MAX_WRITE_HISTORY_LINK_BYTES,
     )?;
     let write_history_link = write_history_link.to_vec();
+    let raw_children = req(map, "directChildScopeIndex")?.as_array()?;
+    assert_within_bound(
+        "directChildScopeIndex",
+        raw_children.len(),
+        MAX_DIRECT_CHILD_SCOPES,
+    )?;
 
     let mut grant_ledger = Vec::new();
     for item in req(map, "grantLedger")?.as_array()? {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
     assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
-    let mut direct_child_scope_index = Vec::new();
-    for item in req(map, "directChildScopeIndex")?.as_array()? {
+    let mut direct_child_scope_index = Vec::with_capacity(raw_children.len());
+    for item in raw_children {
         direct_child_scope_index.push(ChildScopeRef::from_value(item)?);
     }
 
@@ -273,22 +299,37 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
 /// The write body is sealed outside core, so this encode is its release-active
-/// fail-closed guard: a duplicate-tag ledger, or a `writeHistoryLink` past
-/// [`MAX_WRITE_HISTORY_LINK_BYTES`], fails here with the same verdict
+/// fail-closed guard: a duplicate-tag ledger, a `writeHistoryLink` past
+/// [`MAX_WRITE_HISTORY_LINK_BYTES`], or a `directChildScopeIndex` past
+/// [`MAX_DIRECT_CHILD_SCOPES`] entries or carrying an `ipnsName` past
+/// [`MAX_IPNS_NAME_BYTES`], fails here with the same verdict
 /// [`decode_write_body`] raises, so it never hands back bytes its own decoder
 /// rejects. The decoder's other reject, `invalid-expiry`, needs no guard —
 /// [`GrantLedgerEntry::expires_at`] is `NonZeroU64`, so those bytes are
 /// unrepresentable rather than checked. Its key is optional, though, so each
-/// row's preserved fields must not smuggle one in.
+/// row's preserved fields must not smuggle one in. Every level's preserved list
+/// is held to the same rule, so the encoder never silently drops a caller's
+/// field where it errors on the equivalent one a level up.
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     assert_within_bound(
         "writeHistoryLink",
         body.write_history_link.len(),
         MAX_WRITE_HISTORY_LINK_BYTES,
     )?;
+    // Bounds before the uniqueness walk, the order the decoder checks them in,
+    // so a value violating both gets the same verdict from either side.
+    assert_within_bound(
+        "directChildScopeIndex",
+        body.direct_child_scope_index.len(),
+        MAX_DIRECT_CHILD_SCOPES,
+    )?;
     assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
+    assert_unknown_disjoint(&body.unknown, WRITE_BODY_KNOWN)?;
     for entry in &body.grant_ledger {
         assert_unknown_disjoint(&entry.unknown, LEDGER_ENTRY_KNOWN)?;
+    }
+    for child in &body.direct_child_scope_index {
+        child.validate()?;
     }
     let mut m = Map::new();
     m.insert(
@@ -383,9 +424,19 @@ mod tests {
         assert_eq!(decode_write_body(&bytes).unwrap(), body);
     }
 
+    /// Hand-built write-body wire bytes with an empty grant ledger, the way a
+    /// hostile peer's arrive.
+    fn raw_body(children: Vec<Value>, write_history_link: Value) -> Vec<u8> {
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(children));
+        m.insert("grantLedger", Value::Array(vec![]));
+        m.insert("writeHistoryLink", write_history_link);
+        encode(&Value::Map(m)).unwrap()
+    }
+
     /// Encode/decode symmetry on the byte bound (AGENTS.md rule 8): both sides
     /// admit exactly `MAX_WRITE_HISTORY_LINK_BYTES` and refuse one more with the
-    /// same verdict. `assert_eq!`, not `debug_assert!` — this fires in release.
+    /// same verdict.
     #[test]
     fn a_write_history_link_past_its_byte_bound_is_refused_by_both_sides() {
         let at_bound = WriteBody {
@@ -404,15 +455,150 @@ mod tests {
             "too-many-structures"
         );
 
-        let mut m = Map::new();
-        m.insert("directChildScopeIndex", Value::Array(vec![]));
-        m.insert("grantLedger", Value::Array(vec![]));
-        m.insert(
-            "writeHistoryLink",
-            Value::Bytes(vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES + 1]),
+        assert_eq!(
+            decode_write_body(&raw_body(
+                vec![],
+                Value::Bytes(vec![0xab; MAX_WRITE_HISTORY_LINK_BYTES + 1])
+            ))
+            .unwrap_err()
+            .check(),
+            "too-many-structures"
+        );
+    }
+
+    fn raw_child(ipns_name: Vec<u8>) -> Value {
+        let mut c = Map::new();
+        c.insert("ipnsName", Value::Bytes(ipns_name));
+        c.insert("scopeId", Value::Bytes(vec![0x55; 16]));
+        Value::Map(c)
+    }
+
+    /// Encode/decode symmetry on the entry count (AGENTS.md rule 8): both sides
+    /// admit exactly `MAX_DIRECT_CHILD_SCOPES` and refuse one more with the same
+    /// verdict.
+    #[test]
+    fn a_child_scope_index_past_its_entry_bound_is_refused_by_both_sides() {
+        let child = |i: usize| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            ChildScopeRef::new(id, b"child".to_vec())
+        };
+        let at_bound = WriteBody {
+            direct_child_scope_index: (0..MAX_DIRECT_CHILD_SCOPES).map(child).collect(),
+            ..sample()
+        };
+        let bytes = encode_write_body(&at_bound).expect("an index at the bound encodes");
+        assert_eq!(decode_write_body(&bytes).unwrap(), at_bound);
+
+        let over = WriteBody {
+            direct_child_scope_index: (0..=MAX_DIRECT_CHILD_SCOPES).map(child).collect(),
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&over).unwrap_err().check(),
+            "too-many-structures"
+        );
+        let raw_over: Vec<Value> = (0..=MAX_DIRECT_CHILD_SCOPES)
+            .map(|_| raw_child(Vec::new()))
+            .collect();
+        assert_eq!(
+            decode_write_body(&raw_body(raw_over, Value::Bytes(vec![])))
+                .unwrap_err()
+                .check(),
+            "too-many-structures"
+        );
+    }
+
+    /// A preserved field can never override the bounded typed one: `merge_unknown`
+    /// skips a key the encoder already inserted, so an over-long `ipnsName` in
+    /// `unknown` would otherwise be dropped in silence rather than refused.
+    #[test]
+    fn a_child_scope_unknown_field_cannot_override_the_bounded_ipns_name() {
+        let mut child = ChildScopeRef::new([0x55; 16], b"short".to_vec());
+        child.unknown = PreservedFields::from_iter([(
+            "ipnsName".to_string(),
+            Value::Bytes(vec![0x6b; MAX_IPNS_NAME_BYTES + 1]),
+        )]);
+        let body = WriteBody {
+            direct_child_scope_index: vec![child],
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&body).unwrap_err().check(),
+            "unknown-field-collision"
+        );
+    }
+
+    /// The same rule one level up: a top-level preserved field naming a schema
+    /// key is refused, not silently dropped.
+    #[test]
+    fn encode_rejects_a_schema_key_smuggled_through_the_top_level_preserved_list() {
+        let body = WriteBody {
+            unknown: PreservedFields::from_iter([(
+                "writeHistoryLink".to_string(),
+                Value::Bytes(vec![0xff; MAX_WRITE_HISTORY_LINK_BYTES + 1]),
+            )]),
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&body).unwrap_err().check(),
+            "unknown-field-collision"
+        );
+    }
+
+    /// A value violating both the count bound and ledger-tag uniqueness gets one
+    /// verdict, whichever side sees it — the decoder's, since encode checks
+    /// bounds first for exactly this reason.
+    #[test]
+    fn a_body_violating_two_invariants_gets_the_same_verdict_from_both_sides() {
+        let mut body = WriteBody {
+            direct_child_scope_index: (0..=MAX_DIRECT_CHILD_SCOPES)
+                .map(|_| ChildScopeRef::new([0x55; 16], b"child".to_vec()))
+                .collect(),
+            ..sample()
+        };
+        body.grant_ledger[1].tag = body.grant_ledger[0].tag;
+
+        let raw = raw_body(
+            (0..=MAX_DIRECT_CHILD_SCOPES)
+                .map(|_| raw_child(Vec::new()))
+                .collect(),
+            Value::Bytes(vec![]),
         );
         assert_eq!(
-            decode_write_body(&encode(&Value::Map(m)).unwrap())
+            encode_write_body(&body).unwrap_err().check(),
+            decode_write_body(&raw).unwrap_err().check()
+        );
+        assert_eq!(
+            encode_write_body(&body).unwrap_err().check(),
+            "too-many-structures"
+        );
+    }
+
+    /// Encode/decode symmetry on the per-entry byte bound (AGENTS.md rule 8).
+    #[test]
+    fn a_child_scope_ipns_name_past_its_byte_bound_is_refused_by_both_sides() {
+        let over_long = vec![0x6b; MAX_IPNS_NAME_BYTES + 1];
+        let at_bound = WriteBody {
+            direct_child_scope_index: vec![ChildScopeRef::new(
+                [0x55; 16],
+                vec![0x6b; MAX_IPNS_NAME_BYTES],
+            )],
+            ..sample()
+        };
+        let bytes = encode_write_body(&at_bound).expect("a name at the bound encodes");
+        assert_eq!(decode_write_body(&bytes).unwrap(), at_bound);
+
+        let over = WriteBody {
+            direct_child_scope_index: vec![ChildScopeRef::new([0x55; 16], over_long.clone())],
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&over).unwrap_err().check(),
+            "too-many-structures"
+        );
+        assert_eq!(
+            decode_write_body(&raw_body(vec![raw_child(over_long)], Value::Bytes(vec![])))
                 .unwrap_err()
                 .check(),
             "too-many-structures"
