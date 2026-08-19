@@ -31,7 +31,8 @@ import {
   WorkerScheduler,
   toHex,
 } from '../../src/seams/index.js';
-import { deleteDatabase } from '../../src/seams/idb.js';
+import { deleteDatabase, openDatabase } from '../../src/seams/idb.js';
+import { makeBrowserSeams, reclaimOtherAccountStores } from '../../src/worker/browserSeams.js';
 import type { HarnessWorkerScope } from './workerScope.js';
 
 interface SeamOutcome {
@@ -263,6 +264,82 @@ async function runHttpBehavioral(): Promise<void> {
   }
 }
 
+/**
+ * Reclaiming the durable stores of accounts that signed in on this profile
+ * before the live one, over real IndexedDB and OPFS. Namespacing made these per
+ * account and nothing used to delete them, so an abandoned account's staged op
+ * bodies were charged against the live account's staging budget for good.
+ */
+async function runStoreReclaimBehavioral(): Promise<void> {
+  const config = {
+    recordEndpoints: [`${scope.location.origin}/routing`],
+    apiBaseUrl: `${scope.location.origin}/mock-api/reclaim`,
+    // Fresh per run: a previous run's residue would answer for the sweep.
+    dbPrefix: `reclaim-${Date.now()}`,
+  };
+  const live = 'liveaccount';
+  const gone = 'goneaccount';
+  const suffixes = ['floors', 'staging', 'snapshot-cache'];
+  const named = (account: string, suffix: string): string =>
+    `${config.dbPrefix}-${account}-${suffix}`;
+  const stagedDir = (account: string): string => `${named(account, 'staging')}-staged`;
+
+  // The departed account's residue, seeded and then closed: its stores are shut
+  // exactly as an account nobody is signed into leaves them.
+  const root = await navigator.storage.getDirectory();
+  for (const suffix of suffixes) {
+    const db = await openDatabase(named(gone, suffix), 1, (opened) => {
+      opened.createObjectStore('records');
+    });
+    db.close();
+  }
+  const debris = await root.getDirectoryHandle(stagedDir(gone), { create: true });
+  const staged = await debris.getFileHandle('a1b2', { create: true });
+  const handle = await staged.createSyncAccessHandle();
+  handle.write(new Uint8Array(4096).fill(9), { at: 0 });
+  handle.flush();
+  handle.close();
+
+  // The live account's stores, open through the real seams as a running engine
+  // holds them.
+  const seams = makeBrowserSeams(config, live);
+  await seams.floorStore.raiseEpochFloor(new Uint8Array(16), 3);
+  await seams.stagingStore.enqueueOp(new Uint8Array([1, 2, 3]));
+  await seams.snapshotCache.put(new Uint8Array(8).fill(5), new Uint8Array([7, 7]));
+
+  const reclaimed = (await reclaimOtherAccountStores(config, live)).sort();
+  const expected = [...suffixes.map((suffix) => named(gone, suffix)), stagedDir(gone)].sort();
+  if (reclaimed.join('|') !== expected.join('|')) {
+    throw new Error(
+      `storeReclaim: reclaimed ${reclaimed.join(',')}, expected ${expected.join(',')}`
+    );
+  }
+
+  const remaining = (await indexedDB.databases()).map((database) => database.name);
+  for (const suffix of suffixes) {
+    if (remaining.includes(named(gone, suffix))) {
+      throw new Error(`storeReclaim: ${named(gone, suffix)} survived the sweep`);
+    }
+    if (!remaining.includes(named(live, suffix))) {
+      throw new Error(`storeReclaim: ${named(live, suffix)} was reclaimed with the others`);
+    }
+  }
+  for await (const name of root.keys()) {
+    if (name === stagedDir(gone)) throw new Error('storeReclaim: staged bytes survived the sweep');
+  }
+
+  // The live account's stores are not merely present but still serving.
+  if ((await seams.floorStore.epochFloor(new Uint8Array(16))) !== 3) {
+    throw new Error('storeReclaim: the live floor store lost its record');
+  }
+  if ((await seams.stagingStore.queuedOps()).length !== 1) {
+    throw new Error('storeReclaim: the live staging queue lost its op');
+  }
+  if ((await seams.snapshotCache.get(new Uint8Array(8).fill(5))) === null) {
+    throw new Error('storeReclaim: the live snapshot cache lost its entry');
+  }
+}
+
 async function run(seam: string): Promise<void> {
   await init({ module_or_path: wasmUrl });
 
@@ -322,6 +399,10 @@ async function run(seam: string): Promise<void> {
     }
     case 'stagingStoreDebris': {
       await runStagingDebrisBehavioral();
+      return;
+    }
+    case 'storeReclaim': {
+      await runStoreReclaimBehavioral();
       return;
     }
     case 'http': {

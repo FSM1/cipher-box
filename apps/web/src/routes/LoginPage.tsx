@@ -6,6 +6,7 @@ import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
 import { LoginError } from '../components/auth/LoginError';
 import { RecoveryPhraseLogin } from '../components/auth/RecoveryPhraseLogin';
+import { SignedInElsewhere } from '../components/auth/SignedInElsewhere';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
@@ -20,6 +21,7 @@ export function LoginPage() {
     isReady,
     isBusy,
     error,
+    heldElsewhere,
     loginWithGoogle,
     sendEmailCode,
     loginWithEmailCode,
@@ -86,6 +88,7 @@ export function LoginPage() {
             </div>
           )}
 
+          {heldElsewhere && <SignedInElsewhere heldBy={heldElsewhere.heldBy} />}
           {error && !recoveryRequired && <LoginError message={error} />}
         </div>
         <footer className="login-footer">

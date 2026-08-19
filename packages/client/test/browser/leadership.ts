@@ -85,7 +85,7 @@ declare global {
     cbEvents(): ObservedEvent[];
     cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
-    cbStart(): Promise<string>;
+    cbStart(accountId?: string): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
     cbUpload(name: string, bytesHex: string): Promise<string>;
     cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
@@ -148,9 +148,9 @@ window.cbEvents = (): ObservedEvent[] => events;
 
 window.cbRole = (): string => client?.currentRole() ?? 'none';
 
-window.cbStart = async (): Promise<string> => {
+window.cbStart = async (accountId: string = TEST_ACCOUNT_ID): Promise<string> => {
   try {
-    await client!.facade.start(secret(), TEST_ACCOUNT_ID);
+    await client!.facade.start(secret(), accountId);
     return 'ok';
   } catch (error) {
     return settle(error);

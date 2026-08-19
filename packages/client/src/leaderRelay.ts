@@ -160,6 +160,8 @@ export class LeaderRelay {
   // port so a re-brokering tab keeps the watch it already proved alive under.
   private readonly presence = new Map<string, AbortController>();
   private readonly namingTimeoutMs: number;
+  // The account this leadership's engine holds; `null` until it cold-starts.
+  private account: string | null = null;
   private readonly unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
@@ -185,6 +187,17 @@ export class LeaderRelay {
     this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
     // Announce leadership so followers (existing or newly-elected-away) reconnect.
     this.post({ type: 'cb:leader', token: this.token });
+  }
+
+  /**
+   * Names the account this leadership's engine cold-started for. Until it is
+   * called the relay serves no follower that has one, and after it only
+   * followers on the same account: the origin hosts a single engine, so it also
+   * hosts a single account (blueprint/web-client.md "Engine hosting and tab
+   * leadership").
+   */
+  serves(accountId: string): void {
+    this.account = accountId;
   }
 
   /** Folds the leader tab's own open folder into the focus-window union. */
@@ -318,8 +331,21 @@ export class LeaderRelay {
   private serve(entry: PortEntry, message: PortRequest | { type?: unknown }): boolean {
     if (this.closed) return false;
     if (message.type === 'cb:portHello') {
-      const { clientId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
+      const { clientId, accountId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
       if (entry.clientId !== null || typeof clientId !== 'string') return false;
+      if (accountId !== null && typeof accountId !== 'string') return false;
+      // Serving a greeting that names another account would put that tab's UI on
+      // this engine's vault — a cross-account read inside one browser profile.
+      // Refused, and told which account holds the engine, so the tab can say so.
+      if (accountId !== this.account) {
+        this.postPort(entry.port, {
+          type: 'cb:portRefused',
+          token: this.token,
+          accountId: this.account,
+        });
+        this.detachPort(entry);
+        return true;
+      }
       // A re-brokering follower supersedes the port it held before; whatever it
       // had in flight there is retired with that entry.
       this.detachPortOf(clientId);

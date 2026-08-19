@@ -21,6 +21,11 @@
  * opened the channel is no longer a receiver. The rendezvous is as authenticated
  * as the `cb:leader` beacon and no more: same origin remains the trust boundary.
  *
+ * Same origin is not the same account, though, so the greeting names the account
+ * this tab is starting for, and a leader whose engine holds another refuses it —
+ * a second account in a second tab is told where the engine went rather than
+ * served the first account's vault.
+ *
  * The tab also holds a **presence lock** for its whole life, released by the
  * browser when it dies; the leader watches that release to reclaim what this tab
  * held. It is taken before the greeting, so the leader never watches a name no
@@ -38,7 +43,7 @@ import {
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
-import { CorrelatedTransport } from './correlatedTransport.js';
+import { CorrelatedTransport, EngineRequestError } from './correlatedTransport.js';
 import { asError } from './errorMessage.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
@@ -53,6 +58,24 @@ import type {
 
 /** How long a follower waits on each step of brokering its private port. */
 const DEFAULT_PORT_TIMEOUT_MS = 5000;
+
+/**
+ * The origin's one engine belongs to another account, so this tab cannot be
+ * served by it. `heldBy` names that account, or is `null` when the tab hosting
+ * the engine has started none — either way the answer is that there is no engine
+ * here for this account, never a fallback to the one there is.
+ */
+export class EngineHeldElsewhereError extends EngineRequestError {
+  constructor(readonly heldBy: string | null) {
+    super(
+      heldBy === null
+        ? 'another tab in this browser hosts the engine and is not signed in'
+        : 'another account is signed in to CipherBox in another tab of this browser',
+      'engineHeldElsewhere'
+    );
+    this.name = 'EngineHeldElsewhereError';
+  }
+}
 
 export interface BroadcastTransportOptions {
   portTimeoutMs?: number;
@@ -90,6 +113,11 @@ export class BroadcastTransport extends CorrelatedTransport {
   private settleBrokerage: (() => void) | null = null;
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
+
+  // The account this tab is signed in as; `null` until `start`. It rides every
+  // port greeting, and the leader adopts the port only if its own engine holds
+  // the same account.
+  private accountId: string | null = null;
 
   private readonly presenceHeld: Promise<void>;
   private readonly presenceRequest = new AbortController();
@@ -143,13 +171,21 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   /**
    * A follower holds no keys and never receives the login secret — the leader's
-   * engine already owns key derivation. Starting a follower is just awaiting a
-   * live leader; the secret is scrubbed by its terminal owner (`EngineClient`),
-   * never handed to this keyless transport.
+   * engine already owns key derivation, and the secret is scrubbed by its
+   * terminal owner (`EngineClient`) rather than handed to this keyless
+   * transport. Starting a follower is brokering its port under `accountId`:
+   * a leader hosting any other account refuses it, so a resolved `start` is the
+   * proof this tab reached its *own* account's engine.
    */
-  start(): Promise<void> {
+  start(_secret: ArrayBuffer, accountId: string): Promise<void> {
     if (this.terminalError) return Promise.reject(this.terminalError);
-    return this.leaderReady;
+    if (this.accountId !== accountId) {
+      this.accountId = accountId;
+      // The port it holds was adopted under the account it greeted with.
+      this.dropPort(retryError());
+      this.rejectPending(retryError());
+    }
+    return this.ensurePort().then(() => undefined);
   }
 
   command(
@@ -245,6 +281,9 @@ export class BroadcastTransport extends CorrelatedTransport {
    * port, and the leader's greeting must still carry the active leader's token.
    */
   private async brokerPort(): Promise<MessagePortLike> {
+    // Read before the first await: a `start` landing mid-brokerage re-dials, and
+    // this port must be adopted under the account it actually greeted with.
+    const accountId = this.accountId;
     await this.leaderReady;
     // Fenced from the leadership this brokerage started under, not from the one
     // in force when a read first asked for a port.
@@ -256,7 +295,11 @@ export class BroadcastTransport extends CorrelatedTransport {
     const port = await this.courier.connect(await this.awaitHost());
     const release = this.bindPort(port);
     try {
-      port.postMessage({ type: 'cb:portHello', clientId: this.clientId } satisfies PortRequest);
+      port.postMessage({
+        type: 'cb:portHello',
+        clientId: this.clientId,
+        accountId,
+      } satisfies PortRequest);
       await this.awaitAdoption();
       if (this.closed || generation !== this.portGeneration) throw retryError();
     } catch (error) {
@@ -282,6 +325,18 @@ export class BroadcastTransport extends CorrelatedTransport {
         if (adopted || !this.fromActiveLeader(token)) return;
         adopted = true;
         this.settleBrokerage?.();
+        return;
+      }
+      if (message.type === 'cb:portRefused') {
+        const refusal = message as Extract<PortResponse, { type: 'cb:portRefused' }>;
+        if (adopted || !this.fromActiveLeader(refusal.token)) return;
+        // Not retryable and not latched: the answer is whatever the leader holds
+        // now, so the next request asks again rather than replaying a stale one.
+        this.abortBrokerage?.(
+          new EngineHeldElsewhereError(
+            typeof refusal.accountId === 'string' ? refusal.accountId : null
+          )
+        );
         return;
       }
       if (!adopted) return;
@@ -457,8 +512,10 @@ export class BroadcastTransport extends CorrelatedTransport {
     }
     this.leaderToken = token;
     this.resolveLeaderReady();
-    // Broker eagerly at the swap: the first read then costs no rendezvous.
-    void this.ensurePort().catch(() => undefined);
+    // Broker eagerly at the swap: the first read then costs no rendezvous. Not
+    // before `start` names this tab's account — the greeting carries it, and a
+    // port adopted under one account is not a port another may use.
+    if (this.accountId !== null) void this.ensurePort().catch(() => undefined);
   }
 
   private onLeaderGone(token: string): void {

@@ -12,7 +12,7 @@
  * never import it into the UI realm.
  */
 
-import { makeBrowserSeams } from './browserSeams.js';
+import { makeBrowserSeams, reclaimOtherAccountStores, type BrowserSeams } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
@@ -42,6 +42,17 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
   void bootstrap(event.data);
 }
 
+/**
+ * This account's seams, plus the sweep that reclaims the stores of accounts that
+ * signed in on this profile before it. It runs alongside the cold start rather
+ * than gating it: the bytes it frees are charged against the origin quota this
+ * worker already measured, so they are the *next* start's headroom.
+ */
+function seamsFor(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
+  void reclaimOtherAccountStores(config, accountId);
+  return makeBrowserSeams(config, accountId);
+}
+
 async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
   try {
     // The quota estimate is independent of the WASM fetch and compile, so it
@@ -49,7 +60,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const headroom = measureStorageHeadroomBytes();
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
-    const host = new EngineHost(wasm, (accountId) => makeBrowserSeams(config, accountId), {
+    const host = new EngineHost(wasm, (accountId) => seamsFor(config, accountId), {
       apiBaseUrl: config.apiBaseUrl,
       acceleratorBaseUrl: config.acceleratorBaseUrl,
       publicGateways: config.publicGateways,

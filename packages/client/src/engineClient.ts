@@ -138,6 +138,9 @@ export class EngineClient implements EngineTransport {
   // The vault is active (user logged in). A follower promoted while active must
   // re-derive keys; a never-active tab elected first just awaits `start`.
   private started = false;
+  // The account this tab's engine holds; `null` until a start resolves. The
+  // relay refuses a follower on any other account.
+  private accountId: string | null = null;
   private ownFocus: Uint8Array | null = null;
 
   constructor(private readonly config: EngineClientConfig) {
@@ -182,6 +185,8 @@ export class EngineClient implements EngineTransport {
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
     return this.current.start(secret, accountId).then(() => {
       this.started = true;
+      this.accountId = accountId;
+      this.relay?.serves(accountId);
     });
   }
 
@@ -358,6 +363,7 @@ export class EngineClient implements EngineTransport {
         const { secret, accountId } = await this.provideFailoverSecret();
         try {
           await local.start(secret, accountId);
+          this.accountId = accountId;
         } finally {
           // This frame owns the re-derived buffer until a transfer detaches it
           // (`SecretSource`); a start that failed before the post did not.
@@ -376,6 +382,9 @@ export class EngineClient implements EngineTransport {
       this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
       this.relay = new LeaderRelay(this.channel, local, this.courier, this.config.locks);
+      // Before any follower can greet: the relay's first channel post is the
+      // beacon that invites one, and a greeting is answered on a later turn.
+      if (this.accountId !== null) this.relay.serves(this.accountId);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
     } catch (error) {
       this.abortPromotion(local, error);
