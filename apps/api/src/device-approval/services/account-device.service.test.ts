@@ -174,6 +174,21 @@ describe('AccountDeviceService', () => {
       expect(again.label).toBe('laptop');
     });
 
+    it('refuses a re-touch presenting a different identity, and rewrites nothing', async () => {
+      await service.register(account, registration(device, account, { label: 'A' }));
+
+      await expect(
+        service.register(
+          account,
+          registration(device, account, { identityToken: mintIdentityToken(), label: 'B' })
+        )
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(devices.rows).toHaveLength(1);
+      expect(devices.rows[0].identitySubjectId).toBe(subjectOf(token));
+      expect(devices.rows[0].label).toBe('A');
+    });
+
     it('rejects a key already registered to another account', async () => {
       await service.register(account, registration(device, account));
 

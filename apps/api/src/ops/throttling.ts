@@ -72,7 +72,7 @@ export const THROTTLE_SURFACES = {
    * Pre-reconstruction session mint: per IP, because the caller has no account
    * yet. Login-shaped in cost and consequence, so it shares the auth cap.
    */
-  deviceApprovalSession: { default: { limit: 10, ttl: 60_000 } },
+  deviceApprovalSession: { default: { limit: resolveAuthLimit, ttl: 60_000 } },
   /**
    * Opening a rendezvous: per account. Deliberately the tightest surface here —
    * every request costs a member an approval prompt, so this is the cap that

@@ -167,7 +167,16 @@ describe('TokenService scoped tokens', () => {
     expect(Number(exp) - Number(iat)).toBe(120);
   });
 
-  it.each(['not-a-number', '0', '-60', '30.5', ''])(
+  it('accepts the ceiling itself, so the bound is inclusive', async () => {
+    const { service } = build({ SCOPED_TOKEN_TTL_SECONDS: '3600' });
+    const scoped = await service.createScopedToken(USER_ID, 'device-approval');
+    const { iat, exp } = await claims(scoped.accessToken);
+
+    expect(scoped.expiresIn).toBe(3600);
+    expect(Number(exp) - Number(iat)).toBe(3600);
+  });
+
+  it.each(['not-a-number', '0', '-60', '30.5', '', '3601', '86400'])(
     'falls back to the default TTL for the misconfigured value %j',
     async (raw) => {
       const { service } = build({ SCOPED_TOKEN_TTL_SECONDS: raw });
