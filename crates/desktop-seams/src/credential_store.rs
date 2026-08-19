@@ -51,44 +51,50 @@ impl KeyringCredentialStore {
 
     /// Stores an opaque secret under one account, replacing any previous
     /// value.
-    async fn store_secret(&self, account: &'static str, secret: &[u8]) -> SeamResult<()> {
+    ///
+    /// This helper and the two below hand back the queue future instead of
+    /// being `async fn`: the slot is then taken when they are called, not when
+    /// the future is first polled, so no caller can land a write after the
+    /// logout delete it issued later.
+    fn store_secret(
+        &self,
+        account: &'static str,
+        secret: &[u8],
+    ) -> impl Future<Output = SeamResult<()>> + use<> {
         let service = self.service.clone();
         // The worker owns this copy outright, so it is wiped where it dies.
         let secret = Zeroizing::new(secret.to_vec());
-        self.offload
-            .run("keyring set", move || {
-                entry(&service, account)?
-                    .set_secret(&secret)
-                    .map_err(|err| SeamError::new(format!("keyring set: {err}")))
-            })
-            .await
+        self.offload.run("keyring set", move || {
+            entry(&service, account)?
+                .set_secret(&secret)
+                .map_err(|err| SeamError::new(format!("keyring set: {err}")))
+        })
     }
 
     /// Loads an opaque secret, mapping a missing entry to `None`.
-    async fn load_secret(&self, account: &'static str) -> SeamResult<Option<Vec<u8>>> {
+    fn load_secret(
+        &self,
+        account: &'static str,
+    ) -> impl Future<Output = SeamResult<Option<Vec<u8>>>> + use<> {
         let service = self.service.clone();
-        self.offload
-            .run("keyring get", move || {
-                match entry(&service, account)?.get_secret() {
-                    Ok(secret) => Ok(Some(secret)),
-                    Err(keyring::Error::NoEntry) => Ok(None),
-                    Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
-                }
-            })
-            .await
+        self.offload.run("keyring get", move || {
+            match entry(&service, account)?.get_secret() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(err) => Err(SeamError::new(format!("keyring get: {err}"))),
+            }
+        })
     }
 
     /// Deletes an account's secret. Idempotent (a missing entry is success).
-    async fn clear_secret(&self, account: &'static str) -> SeamResult<()> {
+    fn clear_secret(&self, account: &'static str) -> impl Future<Output = SeamResult<()>> + use<> {
         let service = self.service.clone();
-        self.offload
-            .run("keyring delete", move || {
-                match entry(&service, account)?.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                    Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
-                }
-            })
-            .await
+        self.offload.run("keyring delete", move || {
+            match entry(&service, account)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(err) => Err(SeamError::new(format!("keyring delete: {err}"))),
+            }
+        })
     }
 
     /// Persists the last-account id — the only extra datum this store holds
@@ -127,7 +133,11 @@ impl CredentialStore for KeyringCredentialStore {
 #[cfg(test)]
 mod tests {
     use super::KeyringCredentialStore;
+    use cipherbox_engine::testkit::block_on;
+    use std::future::Future;
+    use std::pin::pin;
     use std::sync::Arc;
+    use std::task::{Context, Waker};
 
     #[test]
     fn a_cloned_store_shares_one_ordering_queue() {
@@ -135,6 +145,32 @@ mod tests {
             KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
         let handed_to_the_shell = store.clone();
         assert!(Arc::ptr_eq(&store.offload, &handed_to_the_shell.offload));
+    }
+
+    /// Fails the moment a helper goes back to `async fn`: the write would then
+    /// take its queue slot at its first poll, behind the delete, and a logout
+    /// would leave a live refresh token in the keyring.
+    #[test]
+    fn a_write_built_before_a_delete_runs_first_however_the_futures_are_polled() {
+        // keyring's in-process mock: no CI runner has an unlocked OS keyring,
+        // and the ordering under test is decided before the host call.
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        let store =
+            KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
+
+        let write = store.store_secret("ordering-probe", b"token");
+        let delete = store.clear_secret("ordering-probe");
+
+        // Polled in the opposite order to construction. The worker is FIFO, so
+        // the delete finishing proves the write already ran.
+        block_on(delete).expect("the delete ran");
+
+        assert!(
+            pin!(write)
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            "the write was queued at call, so its result is already waiting"
+        );
     }
 }
 

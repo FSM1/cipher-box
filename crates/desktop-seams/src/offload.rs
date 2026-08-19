@@ -72,7 +72,7 @@ impl Offload {
         &self,
         what: &'static str,
         work: F,
-    ) -> impl Future<Output = SeamResult<T>>
+    ) -> impl Future<Output = SeamResult<T>> + use<T, F>
     where
         T: WipeUndelivered + Send + 'static,
         F: FnOnce() -> SeamResult<T> + Send + 'static,

@@ -328,7 +328,6 @@ mod tests {
         http
     }
 
-    /// The content addresses a run uploaded, recomputed from the bytes it sent.
     fn uploaded_cids(http: &StubHttp) -> Vec<String> {
         http.bodies_for("/content/upload")
             .iter()
@@ -347,7 +346,6 @@ mod tests {
         assert_eq!(sorted(http.retired()), sorted(expected));
     }
 
-    /// The `(method, path)` shape of the run, in send order.
     fn shape(http: &StubHttp) -> Vec<(HttpMethod, String)> {
         http.calls()
             .into_iter()

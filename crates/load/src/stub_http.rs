@@ -20,7 +20,6 @@ pub(crate) struct Call {
 #[derive(Default)]
 struct State {
     calls: Vec<Call>,
-    /// Paths answered 429 instead of their canned response.
     throttled: HashSet<String>,
 }
 
@@ -43,12 +42,10 @@ impl StubHttp {
         self.state.borrow_mut().calls.clear();
     }
 
-    /// Every call so far, in send order.
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.state.borrow().calls.clone()
     }
 
-    /// The paths of every call so far, in send order.
     pub(crate) fn paths(&self) -> Vec<String> {
         self.state
             .borrow()
@@ -58,7 +55,6 @@ impl StubHttp {
             .collect()
     }
 
-    /// The bodies every call to `path` carried, in send order.
     pub(crate) fn bodies_for(&self, path: &str) -> Vec<Vec<u8>> {
         self.state
             .borrow()
@@ -69,15 +65,14 @@ impl StubHttp {
             .collect()
     }
 
-    /// Every name registered, in registration order.
     pub(crate) fn registered_names(&self) -> Vec<String> {
         self.registrations()
             .map(|entry| entry["ipnsName"].as_str().expect("ipnsName").to_owned())
             .collect()
     }
 
-    /// Every row a registration created — each name and its content CIDs. This
-    /// is exactly the set a scenario owes the registry back.
+    /// Exactly the set a scenario owes the registry back: every name it
+    /// registered plus every content CID under it.
     pub(crate) fn registered_targets(&self) -> Vec<String> {
         self.registrations()
             .flat_map(|entry| {
@@ -103,7 +98,6 @@ impl StubHttp {
             })
     }
 
-    /// Every target retired, in retire order.
     pub(crate) fn retired(&self) -> Vec<String> {
         self.bodies_for("/registry/retire")
             .iter()
