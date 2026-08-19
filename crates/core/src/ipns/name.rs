@@ -37,6 +37,13 @@ const CID_PREFIX: [u8; 8] = [0x01, 0x72, 0x00, 0x24, 0x08, 0x01, 0x12, 0x20];
 /// Ed25519 public key.
 const CID_LEN: usize = CID_PREFIX.len() + PUBLIC_LEN;
 
+/// The widest a name string can be. The one canonical layout makes this a law,
+/// not a policy: [`IpnsName::parse`] refuses anything longer, and any codec
+/// carrying opaque `ipnsName` bytes bounds them here rather than picking its own
+/// number. The base36 upper bound exceeds a real name's 62-byte width, so it
+/// never rejects one.
+pub const MAX_IPNS_NAME_BYTES: usize = 1 + base36_len(CID_LEN);
+
 /// A validated IPNS name: the canonical `k`-prefixed base36 string plus the
 /// Ed25519 public key it names. Parsing enforces the single canonical layout,
 /// so [`public_key`](Self::public_key) is infallible and the "pubkey from the
@@ -67,9 +74,8 @@ impl IpnsName {
     /// valid compressed Edwards point.
     pub fn parse(text: &str) -> Result<Self, CodecError> {
         // Bound the input before the O(n^2) base36 division so a giant string
-        // cannot burn work. The base36 upper bound always exceeds a real name's
-        // true width, so it never rejects one.
-        if text.len() > 1 + base36_len(CID_LEN) {
+        // cannot burn work.
+        if text.len() > MAX_IPNS_NAME_BYTES {
             return Err(malformed());
         }
         let mut chars = text.chars();
@@ -130,7 +136,7 @@ const BASE36_ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
 /// A loose upper bound on the base36 length of `n` bytes, for string capacity:
 /// log(256)/log(36) < 1.55, so `2*n` always suffices.
-fn base36_len(n: usize) -> usize {
+const fn base36_len(n: usize) -> usize {
     2 * n
 }
 

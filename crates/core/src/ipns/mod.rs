@@ -11,5 +11,5 @@
 pub mod name;
 pub mod record;
 
-pub use name::IpnsName;
+pub use name::{IpnsName, MAX_IPNS_NAME_BYTES};
 pub use record::{DEFAULT_VALIDITY_DAYS, IpnsRecord, VerifiedRecord};
