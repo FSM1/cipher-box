@@ -429,12 +429,8 @@ impl CommandOutcome {
             .map(|contact| contact.enc_subkey().to_bytes().to_vec())
     }
 
-    /// `inviteLinkMinted`: the invite secret the link's URL fragment carries —
-    /// **the whole bearer capability**, so a host puts it in the fragment and
-    /// nowhere durable; otherwise `undefined`.
-    ///
-    /// Read it once and put it in the fragment: every call leaves another
-    /// unwiped copy in linear memory (the module header states the residual).
+    /// `inviteLinkMinted`: the invite secret the link's URL fragment carries;
+    /// otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = inviteSecret)]
     pub fn invite_secret(&self) -> Option<Vec<u8>> {
         self.link()

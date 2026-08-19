@@ -2898,12 +2898,11 @@ where {
                 check: "invite-target-is-not-a-scope-root",
             });
         }
-        let write_scope_seed =
-            cached_seed(&self.scope_write_seeds, &scope_id).ok_or(EngineError::Seam {
+        let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
+            EngineError::ContentUnavailable {
                 message: "no write scope seed is held for the vault root".to_owned(),
-            })?;
-        // Derived, never taken from a record: the blinded tag binds this name,
-        // so a link bound to anything else is one nobody can self-locate.
+            },
+        )?;
         let scope = ChildScopeRef::new(
             scope_id,
             derive_write_name(&write_scope_seed, &scope_id)
@@ -2928,7 +2927,6 @@ where {
                 scope_keys: &scope_keys,
             },
             ancestry: RotationAncestry::default(),
-            // A mint runs no sweep, so it never consults a scope pointer.
             owner_pointer_seed: None,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
@@ -2954,7 +2952,6 @@ where {
                 scope: &scope,
                 current: &current,
                 permission: permission.into(),
-                // The command carries no expiry term.
                 expires_at: None,
             },
         )

@@ -193,8 +193,6 @@ pub async fn mint_invite_link<P: ScopeRootPublisher, S: InviteStore, E: Entropy>
             pseudonym_signer: &current.pseudonym_signer,
         },
         &ResealSeeds {
-            // A mint cuts no plane: the existing seed at the current epoch,
-            // minting no history link (`reseal_scope_root`'s sweep shape).
             override_seed: &current.override_seed,
             read_epoch: current.current_read_epoch,
             prev: None,

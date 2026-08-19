@@ -217,7 +217,7 @@ fn minting_an_invite_link_on_an_unresolved_vault_root_reports_availability() {
             node: root,
             permission: Permission::Read,
         })),
-        Err(EngineError::Seam { .. }),
+        Err(EngineError::ContentUnavailable { .. }),
     ));
 }
 
