@@ -57,13 +57,24 @@ export interface RecoveryEnrollment {
 /** What the Core Kit's own serializer emits, and so what a field must collect. */
 export const RECOVERY_PHRASE_WORDS = 24;
 
-/** Whether one of the SDK's flattened factor descriptions names `module`. */
-function describes(entry: string, module: FactorKeyTypeShareDescription): boolean {
+/**
+ * Whether one of the SDK's flattened factor descriptions is the recovery
+ * factor. The share index carries it as well as the label, because the SDK
+ * stamps an index on every factor it writes but defaults an unnamed factor's
+ * label to `Other` — v1 read the label alone and told accounts that held a
+ * phrase they had none.
+ */
+function isRecoveryFactor(entry: string): boolean {
+  let described: { module?: unknown; tssShareIndex?: unknown };
   try {
-    return (JSON.parse(entry) as { module?: unknown }).module === module;
+    described = JSON.parse(entry) as typeof described;
   } catch {
     return false;
   }
+  return (
+    described.module === FactorKeyTypeShareDescription.SeedPhrase ||
+    described.tssShareIndex === TssShareType.RECOVERY
+  );
 }
 
 /** The one reading of a typed phrase, so a field and the redemption agree. */
@@ -105,9 +116,16 @@ class Web3AuthSession implements WebCoreKitSession {
       idToken: credential.token,
     });
     this.signedInEmail = credential.email;
-    if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) await this.useStoredDeviceFactor();
-    if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) throw new RecoveryRequiredError();
-    await this.coreKit.commitChanges();
+    if (!this.isLoggedIn()) await this.useStoredDeviceFactor();
+    if (this.isLoggedIn()) {
+      await this.coreKit.commitChanges();
+      return;
+    }
+    // A phrase answers a factor policy and nothing else, so only that status
+    // raises the prompt: any other one would strand the member at a panel whose
+    // own guard refuses the phrase they type into it.
+    if (!this.needsRecovery()) throw new Error(`the sign-in stopped at ${this.coreKit.status}`);
+    throw new RecoveryRequiredError();
   }
 
   hasRecoveryPhrase(): boolean {
@@ -117,11 +135,10 @@ class Web3AuthSession implements WebCoreKitSession {
     } catch {
       return false;
     }
-    // By label, not by factor count: a device-approval factor would take the
-    // count past its unenrolled two and report a phrase nobody was ever shown.
-    return described.some((entries) =>
-      entries.some((entry) => describes(entry, FactorKeyTypeShareDescription.SeedPhrase))
-    );
+    // By what each factor says it is, not by factor count: a device-approval
+    // factor would take the count past its unenrolled two and report a phrase
+    // nobody was ever shown.
+    return described.some((entries) => entries.some(isRecoveryFactor));
   }
 
   async recoverWithPhrase(phrase: string): Promise<void> {

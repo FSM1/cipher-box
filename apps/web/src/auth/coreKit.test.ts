@@ -383,6 +383,22 @@ describe('recovery phrase enrollment', () => {
     expect(created.hasRecoveryPhrase()).toBe(true);
   });
 
+  it('reads the phrase off the share index too, which the SDK stamps on every factor', async () => {
+    const created = await enrolled();
+    // The label the SDK falls back to when a factor is created without one; the
+    // index is what still tells a recovery factor from a device factor.
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.DEVICE })],
+    };
+    expect(created.hasRecoveryPhrase()).toBe(false);
+
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.DEVICE })],
+      cd: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.RECOVERY })],
+    };
+    expect(created.hasRecoveryPhrase()).toBe(true);
+  });
+
   it('reports no phrase when the descriptions cannot be read at all', () => {
     const created = session();
     sdk.shareDescriptions = { ab: ['not json'] };
@@ -442,6 +458,18 @@ describe('a Core Kit login', () => {
 
     sdk.userInfo = undefined;
     expect(session().method()).toBeNull();
+  });
+
+  it('raises the recovery prompt for a factor policy and for nothing else', async () => {
+    const created = session();
+    sdk.statusAfterLogin = COREKIT_STATUS.INITIALIZED;
+
+    const failure = await created.login(credential()).catch((error: unknown) => error);
+
+    // A phrase cannot answer this, so offering the panel would strand the
+    // member at a prompt its own guard refuses.
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(RecoveryRequiredError);
   });
 
   it('reports the address the exchange gave it, and drops it on logout', async () => {

@@ -141,15 +141,14 @@ impl EngineHandle {
         // so one headroom figure yields one budget on every platform. An absent
         // or nonsensical figure is `UNMEASURED`, not a measured zero: both admit
         // no upload (there is no floor-up), but only one of them means the
-        // origin is full, and the rejection says which.
-        let storage_policy = match profile {
-            SyncTimingProfile::CI => StoragePolicy::CI,
-            _ => match storage_headroom_bytes {
-                Some(bytes) if bytes.is_finite() && bytes >= 0.0 => {
-                    StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
-                }
-                _ => StoragePolicy::UNMEASURED,
-            },
+        // origin is full, and the rejection says which. The timing profile has
+        // no say here: a measured byte count belongs to no named set, so a
+        // browser on the CI cadence still stages against the quota it has.
+        let storage_policy = match storage_headroom_bytes {
+            Some(bytes) if bytes.is_finite() && bytes >= 0.0 => {
+                StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
+            }
+            _ => StoragePolicy::UNMEASURED,
         };
 
         // With no accelerator base URL and no fallbacks the gateway is empty and
