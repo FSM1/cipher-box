@@ -15,17 +15,21 @@
 
 use std::collections::BTreeMap;
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::facade::{NodeId, NodeKind};
 
 /// One node's metadata in the working tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct NodeMeta {
     /// Location-independent node id.
+    #[zeroize(skip)]
     pub id: NodeId,
     /// The display name, stored **as entered** (uniqueness folds via
     /// [`collation_key`]; the stored name is never mutated for comparison).
     pub name: String,
     /// File or folder.
+    #[zeroize(skip)]
     pub kind: NodeKind,
     /// The node's own IPNS record sequence — the conditional-delete snapshot
     /// (a delete op drops on rebase if this advanced past the op's snapshot).
@@ -66,6 +70,16 @@ impl NodeMeta {
             mtime: None,
             ipns_name: None,
         }
+    }
+
+    /// Replace the display name, wiping the one it supersedes.
+    ///
+    /// A plain field assignment would drop the old `String` intact: this type
+    /// wipes on drop, and a name is user-private metadata in a zero-knowledge
+    /// system (`Value::zeroize_bytes` treats text the same way).
+    pub fn rename(&mut self, name: impl Into<String>) {
+        self.name.zeroize();
+        self.name = name.into();
     }
 }
 

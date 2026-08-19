@@ -832,7 +832,9 @@ mod tests {
             );
             let staged = StagedContent {
                 root_cid: cid.clone(),
-                ..staged
+                plaintext_size: staged.plaintext_size,
+                sealed_content_key: staged.sealed_content_key.clone(),
+                epoch: staged.epoch,
             };
             store
                 .put_staged_bytes(&cid, b"not a root manifest")

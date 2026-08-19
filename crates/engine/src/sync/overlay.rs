@@ -45,7 +45,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         }
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
-                node.name = new_name.clone();
+                node.rename(new_name.clone());
                 op.stamp_authored(node);
             }
         }
@@ -101,7 +101,7 @@ fn relocate(
     }
     if let Some(node) = view.node_mut(op.target) {
         if let Some(new_name) = new_name {
-            node.name = new_name.to_owned();
+            node.rename(new_name);
         }
         op.stamp_authored(node);
     }

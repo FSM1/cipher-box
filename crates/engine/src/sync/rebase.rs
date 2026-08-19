@@ -26,6 +26,8 @@
 use core::num::NonZeroU64;
 use std::collections::HashSet;
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
 #[cfg(test)]
@@ -116,9 +118,10 @@ pub enum DeadLetterReason {
 }
 
 /// One applied op, resolved for republish.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct AppliedOp {
     /// The durable-queue id.
+    #[zeroize(skip)]
     pub op_id: OpId,
     /// The op as journaled.
     pub op: Op,
@@ -126,6 +129,7 @@ pub struct AppliedOp {
     /// collision), `None` for ops that carry no name.
     pub effective_name: Option<String>,
     /// The add/add auto-suffix fired.
+    #[zeroize(skip)]
     pub suffixed: bool,
 }
 
@@ -439,7 +443,7 @@ fn rebase_rename(working: &mut Snapshot, op: &Op, new_name: &str) -> OpResolutio
         None => (new_name.to_owned(), false),
     };
     if let Some(node) = working.node_mut(op.target) {
-        node.name = effective.clone();
+        node.rename(effective.clone());
     }
     OpResolution::Applied {
         effective_name: Some(effective),
@@ -579,7 +583,7 @@ fn rebase_move(
         working.link_next(new_parent, op.target);
     }
     if let Some(node) = working.node_mut(op.target) {
-        node.name = effective.clone();
+        node.rename(effective.clone());
     }
     OpResolution::Applied {
         effective_name: Some(effective),
@@ -631,7 +635,7 @@ fn rebase_update_content(
                     None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
                 };
             let mut resurrected = meta.clone();
-            resurrected.name = effective.clone();
+            resurrected.rename(effective.clone());
             resurrected.content_version = resurrected.content_version.map(|count| count + 1);
             resurrected.head_content_cid = op.staged_content().map(|c| c.root_cid.clone());
             working.upsert_node(resurrected);
@@ -795,8 +799,15 @@ mod tests {
     const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
 
     fn staged_k() -> crate::sync::op::StagedContent {
+        staged_root(b"k")
+    }
+
+    /// A staged version addressed by `root`. Built field-by-field rather than
+    /// with a functional update: `StagedContent` wipes on drop, and a `Drop`
+    /// type cannot be moved out of.
+    fn staged_root(root: &[u8]) -> crate::sync::op::StagedContent {
         crate::sync::op::StagedContent {
-            root_cid: b"k".to_vec(),
+            root_cid: root.to_vec(),
             plaintext_size: 1,
             sealed_content_key: b"sealed-key-blob".to_vec(),
             epoch: 1,
@@ -848,10 +859,7 @@ mod tests {
     /// The staged version a second edit authors, distinct from [`staged_k`] so
     /// the two heads are told apart by identity.
     fn staged_next() -> crate::sync::op::StagedContent {
-        crate::sync::op::StagedContent {
-            root_cid: b"next".to_vec(),
-            ..staged_k()
-        }
+        staged_root(b"next")
     }
 
     /// One edit-vs-edit fixture: a published file whose head the working base
@@ -904,7 +912,7 @@ mod tests {
         assert_eq!(working.node(id(1)).unwrap().content_version, Some(2));
         assert_eq!(
             working.node(id(1)).unwrap().head_content_cid,
-            Some(staged_k().root_cid),
+            Some(staged_k().root_cid.clone()),
             "the applied edit is the head the next one anchors on"
         );
     }
@@ -941,7 +949,13 @@ mod tests {
             ),
             (
                 OpId(2),
-                Op::update_content(id(1), staged_next(), Some(staged_k().root_cid), 1, AT),
+                Op::update_content(
+                    id(1),
+                    staged_next(),
+                    Some(staged_k().root_cid.clone()),
+                    1,
+                    AT,
+                ),
             ),
         ];
 
@@ -951,7 +965,7 @@ mod tests {
         assert_eq!(report.applied.len(), 2);
         assert_eq!(
             report.rebased.node(id(1)).unwrap().head_content_cid,
-            Some(staged_next().root_cid)
+            Some(staged_next().root_cid.clone())
         );
     }
 
@@ -969,7 +983,13 @@ mod tests {
             ),
             (
                 OpId(2),
-                Op::update_content(id(1), staged_next(), Some(staged_k().root_cid), 1, AT),
+                Op::update_content(
+                    id(1),
+                    staged_next(),
+                    Some(staged_k().root_cid.clone()),
+                    1,
+                    AT,
+                ),
             ),
         ];
 
@@ -1127,7 +1147,7 @@ mod tests {
         let mut base = tree();
         with_node(&mut base, id(0), id(1), "start.txt", NodeKind::File);
         // A concurrent rename already moved it to "other.txt".
-        base.node_mut(id(1)).unwrap().name = "other.txt".into();
+        base.node_mut(id(1)).unwrap().rename("other.txt");
 
         let local = base.clone();
         let res = rebase_one(
@@ -1419,7 +1439,7 @@ mod tests {
         // advances the node's own sequence — the conditional-delete anchor
         // alone would see this as "unchanged" and destroy a bystander.
         let mut base = replace_tree(1);
-        base.node_mut(id(3)).unwrap().name = "keep.txt".into();
+        base.node_mut(id(3)).unwrap().rename("keep.txt");
         let local = base.clone();
 
         let res = rebase_one(
@@ -1619,7 +1639,7 @@ mod tests {
         base.remove_node(id(3));
         base.unlink(id(0), id(2));
         base.link(id(1), id(2), 2);
-        base.node_mut(id(2)).unwrap().name = "target.txt".into();
+        base.node_mut(id(2)).unwrap().rename("target.txt");
         let local = base.clone();
 
         let res = rebase_one(
