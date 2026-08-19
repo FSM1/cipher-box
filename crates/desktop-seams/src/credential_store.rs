@@ -31,6 +31,12 @@ fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
 /// `Debug` is derived and safe: the struct carries only the service name and a
 /// queue handle, both non-secret; no token is ever held in memory by this
 /// handle.
+///
+/// No method on this path is an `async fn`: each hands back the worker-queue
+/// future, so the queue slot is taken when the method is called rather than
+/// when its future is first polled. One `async fn` anywhere between the caller
+/// and the worker queue would restore the ordering hazard the queue exists to
+/// remove — a write landing after the logout delete that was issued later.
 #[derive(Debug, Clone)]
 pub struct KeyringCredentialStore {
     service: String,
@@ -51,11 +57,6 @@ impl KeyringCredentialStore {
 
     /// Stores an opaque secret under one account, replacing any previous
     /// value.
-    ///
-    /// This helper and the two below hand back the queue future instead of
-    /// being `async fn`: the slot is then taken when they are called, not when
-    /// the future is first polled, so no caller can land a write after the
-    /// logout delete it issued later.
     fn store_secret(
         &self,
         account: &'static str,
@@ -100,39 +101,44 @@ impl KeyringCredentialStore {
     /// Persists the last-account id — the only extra datum this store holds
     /// beyond the refresh token, used by the shell to pick the account
     /// directory on next launch (blueprint/desktop.md "last-account id").
-    pub async fn store_last_account_id(&self, account_id: &[u8]) -> SeamResult<()> {
-        self.store_secret(LAST_ACCOUNT_ID_ACCOUNT, account_id).await
+    pub fn store_last_account_id(
+        &self,
+        account_id: &[u8],
+    ) -> impl Future<Output = SeamResult<()>> + use<> {
+        self.store_secret(LAST_ACCOUNT_ID_ACCOUNT, account_id)
     }
 
     /// The persisted last-account id, if any.
-    pub async fn load_last_account_id(&self) -> SeamResult<Option<Vec<u8>>> {
-        self.load_secret(LAST_ACCOUNT_ID_ACCOUNT).await
+    pub fn load_last_account_id(
+        &self,
+    ) -> impl Future<Output = SeamResult<Option<Vec<u8>>>> + use<> {
+        self.load_secret(LAST_ACCOUNT_ID_ACCOUNT)
     }
 
     /// Deletes the persisted last-account id. Idempotent.
-    pub async fn clear_last_account_id(&self) -> SeamResult<()> {
-        self.clear_secret(LAST_ACCOUNT_ID_ACCOUNT).await
+    pub fn clear_last_account_id(&self) -> impl Future<Output = SeamResult<()>> + use<> {
+        self.clear_secret(LAST_ACCOUNT_ID_ACCOUNT)
     }
 }
 
 impl CredentialStore for KeyringCredentialStore {
-    async fn store_refresh_token(&self, refresh_token: &[u8]) -> SeamResult<()> {
+    fn store_refresh_token(&self, refresh_token: &[u8]) -> impl Future<Output = SeamResult<()>> {
         self.store_secret(REFRESH_TOKEN_ACCOUNT, refresh_token)
-            .await
     }
 
-    async fn load_refresh_token(&self) -> SeamResult<Option<Vec<u8>>> {
-        self.load_secret(REFRESH_TOKEN_ACCOUNT).await
+    fn load_refresh_token(&self) -> impl Future<Output = SeamResult<Option<Vec<u8>>>> {
+        self.load_secret(REFRESH_TOKEN_ACCOUNT)
     }
 
-    async fn clear_refresh_token(&self) -> SeamResult<()> {
-        self.clear_secret(REFRESH_TOKEN_ACCOUNT).await
+    fn clear_refresh_token(&self) -> impl Future<Output = SeamResult<()>> {
+        self.clear_secret(REFRESH_TOKEN_ACCOUNT)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::KeyringCredentialStore;
+    use cipherbox_engine::seams::CredentialStore;
     use cipherbox_engine::testkit::block_on;
     use std::future::Future;
     use std::pin::pin;
@@ -147,9 +153,10 @@ mod tests {
         assert!(Arc::ptr_eq(&store.offload, &handed_to_the_shell.offload));
     }
 
-    /// Fails the moment a helper goes back to `async fn`: the write would then
-    /// take its queue slot at its first poll, behind the delete, and a logout
-    /// would leave a live refresh token in the keyring.
+    /// Fails the moment any method on the seam path goes back to `async fn`:
+    /// the write would then take its queue slot at its first poll, behind the
+    /// delete, and a logout would leave a live refresh token in the keyring.
+    /// Driven through the `CredentialStore` methods the shell calls.
     #[test]
     fn a_write_built_before_a_delete_runs_first_however_the_futures_are_polled() {
         // keyring's in-process mock: no CI runner has an unlocked OS keyring,
@@ -158,8 +165,8 @@ mod tests {
         let store =
             KeyringCredentialStore::new("com.cipherbox.desktop.test").expect("worker started");
 
-        let write = store.store_secret("ordering-probe", b"token");
-        let delete = store.clear_secret("ordering-probe");
+        let write = store.store_refresh_token(b"token");
+        let delete = store.clear_refresh_token();
 
         // Polled in the opposite order to construction. The worker is FIFO, so
         // the delete finishing proves the write already ran.
