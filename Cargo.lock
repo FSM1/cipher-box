@@ -630,6 +630,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "chacha20poly1305",
+ "curve25519-dalek",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",

@@ -175,6 +175,13 @@ pub enum CreateGrantError {
     },
     /// The recipient encryption key is non-contributory (degenerate ECDH).
     UnusableRecipientKey,
+    /// The recipient's encryption subkey is the vault owner's own: the owner
+    /// already outranks every grantee, so the grant confers nothing while
+    /// consuming a commitment slot and filing the owner's pseudonym as a third
+    /// party's. The invite path's
+    /// [`ClaimantIsTheOwner`](super::InviteError::ClaimantIsTheOwner) refuses
+    /// the same input.
+    RecipientIsTheOwner,
     /// Encoding/signing the grant-set commitment failed (fail-closed codec).
     CommitmentEncode(CodecError),
     /// Entropy acquisition failed (seed mint or mailbox ephemeral).
@@ -231,6 +238,7 @@ impl CreateGrantError {
             Self::Converge(_) => "converge-failed",
             Self::SubtreeNotConverged { .. } => "subtree-not-converged",
             Self::UnusableRecipientKey => "unusable-recipient-key",
+            Self::RecipientIsTheOwner => "recipient-is-the-owner",
             Self::CommitmentEncode(_) => "commitment-encode-failed",
             Self::Entropy(_) => "entropy-error",
             Self::Mint(_) => "mint-failed",
@@ -277,6 +285,11 @@ where
     P: ScopeRootPublisher + SweepPublisher,
     M: Mailbox,
 {
+    // Refused ahead of the publishing sweep, so a self-grant costs no publish.
+    if *recipient.enc_pub == owner.enc_secret.public() {
+        return Err(CreateGrantError::RecipientIsTheOwner);
+    }
+
     // 1) Derive the scope root's ipnsName from the folder's write material — the
     // sole gated identity edge (blueprint/engine.md: the name binds the record
     // via the Ed25519 key it encodes). The tag and commitment below bind this
@@ -643,6 +656,10 @@ mod tests {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         publish_result: Result<(), ScopeRootPublishError>,
         publish_calls: Rc<RefCell<usize>>,
+        /// Every read-seam entry: the sweep's three resolver calls and the
+        /// cascade re-seal resolve. A refusal that must land before the
+        /// convergence gate leaves this at zero.
+        resolve_calls: Rc<RefCell<usize>>,
         fail_after: Option<(usize, ScopeRootPublishError)>,
         /// Interior nodes **inside** the granted folder: id → published epoch.
         interior: Rc<RefCell<Vec<InteriorNodeState>>>,
@@ -663,6 +680,7 @@ mod tests {
                 published: Rc::new(RefCell::new(Vec::new())),
                 publish_result,
                 publish_calls: Rc::new(RefCell::new(0)),
+                resolve_calls: Rc::new(RefCell::new(0)),
                 fail_after: None,
                 interior: Rc::new(RefCell::new(Vec::new())),
                 outside: Rc::new(RefCell::new(Vec::new())),
@@ -711,6 +729,14 @@ mod tests {
             self.unreadable = Some(node_id);
             self
         }
+
+        fn count_resolve(&self) {
+            *self.resolve_calls.borrow_mut() += 1;
+        }
+
+        fn resolve_calls(&self) -> usize {
+            *self.resolve_calls.borrow()
+        }
     }
 
     impl SweepResolver for FakeNet {
@@ -718,6 +744,7 @@ mod tests {
             &self,
             scope: &ChildScopeRef,
         ) -> Result<SweptScope, SweepResolveFailure> {
+            self.count_resolve();
             if scope.scope_id != PARENT_SCOPE {
                 return Err(SweepResolveFailure::Rejected);
             }
@@ -740,6 +767,7 @@ mod tests {
             &self,
             _scope_id: &[u8; 16],
         ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
+            self.count_resolve();
             Ok(None)
         }
 
@@ -748,6 +776,7 @@ mod tests {
             _scope: &ChildScopeRef,
             child: &NodeRef,
         ) -> Result<SweptChild, SweepResolveFailure> {
+            self.count_resolve();
             if self.unresolvable == Some(child.node_id) {
                 return Err(SweepResolveFailure::Unavailable);
             }
@@ -831,6 +860,7 @@ mod tests {
 
     impl CascadeResealResolver for FakeNet {
         async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
+            self.count_resolve();
             if scope.scope_id != DESCENDANT_SCOPE {
                 return Err(ResolveFailure::Rejected);
             }
@@ -1031,6 +1061,20 @@ mod tests {
         Vec<ResealedScopeRoot>,
         InMemoryMailboxHub,
     ) {
+        run_for(entropy_seed, subtree, net, parent_grants, &recipient_enc())
+    }
+
+    fn run_for(
+        entropy_seed: u64,
+        subtree: &[ChildScopeRef],
+        net: FakeNet,
+        parent_grants: &[GrantRow],
+        recipient_enc: &X25519Secret,
+    ) -> (
+        Result<CreateGrantOutcome, CreateGrantError>,
+        Vec<ResealedScopeRoot>,
+        InMemoryMailboxHub,
+    ) {
         let hub = InMemoryMailboxHub::default();
         let mailbox = hub.mailbox_for(&recipient_identity().to_sec1());
 
@@ -1038,7 +1082,6 @@ mod tests {
         let owner_enc_pub = owner_enc.public();
         let owner_identity = owner_identity();
         let owner_pseudonym = owner_pseudonym();
-        let recipient_enc = recipient_enc();
         let recipient_pub = recipient_enc.public();
 
         let parent_node_seed = [0x44; SECRET_LEN];
@@ -1517,6 +1560,26 @@ mod tests {
             PARENT_NAME.to_vec(),
             "never republished under the parent scope-root name"
         );
+    }
+
+    #[test]
+    fn a_self_grant_is_refused_before_any_network_effect() {
+        let net = FakeNet::new(Ok(()));
+        let (outcome, published, hub) = run_for(7, &[], net.clone(), &[], &owner_enc());
+
+        let err = outcome.expect_err("a self-grant is refused");
+        assert_eq!(err, CreateGrantError::RecipientIsTheOwner);
+        assert_eq!(err.check(), "recipient-is-the-owner");
+        // The sweep's first act is a `resolve_scope`, so a zero read count is
+        // what pins the refusal ahead of the convergence gate; `published` alone
+        // cannot, since a sweep over an empty subtree publishes nothing.
+        assert_eq!(net.resolve_calls(), 0, "no read seam is consulted");
+        assert!(published.is_empty(), "nothing reaches the network");
+        // Raw `poll`, not `poll_verified`: an unopenable blob must count as a
+        // post, not be filtered away into a false pass.
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        let items = block_on(recip_box.poll()).unwrap();
+        assert!(items.is_empty(), "no share pointer is posted");
     }
 
     #[test]

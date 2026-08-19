@@ -28,5 +28,25 @@
     "ciphertext": "14a967daaa0abaf4e187b4602b109ae3537e1e6a0892e8",
     "check": "hpke-non-contributory",
     "class": "trust"
+  },
+  {
+    "name": "non-prime-order-enc",
+    "recipientSecret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "enc": "4e35c3f89dc1e8a63e97f5b169cea7ec76992a0281414d412f44942473088930",
+    "info": "696e666f",
+    "aad": "616164",
+    "ciphertext": "14a967daaa0abaf4e187b4602b109ae3537e1e6a0892e8",
+    "check": "hpke-non-contributory",
+    "class": "trust"
+  },
+  {
+    "name": "non-canonical-enc",
+    "recipientSecret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "enc": "675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea5af",
+    "info": "696e666f",
+    "aad": "616164",
+    "ciphertext": "14a967daaa0abaf4e187b4602b109ae3537e1e6a0892e8",
+    "check": "hpke-non-contributory",
+    "class": "trust"
   }
 ]

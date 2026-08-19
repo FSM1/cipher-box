@@ -9,6 +9,7 @@
 
 use core::fmt;
 
+use curve25519_dalek::montgomery::MontgomeryPoint;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::secret::{SECRET_LEN, SecretBytes};
@@ -57,14 +58,14 @@ impl fmt::Debug for X25519Secret {
 }
 
 impl X25519Public {
-    /// Adopt a 32-byte public key, **rejecting** the RFC 7748 small-order
-    /// u-coordinates. Holding an `X25519Public` therefore means "not low-order",
-    /// so [`super::hpke::dhkem_encap`] (seal) needs no separate check. This
-    /// rejects the canonical chosen-key encodings up front, before contact
-    /// import or decap; the exhaustive gate is the contributory check in
-    /// [`Self::diffie_hellman`].
+    /// Adopt a 32-byte public key, rejecting anything that is not the canonical
+    /// encoding of a prime-order point — see [`is_adoptable`] for why both
+    /// halves are load-bearing. Holding an `X25519Public` therefore carries that
+    /// invariant, so [`super::hpke::dhkem_encap`] (seal) needs no separate check
+    /// and the contributory backstop in [`Self::diffie_hellman`] can never fire
+    /// for a peer adopted here.
     pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Option<Self> {
-        if is_small_order(&bytes) {
+        if !is_adoptable(&bytes) {
             return None;
         }
         Some(Self(PublicKey::from(bytes)))
@@ -76,50 +77,60 @@ impl X25519Public {
     }
 }
 
-/// One p-form small-order u-coordinate: `first || 0xff×30 || 0x7f` (the p-1/p/p+1
-/// encodings, high bit already clear).
-const fn p_form(first: u8) -> [u8; 32] {
-    let mut a = [0xff; 32];
-    a[0] = first;
-    a[31] = 0x7f;
-    a
+/// Whether `bytes` is the canonical encoding of a Curve25519 point of prime
+/// order `l`. Both halves close the same attack: ECDH decides on the point,
+/// HPKE binds the supplied bytes into `kem_context`, so anything that lets two
+/// encodings share a point lets a sealed blob be addressed to a key whose real
+/// holder can never open it.
+///
+/// - **Prime order.** The u-coordinate is lifted to Edwards — which rejects the
+///   twist, where the birational map has no preimage — and the lift tested for a
+///   torsion component. A small-order blacklist would not do: clamping makes the
+///   scalar a multiple of 8, so every cofactor twin `P + t` (`t` in `E[8]`)
+///   yields `P`'s shared secret, and the cheapest twin `1/u` is computable from
+///   public data.
+/// - **Canonical.** X25519 ignores bit 255 and reduces mod `p`, so several
+///   distinct byte strings reach one point while `to_bytes` re-emits whichever
+///   arrived. Re-encoding the lift and demanding the input back refuses them
+///   all in one step.
+///
+/// The Edwards sign bit passed to the lift is arbitrary: `P` and `-P` share an
+/// order, and `to_montgomery` discards the sign again.
+fn is_adoptable(bytes: &[u8; SECRET_LEN]) -> bool {
+    MontgomeryPoint(*bytes)
+        .to_edwards(0)
+        .is_some_and(|p| p.is_torsion_free() && p.to_montgomery().to_bytes() == *bytes)
 }
 
-/// The RFC 7748 small-order u-coordinate encodings (the identity and every
-/// order-2/4/8 point), in canonical + mod-p wraparound form, with the ignored
-/// high bit cleared (libsodium's blacklist). A peer of order dividing 8 forces an
-/// all-zero ECDH result; these are the encodings a chosen-key attacker uses.
-const SMALL_ORDER_POINTS: [[u8; 32]; 7] = [
-    [0u8; 32],
-    {
-        let mut a = [0u8; 32];
-        a[0] = 1;
-        a
-    },
-    [
-        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
-        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
-        0xb8, 0x00,
-    ],
-    [
-        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
-        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
-        0x11, 0x57,
-    ],
-    p_form(0xec),
-    p_form(0xed),
-    p_form(0xee),
-];
-
-/// Whether `bytes` encodes an X25519 point of order dividing 8. X25519 ignores
-/// bit 255 of the u-coordinate, so it is masked before the table compare.
-fn is_small_order(bytes: &[u8; SECRET_LEN]) -> bool {
-    let mut masked = *bytes;
-    masked[31] &= 0x7f;
-    SMALL_ORDER_POINTS.contains(&masked)
+/// Every cofactor twin `P + t` of `public`, for the seven non-identity `t` in
+/// `E[8]`, in ascending byte order: distinct encodings of one cofactor class,
+/// which each clamped X25519 exchange collapses back onto `P`. The fixture the
+/// prime-order half of [`is_adoptable`] exists to refuse.
+///
+/// `#[doc(hidden)]`: `pub` only for the cross-crate tests and the `kat_gen`
+/// example, not supported API.
+#[doc(hidden)]
+pub fn cofactor_twins(public: &X25519Public) -> [[u8; SECRET_LEN]; 7] {
+    let lifted = MontgomeryPoint(public.to_bytes())
+        .to_edwards(0)
+        .expect("an adopted public key lifts to Edwards");
+    let mut twins = [[0u8; SECRET_LEN]; 7];
+    let mut found = 0;
+    for torsion in curve25519_dalek::constants::EIGHT_TORSION.iter() {
+        let twin = (lifted + torsion).to_montgomery().to_bytes();
+        if twin != public.to_bytes() {
+            twins[found] = twin;
+            found += 1;
+        }
+    }
+    assert_eq!(found, 7, "E[8] has seven non-identity points");
+    // Sorted, so a caller picking one twin picks it lexicographically rather
+    // than by `EIGHT_TORSION`'s array order — the KAT vectors bake these bytes in.
+    twins.sort_unstable();
+    twins
 }
 
-/// Construct a public key **without** the low-order guard, so a test can drive
+/// Construct a public key **without** the adoption guard, so a test can drive
 /// the ECDH contributory backstop against a point `from_bytes` refuses.
 #[cfg(test)]
 pub(crate) fn testonly_public_from_bytes(bytes: [u8; SECRET_LEN]) -> X25519Public {
@@ -194,6 +205,88 @@ mod tests {
             *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("hex");
         }
         a
+    }
+
+    #[test]
+    fn cofactor_twins_are_rejected_yet_share_the_shared_secret() {
+        // Each twin is on-curve, not low-order, and drives the identical X25519
+        // output — so neither the RFC 7748 blacklist nor the contributory
+        // backstop can see it, while HPKE binds the key bytes and would seal to
+        // something `honest`'s holder can never open.
+        let honest = X25519Secret::from_scalar([0x5a; 32]).public();
+        let peer = X25519Secret::from_scalar([0x6b; 32]);
+        let honest_dh = peer.diffie_hellman(&honest).expect("contributory");
+
+        for twin in cofactor_twins(&honest) {
+            assert_eq!(X25519Public::from_bytes(twin), None, "twin must be refused");
+            let dh = peer
+                .diffie_hellman(&testonly_public_from_bytes(twin))
+                .expect("a twin is not low-order");
+            assert_eq!(dh.as_bytes(), honest_dh.as_bytes());
+        }
+    }
+
+    #[test]
+    fn no_second_encoding_of_an_accepted_key_is_ever_accepted() {
+        // The canonical half of the gate. X25519 ignores bit 255 and reduces mod
+        // p, so a point has more than one spelling; each one re-derives the
+        // honest key's blinded tag while `to_bytes` re-emits whichever arrived,
+        // which is what `kem_context` then binds.
+        let honest = X25519Secret::from_scalar([0x5a; 32]).public();
+        let mut high_bit = honest.to_bytes();
+        high_bit[31] |= 0x80;
+
+        for enc in cofactor_twins(&honest).into_iter().chain([high_bit]) {
+            assert_ne!(enc, honest.to_bytes(), "a second encoding, not the key");
+            assert_eq!(X25519Public::from_bytes(enc), None);
+        }
+    }
+
+    #[test]
+    fn a_mod_p_wraparound_encoding_is_rejected() {
+        // The other canonical case, which needs `u < 19` to have a second
+        // encoding below 2^255 at all: the basepoint `u = 9` is prime-order, and
+        // `9 + p == 2^255 - 10` is its only other sub-2^255 spelling.
+        let mut basepoint = [0u8; SECRET_LEN];
+        basepoint[0] = 9;
+        let mut wrapped = [0xffu8; SECRET_LEN];
+        wrapped[0] = 0xf6;
+        wrapped[31] = 0x7f;
+
+        assert!(
+            X25519Public::from_bytes(basepoint).is_some(),
+            "the basepoint"
+        );
+        assert_eq!(
+            X25519Public::from_bytes(wrapped),
+            None,
+            "u + p is not canonical"
+        );
+
+        // Invisible to the contributory backstop: both reach the same secret.
+        let probe = X25519Secret::from_scalar([0x77; 32]);
+        let via_wrapped = probe
+            .diffie_hellman(&testonly_public_from_bytes(wrapped))
+            .expect("contributory");
+        let via_canonical = probe
+            .diffie_hellman(&testonly_public_from_bytes(basepoint))
+            .expect("contributory");
+        assert_eq!(via_wrapped.as_bytes(), via_canonical.as_bytes());
+    }
+
+    #[test]
+    fn every_derived_public_key_survives_its_own_decoder() {
+        // Produce/decode symmetry: `X25519Secret::public()` is the one
+        // constructor that skips `from_bytes`, so what it emits must always be
+        // re-adoptable. Clamping is what guarantees it for any injected scalar.
+        for seed in [0x00u8, 0x5a, 0xff] {
+            let derived = X25519Secret::from_scalar([seed; 32]).public();
+            assert_eq!(
+                X25519Public::from_bytes(derived.to_bytes()),
+                Some(derived),
+                "a derived public key must survive its own decoder"
+            );
+        }
     }
 
     #[test]

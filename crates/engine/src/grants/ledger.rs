@@ -60,9 +60,12 @@ pub fn recipient_blinded_tag(
 /// `scope_root_ipns_name` — the check only a holder of the owner encryption
 /// subkey can run, since the tag is the owner–recipient pairwise ECDH.
 ///
-/// `false` on a malformed or low-order recipient key: a tag it can never derive
-/// is a tag it is not bound to. Every input is public and the verdict is a
-/// public tag comparison, so no constant-time guarantee is needed.
+/// `false` on a recipient key core refuses to adopt: a tag it can never derive
+/// is a tag it is not bound to. That refusal covers the whole cofactor class of
+/// an honest key, not just the low-order points — a twin re-derives the honest
+/// key's tag, so the shared secret alone cannot tell the two apart. Every input
+/// is public and the verdict is a public tag comparison, so no constant-time
+/// guarantee is needed.
 pub fn entry_tag_is_bound(
     owner_enc_secret: &X25519Secret,
     entry: &GrantLedgerEntry,
@@ -253,6 +256,44 @@ mod tests {
             recipient_blinded_tag(&recipient_enc, &owner_enc.public(), name).unwrap();
         let owner_side = recipient_blinded_tag(&owner_enc, &recipient_enc.public(), name).unwrap();
         assert_eq!(recipient_side, owner_side);
+    }
+
+    #[test]
+    fn a_recipient_key_core_will_not_adopt_is_not_bound_to_the_tag() {
+        // Both encodings a write-grantee can swap in re-derive the victim's own
+        // tag — a cofactor twin and a non-canonical spelling of the key itself —
+        // so only core's adoption gate ([`X25519Public::from_bytes`]) stops the
+        // owner re-minting a blob the victim can never open.
+        let owner_enc = X25519Secret::from_scalar([0x33; 32]);
+        let victim = X25519Secret::from_scalar([0x44; 32]).public();
+        let name = b"scope-root-name";
+
+        let row = mint_grant_row(
+            &owner_enc,
+            [0x02; IDENTITY_PUBLIC_LEN],
+            &victim,
+            &[0x07; 16],
+            name,
+            Permission::Read,
+        )
+        .expect("a contributory recipient key");
+        assert!(entry_tag_is_bound(&owner_enc, &row.ledger_entry, name));
+
+        let mut high_bit = victim.to_bytes();
+        high_bit[31] |= 0x80;
+        let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
+            .into_iter()
+            .chain([high_bit]);
+
+        for enc_pk in unadoptable {
+            let mut swapped = row.ledger_entry.clone();
+            swapped.recipient_enc_pk = enc_pk;
+            assert_eq!(swapped.tag, row.ledger_entry.tag, "owner-committed tag");
+            assert!(
+                !entry_tag_is_bound(&owner_enc, &swapped, name),
+                "a key core will not adopt binds no tag"
+            );
+        }
     }
 
     #[test]
