@@ -185,18 +185,23 @@ jobs:
 
       - name: Install Playwright Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
+          # The marker records the install's own status, so a stall is told
+          # apart from the command exiting 124 on its own. `--kill-after`
+          # matters most: without it `timeout` waits forever on a child that
+          # ignores SIGTERM, which is the stall this step exists to bound.
+          marker="$RUNNER_TEMP/playwright-browser-status"
           for attempt in 1 2 3; do
-            install_status=0
-            timeout 150 pnpm --filter @cipherbox/web-e2e exec playwright install chromium || install_status=$?
-            if [ "$install_status" -eq 0 ]; then
-              exit 0
-            fi
-            # Only a stall is worth retrying. 124 is `timeout`'s own code; any
-            # other status is the install failing, and repeating it three times
-            # would bury the cause this step exists to surface.
-            if [ "$install_status" -ne 124 ]; then
+            rm -f "$marker"
+            # shellcheck disable=SC2016  # the inner shell expands $? and $1, not this one
+            timeout --kill-after=30 150 bash -c \
+              'pnpm --filter @cipherbox/web-e2e exec playwright install chromium; echo "$?" > "$1"' _ "$marker" || true
+            if [ -f "$marker" ]; then
+              install_status=$(cat "$marker")
+              if [ "$install_status" -eq 0 ]; then
+                exit 0
+              fi
               echo "::error::playwright install chromium failed with status $install_status"
               exit "$install_status"
             fi
@@ -206,18 +211,23 @@ jobs:
           exit 1
 
       - name: Install the Playwright system dependencies
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
+          # The marker records the install's own status, so a stall is told
+          # apart from the command exiting 124 on its own. `--kill-after`
+          # matters most: without it `timeout` waits forever on a child that
+          # ignores SIGTERM, which is the stall this step exists to bound.
+          marker="$RUNNER_TEMP/playwright-deps-status"
           for attempt in 1 2 3; do
-            install_status=0
-            timeout 150 pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium || install_status=$?
-            if [ "$install_status" -eq 0 ]; then
-              exit 0
-            fi
-            # Only a stall is worth retrying. 124 is `timeout`'s own code; any
-            # other status is the install failing, and repeating it three times
-            # would bury the cause this step exists to surface.
-            if [ "$install_status" -ne 124 ]; then
+            rm -f "$marker"
+            # shellcheck disable=SC2016  # the inner shell expands $? and $1, not this one
+            timeout --kill-after=30 150 bash -c \
+              'pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium; echo "$?" > "$1"' _ "$marker" || true
+            if [ -f "$marker" ]; then
+              install_status=$(cat "$marker")
+              if [ "$install_status" -eq 0 ]; then
+                exit 0
+              fi
               echo "::error::playwright install-deps failed with status $install_status"
               exit "$install_status"
             fi
