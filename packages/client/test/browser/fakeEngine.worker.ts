@@ -11,7 +11,11 @@
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import { StubEngineHost } from '../../src/testkit.js';
-import type { CommandDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
+import type {
+  CommandDescriptor,
+  CommandOutcomeDescriptor,
+  EventDescriptor,
+} from '../../src/worker/protocol.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,15 +29,16 @@ class FakeHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  async command(descriptor: CommandDescriptor): Promise<void> {
+  async command(descriptor: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     this.commandCount += 1;
     if (descriptor.kind === 'manualRefresh') {
       for (let opId = 1n; opId <= 10n; opId += 1n)
         this.pushEvent({ kind: 'deadLetter', opId, reason: 'undecodable' });
-      return;
+      return { kind: 'done' };
     }
     // First call is slow, later calls fast → responses arrive out of order.
     await sleep(this.commandCount === 1 ? 40 : 5);
+    return { kind: 'done' };
   }
 
   abortWrite(): Promise<void> {

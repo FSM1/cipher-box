@@ -14,6 +14,7 @@ export const CLIENT_PACKAGE = '@cipherbox/client';
 // and imports its collaborators by relative path, so nothing outside this
 // package consumes the worker-realm internals through the barrel.
 export { EngineFacade } from './facade.js';
+export type { ImportedContact } from './facade.js';
 export { EngineRequestError, overBudgetRemedy } from './correlatedTransport.js';
 export type { OverBudgetRemedy } from './correlatedTransport.js';
 export { LocalTransport } from './transport.js';
@@ -22,7 +23,12 @@ export type { EngineTransport, EngineWorkerLike, EngineEventListener } from './t
 // Tab leadership, the broadcast transport, and the transport-swapping client:
 // one facade per tab, leader or follower, over the origin's single engine.
 export { EngineClient } from './engineClient.js';
-export type { EngineClientConfig, EngineClientRole, SecretSource } from './engineClient.js';
+export type {
+  EngineClientConfig,
+  EngineClientRole,
+  LoginSecret,
+  SecretSource,
+} from './engineClient.js';
 export { spawnEngineWorker } from './spawnEngineWorker.js';
 export type { EngineHostConfig } from './spawnEngineWorker.js';
 export { LeaderElection } from './leadership.js';
@@ -48,6 +54,7 @@ export { fromHex, toHex } from './seams/bytes.js';
 // The wire descriptors the UI exchanges with the engine over the transport.
 export type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   Permission,
   NodeKind,

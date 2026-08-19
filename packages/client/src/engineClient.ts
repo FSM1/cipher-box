@@ -29,6 +29,7 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import { LocalTransport } from './transport.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -42,7 +43,17 @@ import type {
  * returned buffer is transferred into the worker and zeroed — never retained.
  */
 export interface SecretSource {
-  provideSecret(): Promise<ArrayBuffer>;
+  provideSecret(): Promise<LoginSecret>;
+}
+
+/**
+ * The two travel together because a failover cold start must not open one
+ * account's durable stores under another account's secret.
+ */
+export interface LoginSecret {
+  secret: ArrayBuffer;
+  /** Names the account whose durable stores the engine opens (`makeBrowserSeams`). */
+  accountId: string;
 }
 
 export interface EngineClientConfig {
@@ -160,7 +171,7 @@ export class EngineClient implements EngineTransport {
 
   // --- EngineTransport ---
 
-  start(secret: ArrayBuffer): Promise<void> {
+  start(secret: ArrayBuffer, accountId: string): Promise<void> {
     // This seam is the secret's terminal owner (security rule 7). On the leader
     // path the worker becomes the terminal owner — `LocalTransport.start`
     // transfers the buffer in (neutered), never copied. On the follower path the
@@ -169,12 +180,12 @@ export class EngineClient implements EngineTransport {
     // callee that would be zeroing someone else's.
     if (this.role !== 'leader') new Uint8Array(secret).fill(0);
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
-    return this.current.start(secret).then(() => {
+    return this.current.start(secret, accountId).then(() => {
       this.started = true;
     });
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
     return this.current.command(command, transfer);
   }
 
@@ -344,9 +355,9 @@ export class EngineClient implements EngineTransport {
       local = new LocalTransport(worker);
 
       if (wasActiveFollower) {
-        const secret = await this.provideFailoverSecret();
+        const { secret, accountId } = await this.provideFailoverSecret();
         try {
-          await local.start(secret);
+          await local.start(secret, accountId);
         } finally {
           // This frame owns the re-derived buffer until a transfer detaches it
           // (`SecretSource`); a start that failed before the post did not.
@@ -371,7 +382,7 @@ export class EngineClient implements EngineTransport {
     }
   }
 
-  private async provideFailoverSecret(): Promise<ArrayBuffer> {
+  private async provideFailoverSecret(): Promise<LoginSecret> {
     const source = this.config.secretSource;
     if (!source) throw new Error('failover leader has no SecretSource; engine cannot start');
     return source.provideSecret();

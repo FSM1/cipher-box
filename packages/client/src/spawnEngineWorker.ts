@@ -28,8 +28,6 @@ export interface EngineHostConfig {
   wasmBinaryUrl: string;
   /** Sync timing profile. */
   profile?: 'ci' | 'production';
-  /** Namespaces the IndexedDB/OPFS store names. */
-  dbPrefix?: string;
 }
 
 const spawnModuleWorker = () =>

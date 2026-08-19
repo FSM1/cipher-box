@@ -20,10 +20,12 @@ export {
   type IdentityMethod,
 } from './identity';
 export {
+  accountIdFromTssPoint,
   exportLoginSecret,
   handOffLoginSecret,
   type LoginFacade,
   type LoginSecretExporter,
+  type TssPublicPoint,
 } from './secret';
 export {
   RecoveryRequiredError,

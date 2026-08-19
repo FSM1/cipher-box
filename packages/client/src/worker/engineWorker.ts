@@ -49,8 +49,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const headroom = measureStorageHeadroomBytes();
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
-    const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, {
+    const host = new EngineHost(wasm, (accountId) => makeBrowserSeams(config, accountId), {
       apiBaseUrl: config.apiBaseUrl,
       acceleratorBaseUrl: config.acceleratorBaseUrl,
       publicGateways: config.publicGateways,

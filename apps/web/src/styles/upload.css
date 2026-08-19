@@ -168,6 +168,26 @@
   color: var(--color-warning);
 }
 
+/* A hold is a wait, not a verdict, so it reads apart from the error surface. */
+.upload-row-hold {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.upload-row--held .file-list-item-icon {
+  color: var(--color-warning);
+}
+
+.upload-panel-retained {
+  margin: 0 0 var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .upload-row-fill,
   .upload-row-track--indeterminate {

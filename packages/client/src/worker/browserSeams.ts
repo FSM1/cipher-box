@@ -24,6 +24,13 @@ export interface BrowserSeamsConfig {
   dbPrefix?: string;
 }
 
+/**
+ * Store names are built from the account id, so it is bounded and path-free.
+ * The bound clears a secp256k1 point written as two 64-character hex
+ * coordinates and a separator.
+ */
+const ACCOUNT_ID = /^[0-9a-z][0-9a-z-]{0,159}$/;
+
 /** The seam bag the WASM `EngineHandle` constructor reads. */
 export interface BrowserSeams {
   floorStore: IdbFloorStore;
@@ -36,8 +43,15 @@ export interface BrowserSeams {
   credentialStore: NoopCredentialStore;
 }
 
-export function makeBrowserSeams(config: BrowserSeamsConfig): BrowserSeams {
-  const prefix = config.dbPrefix ?? 'cipherbox';
+/**
+ * `accountId` namespaces every durable store, so two accounts signed in on one
+ * browser profile cannot share an epoch floor keyed by the constant root scope
+ * id — which would refuse the lower-epoch account's cold start as a rollback,
+ * with no way back (blueprint/engine.md "Floor law").
+ */
+export function makeBrowserSeams(config: BrowserSeamsConfig, accountId: string): BrowserSeams {
+  if (!ACCOUNT_ID.test(accountId)) throw new Error('account id is not a store namespace');
+  const prefix = `${config.dbPrefix ?? 'cipherbox'}-${accountId}`;
   const http = new FetchHttp();
   return {
     floorStore: new IdbFloorStore(`${prefix}-floors`),

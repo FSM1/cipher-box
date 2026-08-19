@@ -6,13 +6,14 @@
 
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
-import type { EngineWasm } from './engineWasm.js';
+import type { EngineWasm, WasmCommandOutcome, WasmEngineHandle } from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
@@ -32,8 +33,10 @@ import {
  * exercise transport ordering and out-of-order correlation deterministically.
  */
 export interface EngineHostLike {
-  start(secret: ArrayBuffer): Promise<void>;
-  command(command: CommandDescriptor): Promise<void>;
+  /** Cold-starts the engine for `accountId`, whose durable state it opens. */
+  start(secret: ArrayBuffer, accountId: string): Promise<void>;
+  /** Runs one command; resolves with what it produced. */
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor>;
   /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   /** Takes ownership of `chunk`: the host is its terminal owner, so it scrubs the
@@ -62,6 +65,35 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
     : (bytes.slice().buffer as ArrayBuffer);
 }
 
+/** A getter the outcome's own `kind` promises, refused when it answers nothing. */
+function present<T>(value: T | undefined, kind: string, field: string): T {
+  if (value === undefined) throw new Error(`command outcome ${kind} carries no ${field}`);
+  return value;
+}
+
+/** Reads a wasm-bindgen `CommandOutcome`'s getters into a descriptor. */
+function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
+  const kind = outcome.kind;
+  switch (kind) {
+    case 'done':
+      return { kind: 'done' };
+    case 'queued':
+      return { kind: 'queued', opId: present(outcome.opId, kind, 'opId') };
+    case 'contactImported':
+      return {
+        kind: 'contactImported',
+        identityPublicKey: present(outcome.identityPublicKey, kind, 'identityPublicKey'),
+        encPublicKey: present(outcome.encPublicKey, kind, 'encPublicKey'),
+      };
+  }
+  throw new Error(`unknown command outcome ${kind}`);
+}
+
+/** A refusal carrying one of the engine's own stable codes, as the engine does. */
+function refuse(code: 'notStarted' | 'alreadyStarted', message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
 /** What the engine instance itself is configured with, beyond its seams. */
 export type EngineHostOptions = Pick<
   EngineHostConfig,
@@ -72,21 +104,49 @@ export type EngineHostOptions = Pick<
 };
 
 export class EngineHost implements EngineHostLike {
-  private readonly handle;
+  private engine: { handle: WasmEngineHandle; accountId: string } | null = null;
+  private live!: (handle: WasmEngineHandle) => void;
+  /** Resolves with the engine once one exists, so the event pump can wait. */
+  private readonly running = new Promise<WasmEngineHandle>((resolve) => {
+    this.live = resolve;
+  });
 
   constructor(
     private readonly wasm: EngineWasm,
-    seams: unknown,
-    options: EngineHostOptions
-  ) {
-    this.handle = new wasm.EngineHandle(
-      seams,
-      options.profile,
-      options.apiBaseUrl,
-      options.acceleratorBaseUrl,
-      options.publicGateways,
-      options.storageHeadroomBytes
+    private readonly seams: (accountId: string) => unknown,
+    private readonly options: EngineHostOptions
+  ) {}
+
+  /**
+   * The engine for `accountId`, built by the first `start`. Construction waits
+   * for that call because the seams are namespaced per account, and no account
+   * is known until the login secret arrives.
+   */
+  private engineFor(accountId: string): WasmEngineHandle {
+    const id = text(accountId, 'accountId');
+    const current = this.engine;
+    if (current) {
+      if (current.accountId !== id)
+        throw refuse('alreadyStarted', 'another account holds this engine');
+      return current.handle;
+    }
+    const handle = new this.wasm.EngineHandle(
+      this.seams(id),
+      this.options.profile,
+      this.options.apiBaseUrl,
+      this.options.acceleratorBaseUrl,
+      this.options.publicGateways,
+      this.options.storageHeadroomBytes
     );
+    this.engine = { handle, accountId: id };
+    this.live(handle);
+    return handle;
+  }
+
+  /** The running engine; refused before `start`, as the engine itself refuses. */
+  private get handle(): WasmEngineHandle {
+    if (!this.engine) throw refuse('notStarted', 'engine not started');
+    return this.engine.handle;
   }
 
   /**
@@ -106,12 +166,21 @@ export class EngineHost implements EngineHostLike {
     }
   }
 
-  async start(secret: ArrayBuffer): Promise<void> {
-    return this.scrubbing(buffer(secret, 'secret'), (view) => this.handle.start(view));
+  async start(secret: ArrayBuffer, accountId: string): Promise<void> {
+    // Inside `scrubbing`: a refused account still leaves this frame the
+    // secret's terminal owner (security rule 7).
+    return this.scrubbing(buffer(secret, 'secret'), (view) =>
+      this.engineFor(accountId).start(view)
+    );
   }
 
-  async command(command: CommandDescriptor): Promise<void> {
-    await this.handle.command(buildCommand(this.wasm, command));
+  async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    const outcome = await this.handle.command(buildCommand(this.wasm, command));
+    try {
+      return readOutcome(outcome);
+    } finally {
+      outcome.free();
+    }
   }
 
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
@@ -180,7 +249,8 @@ export class EngineHost implements EngineHostLike {
   }
 
   async nextEvent(): Promise<EventDescriptor | null> {
-    const event = await this.handle.nextEvent();
+    const handle = await this.running;
+    const event = await handle.nextEvent();
     return event ? readEvent(this.wasm, event) : null;
   }
 }

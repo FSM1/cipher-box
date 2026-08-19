@@ -61,6 +61,9 @@ export function fakeExchange() {
   return { exchange, calls };
 }
 
+/** The account the fake session names; the shape a real host's id has. */
+export const FAKE_ACCOUNT_ID = 'a1b2c3-d4e5f6';
+
 /** The one phrase the fake accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
 
@@ -102,16 +105,18 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
       calls.exports += 1;
       return Promise.resolve(SECRET_HEX);
     },
+    accountId: () => FAKE_ACCOUNT_ID,
   };
   return { session, calls };
 }
 
 export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
-  const calls = { secrets: [] as Uint8Array[], logouts: 0 };
+  const calls = { secrets: [] as Uint8Array[], accounts: [] as string[], logouts: 0 };
   const facade: LoginFacade = {
-    start(secret) {
+    start(secret, accountId) {
       calls.secrets.push(new Uint8Array(secret).slice());
-      return overrides.start?.(secret) ?? Promise.resolve();
+      calls.accounts.push(accountId);
+      return overrides.start?.(secret, accountId) ?? Promise.resolve();
     },
     logout() {
       calls.logouts += 1;

@@ -40,7 +40,7 @@ export function useVaultActions(): VaultActions {
   const [error, setError] = useState<string | null>(null);
 
   const run = useCallback(
-    async (command: VaultCommand, dispatch: () => Promise<void>): Promise<boolean> => {
+    async (command: VaultCommand, dispatch: () => Promise<unknown>): Promise<boolean> => {
       setBusy(command);
       setError(null);
       try {
@@ -57,7 +57,7 @@ export function useVaultActions(): VaultActions {
   );
 
   const dispatchOrFail = useCallback(
-    (command: VaultCommand, dispatch: (facade: EngineFacade) => Promise<void>) => {
+    (command: VaultCommand, dispatch: (facade: EngineFacade) => Promise<unknown>) => {
       if (client === null) {
         setError('the engine is not ready yet');
         return Promise.resolve(false);
@@ -76,7 +76,7 @@ export function useVaultActions(): VaultActions {
     async (
       command: VaultCommand,
       nodes: readonly Uint8Array[],
-      dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<void>
+      dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<unknown>
     ): Promise<BatchOutcome> => {
       const accepted: Uint8Array[] = [];
       const ok = await dispatchOrFail(command, async (facade) => {

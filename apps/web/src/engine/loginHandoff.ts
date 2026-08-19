@@ -7,7 +7,7 @@
  */
 
 import { exportLoginSecret, type LoginSecretExporter } from '@cipherbox/login';
-import type { SecretSource } from '@cipherbox/client';
+import type { LoginSecret, SecretSource } from '@cipherbox/client';
 
 /** The `SecretSource` a failover promotion re-exports through. */
 export class LoginSecretSource implements SecretSource {
@@ -18,10 +18,10 @@ export class LoginSecretSource implements SecretSource {
     this.exporter = exporter;
   }
 
-  provideSecret(): Promise<ArrayBuffer> {
+  async provideSecret(): Promise<LoginSecret> {
     const exporter = this.exporter;
-    if (!exporter)
-      return Promise.reject(new Error('no login session to re-export the secret from'));
-    return exportLoginSecret(exporter);
+    if (!exporter) throw new Error('no login session to re-export the secret from');
+    const accountId = exporter.accountId();
+    return { secret: await exportLoginSecret(exporter), accountId };
   }
 }

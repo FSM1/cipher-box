@@ -167,6 +167,19 @@ export type CommandDescriptor =
   | { kind: 'logout' };
 
 /**
+ * What one command produced, as data (mirrors the facade `CommandOutcome`).
+ *
+ * `queued` carries the durable queue id a later `opProgress`/`deadLetter`
+ * repeats, so a host correlates the call to the events it makes. Holding an
+ * imported contact's keys is the proof its binding signature verified — the
+ * engine has no other way to hand that evidence out.
+ */
+export type CommandOutcomeDescriptor =
+  | { kind: 'done' }
+  | { kind: 'queued'; opId: bigint }
+  | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array };
+
+/**
  * Where a streaming write lands: a new file named `name` under `parent`, or a
  * new version of the existing file `node`. Never both (the engine rejects it).
  */
@@ -207,7 +220,7 @@ export type EventDescriptor =
 
 /** A UI → worker request. `id` correlates the eventual response. */
 export type WorkerRequest =
-  | { type: 'start'; id: number; secret: ArrayBuffer }
+  | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string }
   | { type: 'command'; id: number; command: CommandDescriptor }
   | { type: 'beginWrite'; id: number; target: WriteTarget; size: number }
   | { type: 'pushChunk'; id: number; handle: WriteHandle; chunk: ArrayBuffer }
@@ -229,13 +242,14 @@ export type WorkerMessage =
    * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
-   * for `openContentStream`, the durable op id for `commitWrite`.
+   * for `openContentStream`, the durable op id for `commitWrite`, the outcome
+   * for `command`.
    */
   | {
       type: 'response';
       id: number;
       ok: true;
-      result?: SnapshotDescriptor | ArrayBuffer | bigint | string;
+      result?: SnapshotDescriptor | CommandOutcomeDescriptor | ArrayBuffer | bigint | string;
     }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the

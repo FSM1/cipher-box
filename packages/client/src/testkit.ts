@@ -7,12 +7,14 @@
  */
 
 import type { BroadcastChannelLike } from './broadcast.js';
+import type { LoginSecret } from './engineClient.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import type { EngineHostLike } from './worker/engineHost.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -59,6 +61,14 @@ export const fakeWasmEnums = {
 /** A nonce inside the EIP-4361 class the engine enforces. */
 export const FAKE_SIWE_NONCE = 'nonce123456789ab';
 
+/** The account a test engine namespaces its durable stores under. */
+export const TEST_ACCOUNT_ID = 'acct01';
+
+/** What a `SecretSource` double re-derives for a failover promotion. */
+export function fakeLoginSecret(bytes: number[] = [1]): LoginSecret {
+  return { secret: Uint8Array.from(bytes).buffer, accountId: TEST_ACCOUNT_ID };
+}
+
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
 export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {
   return {
@@ -83,11 +93,11 @@ const notStubbed = (method: string): Promise<never> =>
  * in each double.
  */
 export class StubEngineHost implements EngineHostLike {
-  start(_secret: ArrayBuffer): Promise<void> {
+  start(_secret: ArrayBuffer, _accountId: string): Promise<void> {
     return notStubbed('start');
   }
 
-  command(_command: CommandDescriptor): Promise<void> {
+  command(_command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     return notStubbed('command');
   }
 
@@ -432,7 +442,8 @@ export class FakeEngineTransport implements EngineTransport {
   /** What `openContentStream` hands back. */
   streamHandle: StreamHandle = 1n;
   commitOpId = 42n;
-  respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
+  respond: (command: CommandDescriptor) => Promise<CommandOutcomeDescriptor> = () =>
+    Promise.resolve({ kind: 'done' });
   respondSnapshot: (folder: Uint8Array | null) => Promise<SnapshotDescriptor> = (folder) =>
     Promise.resolve(emptySnapshot(folder ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
@@ -451,7 +462,7 @@ export class FakeEngineTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  command(command: CommandDescriptor): Promise<void> {
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     this.commands.push(command);
     return this.respond(command);
   }

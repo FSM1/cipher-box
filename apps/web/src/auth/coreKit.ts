@@ -18,6 +18,7 @@ import {
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import BN from 'bn.js';
 import {
+  accountIdFromTssPoint,
   isIdentityMethod,
   RecoveryRequiredError,
   type CoreKitSession,
@@ -232,12 +233,14 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.coreKit.status === COREKIT_STATUS.REQUIRED_SHARE;
   }
 
-  /** The account's TSS public key; blank when this device cannot read it. */
+  accountId(): string {
+    return accountIdFromTssPoint(this.coreKit.getKeyDetails().tssPubKey);
+  }
+
+  /** The account's key, or blank when this device cannot read it. */
   private accountKey(): string {
     try {
-      const point = this.coreKit.getKeyDetails().tssPubKey;
-      if (!point?.x || !point.y) return '';
-      return `${point.x.toString('hex')}:${point.y.toString('hex')}`;
+      return this.accountId();
     } catch {
       return '';
     }

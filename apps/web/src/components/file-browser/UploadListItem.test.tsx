@@ -17,9 +17,9 @@ function entry(overrides: Partial<UploadEntry> = {}): UploadEntry {
   };
 }
 
-function show(upload: UploadEntry) {
+function show(upload: UploadEntry, heldBytes: bigint | null = null) {
   const handlers = { onCancel: vi.fn(), onRetry: vi.fn(), onDismiss: vi.fn() };
-  render(<UploadListItem upload={upload} {...handlers} />);
+  render(<UploadListItem upload={upload} heldBytes={heldBytes} {...handlers} />);
   return handlers;
 }
 
@@ -129,6 +129,18 @@ describe('an upload row', () => {
 
     expect(screen.queryByTestId('upload-row-remedy')).toBeNull();
     expect(screen.getByLabelText('Retry upload of report.pdf')).toBeTruthy();
+  });
+
+  it('says the drain is holding the row, apart from a plain queue', () => {
+    show(entry({ phase: 'queued', opId: 1n }), 900n);
+
+    expect(screen.getByTestId('upload-row-hold').textContent).toContain('900 B');
+    expect(screen.getByTestId('upload-row-status').textContent).toBe('waiting for room');
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('waiting for room');
+    // A hold is neither the refusal surface nor a verdict on the write.
+    expect(screen.queryByTestId('upload-row-error')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('Cancel upload of report.pdf')).toBeTruthy();
   });
 
   it('marks a stopped attempt as retryable, not settled', () => {

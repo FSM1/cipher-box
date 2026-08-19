@@ -44,6 +44,7 @@ import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -151,10 +152,17 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.leaderReady;
   }
 
-  command(command: CommandDescriptor, _transfer: Transferable[]): Promise<void> {
+  command(
+    command: CommandDescriptor,
+    _transfer: Transferable[]
+  ): Promise<CommandOutcomeDescriptor> {
     // Command arguments name files and contacts, so they take the private port
     // rather than the origin-wide channel.
-    return this.overPort<void>((requestId) => ({ type: 'cb:portCommand', requestId, command }));
+    return this.overPort<CommandOutcomeDescriptor>((requestId) => ({
+      type: 'cb:portCommand',
+      requestId,
+      command,
+    }));
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {

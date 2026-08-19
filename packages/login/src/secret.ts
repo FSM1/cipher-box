@@ -4,9 +4,31 @@
  * transferred, and holds nothing.
  */
 
+/** A TSS public key point, as the Core Kit's key details carry it. */
+export interface TssPublicPoint {
+  x?: { toString(radix: 'hex'): string } | null;
+  y?: { toString(radix: 'hex'): string } | null;
+}
+
+/**
+ * Names an account by its TSS public key. The coordinates are separated, not
+ * concatenated: hex drops leading zeroes, so two points could otherwise spell
+ * one name.
+ */
+export function accountIdFromTssPoint(point: TssPublicPoint | undefined | null): string {
+  if (!point?.x || !point.y) throw new Error('the account key could not be read on this device');
+  return `${point.x.toString('hex')}-${point.y.toString('hex')}`;
+}
+
 /** The Core Kit surface this handoff drives, as a seam. */
 export interface LoginSecretExporter {
   _UNSAFE_exportTssKey(): Promise<string>;
+  /**
+   * The signed-in account's stable, non-secret public identifier. A host that
+   * keeps durable per-account state namespaces it by this; one that derives the
+   * namespace below the facade ignores it.
+   */
+  accountId(): string;
 }
 
 /**
@@ -14,7 +36,7 @@ export interface LoginSecretExporter {
  * per host: a WASM worker on web, Tauri IPC on desktop.
  */
 export interface LoginFacade {
-  start(secret: ArrayBuffer): Promise<void>;
+  start(secret: ArrayBuffer, accountId: string): Promise<void>;
   logout(): Promise<void>;
 }
 
@@ -59,9 +81,12 @@ export async function handOffLoginSecret(
   facade: LoginFacade,
   exporter: LoginSecretExporter
 ): Promise<void> {
+  // Read before the export, so a session that cannot name its account never
+  // mints a secret buffer.
+  const accountId = exporter.accountId();
   const secret = await exportLoginSecret(exporter);
   try {
-    await facade.start(secret);
+    await facade.start(secret, accountId);
   } finally {
     if (secret.byteLength > 0) new Uint8Array(secret).fill(0);
   }

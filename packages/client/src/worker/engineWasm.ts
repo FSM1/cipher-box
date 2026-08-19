@@ -41,6 +41,19 @@ export interface WasmEvent {
   readonly deadLetterReason?: number;
 }
 
+/**
+ * wasm-bindgen `CommandOutcome` — what one command produced. Unlike the plain
+ * views above it is an exported class holding a pointer into WASM memory, so
+ * the caller owns it: read the getters, then `free()`.
+ */
+export interface WasmCommandOutcome {
+  readonly kind: string;
+  readonly opId?: bigint;
+  readonly identityPublicKey?: Uint8Array;
+  readonly encPublicKey?: Uint8Array;
+  free(): void;
+}
+
 /** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
 export interface WasmBreadcrumb {
   readonly id: Uint8Array;
@@ -88,7 +101,7 @@ export interface WasmSnapshotView {
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
-  command(command: WasmCommand): Promise<unknown>;
+  command(command: WasmCommand): Promise<WasmCommandOutcome>;
   /** Either `(parent, name)` or `(node)` — never both, never neither. */
   beginWrite(
     parent: WasmNodeId | undefined,

@@ -6,7 +6,7 @@
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import { StubEngineHost } from '../../src/testkit.js';
-import type { EventDescriptor } from '../../src/worker/protocol.js';
+import type { CommandOutcomeDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
 import { fixtureBuffer, LEADER_SEED } from './mediaFixture.js';
 
 class MediaHost extends StubEngineHost {
@@ -14,8 +14,8 @@ class MediaHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  command(): Promise<void> {
-    return Promise.resolve();
+  command(): Promise<CommandOutcomeDescriptor> {
+    return Promise.resolve({ kind: 'done' });
   }
 
   abortWrite(): Promise<void> {

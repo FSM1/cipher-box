@@ -110,6 +110,7 @@ export function fakeCoreKitSession(
   let method: IdentityMethod | null = null;
   let email: string | null = null;
   const session: WebCoreKitSession = {
+    accountId: () => 'acct01',
     restore: options.restore ?? (() => Promise.resolve()),
     isLoggedIn: () => loggedIn,
     login(credential) {

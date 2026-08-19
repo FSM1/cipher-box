@@ -6,6 +6,7 @@
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import {
+  accountIdFromTssPoint,
   isIdentityMethod,
   type CoreKitSession,
   type IdentityCredential,
@@ -114,6 +115,10 @@ class ShellSession implements CoreKitSession {
 
   _UNSAFE_exportTssKey(): Promise<string> {
     return this.coreKit._UNSAFE_exportTssKey();
+  }
+
+  accountId(): string {
+    return accountIdFromTssPoint(this.coreKit.getKeyDetails().tssPubKey);
   }
 }
 

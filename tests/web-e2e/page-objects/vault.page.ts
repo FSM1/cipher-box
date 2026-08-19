@@ -27,7 +27,9 @@ export class VaultPage {
     await this.page.evaluate(async () => {
       const secret = crypto.getRandomValues(new Uint8Array(32));
       const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
-      await window.__CIPHERBOX_ENGINE__!.signIn(hex);
+      // Its own store namespace, so a second cold start in one context never
+      // inherits the first account's epoch floor.
+      await window.__CIPHERBOX_ENGINE__!.signIn(hex, crypto.randomUUID());
     });
     await this.page.waitForURL('**/files');
   }

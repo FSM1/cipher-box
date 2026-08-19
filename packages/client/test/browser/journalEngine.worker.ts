@@ -11,7 +11,12 @@
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import { StubEngineHost } from '../../src/testkit.js';
-import type { CommandDescriptor, EventDescriptor, WriteTarget } from '../../src/worker/protocol.js';
+import type {
+  CommandDescriptor,
+  CommandOutcomeDescriptor,
+  EventDescriptor,
+  WriteTarget,
+} from '../../src/worker/protocol.js';
 
 const DB_NAME = 'cb-leadership-journal';
 const STORE = 'ops';
@@ -54,12 +59,14 @@ class JournalHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  async command(command: CommandDescriptor): Promise<void> {
+  async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     // Durable journal BEFORE the ack: the resolved promise is the UI-visible
     // ack, and it only settles once the op is on disk.
     if (command.kind !== 'manualRefresh' && command.kind !== 'setFocus') {
       await journal(command.kind);
+      return { kind: 'queued', opId: this.nextOpId++ };
     }
+    return { kind: 'done' };
   }
 
   beginWrite(_target: WriteTarget, size: number): Promise<bigint> {

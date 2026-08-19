@@ -39,6 +39,22 @@ export function isRecoverable(error: SnapshotError): boolean {
   return error.code === 'tooManyStreams' || error.code === 'refreshFailed';
 }
 
+/**
+ * Bytes the drain must free before it will start `opId`, or `null` when that op
+ * is not the one held. A hold clears, which is why `blueprint/engine.md` makes
+ * it a snapshot field rather than an event.
+ */
+export function heldBytes(state: SnapshotState, opId: bigint | null): bigint | null {
+  const blocked = state.view?.blocked;
+  if (blocked == null || opId === null || blocked.opId !== opId) return null;
+  return blocked.neededBytes;
+}
+
+/** Durable queue entries this session cannot read but whose bytes it is charged for. */
+export function retainedRecords(state: SnapshotState): number {
+  return state.view?.retainedRecords ?? 0;
+}
+
 export interface SnapshotStore {
   /** `useSyncExternalStore` subscribe: fires on every committed change. */
   subscribe(onStoreChange: () => void): () => void;

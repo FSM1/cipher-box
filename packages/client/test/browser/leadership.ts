@@ -11,7 +11,7 @@ import { EngineClient } from '../../src/engineClient.js';
 import { collect } from '../../src/testkit.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
 import { awaitElection } from './election.js';
-import { hex, unhex } from './hexUtil.js';
+import { hex, TEST_ACCOUNT_ID, unhex } from './hexUtil.js';
 import { awaitServiceWorkerControl } from './serviceWorker.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
@@ -132,7 +132,9 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
     createChannel: () => new BroadcastChannel(channelName),
     spawnWorker: () => new Worker(workerUrl, { type: 'module' }),
     // Failover re-derivation: a real login re-exports this from Core Kit.
-    secretSource: { provideSecret: () => Promise.resolve(secret()) },
+    secretSource: {
+      provideSecret: () => Promise.resolve({ secret: secret(), accountId: TEST_ACCOUNT_ID }),
+    },
   });
   // A fresh client observes a fresh stream: a prior client's events are not its
   // own, and a leak poll that matched one would pass for the wrong reason.
@@ -148,7 +150,7 @@ window.cbRole = (): string => client?.currentRole() ?? 'none';
 
 window.cbStart = async (): Promise<string> => {
   try {
-    await client!.facade.start(secret());
+    await client!.facade.start(secret(), TEST_ACCOUNT_ID);
     return 'ok';
   } catch (error) {
     return settle(error);

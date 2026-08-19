@@ -23,6 +23,7 @@
 
 import type {
   CommandDescriptor,
+  CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -104,7 +105,13 @@ export type PortResponse =
       type: 'cb:portResult';
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor | ArrayBuffer | string | StreamHandle | WriteHandle;
+      result?:
+        | SnapshotDescriptor
+        | CommandOutcomeDescriptor
+        | ArrayBuffer
+        | string
+        | StreamHandle
+        | WriteHandle;
     }
   | { type: 'cb:portResult'; requestId: number; ok: false; error: string; code?: string };
 

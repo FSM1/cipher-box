@@ -7,8 +7,8 @@ const SECRET_BYTES = Uint8Array.from({ length: 32 }, (_, i) =>
   Number.parseInt(SECRET_HEX.slice(i * 2, i * 2 + 2), 16)
 );
 
-function exporter(key: string): LoginSecretExporter {
-  return { _UNSAFE_exportTssKey: () => Promise.resolve(key) };
+function exporter(key: string, accountId = 'acct01'): LoginSecretExporter {
+  return { _UNSAFE_exportTssKey: () => Promise.resolve(key), accountId: () => accountId };
 }
 
 /** `postMessage(msg, [secret])` detaches the sender's buffer; so does this. */
@@ -25,7 +25,9 @@ describe('LoginSecretSource', () => {
     const source = new LoginSecretSource();
     source.use(exporter(SECRET_HEX));
 
-    expect(new Uint8Array(await source.provideSecret())).toEqual(SECRET_BYTES);
+    const { secret, accountId } = await source.provideSecret();
+    expect(new Uint8Array(secret)).toEqual(SECRET_BYTES);
+    expect(accountId).toBe('acct01');
   });
 
   it('refuses to provide a secret with no live session', async () => {
@@ -51,7 +53,7 @@ describe('secret containment in the browser', () => {
     await handOffLoginSecret(facade, exporter(SECRET_HEX));
     const reExported = await source.provideSecret();
 
-    expect(new Uint8Array(reExported)).toEqual(SECRET_BYTES);
+    expect(new Uint8Array(reExported.secret)).toEqual(SECRET_BYTES);
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
   });
