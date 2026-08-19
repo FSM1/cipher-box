@@ -36,7 +36,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::content::{
@@ -427,8 +427,9 @@ struct MovePlan {
     from_parent: NodeId,
     /// The destination parent; the source parent for a rename in place.
     dest: NodeId,
-    /// `None` keeps the name the ref already carries.
-    new_name: Option<String>,
+    /// `None` keeps the name the ref already carries. Zeroizing because the
+    /// plan is destructured, so the field outlives the struct that held it.
+    new_name: Option<Zeroizing<String>>,
     /// The node the rebase vacated at the destination name, if any.
     vacated: Option<NodeId>,
 }
@@ -1080,7 +1081,9 @@ where
                 let plan = MovePlan {
                     from_parent: parent,
                     dest: parent,
-                    new_name: Some(applied.effective_name.clone().ok_or(Halt::Unclassified)?),
+                    new_name: Some(Zeroizing::new(
+                        applied.effective_name.clone().ok_or(Halt::Unclassified)?,
+                    )),
                     vacated: None,
                 };
                 self.publish_ref_move(scope, pass, applied, rebased, plan)
@@ -1111,7 +1114,9 @@ where
                 let plan = MovePlan {
                     from_parent: *from_parent,
                     dest: *new_parent,
-                    new_name: Some(applied.effective_name.clone().ok_or(Halt::Unclassified)?),
+                    new_name: Some(Zeroizing::new(
+                        applied.effective_name.clone().ok_or(Halt::Unclassified)?,
+                    )),
                     // Only the node the rebase actually vacated loses its ref:
                     // one that won the conditional delete keeps its entry, and
                     // the move already resolved onto a name beside it.
@@ -1157,7 +1162,7 @@ where
         parent: NodeId,
         node: &NewNode,
     ) -> Result<(), Halt> {
-        let name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
+        let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
         self.ensure_folder(scope, pass, parent).await?;
 
         let mut shortfall = None;
@@ -1186,7 +1191,7 @@ where
         let child_name = derive_write_name(scope.write_scope_seed, &child_id.0);
         let child = new_child(
             child_id.0,
-            name,
+            name.to_string(),
             &child_name,
             body,
             rebased.max_link_counter(child_id),
@@ -1323,7 +1328,8 @@ where
             .cloned()
             .ok_or(Halt::Unclassified)?;
         if let Some(new_name) = new_name {
-            moved.name = new_name;
+            moved.name.zeroize();
+            moved.name = new_name.to_string();
         }
         if source != dest {
             // Only a newly-established link advances the counter, to the winner

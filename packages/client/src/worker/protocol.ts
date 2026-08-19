@@ -128,9 +128,9 @@ export interface ByoIpfsConfigDescriptor {
   kind: ByoKind;
   /**
    * Bearer credential, `null` for a provider that needs none. Bytes rather
-   * than a string so the worker can scrub its copy once the engine has it —
-   * a JS string cannot be overwritten (`EngineHost.start` carries the login
-   * secret the same way).
+   * than a string, which cannot be overwritten. A descriptor is cloned rather
+   * than transferred, so this scrubs the worker's copy only — the sender keeps
+   * one it owns and must wipe itself.
    */
   accessToken: Uint8Array | null;
 }

@@ -151,12 +151,7 @@ describe('buildCommand', () => {
     /** A fresh bearer, since the codec scrubs the view it is handed. */
     const token = (): Uint8Array => new TextEncoder().encode('s3cret');
 
-    /**
-     * Records what the settings builders were constructed with. The token
-     * argument is snapshotted rather than retained: the codec scrubs the view
-     * once the builder returns, by which point wasm-bindgen would have copied
-     * the bytes into linear memory.
-     */
+    /** Records builder args, copying byte views before the codec scrubs them. */
     const spyWasm = (): { wasm: EngineWasm; byo: unknown[][]; settings: unknown[][] } => {
       const byo: unknown[][] = [];
       const settings: unknown[][] = [];
@@ -240,17 +235,13 @@ describe('buildCommand', () => {
     });
 
     it('scrubs the bearer even when the builder refuses', () => {
+      const { wasm } = spyWasm();
       const bearer = token();
-      const wasm = {
-        ...fakeWasmEnums,
-        ByoIpfsConfig: class {
-          constructor() {
-            throw new Error('accessToken must be UTF-8');
-          }
-        },
-        VaultSettings: class {},
-        Command: { saveVaultSettings: (value: unknown) => ({ value }) },
-      } as unknown as EngineWasm;
+      (wasm as { ByoIpfsConfig: unknown }).ByoIpfsConfig = class {
+        constructor() {
+          throw new Error('accessToken must be a sendable bearer');
+        }
+      };
 
       expect(() =>
         buildCommand(wasm, {
@@ -261,8 +252,33 @@ describe('buildCommand', () => {
             keepLatestVersions: null,
           },
         })
-      ).toThrow('accessToken must be UTF-8');
+      ).toThrow('accessToken must be a sendable bearer');
       expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+    });
+
+    it('scrubs the bearer when a refusal lands before the provider is built', () => {
+      const { wasm, byo } = spyWasm();
+      const bearer = token();
+
+      // `pinMode` and the retention cap are checked first, so these refusals
+      // never reach the builder that would otherwise spend the bearer.
+      for (const settings of [
+        { pinMode: 'nowhere', keepLatestVersions: null },
+        { pinMode: 'hosted', keepLatestVersions: 0 },
+      ]) {
+        bearer.set(token());
+        expect(() =>
+          buildCommand(wasm, {
+            kind: 'saveVaultSettings',
+            settings: {
+              ...settings,
+              byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: bearer },
+            },
+          } as unknown as CommandDescriptor)
+        ).toThrow();
+        expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+      }
+      expect(byo).toEqual([]);
     });
 
     it('refuses a bearer sent as a string, which no owner could scrub', () => {

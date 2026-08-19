@@ -3,139 +3,35 @@
 //! An op body is sealed because it carries filenames, and opening one copies
 //! those names out of the `Zeroizing` buffer the seal hands back into owned
 //! `String`s that outlive it. The same names then live on in the working-tree
-//! snapshot. This suite owns the whole test binary because it installs a global
-//! allocator that inspects each block freed on the thread under test.
-
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+//! snapshot and in the collation keys a rebase folds. This suite owns the whole
+//! test binary because it installs the `wipe_watch` global allocator, which
+//! inspects each block freed on the thread under test.
 
 use cipherbox_core::suite::x25519::X25519Secret;
-use cipherbox_engine::seams::UnixMillis;
+use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::{
-    NewNode, Op, RecordClass, RecordReader, RecordSeal, Snapshot, encode_op_record,
+    NewNode, Op, RecordClass, RecordReader, RecordSeal, Snapshot, encode_op_record, replay,
 };
 use cipherbox_engine::{NodeId, NodeKind};
 use zeroize::Zeroizing;
 
-/// A run of this many identical bytes in a freed block is stranded plaintext.
-/// An accidental match on unrelated bytes is ~2^-128 per position at this width.
-const MARKER_LEN: usize = 16;
-/// Names are built two markers wide, so a `String` whose allocation the
-/// allocator rounds up still carries a full run inside the block it reports.
-const NAME_LEN: usize = 2 * MARKER_LEN;
+mod wipe_watch;
 
-/// The freed block that carried a marker run. Reported rather than reduced to a
-/// bare boolean, so a failure is diagnosable from CI output alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Leak {
-    block_size: usize,
-    run_start: usize,
-    marker: u8,
-}
-
-thread_local! {
-    /// The whole watch is thread-local: the allocator is process-wide, so
-    /// global state would let a block the scenario never owned decide the
-    /// verdict.
-    static WATCHING: Cell<bool> = const { Cell::new(false) };
-    /// The armed marker bytes, one bit per value.
-    static ARMED: Cell<[u64; 4]> = const { Cell::new([0; 4]) };
-    /// Blocks the scan actually looked at. Without it a no-leak assertion
-    /// passes vacuously whenever nothing in the armed window matched.
-    static INSPECTED: Cell<usize> = const { Cell::new(0) };
-    /// First hit only; a later one adds nothing.
-    static LEAK: Cell<Option<Leak>> = const { Cell::new(None) };
-}
-
-fn is_armed(mask: &[u64; 4], byte: u8) -> bool {
-    mask[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0
-}
-
-/// Flags any freed block still carrying a marker run, while a scenario is in
-/// flight on this thread. A block too small to hold one cannot carry it.
-struct Watchdog;
-
-unsafe impl GlobalAlloc for Watchdog {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if layout.size() >= MARKER_LEN && WATCHING.get() {
-            INSPECTED.set(INSPECTED.get() + 1);
-            let armed = ARMED.get();
-            let mut run = 0usize;
-            let mut previous = 0u8;
-            for offset in 0..layout.size() {
-                let byte = unsafe { ptr.add(offset).read_volatile() };
-                run = if byte == previous { run + 1 } else { 1 };
-                previous = byte;
-                if run == MARKER_LEN && is_armed(&armed, byte) {
-                    if LEAK.get().is_none() {
-                        LEAK.set(Some(Leak {
-                            block_size: layout.size(),
-                            run_start: offset + 1 - MARKER_LEN,
-                            marker: byte,
-                        }));
-                    }
-                    break;
-                }
-            }
-        }
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
+use wipe_watch::{MARKER_LEN, Watchdog, Watched, watched};
 
 #[global_allocator]
 static ALLOCATOR: Watchdog = Watchdog;
 
-/// What the watchdog saw over one armed scenario.
-struct Watched<T> {
-    outcome: T,
-    leak: Option<Leak>,
-    inspected: usize,
-}
+/// Names are built two markers wide, so a `String` whose allocation the
+/// allocator rounds up still carries a full run inside the block it reports.
+const NAME_LEN: usize = 2 * MARKER_LEN;
 
-/// Runs `body` with the watchdog armed for every byte in `markers` on this
-/// thread. Every scenario owns its own watch, so none needs serializing against
-/// another.
-fn watched<T>(markers: &[u8], body: impl FnOnce() -> T) -> Watched<T> {
-    assert!(!markers.is_empty(), "a watch with no marker is vacuous");
-    assert!(
-        markers.iter().all(|&m| m != 0),
-        "0x00 is what a wiped buffer holds, so it would match every correct wipe"
-    );
-    let mut armed = [0u64; 4];
-    for &m in markers {
-        armed[usize::from(m >> 6)] |= 1 << (m & 63);
-    }
-    LEAK.set(None);
-    INSPECTED.set(0);
-    ARMED.set(armed);
-    let outcome = {
-        /// Disarms on the way out, an unwinding `body` included: a thread left
-        /// armed scans every later allocation against a marker no one is
-        /// watching for.
-        struct Disarm;
-        impl Drop for Disarm {
-            fn drop(&mut self) {
-                WATCHING.set(false);
-            }
-        }
-        let _disarm = Disarm;
-        WATCHING.set(true);
-        body()
-    };
-    Watched {
-        outcome,
-        leak: LEAK.get(),
-        inspected: INSPECTED.get(),
-    }
-}
+const AT: UnixMillis = UnixMillis(0);
 
 /// A filename of `marker` repeated — one armed run, and valid UTF-8 because
-/// every marker this suite arms is ASCII.
+/// every marker this suite arms is ASCII. Lowercase-stable too, so a collation
+/// key folded from it is byte-identical and equally detectable.
 fn marked_name(marker: u8) -> String {
     assert!(marker.is_ascii() && marker != 0, "a name must be UTF-8");
     String::from_utf8(vec![marker; NAME_LEN]).expect("ascii is UTF-8")
@@ -144,8 +40,6 @@ fn marked_name(marker: u8) -> String {
 fn id(b: u8) -> NodeId {
     NodeId([b; 16])
 }
-
-const AT: UnixMillis = UnixMillis(0);
 
 /// A sealed durable record carrying a `create` op named `name`, with the
 /// custody that opens it. Built outside any armed window: this suite watches
@@ -164,24 +58,26 @@ fn sealed_create(name: &str) -> (X25519Secret, Vec<u8>) {
     (owner, record)
 }
 
-/// The suite's own instrument: a run the scenario deliberately strands must be
-/// reported, or every no-leak assertion below passes vacuously.
-#[test]
-fn the_watchdog_reports_a_stranded_run() {
-    const STRANDED: u8 = 0x3C;
-    let seen = watched(&[STRANDED], || {
-        let stranded = vec![STRANDED; NAME_LEN];
-        drop(stranded);
-    });
+/// Asserts the scenario stranded nothing, and that a name-sized block of its own
+/// actually reached the scan.
+///
+/// `inspected > 0` alone is too weak: the paths under test free dozens of
+/// unrelated blocks, so it would hold even if the name were interned or leaked
+/// and never freed at all — which is the worse outcome, not the fixed one. The
+/// control re-runs the same allocation with the wipe defeated and requires the
+/// instrument to report it.
+fn assert_wiped<T>(seen: &Watched<T>, control_marker: u8, what: &str) {
+    assert!(
+        seen.inspected > 0,
+        "{what}: no freed block reached the scan"
+    );
+    assert_eq!(seen.leak, None, "{what} reached freed memory");
 
-    assert_eq!(
-        seen.leak,
-        Some(Leak {
-            block_size: NAME_LEN,
-            run_start: 0,
-            marker: STRANDED,
-        }),
-        "a hit names its block and its region, so a false positive is visible as one"
+    let control = watched(&[control_marker], || drop(marked_name(control_marker)));
+    assert!(
+        control.leak.is_some(),
+        "{what}: a name-sized block dropped unwiped goes unreported, \
+         so the assertion above proves nothing"
     );
 }
 
@@ -200,11 +96,7 @@ fn a_decoded_op_wipes_its_filename_on_drop() {
         }
     });
 
-    assert!(
-        seen.inspected > 0,
-        "the window saw no freed block, so the verdict is vacuous"
-    );
-    assert_eq!(seen.leak, None, "a decoded filename reached freed memory");
+    assert_wiped(&seen, 0x2C, "a decoded filename");
 }
 
 /// The longest-lived copy: a name projected into the working tree lives for the
@@ -220,11 +112,7 @@ fn a_dropped_snapshot_wipes_its_node_names() {
         drop(snapshot);
     });
 
-    assert!(
-        seen.inspected > 0,
-        "the window saw no freed block, so the verdict is vacuous"
-    );
-    assert_eq!(seen.leak, None, "a snapshot node name reached freed memory");
+    assert_wiped(&seen, 0x3F, "a snapshot node name");
 }
 
 /// A rename supersedes a name in place. The replaced `String` is dropped by the
@@ -240,10 +128,31 @@ fn a_rename_wipes_the_name_it_supersedes() {
         node
     });
 
-    assert!(
-        seen.inspected > 0,
-        "the window saw no freed block, so the verdict is vacuous"
-    );
-    assert_eq!(seen.leak, None, "the superseded name reached freed memory");
-    assert_eq!(seen.outcome.name, "after");
+    assert_wiped(&seen, 0x40, "the superseded name");
+    assert_eq!(seen.outcome.name(), "after");
+}
+
+/// A replay folds a collation key per sibling and a candidate per collision
+/// probe. Both are verbatim copies of a filename, and there are far more of them
+/// than there are nodes.
+#[test]
+fn a_replay_wipes_the_collation_keys_and_suffix_candidates_it_folds() {
+    const MARK: u8 = 0x61;
+    let name = marked_name(MARK);
+    let (owner, record) = sealed_create(&name);
+    let raw = vec![(OpId(1), record)];
+
+    let seen = watched(&[MARK], || {
+        // A sibling already holding the name, so the create loses the add/add
+        // race and the suffix probe runs.
+        let mut base = Snapshot::new(id(0));
+        base.upsert_node(NodeMeta::new(id(2), name.as_str(), NodeKind::File));
+        base.link(id(0), id(2), 1);
+        let scan = cipherbox_engine::sync::decode_queue(&RecordReader::new(&owner), &raw);
+        let report = replay(&base, &base.clone(), &scan.mine, &[id(0)]);
+        drop(report);
+        drop(base);
+    });
+
+    assert_wiped(&seen, 0x62, "a folded collation key");
 }

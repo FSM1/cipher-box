@@ -38,7 +38,6 @@ pub struct Op {
     /// at one sequence.
     ///
     /// [`Scheduler`]: crate::seams::Scheduler
-    #[zeroize(skip)]
     pub authored_at: UnixMillis,
     /// The mutation.
     pub kind: OpKind,
@@ -50,7 +49,7 @@ pub struct Op {
 /// One value because the parts must not drift: the root names sealed blocks
 /// whose byte count is not the plaintext's, and the key is a KDF non-edge that
 /// nothing can re-derive if it is separated from the version it opens.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedContent {
     /// DAG root CID of the staged content — simultaneously the root block's
     /// staging key and the published version's `contentCid`.
@@ -84,7 +83,7 @@ pub struct Replaced {
 /// rather than refused at publish — the op-queue end of the same structural
 /// guard [`new_child`](crate::net::author::new_child) makes on the wire
 /// (AGENTS.md rule 8).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewNode {
     /// A folder, always created empty.
     Folder,
@@ -124,6 +123,10 @@ pub enum ScopeCrossing {
 }
 
 /// The intent-op mutations (#33 D6).
+///
+/// Wipes on drop, but only over the names: a content address rides the op
+/// record's own clear header and a sealed content key is already ciphertext,
+/// so wiping either would cost a pass over every render's copy to hide nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub enum OpKind {
     /// Create a node under a parent.
@@ -135,6 +138,7 @@ pub enum OpKind {
         name: String,
         /// What is being created, carrying exactly the content its kind can
         /// hold.
+        #[zeroize(skip)]
         node: NewNode,
     },
     /// Delete a node. `target_sequence` snapshots the target's own record
@@ -188,6 +192,7 @@ pub enum OpKind {
     /// Write a new file version (fresh per-version content key).
     UpdateContent {
         /// The new version's staged content.
+        #[zeroize(skip)]
         content: StagedContent,
         /// The `contentCid` of the version this edit was formed against — the
         /// conditional-edit anchor (blueprint/engine.md "Per-op rebase rules").

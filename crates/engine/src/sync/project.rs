@@ -182,10 +182,8 @@ mod tests {
         let snap = project_fresh(root, &adopted);
 
         let kids = snap.children(root);
-        let by: Vec<(NodeId, &str, NodeKind)> = kids
-            .iter()
-            .map(|n| (n.id, n.name.as_str(), n.kind))
-            .collect();
+        let by: Vec<(NodeId, &str, NodeKind)> =
+            kids.iter().map(|n| (n.id, n.name(), n.kind)).collect();
         assert_eq!(
             by,
             vec![
@@ -368,7 +366,7 @@ mod tests {
         assert_eq!(meta.size, Some(2_048), "size has no ChildRef to come from");
         assert_eq!(meta.mtime, Some(500), "mtime has no ChildRef to come from");
         assert_eq!(meta.content_version, Some(2), "the version count carries");
-        assert_eq!(meta.name, "renamed.txt", "the body owns the name");
+        assert_eq!(meta.name(), "renamed.txt", "the body owns the name");
         assert_eq!(meta.kind, NodeKind::Folder, "the body owns the kind");
         assert_eq!(snap.max_link_counter(node_id(1)), 9, "the body owns links");
         assert_eq!(

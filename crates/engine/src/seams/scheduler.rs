@@ -8,7 +8,17 @@ use core::time::Duration;
 /// (or the virtual clock in tests). Journaled verbatim on an intent op's
 /// `authored_at`, hence serializable.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    zeroize::Zeroize,
 )]
 pub struct UnixMillis(pub u64);
 

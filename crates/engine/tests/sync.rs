@@ -136,7 +136,7 @@ fn race_2_rename_vs_rename_serialized_by_parent_cas_higher_writer_wins() {
     // rename re-anchors and publishes at a higher parent sequence, so it wins.
     let mut base = Snapshot::new(id(0));
     with_child(&mut base, id(0), id(1), "start.txt", NodeKind::File);
-    base.node_mut(id(1)).unwrap().name = "other.txt".into();
+    base.node_mut(id(1)).unwrap().rename("other.txt");
     let local = base.clone();
 
     let res = rebase_one(
@@ -152,7 +152,7 @@ fn race_2_rename_vs_rename_serialized_by_parent_cas_higher_writer_wins() {
             ..
         }
     ));
-    assert_eq!(base.node(id(1)).unwrap().name, "mine.txt");
+    assert_eq!(base.node(id(1)).unwrap().name(), "mine.txt");
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
     assert_eq!(
         res,
         OpResolution::Applied {
-            effective_name: Some("a (2).txt".to_owned()),
+            effective_name: Some(Zeroizing::new("a (2).txt".to_owned())),
             suffixed: true,
             scope_exit_trigger: None,
         }
@@ -301,10 +301,13 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
         let report = replay(&base, &base, &scan.mine, SCOPE_ROOTS);
 
         assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
-        assert_eq!(report.rebased.node(id(1)).unwrap().name, "notes-v2.txt");
+        assert_eq!(report.rebased.node(id(1)).unwrap().name(), "notes-v2.txt");
         // The colliding create auto-suffixed on merge.
         assert!(report.applied[2].suffixed);
-        assert_eq!(report.rebased.node(id(2)).unwrap().name, "notes-v2 (2).txt");
+        assert_eq!(
+            report.rebased.node(id(2)).unwrap().name(),
+            "notes-v2 (2).txt"
+        );
     });
 }
 
@@ -676,13 +679,13 @@ fn state_law_renders_the_snapshot_plus_the_pending_overlay() {
 
     assert!(view.contains(id(2)), "pending create shows immediately");
     assert_eq!(
-        view.node(id(1)).unwrap().name,
+        view.node(id(1)).unwrap().name(),
         "renamed.txt",
         "pending rename shows"
     );
     // The gate-passing snapshot is the only source of truth and is untouched.
     assert!(!base.contains(id(2)));
-    assert_eq!(base.node(id(1)).unwrap().name, "confirmed.txt");
+    assert_eq!(base.node(id(1)).unwrap().name(), "confirmed.txt");
 }
 
 // ---------------------------------------------------------------------------
