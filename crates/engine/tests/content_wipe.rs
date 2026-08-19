@@ -37,7 +37,6 @@ thread_local! {
     /// global state would let a block the read path never owned decide the
     /// verdict. `block_on` drives the read on the armed thread.
     static WATCHING: Cell<bool> = const { Cell::new(false) };
-    /// The byte the armed scenario's marker is made of.
     static MARKER_BYTE: Cell<u8> = const { Cell::new(0) };
     /// Blocks the scan actually looked at. Without it a no-leak assertion
     /// passes vacuously whenever nothing in the armed window matched.
