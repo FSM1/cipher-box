@@ -23,7 +23,7 @@ test('a created folder publishes and is listed', async ({ page }) => {
 test('a renamed folder publishes under its new name', async ({ page }) => {
   const { vault, files } = await coldStart(page);
   await files.createFolder('drafts');
-  await vault.settledNow();
+  await vault.settled();
 
   await files.rename('drafts', 'final');
 
@@ -36,7 +36,7 @@ test('a moved folder leaves the root and lists under its new parent', async ({ p
   const { vault, files } = await coldStart(page);
   await files.createFolder('archive');
   await files.createFolder('notes');
-  await vault.settledNow();
+  await vault.settled();
 
   await files.move('notes', 'archive');
 
@@ -51,7 +51,7 @@ test('a moved folder leaves the root and lists under its new parent', async ({ p
 test('a deleted folder leaves the listing', async ({ page }) => {
   const { vault, files } = await coldStart(page);
   await files.createFolder('scratch');
-  await vault.settledNow();
+  await vault.settled();
 
   await files.remove('scratch');
 

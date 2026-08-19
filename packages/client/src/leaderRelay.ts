@@ -12,6 +12,13 @@
  * Nothing that names or measures vault content touches the `BroadcastChannel`
  * in either direction: it carries election and the port rendezvous only. One
  * port per follower per leadership.
+ *
+ * The channel is a **rendezvous, not an authority**: every same-origin context
+ * can read and write it, so the leadership token fences one leadership from the
+ * next and authenticates nothing. Each trust decision rests on something the
+ * channel cannot forge — a request is served only over the port the follower
+ * itself dialed, and a departure only on the release of that follower's
+ * presence lock, which no other context can give up on its behalf.
  */
 
 import {
@@ -159,10 +166,8 @@ export class LeaderRelay {
   // trailing pass behind it (see `forceRefresh`).
   private refreshInFlight = false;
   private refreshTrailing = false;
-  // An unguessable per-leadership capability. It stamps every leader→follower
-  // message so followers reject a forged beacon or port rendezvous from a
-  // non-leader same-origin context (integrity defense-in-depth; same-origin is
-  // the trust boundary).
+  // Stamps every leader→follower message so a follower can tell this leadership
+  // from the one before it, and drop a stale beacon.
   private readonly token = globalThis.crypto.randomUUID();
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
@@ -216,9 +221,6 @@ export class LeaderRelay {
       case 'cb:portWanted':
         void this.announceHost();
         return;
-      case 'cb:bye':
-        this.reclaim((message as Extract<FollowerMessage, { type: 'cb:bye' }>).clientId);
-        return;
     }
   }
 
@@ -231,8 +233,8 @@ export class LeaderRelay {
 
   /**
    * Abandons everything a follower held: its focus, its write and stream
-   * handles, and its port. Driven by `cb:bye` and by the presence watch, which
-   * is the only signal a crashed tab leaves behind.
+   * handles, and its port. Driven by the presence watch, which is the only
+   * departure signal no other same-origin context can give on its behalf.
    */
   private reclaim(clientId: string): void {
     this.retirePresence(clientId);

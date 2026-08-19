@@ -1,9 +1,14 @@
-import { COREKIT_STATUS } from '@web3auth/mpc-core-kit';
+import {
+  COREKIT_STATUS,
+  FactorKeyTypeShareDescription,
+  keyToMnemonic,
+  TssShareType,
+} from '@web3auth/mpc-core-kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
-import type { IdentityCredential } from '@cipherbox/login';
+import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
 
 const STORE_KEY = 'corekit_store';
 
@@ -22,6 +27,26 @@ const sdk = vi.hoisted(() => ({
   logoutError: undefined as Error | undefined,
   logoutCalls: 0,
   initFailure: undefined as Error | undefined,
+  /** The factor this device has stored, if any; `undefined` is a fresh device. */
+  deviceFactor: undefined as string | undefined,
+  /** The one factor key that reconstructs; anything else is refused. */
+  opensWith: undefined as string | undefined,
+  inputs: [] as string[],
+  created: [] as Record<string, unknown>[],
+  /** The `replaceExisting` flag each `setDeviceFactor` carried. */
+  setDeviceFactors: [] as unknown[],
+  commits: 0,
+  /** Which `commitChanges` call rejects, 1-based; `0` for none. */
+  commitFailsAfter: 0,
+  shareDescriptions: {} as Record<string, string[]>,
+  /** Set to make the SDK's own factor read throw, as an unreachable one does. */
+  keyDetailsError: undefined as Error | undefined,
+  /** What `getKeyDetails` reports, so an enrollment can be seen to move it. */
+  accountKey: 'aa',
+  accountKeyAfterEnroll: undefined as string | undefined,
+  enableMfaParams: undefined as Record<string, unknown> | undefined,
+  enableMfaResult: 'ab'.repeat(32),
+  enableMfaError: undefined as Error | undefined,
 }));
 vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@web3auth/mpc-core-kit')>();
@@ -47,11 +72,46 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         return sdk.userInfo;
       }
       commitChanges(): Promise<void> {
-        return Promise.resolve();
+        sdk.commits += 1;
+        return sdk.commits === sdk.commitFailsAfter
+          ? Promise.reject(new Error('metadata sync failed'))
+          : Promise.resolve();
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
         return sdk.logoutError ? Promise.reject(sdk.logoutError) : Promise.resolve();
+      }
+      getDeviceFactor(): Promise<string | undefined> {
+        return Promise.resolve(sdk.deviceFactor);
+      }
+      inputFactorKey(factorKey: { toString(base: string): string }): Promise<void> {
+        const hex = factorKey.toString('hex');
+        sdk.inputs.push(hex);
+        if (hex !== sdk.opensWith) return Promise.reject(new Error(`no share for ${hex}`));
+        sdk.status = COREKIT_STATUS.LOGGED_IN;
+        return Promise.resolve();
+      }
+      createFactor(params: Record<string, unknown>): Promise<string> {
+        sdk.created.push(params);
+        return Promise.resolve('factor');
+      }
+      setDeviceFactor(_factorKey: unknown, replaceExisting?: unknown): Promise<void> {
+        sdk.setDeviceFactors.push(replaceExisting);
+        return Promise.resolve();
+      }
+      getKeyDetails(): Record<string, unknown> {
+        if (sdk.keyDetailsError) throw sdk.keyDetailsError;
+        const key = sdk.accountKey;
+        return {
+          shareDescriptions: sdk.shareDescriptions,
+          tssPubKey: { x: { toString: () => key }, y: { toString: () => key } },
+        };
+      }
+      enableMFA(params: Record<string, unknown>): Promise<string> {
+        sdk.enableMfaParams = params;
+        if (sdk.enableMfaError) return Promise.reject(sdk.enableMfaError);
+        if (sdk.accountKeyAfterEnroll) sdk.accountKey = sdk.accountKeyAfterEnroll;
+        return Promise.resolve(sdk.enableMfaResult);
       }
     },
   };
@@ -89,6 +149,19 @@ beforeEach(() => {
   sdk.logoutError = undefined;
   sdk.logoutCalls = 0;
   sdk.initFailure = undefined;
+  sdk.deviceFactor = undefined;
+  sdk.opensWith = undefined;
+  sdk.inputs = [];
+  sdk.created = [];
+  sdk.setDeviceFactors = [];
+  sdk.commits = 0;
+  sdk.commitFailsAfter = 0;
+  sdk.shareDescriptions = {};
+  sdk.keyDetailsError = undefined;
+  sdk.accountKey = 'aa';
+  sdk.accountKeyAfterEnroll = undefined;
+  sdk.enableMfaParams = undefined;
+  sdk.enableMfaError = undefined;
   window.localStorage.clear();
   keys = new MemoryKeys();
   store = sealedTestStore(keys);
@@ -166,18 +239,198 @@ describe('the Core Kit store', () => {
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
   });
 
-  it('is cleared when a login stops short of a session and the rollback is refused', async () => {
+  it('is left standing by a login that stops at the factor policy', async () => {
     const created = session();
     sdk.statusAfterLogin = COREKIT_STATUS.REQUIRED_SHARE;
-    sdk.logoutError = REFUSED;
     await store.setItem(STORE_KEY, SESSION);
 
-    await expect(created.login(credential())).rejects.toThrow(
-      /needs approval or a recovery phrase/
-    );
+    await expect(created.login(credential())).rejects.toBeInstanceOf(RecoveryRequiredError);
 
+    // Ending it here would make every factor-policy login a lockout: the phrase
+    // is redeemed against exactly this half-open session.
+    expect(sdk.logoutCalls).toBe(0);
+    expect(window.localStorage.getItem(STORE_KEY)).not.toBeNull();
+  });
+
+  it('is cleared when a member abandons a login held at the factor policy', async () => {
+    const created = session();
+    sdk.statusAfterLogin = COREKIT_STATUS.REQUIRED_SHARE;
+    await store.setItem(STORE_KEY, SESSION);
+    await expect(created.login(credential())).rejects.toBeInstanceOf(RecoveryRequiredError);
+
+    await created.logout();
+
+    // A session short of reconstruction is still a live credential on the device.
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+  });
+});
+
+describe('the recovery phrase as a login', () => {
+  const FACTOR_HEX = 'ab'.repeat(32);
+  const PHRASE = keyToMnemonic(FACTOR_HEX);
+
+  /** A device that reached the factor policy holding no factor of its own. */
+  async function heldAtPolicy(): Promise<ReturnType<typeof session>> {
+    const created = session();
+    sdk.statusAfterLogin = COREKIT_STATUS.REQUIRED_SHARE;
+    await expect(created.login(credential())).rejects.toBeInstanceOf(RecoveryRequiredError);
+    return created;
+  }
+
+  it('reads back the factor this device already holds, so a re-login is ordinary', async () => {
+    const created = session();
+    sdk.statusAfterLogin = COREKIT_STATUS.REQUIRED_SHARE;
+    sdk.deviceFactor = FACTOR_HEX;
+    sdk.opensWith = FACTOR_HEX;
+
+    await created.login(credential());
+
+    // The SDK's own reconstruct tries the deleted hashed share and stops; without
+    // this read every re-login on an enrolled device would look like a lockout.
+    expect(sdk.inputs).toEqual([FACTOR_HEX]);
+    expect(created.isLoggedIn()).toBe(true);
+  });
+
+  it('opens the account from the phrase and mints this device a factor of its own', async () => {
+    const created = await heldAtPolicy();
+    sdk.opensWith = FACTOR_HEX;
+
+    await created.recoverWithPhrase(` ${PHRASE.toUpperCase()}  `);
+
+    expect(sdk.inputs).toEqual([FACTOR_HEX]);
+    expect(created.isLoggedIn()).toBe(true);
+    expect(sdk.created).toEqual([expect.objectContaining({ shareType: TssShareType.DEVICE })]);
+    // Replacing: a stored factor whose commit failed would otherwise refuse
+    // every later mint and leave this device unable to finish a recovery.
+    expect(sdk.setDeviceFactors).toEqual([true]);
+    expect(sdk.commits).toBeGreaterThan(0);
+  });
+
+  it('opens the account even when the factor it mints for this device cannot be synced', async () => {
+    const created = await heldAtPolicy();
+    sdk.opensWith = FACTOR_HEX;
+    // A login held at the policy commits nothing, so the sync after the mint is
+    // the first commit this session makes.
+    sdk.commitFailsAfter = 1;
+
+    await expect(created.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
+
+    // The account is open from here: raising would leave a live session this
+    // device's own guard refuses to retry.
+    expect(created.isLoggedIn()).toBe(true);
+    expect(sdk.created).toHaveLength(1);
+  });
+
+  it('refuses a wrong phrase without ending the session or clearing the store', async () => {
+    const created = await heldAtPolicy();
+    await store.setItem(STORE_KEY, SESSION);
+    sdk.opensWith = 'cd'.repeat(32);
+
+    await expect(created.recoverWithPhrase(PHRASE)).rejects.toThrow(/does not open this account/);
+
+    expect(sdk.logoutCalls).toBe(0);
+    expect(window.localStorage.getItem(STORE_KEY)).not.toBeNull();
+    expect(sdk.created).toEqual([]);
+
+    // Still held at the policy, so the member can type it again.
+    sdk.opensWith = FACTOR_HEX;
+    await expect(created.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
+  });
+
+  it('refuses a phrase that is not a phrase, quoting none of it back', async () => {
+    const created = await heldAtPolicy();
+
+    await expect(created.recoverWithPhrase('correct horse battery staple')).rejects.toThrow(
+      /not a valid recovery phrase/
+    );
+
+    expect(sdk.inputs).toEqual([]);
+  });
+});
+
+describe('recovery phrase enrollment', () => {
+  const enrolled = async () => {
+    const created = session();
+    await created.login(credential());
+    return created;
+  };
+
+  it('cuts the factor policy and returns the phrase, labelled so a later read can tell', async () => {
+    const created = await enrolled();
+
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
+
+    expect(phrase.split(' ')).toHaveLength(24);
+    expect(warning).toBeNull();
+    expect(sdk.enableMfaParams).toEqual({
+      shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
+    });
+  });
+
+  it('hands the phrase back even when the sync that follows the cut fails', async () => {
+    const created = await enrolled();
+    // The sync after the cut: the login's commit is 1, the pre-cut commit 2.
+    sdk.commitFailsAfter = 3;
+
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
+
+    // The cut deleted the hashed cloud share, so these words are the account's
+    // only spare key: discarding them over a failed sync is a lockout.
+    expect(phrase.split(' ')).toHaveLength(24);
+    expect(warning).toMatch(/could not be synced/);
+  });
+
+  it('warns rather than withholds when the account key moved under the cut', async () => {
+    const created = await enrolled();
+    sdk.accountKeyAfterEnroll = 'bb';
+
+    const { phrase, warning } = await created.enrollRecoveryPhrase();
+
+    expect(phrase.split(' ')).toHaveLength(24);
+    expect(warning).toMatch(/account key changed/);
+  });
+
+  it('reads the phrase off its factor label, not off a factor count', async () => {
+    const created = await enrolled();
+    // A device-approval factor would take the count past the two a fresh
+    // account carries without a phrase ever having been shown.
+    sdk.shareDescriptions = { ab: [JSON.stringify({ module: 'deviceShare' })] };
+    expect(created.hasRecoveryPhrase()).toBe(false);
+
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'deviceShare' })],
+      cd: [JSON.stringify({ module: 'seedPhrase' })],
+    };
+    expect(created.hasRecoveryPhrase()).toBe(true);
+  });
+
+  it('reads the phrase off the share index too, which the SDK stamps on every factor', async () => {
+    const created = await enrolled();
+    // The label the SDK falls back to when a factor is created without one; the
+    // index is what still tells a recovery factor from a device factor.
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.DEVICE })],
+    };
+    expect(created.hasRecoveryPhrase()).toBe(false);
+
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.DEVICE })],
+      cd: [JSON.stringify({ module: 'Other', tssShareIndex: TssShareType.RECOVERY })],
+    };
+    expect(created.hasRecoveryPhrase()).toBe(true);
+  });
+
+  it('reports no phrase for a description entry it cannot parse', () => {
+    const created = session();
+    sdk.shareDescriptions = { ab: ['not json'] };
+    expect(created.hasRecoveryPhrase()).toBe(false);
+  });
+
+  it('reports no phrase when the SDK will not hand over the factor list at all', () => {
+    const created = session();
+    sdk.keyDetailsError = new Error('the key details are unreadable');
+    expect(created.hasRecoveryPhrase()).toBe(false);
   });
 });
 
@@ -233,6 +486,18 @@ describe('a Core Kit login', () => {
 
     sdk.userInfo = undefined;
     expect(session().method()).toBeNull();
+  });
+
+  it('raises the recovery prompt for a factor policy and for nothing else', async () => {
+    const created = session();
+    sdk.statusAfterLogin = COREKIT_STATUS.INITIALIZED;
+
+    const failure = await created.login(credential()).catch((error: unknown) => error);
+
+    // A phrase cannot answer this, so offering the panel would strand the
+    // member at a prompt its own guard refuses.
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(RecoveryRequiredError);
   });
 
   it('reports the address the exchange gave it, and drops it on logout', async () => {

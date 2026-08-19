@@ -113,9 +113,7 @@ export type FollowerMessage =
   /** A follower announces itself so the leader replies with a `leader` beacon. */
   | { type: 'cb:hello'; clientId: string }
   /** Asks the leader where a private port may be opened to it. */
-  | { type: 'cb:portWanted'; clientId: string }
-  /** A follower is leaving (tab close / transport teardown). */
-  | { type: 'cb:bye'; clientId: string };
+  | { type: 'cb:portWanted'; clientId: string };
 
 /**
  * Leader → follower messages. Every one carries the current leadership's
@@ -138,12 +136,14 @@ export type BroadcastMessage = FollowerMessage | LeaderMessage;
 export const BROADCAST_CHANNEL_NAME = 'cipherbox-engine';
 
 /**
- * The Web Lock a tab holds for its whole life, so the leader can watch for its
- * death: the browser releases it on close, crash or discard, and the leader's
- * queued request for the same name is granted at exactly that moment. Namespaced
- * away from the engine lock, which elects rather than reports presence.
- * `navigator.locks.query()` reads these names origin-wide, so a name carries a
- * `clientId` and nothing else — never a node id, a name or a count.
+ * The Web Lock a tab holds for its whole life, and the origin's only departure
+ * signal: the browser releases it on close, crash or discard, and the leader's
+ * queued request for the same name is granted at exactly that moment. No other
+ * same-origin context can give it up on that tab's behalf, which is why nothing
+ * on the channel reports a departure. Namespaced away from the engine lock,
+ * which elects rather than reports presence. `navigator.locks.query()` reads
+ * these names origin-wide, so a name carries a `clientId` and nothing else —
+ * never a node id, a name or a count.
  */
 export function presenceLockName(clientId: string): string {
   return `cipherbox-presence:${clientId}`;

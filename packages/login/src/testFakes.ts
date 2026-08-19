@@ -3,7 +3,12 @@
 import type { CredentialCollector } from './collector';
 import type { IdentityCredential, IdentityExchange, IdentityMethod } from './identity';
 import type { LoginFacade } from './secret';
-import type { AccountRecord, CoreKitSession, LoginProgress } from './session';
+import {
+  RecoveryRequiredError,
+  type AccountRecord,
+  type CoreKitSession,
+  type LoginProgress,
+} from './session';
 
 /** A 32-byte scalar in the hex shape Core Kit exports. */
 export const SECRET_HEX = '0f'.repeat(32);
@@ -56,8 +61,16 @@ export function fakeExchange() {
   return { exchange, calls };
 }
 
-export function fakeSession(options: { loggedIn?: boolean } = {}) {
-  const calls = { logins: [] as IdentityCredential[], exports: 0, logouts: 0 };
+/** The one phrase the fake accepts; 24 words, as a real one is. */
+export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
+
+export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boolean } = {}) {
+  const calls = {
+    logins: [] as IdentityCredential[],
+    exports: 0,
+    logouts: 0,
+    phrases: [] as string[],
+  };
   let loggedIn = options.loggedIn ?? false;
   let method: IdentityMethod | null = null;
   let email: string | null = null;
@@ -68,6 +81,13 @@ export function fakeSession(options: { loggedIn?: boolean } = {}) {
       calls.logins.push(credential);
       method = credential.method;
       email = credential.email;
+      if (options.needsRecovery) return Promise.reject(new RecoveryRequiredError());
+      loggedIn = true;
+      return Promise.resolve();
+    },
+    recoverWithPhrase(phrase) {
+      calls.phrases.push(phrase);
+      if (phrase !== FAKE_PHRASE) return Promise.reject(new Error('wrong phrase'));
       loggedIn = true;
       return Promise.resolve();
     },

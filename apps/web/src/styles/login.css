@@ -445,3 +445,53 @@
   color: var(--color-warning-dim);
   text-align: center;
 }
+
+/* ==========================================================================
+   Recovery phrase
+   ========================================================================== */
+
+.recovery-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  text-align: left;
+}
+
+/* Sits on `.email-login-input`, which carries the field skin; this is the
+   textarea-only part of it. */
+.recovery-input {
+  width: 100%;
+  resize: vertical;
+}
+
+.recovery-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.recovery-phrase-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style-position: inside;
+}
+
+.recovery-phrase-cell {
+  padding: var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.recovery-ack {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: center;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}

@@ -40,6 +40,9 @@ export interface ObservedMessage {
   bytesHex: string;
   /** Every string the message carries anywhere in its shape, joined. */
   text: string;
+  /** The rendezvous fields a bystander reads off the channel, for forging one. */
+  clientId?: string;
+  token?: string;
 }
 
 /** One engine event this tab's facade received, flattened the same way. */
@@ -77,6 +80,8 @@ declare global {
     cbCreate(options: HarnessOptions): Promise<void>;
     cbObserve(channelName: string): void;
     cbObserved(): ObservedMessage[];
+    cbForge(message: Record<string, unknown>): void;
+    cbLockState(name: string): Promise<{ held: number; pending: number }>;
     cbEvents(): ObservedEvent[];
     cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
@@ -89,12 +94,12 @@ declare global {
     cbDispose(): Promise<void>;
     cbJournalCount(): Promise<number>;
     cbJournalRecords(): Promise<unknown[]>;
-    cbHeldLocks(lockName: string): Promise<number>;
     cbResetJournal(): Promise<void>;
   }
 }
 
 let client: EngineClient | null = null;
+let opened: BroadcastChannel | null = null;
 const observed: ObservedMessage[] = [];
 const events: ObservedEvent[] = [];
 
@@ -222,16 +227,36 @@ window.cbReadStream = async (offset: number, length: number): Promise<RangeResul
  */
 window.cbObserve = (channelName: string): void => {
   const channel = new BroadcastChannel(channelName);
+  opened = channel;
   channel.addEventListener('message', (event: MessageEvent) => {
-    const message = event.data as { type?: unknown };
+    const message = event.data as { type?: unknown; clientId?: unknown; token?: unknown };
     observed.push({
       type: typeof message?.type === 'string' ? message.type : '(untyped)',
+      clientId: typeof message?.clientId === 'string' ? message.clientId : undefined,
+      token: typeof message?.token === 'string' ? message.token : undefined,
       ...collect(message),
     });
   });
 };
 
 window.cbObserved = (): ObservedMessage[] => observed;
+
+/** Speaks the channel as an unprivileged same-origin context: no engine, no lock. */
+window.cbForge = (message: Record<string, unknown>): void => {
+  if (!opened) throw new Error('cbObserve must open the channel before forging on it');
+  opened.postMessage(message);
+};
+
+/**
+ * The origin's view of one lock name. `pending` counts the leader's presence
+ * watch, so it going to zero is the reclaim itself rather than a proxy for it.
+ */
+window.cbLockState = async (name: string): Promise<{ held: number; pending: number }> => {
+  const state = await navigator.locks.query();
+  const count = (locks: LockInfo[] | undefined): number =>
+    (locks ?? []).filter((lock) => lock.name === name).length;
+  return { held: count(state.held), pending: count(state.pending) };
+};
 
 window.cbDownload = async (nodeHex: string): Promise<DownloadResult> => {
   try {
@@ -246,11 +271,6 @@ window.cbDownload = async (nodeHex: string): Promise<DownloadResult> => {
 window.cbDispose = async (): Promise<void> => {
   await client?.dispose();
   client = null;
-};
-
-window.cbHeldLocks = async (lockName: string): Promise<number> => {
-  const state = await navigator.locks.query();
-  return (state.held ?? []).filter((lock) => lock.name === lockName).length;
 };
 
 function openJournal(): Promise<IDBDatabase> {

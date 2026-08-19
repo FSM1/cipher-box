@@ -627,9 +627,9 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.respondSnapshot = () => new Promise(() => undefined); // never answers
     const inFlight = follower.snapshot(null);
     await tick();
-    // A `cb:bye` any same-origin context can post makes the leader drop that port.
+    // The tab re-brokers, so the leader retires the port this read is parked on.
     // Without a closing notice the read would wait on a wire that is gone.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await dialLeader(ports, 'f');
     await expect(inFlight).rejects.toThrow(/retry/);
 
     // The next read re-brokers against the same live leader.
@@ -655,9 +655,9 @@ describe('broadcast transport ↔ leader relay', () => {
     // Awaited only after the wipe, so the rejection is handled from the outset.
     const settled = expect(follower.download(new Uint8Array(16).fill(1))).rejects.toThrow(/retry/);
     await tick();
-    // Any same-origin context can post this; the leader then drops the port the
-    // window was going to be transferred down.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    // The tab's presence ends mid-read, so the leader drops the port the window
+    // was going to be transferred down.
+    losePresence(bus, 'f');
     await tick();
     release();
     await settled;
@@ -702,7 +702,7 @@ describe('broadcast transport ↔ leader relay', () => {
     relayOn(bus, engine, ports.courier('leader'));
     const first = followerOn(bus, 'f', ports.courier('f'));
     await first.snapshot(null);
-    first.close(); // posts `cb:bye`, so the leader reclaims that port
+    first.close(); // releases its presence, so the leader reclaims that port
     await tick();
 
     const second = followerOn(bus, 'f', ports.courier('f'));
@@ -903,11 +903,10 @@ describe('broadcast transport ↔ leader relay', () => {
     follower.subscribe((event) => events.push(event));
     await follower.snapshot(null);
 
-    // Any same-origin context can post an unauthenticated farewell; the leader
-    // reclaims the live tab's port under the same leadership. The event stream
-    // is one-way, so nothing else would re-dial: this tab would mirror no
-    // further event for the rest of that leadership.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    // The tab re-brokers, so the leader retires the port it held before. The
+    // event stream is one-way, so nothing else would re-dial: this tab would
+    // mirror no further event for the rest of that leadership.
+    await dialLeader(ports, 'f');
     await after(20);
     engine.emit({ kind: 'snapshotUpdated' });
     await after(20);
@@ -933,8 +932,6 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // Greeting on a name it no longer holds would invite the leader's watch to
     // reclaim it live, over and over; it fails closed instead.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
-    await after(20);
     await expect(follower.snapshot(null)).rejects.toThrow();
     expect(greetings()).toBe(1);
   });
@@ -1108,7 +1105,7 @@ describe('leader relay write handles', () => {
     engine.writeHandle = 2n;
     const kept = await staying.beginWrite({ node: node(2) }, 4);
 
-    leaving.close(); // posts `cb:bye`
+    leaving.close(); // releases its presence
     await tick();
 
     expect(engine.aborts).toEqual([orphan]);
@@ -1116,22 +1113,22 @@ describe('leader relay write handles', () => {
     expect(engine.chunks.map((entry) => entry.handle)).toEqual([kept]);
   });
 
-  it('keeps serving a live follower after a cb:bye it never sent', async () => {
+  it('keeps a live follower whole through a farewell forged in its name', async () => {
     const { bus, ports, engine } = bench();
     const follower = followerOn(bus, 'f1', ports.courier('f1'));
-    await follower.beginWrite({ node: node(1) }, 4);
+    const handle = await follower.beginWrite({ node: node(1) }, 4);
 
-    // Any same-origin context can forge this. It costs the tab its open handles,
-    // but must not refuse every handle it asks for afterwards.
+    // The retired farewell shape, and any other message a same-origin context
+    // can put on the channel: only the presence lock reports a departure.
     bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
-    await tick();
+    await after(20);
 
-    engine.writeHandle = 2n;
-    await expect(follower.beginWrite({ node: node(2) }, 4)).resolves.toBe(2n);
+    expect(engine.aborts).toEqual([]);
+    await expect(follower.pushChunk(handle, chunk(1))).resolves.toBeUndefined();
   });
 
   it('releases rather than strands a handle minted for a client that left mid-mint', async () => {
-    const { bus, engine, leaderPort } = await portBench();
+    const { engine, leaderPort, kill } = await portBench();
     let releaseMint!: (handle: bigint) => void;
     engine.beginWrite = () => new Promise((resolve) => (releaseMint = resolve));
 
@@ -1141,9 +1138,9 @@ describe('leader relay write handles', () => {
       write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
     });
     await tick();
-    // Any same-origin context can post this; the mint is still in flight, so the
-    // release sweep runs against a table the handle has not landed in yet.
-    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
+    // The tab dies while the mint is still in flight, so the release sweep runs
+    // against a table the handle has not landed in yet.
+    kill();
     await tick();
     releaseMint(7n);
     await tick();
@@ -1406,7 +1403,7 @@ describe('leader relay write handles', () => {
 describe('leader relay follower presence', () => {
   const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
 
-  it('reclaims the handles and port of a follower that died without a cb:bye', async () => {
+  it('reclaims the handles and port of a follower whose tab is gone', async () => {
     const { engine, leaderPort, kill } = await portBench();
     engine.writeHandle = 3n;
     engine.streamHandle = 4n;
@@ -1422,7 +1419,7 @@ describe('leader relay follower presence', () => {
     });
     await tick();
 
-    // The tab is gone: no farewell, just the browser releasing its presence lock.
+    // The tab is gone: the browser releases its presence lock.
     kill();
     await tick();
 

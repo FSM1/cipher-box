@@ -5,6 +5,7 @@ import {
   authWrapper,
   FAKE_IDENTITY_TOKEN,
   FAKE_NONCE,
+  FAKE_PHRASE,
   fakeCoreKitSession,
   fakeEngineClient,
   fakeIdentityExchange,
@@ -28,6 +29,103 @@ function mount(
     wrapper: authWrapper(client.client, coreKit.session, identity.exchange),
   });
 }
+
+describe('useAuth recovery phrase', () => {
+  beforeEach(() => authStore.signedOut());
+
+  it('prompts for the phrase rather than reporting a failure', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    expect(result.current.auth.recoveryRequired).toBe(true);
+    // The prompt is the outcome, not an error to render beside it.
+    expect(result.current.auth.error).toBeNull();
+    expect(engine.calls.secrets).toEqual([]);
+  });
+
+  it('hands the engine its secret once the phrase opens the account', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    await act(() => result.current.auth.loginWithRecoveryPhrase(FAKE_PHRASE));
+
+    expect(coreKit.calls.phrases).toEqual([FAKE_PHRASE]);
+    expect(result.current.auth.recoveryRequired).toBe(false);
+    expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(authStore.getState()).toMatchObject({ isAuthenticated: true });
+  });
+
+  it('keeps the prompt up for another attempt after a wrong phrase', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    await act(async () => {
+      await expect(result.current.auth.loginWithRecoveryPhrase('wrong')).rejects.toThrow();
+    });
+
+    expect(result.current.auth.recoveryRequired).toBe(true);
+    expect(result.current.auth.error).toMatch(/does not open this account/);
+    expect(coreKit.calls.logouts).toBe(0);
+    expect(engine.calls.secrets).toEqual([]);
+  });
+
+  it('holds the prompt where every surface reads it, not per hook instance', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    const second = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    expect(second.result.current.auth.recoveryRequired).toBe(true);
+
+    // The panel is its own consumer, so a cancel taken there has to reach the
+    // page that decided to render it.
+    await act(() => second.result.current.auth.cancelRecovery());
+    expect(result.current.auth.recoveryRequired).toBe(false);
+  });
+
+  it('holds the enrollment answer where every surface reads it, not per hook instance', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
+    const { result } = mount(engine, coreKit);
+    const menu = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    expect(menu.result.current.auth.recoveryEnrolled).toBe(false);
+
+    await act(async () => {
+      await result.current.auth.enrollRecoveryPhrase();
+    });
+
+    // The menu that offers enrollment is a different consumer from the dialog
+    // that performs it; one still offering it would enroll a second time.
+    expect(menu.result.current.auth.recoveryEnrolled).toBe(true);
+  });
+
+  it('ends the partial session when the member abandons the prompt', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    await act(() => result.current.auth.cancelRecovery());
+
+    expect(result.current.auth.recoveryRequired).toBe(false);
+    expect(coreKit.calls.logouts).toBe(1);
+  });
+});
 
 describe('useAuth', () => {
   beforeEach(() => authStore.signedOut());

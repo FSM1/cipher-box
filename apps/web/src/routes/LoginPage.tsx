@@ -5,6 +5,7 @@ import { useAuth } from '../auth/useAuth';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
 import { LoginError } from '../components/auth/LoginError';
+import { RecoveryPhraseLogin } from '../components/auth/RecoveryPhraseLogin';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
@@ -24,6 +25,7 @@ export function LoginPage() {
     loginWithEmailCode,
     walletNonce,
     loginWithWallet,
+    recoveryRequired,
   } = useAuth();
   const { googleClientId } = useIdentity();
   const navigate = useNavigate();
@@ -50,37 +52,41 @@ export function LoginPage() {
             your files, encrypted on your device. we never see your data.
           </p>
 
-          <div className="login-methods">
-            <GoogleLoginButton
-              clientId={googleClientId}
-              onCredential={(idToken) => dispatch(loginWithGoogle(idToken))}
-              disabled={!isReady}
-              busy={isBusy}
-            />
+          {recoveryRequired ? (
+            <RecoveryPhraseLogin />
+          ) : (
+            <div className="login-methods">
+              <GoogleLoginButton
+                clientId={googleClientId}
+                onCredential={(idToken) => dispatch(loginWithGoogle(idToken))}
+                disabled={!isReady}
+                busy={isBusy}
+              />
 
-            <div className="login-divider">
-              <span>// or</span>
+              <div className="login-divider">
+                <span>// or</span>
+              </div>
+
+              <EmailLoginForm
+                onSendCode={sendEmailCode}
+                onVerify={loginWithEmailCode}
+                disabled={!isReady}
+                busy={isBusy}
+              />
+
+              <div className="login-divider">
+                <span>// or</span>
+              </div>
+
+              <WalletLoginButton
+                requestNonce={walletNonce}
+                onLogin={loginWithWallet}
+                disabled={!isReady || isBusy}
+              />
             </div>
+          )}
 
-            <EmailLoginForm
-              onSendCode={sendEmailCode}
-              onVerify={loginWithEmailCode}
-              disabled={!isReady}
-              busy={isBusy}
-            />
-
-            <div className="login-divider">
-              <span>// or</span>
-            </div>
-
-            <WalletLoginButton
-              requestNonce={walletNonce}
-              onLogin={loginWithWallet}
-              disabled={!isReady || isBusy}
-            />
-          </div>
-
-          {error && <LoginError message={error} />}
+          {error && !recoveryRequired && <LoginError message={error} />}
         </div>
         <footer className="login-footer">
           <span className="footer-copyright">(c) 2026 CipherBox</span>

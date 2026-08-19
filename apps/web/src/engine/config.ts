@@ -96,6 +96,10 @@ export function engineHostConfig(
   return {
     apiBaseUrl: apiBaseUrl(env),
     recordEndpoints,
+    // The CI deployment is the only one that runs the fast cadence; every other
+    // build ships the production timings, so an unrecognised environment lands
+    // on the slow, safe one rather than hammering the record plane.
+    profile: environment(env) === 'ci' ? 'ci' : 'production',
     // The content gateway has no default: unset reads nothing rather than
     // reaching for an endpoint nobody chose. Dormant is the fail-closed state,
     // so a blank value must land there rather than configuring a gateway source

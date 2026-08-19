@@ -8,13 +8,14 @@ import type { EngineClient } from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
+import type { WebCoreKitSession } from '../auth/coreKit';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
-import type {
-  CoreKitSession,
-  IdentityCredential,
-  IdentityExchange,
-  IdentityMethod,
+import {
+  RecoveryRequiredError,
+  type IdentityCredential,
+  type IdentityExchange,
+  type IdentityMethod,
 } from '@cipherbox/login';
 import { wagmiConfig } from '../lib/wagmi';
 import { EngineProvider } from '../providers/EngineProvider';
@@ -27,6 +28,9 @@ export const FAKE_NONCE = 'nonce123456789ab';
 
 /** The identity token the fake exchange mints, whichever method asked. */
 export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
+
+/** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
+export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
 
 export interface EngineCalls {
   /** The buffers `start` was handed, still live so a test can check zeroization. */
@@ -81,6 +85,8 @@ export interface CoreKitCalls {
   logins: IdentityCredential[];
   exports: number;
   logouts: number;
+  phrases: string[];
+  enrollments: number;
 }
 
 export function fakeCoreKitSession(
@@ -89,23 +95,43 @@ export function fakeCoreKitSession(
     email?: () => string | null;
     /** Stands in for the mount-time restore; omit for one that settles at once. */
     restore?: () => Promise<void>;
+    /** Turns every login into one that stops at the factor policy. */
+    needsRecovery?: boolean;
+    /** Whether this account already carries a factor policy. */
+    enrolled?: boolean;
+    /** What an enrollment could not confirm after the policy was cut. */
+    enrollWarning?: string;
   } = {}
 ) {
-  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0 };
+  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0, phrases: [], enrollments: 0 };
   let loggedIn = options.loggedIn ?? false;
   // Both read off the redeemed credential, as the real session does: a bare
   // restore knows neither, and a wallet login carries no address.
   let method: IdentityMethod | null = null;
   let email: string | null = null;
-  const session: CoreKitSession = {
+  const session: WebCoreKitSession = {
     restore: options.restore ?? (() => Promise.resolve()),
     isLoggedIn: () => loggedIn,
     login(credential) {
       calls.logins.push(credential);
       method = credential.method;
       email = credential.email;
+      if (options.needsRecovery) return Promise.reject(new RecoveryRequiredError());
       loggedIn = true;
       return Promise.resolve();
+    },
+    hasRecoveryPhrase: () => options.enrolled ?? false,
+    recoverWithPhrase(phrase) {
+      calls.phrases.push(phrase);
+      if (phrase !== FAKE_PHRASE) {
+        return Promise.reject(new Error('that recovery phrase does not open this account'));
+      }
+      loggedIn = true;
+      return Promise.resolve();
+    },
+    enrollRecoveryPhrase() {
+      calls.enrollments += 1;
+      return Promise.resolve({ phrase: FAKE_PHRASE, warning: options.enrollWarning ?? null });
     },
     method: () => method,
     email: options.email ?? (() => email),
@@ -177,7 +203,7 @@ export function fakeIdentityExchange(overrides: Partial<IdentityExchange> = {}):
 /** Mounts the providers the login flow reads, over the given fakes. */
 export function authWrapper(
   client: EngineClient,
-  session: CoreKitSession,
+  session: WebCoreKitSession,
   exchange: IdentityExchange = fakeIdentityExchange().exchange
 ) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -196,7 +222,7 @@ export function authWrapper(
 /** `authWrapper` plus the wallet-side providers the login *page* also mounts. */
 export function pageWrapper(
   client: EngineClient,
-  session: CoreKitSession,
+  session: WebCoreKitSession,
   exchange: IdentityExchange = fakeIdentityExchange().exchange
 ) {
   const Auth = authWrapper(client, session, exchange);
