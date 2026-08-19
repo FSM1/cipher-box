@@ -251,11 +251,13 @@ impl RotationAncestry {
             .override_seeds
             .insert(scope_id, Zeroizing::new(*override_seed));
         for child in child_index {
-            // A writer-authored index naming its own scope would make the walk
-            // derive a parent seed for a root that has no parent, minting an
-            // ascent link onto it (`rotation/eager_set.rs::bind_child_labels`
-            // skips the walk root on the same rule).
-            if child.scope_id == scope_id {
+            // A writer-authored index naming a scope this walk already gated —
+            // its own, or an ancestor — would derive a parent seed for a root
+            // from below it, minting an ascent link no reader's descent
+            // reproduces (`rotation/eager_set.rs::bind_child_labels` skips the
+            // walk root on the same rule). A gated scope already has whatever
+            // parent edge it is entitled to, so nothing honest is dropped.
+            if inner.override_seeds.contains_key(&child.scope_id) {
                 continue;
             }
             // First-seen wins, matching the walk's own dedup: a scope listed by
@@ -1341,9 +1343,11 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The root name the wave is moving off. It lingers serving the tombstone, so
     /// [`WriteWaveNet::retire`] refuses a batch naming it.
     pub current_root_name: &'a IpnsName,
-    /// The session's vault-anchor scope. The re-point's read-epoch gate compares
-    /// only there, selected from the re-point's own scope id — the produce-side
-    /// mirror of [`floor::cold_seed_checked`]'s own narrowing.
+    /// The session's vault-anchor scope, which
+    /// [`floor::repoint_regression`] needs to scope its read-epoch stage. Unlike
+    /// the consume side, which derives it from the session it is booting, this
+    /// is caller-supplied: wiring that fills it from anything but the session
+    /// root silently mis-scopes that stage.
     pub session_root_scope_id: [u8; 16],
     /// The root read this pass gated and has not yet republished
     /// ([`GatedWaveRoot`]). One rotation pass per net.
@@ -1353,9 +1357,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub subtree: WaveSubtree,
 }
 
-/// The write scope's node index, as this pass's own gated reads discovered it: a
-/// node id locates nothing on its own — only a gated parent's read body names
-/// its children.
+/// What this pass's own gated reads discovered: the write scope's node index —
+/// a node id locates nothing on its own, only a gated parent's read body names
+/// its children — and the lowest read epoch those reads carried.
 #[derive(Default)]
 pub struct WaveSubtree {
     inner: RefCell<Discovered>,
@@ -1369,7 +1373,7 @@ struct Discovered {
     /// (`grants/child_index.rs`).
     child_scopes: BTreeSet<[u8; 16]>,
     /// The lowest envelope read epoch this pass gated. A name wave cuts no read
-    /// key, so the moved copies carry these same epochs.
+    /// key, so the wave's moved copies carry these same epochs.
     lowest_read_epoch: Option<u64>,
 }
 
@@ -1388,14 +1392,10 @@ impl WaveSubtree {
     /// Record the read epoch one gated node carried.
     fn record_read_epoch(&self, epoch: u64) {
         let mut inner = self.inner.borrow_mut();
-        inner.lowest_read_epoch = Some(match inner.lowest_read_epoch {
-            Some(lowest) => lowest.min(epoch),
-            None => epoch,
-        });
+        inner.lowest_read_epoch = Some(inner.lowest_read_epoch.map_or(epoch, |l| l.min(epoch)));
     }
 
-    /// The lowest read epoch this pass gated, or `None` before it has read
-    /// anything.
+    /// The lowest read epoch this pass gated.
     fn lowest_read_epoch(&self) -> Option<u64> {
         self.inner.borrow().lowest_read_epoch
     }
@@ -2294,12 +2294,10 @@ where
         if !root_retire_ready() && old_names.iter().any(|name| name == self.current_root_name) {
             return Err(WritePublishError::Rejected);
         }
-        // Re-read here, not at the enumeration: a read rotation adopted while the
-        // wave ran leaves every moved copy below the live floor, rejected at the
-        // gate's epoch stage, and tombstoning the old names then strands the
-        // subtree at both names. An abandoned wave must leave the old names live.
-        // Fail closed with nothing gated: the epoch is the whole evidence this
-        // irreversible step rests on.
+        // Re-read here, not at the enumeration: a rise since then leaves the
+        // wave's moved copies below the live floor, and tombstoning the old
+        // names would strand the subtree at both. Fail closed with nothing
+        // gated — that epoch is the whole evidence this step rests on.
         let moved_read_epoch = self
             .subtree
             .lowest_read_epoch()
@@ -2325,23 +2323,15 @@ where
         &self,
         repoint: &RepointObject,
     ) -> Result<(), WritePublishError> {
-        // The produce-side mirror of `floor::cold_seed_checked`'s read-epoch
-        // stage, including its narrowing: the comparison is sound only at the
-        // vault anchor, where the read epoch is owner-authored. At a shared scope
-        // a grantee's lazy rotation legitimately advances that floor past the
-        // owner-authored `minReadEpoch`, so comparing there would refuse an
-        // honest re-point.
-        if repoint.scope_id != self.session_root_scope_id {
-            return Ok(());
-        }
-        let read_floor = floor::read_epoch_floor(self.floors, &repoint.scope_id)
+        // The produce side of the gate's own rule, run against the same
+        // predicate the cold seed consumes it with, so the two cannot drift.
+        match floor::repoint_regression(self.floors, repoint, &self.session_root_scope_id)
             .await
             .map_err(|_| WritePublishError::NotLanded)?
-            .unwrap_or(0);
-        if repoint.min_read_epoch < read_floor {
-            return Err(WritePublishError::Rejected);
+        {
+            Some(_) => Err(WritePublishError::Rejected),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     async fn publish_repoint(
@@ -5033,12 +5023,8 @@ mod tests {
 
     #[test]
     fn a_read_floor_rise_before_the_retire_refuses_the_tombstones() {
-        // A name wave cuts no read key, so its moved copies carry the epoch the
-        // enumeration read. A read rotation adopted while the wave ran puts them
-        // below the live floor, where every reader rejects them at the gate's
-        // epoch stage — and retiring the old names then leaves the subtree
-        // reachable at neither name. The wave abandons instead; the old names
-        // stay live. Release-active: retirement is irreversible.
+        // Release-active: retirement is irreversible, and the moved copies the
+        // tombstones hand the subtree to sit below the risen floor.
         let harness = Harness::plain();
         let root = staged_childless_root(&harness);
         let owner = owner_identity();
@@ -5080,10 +5066,8 @@ mod tests {
 
     #[test]
     fn a_repoint_below_the_live_read_floor_is_refused_at_the_vault_anchor() {
-        // The produce side of `floor::cold_seed_checked`: a `minReadEpoch` under
-        // the live floor is a rollback of the revocation boundary, and this build
-        // rejects it on the read side, so signing it would publish a re-point its
-        // own reader refuses.
+        // Signing it would publish a re-point this build's own cold seed
+        // permanently rejects (`gate/floor.rs`).
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
@@ -5101,11 +5085,39 @@ mod tests {
     }
 
     #[test]
+    fn a_repoint_below_the_live_write_epoch_floor_is_refused_at_every_scope() {
+        // The gate's write-epoch stage is unconditional, so the produce side is
+        // too: a shared scope carries no read-epoch comparison and still cannot
+        // sign a rolled-back write clock.
+        let harness = Harness::plain();
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = Wave {
+            session_root_scope_id: [0xa1; 16],
+            ..wave(&harness, &owner, &current_root, &plan)
+        };
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            4,
+        ))
+        .expect("the write floor rise lands");
+
+        let mut repoint = anchor_repoint(SCOPE, 0);
+        repoint.write_epoch = 3;
+        assert_eq!(
+            block_on(net.check_repoint_publishable(&repoint)),
+            Err(WritePublishError::Rejected),
+        );
+        repoint.write_epoch = 4;
+        block_on(net.check_repoint_publishable(&repoint)).expect("at the floor is not below it");
+    }
+
+    #[test]
     fn a_shared_scope_repoint_skips_the_read_epoch_comparison() {
-        // A grantee's lazy rotation advances a shared scope's read floor past the
-        // owner-authored `minReadEpoch`, so the anchor's comparison would refuse
-        // an honest re-point here — the same false positive `cold_seed_checked`
-        // excludes on the read side (`gate/floor.rs`).
+        // The narrowing is load-bearing in both directions: comparing here would
+        // refuse an honest re-point (`gate/floor.rs`).
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
@@ -6384,10 +6396,8 @@ mod tests {
 
     #[test]
     fn a_planted_self_entry_gives_the_walk_root_no_parent_seed() {
-        // A committed writer authors the root's own `directChildScopeIndex`, so an
-        // entry naming the root itself is writer-supplied. Deriving a parent seed
-        // from it would let the index self-heal mint an ascent link onto a root
-        // that owes none.
+        // `directChildScopeIndex` is writer-authored, so an entry naming the walk
+        // root is a writer's claim to be its parent.
         let planted = RotationAncestry::rooted_at(
             SCOPE,
             &OWNER_ROOT_SCOPE_SEED,
@@ -6411,16 +6421,28 @@ mod tests {
                 .parent_node_seed(&SCOPE)
                 .is_some()
         );
+
+        // Same claim one hop down: a descendant's own index naming the walk root
+        // is the identical primitive, so the filter is keyed on "already gated",
+        // not on the entry naming its own scope.
+        let deep = RotationAncestry::rooted_at(
+            SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            &[ChildScopeRef::new(child, b"child".to_vec())],
+        );
+        deep.record(
+            child,
+            &SWEPT_SEED,
+            &[ChildScopeRef::new(SCOPE, b"back-edge".to_vec())],
+        );
+        assert!(deep.parent_node_seed(&SCOPE).is_none());
     }
 
     #[test]
     fn a_poisoned_ancestry_still_adopts_the_link_less_vault_root() {
-        // The index self-heal republishes the root, and a fabricated parent seed
-        // would mint an ascent link onto a vault root. Every ordinary read derives
-        // no parent seed, so the gate's ascent stage would reject the record on
-        // every device while the name's sequence floor had already moved past the
-        // last good one. The requirement is keyed on the record's own section, so
-        // the repaired root re-gates exactly as it did before.
+        // The requirement is keyed on the record's own section, not on the
+        // ancestry's answer, so the self-heal republishes the root link-less and
+        // an ordinary read — which derives no parent seed — still adopts it.
         let boundary = [0x0a; 16];
         let parent_node_seed = *kdf::node_seed(&SWEPT_SEED, &boundary).as_bytes();
         let descendant = owner_scope_root(

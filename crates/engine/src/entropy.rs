@@ -10,6 +10,7 @@
 use core::fmt;
 
 use cipherbox_core::suite::aead::NONCE_LEN;
+use cipherbox_core::suite::secret::SECRET_LEN;
 
 use zeroize::Zeroizing;
 
@@ -83,17 +84,14 @@ pub fn fresh_ephemeral<E: Entropy + ?Sized>(
     Ok(ephemeral)
 }
 
-/// A fresh `N`-byte key seed, or a closed failure.
+/// A fresh key seed, or a closed failure.
 ///
-/// Same refusal as [`fresh_ephemeral`], for the sharpest reason of the three: an
-/// all-zero override seed does not merely weaken the new epoch, it publishes the
-/// previous one — the rotation seals its history link under the new seed's
-/// structure key, so a seed anyone can guess hands out the epoch the rotation
-/// was cutting.
-pub fn fresh_seed<const N: usize, E: Entropy + ?Sized>(
+/// Same refusal as [`fresh_ephemeral`]: a seed anyone can guess is a key anyone
+/// can re-derive, for every edge the KDF tree grows from it.
+pub fn fresh_seed<E: Entropy + ?Sized>(
     entropy: &mut E,
-) -> Result<Zeroizing<[u8; N]>, EntropyError> {
-    let mut seed = Zeroizing::new([0u8; N]);
+) -> Result<Zeroizing<[u8; SECRET_LEN]>, EntropyError> {
+    let mut seed = Zeroizing::new([0u8; SECRET_LEN]);
     entropy.fill(seed.as_mut_slice())?;
     if seed.iter().all(|byte| *byte == 0) {
         return Err(EntropyError::new("entropy seam produced an all-zero seed"));
@@ -139,7 +137,7 @@ mod fresh_draw_tests {
     fn a_seam_that_writes_nothing_is_refused() {
         assert!(fresh_ephemeral(&mut Silent).is_err());
         assert!(fresh_nonce(&mut Silent).is_err());
-        assert!(fresh_seed::<32, _>(&mut Silent).is_err());
+        assert!(fresh_seed(&mut Silent).is_err());
     }
 
     #[test]
@@ -159,7 +157,7 @@ mod fresh_draw_tests {
             "no entropy",
         );
         assert_eq!(
-            fresh_seed::<32, _>(&mut Broken)
+            fresh_seed(&mut Broken)
                 .expect_err("the seam failure propagates")
                 .message(),
             "no entropy",
@@ -178,7 +176,7 @@ mod fresh_draw_tests {
                 .any(|b| *b != 0)
         );
         assert!(
-            fresh_seed::<32, _>(&mut seeded)
+            fresh_seed(&mut seeded)
                 .expect("fresh")
                 .iter()
                 .any(|b| *b != 0)

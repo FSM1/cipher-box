@@ -342,11 +342,10 @@ where
 
     // Mint the fresh random override seed — the fresh-seed cut that revokes cached
     // access. `Zeroizing` wipes it on every return path, including a panic unwind.
-    let new_override_seed: Zeroizing<[u8; SECRET_LEN]> =
-        fresh_seed(entropy).map_err(|e| CascadeError::Reseal {
-            scope_id,
-            error: ResealError::Entropy(e),
-        })?;
+    let new_override_seed = fresh_seed(entropy).map_err(|e| CascadeError::Reseal {
+        scope_id,
+        error: ResealError::Entropy(e),
+    })?;
 
     let seeds = ResealSeeds {
         override_seed: &new_override_seed,
@@ -948,62 +947,37 @@ mod tests {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    fn run(
-        net: FakeNet,
-        root_children: &[u8],
-    ) -> (
+    /// What every cascade run hands back: the outcome, the fake network it ran
+    /// against, its floors, and the number of tasks it spawned.
+    type CascadeRun = (
         Result<CascadeOutcome, CascadeError>,
         FakeNet,
         InMemoryFloorStore,
         usize,
-    ) {
+    );
+
+    fn run(net: FakeNet, root_children: &[u8]) -> CascadeRun {
         let root_index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
         run_with_index(net, root_index)
     }
 
     /// [`run`] with a caller-chosen root child index (custom `ipns_name` labels).
-    #[allow(clippy::type_complexity)]
-    fn run_with_index(
-        net: FakeNet,
-        root_index: Vec<ChildScopeRef>,
-    ) -> (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    ) {
+    fn run_with_index(net: FakeNet, root_index: Vec<ChildScopeRef>) -> CascadeRun {
         run_fx(RootFx::new(net.clone()), net, root_index)
     }
 
     /// [`run_with_index`] over a caller-built root fixture.
-    #[allow(clippy::type_complexity)]
-    fn run_fx(
-        fx: RootFx,
-        net: FakeNet,
-        root_index: Vec<ChildScopeRef>,
-    ) -> (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    ) {
+    fn run_fx(fx: RootFx, net: FakeNet, root_index: Vec<ChildScopeRef>) -> CascadeRun {
         run_fx_with(SeededEntropy::new(0xCA5CADE), fx, net, root_index)
     }
 
     /// [`run_fx`] over a caller-chosen entropy seam.
-    #[allow(clippy::type_complexity)]
     fn run_fx_with<E: Entropy>(
         mut entropy: E,
         fx: RootFx,
         net: FakeNet,
         root_index: Vec<ChildScopeRef>,
-    ) -> (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    ) {
+    ) -> CascadeRun {
         let floors = InMemoryFloorStore::default();
         let scheduler = VirtualScheduler::new();
         let outcome = block_on(async {
@@ -1019,10 +993,9 @@ mod tests {
 
     #[test]
     fn a_silent_entropy_seam_re_keys_nothing() {
-        // The cascade draws every descendant's fresh seed before `reseal_scope_root`
-        // runs, so `fresh_ephemeral`'s own guard can never fire first on a partly
-        // broken seam. An all-zero seed republishes the pre-cascade seed inside the
-        // new epoch's history link — the revocation this cascade exists to make.
+        // Nothing downstream shadows the draw: the seed is minted before
+        // `reseal_scope_root`, and the epoch's own history link would republish
+        // the pre-cascade seed under it.
         let net = FakeNet::new().scope(0x0a, 4, &[]);
         let (outcome, net, floors, spawned) = run_fx_with(
             SilentEntropy,

@@ -199,15 +199,14 @@ pub trait WriteWavePublisher {
     /// Batch-retire interior old names at wave completion. MUST run only **after**
     /// the root re-point, and MUST NOT include the old root name (it lingers).
     /// The wave's one irreversible step, so an implementor MUST re-read the
-    /// read-epoch floor here and refuse on a rise: a rotation adopted mid-wave
-    /// puts the moved copies below it, and tombstoning the old names then strands
-    /// the subtree at both names.
+    /// read-epoch floor here and refuse on a rise — its evidence being the epochs
+    /// its own [`WriteSubtreeResolver::resolve_node`] reads gated, which is why
+    /// the resolver and the publisher must be one value.
     async fn retire(&self, old_names: &[IpnsName]) -> Result<(), WritePublishError>;
 
-    /// Refuse a re-point this build's own cold-seed gate would reject, **before**
-    /// the owner signs it — the produce side of
-    /// [`floor::cold_seed_checked`](crate::gate::floor::cold_seed_checked),
-    /// including its narrowing to the vault-anchor scope.
+    /// Refuse a re-point this build's own gate would reject
+    /// ([`floor::repoint_regression`](crate::gate::floor::repoint_regression)),
+    /// **before** the owner signs it.
     async fn check_repoint_publishable(
         &self,
         repoint: &RepointObject,
@@ -353,7 +352,7 @@ pub enum WriteRotateError {
     /// where the wave stopped (it re-derives and resumes from published state).
     Publish {
         /// The wave stage that failed (`republish` / `retire` /
-        /// `repoint-<channel>`).
+        /// `repoint-precheck` / `repoint-<channel>`).
         stage: &'static str,
         /// The offending node id, or the scope id for the retire/re-point stages.
         node_id: [u8; 16],
@@ -612,7 +611,7 @@ where
         .check_repoint_publishable(&repoint)
         .await
         .map_err(|error| WriteRotateError::Publish {
-            stage: repoint_stage(RepointChannel::ScopePointer),
+            stage: "repoint-precheck",
             node_id: scope_id,
             error,
         })?;

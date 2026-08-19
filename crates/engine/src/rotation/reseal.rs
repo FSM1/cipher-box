@@ -501,12 +501,8 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::SignerNotCommitted);
     }
 
-    // Fail-closed BEFORE any seal, both directions: the link is owed or it is
-    // not, and the mint below keys off the seed alone. A descendant handed no
-    // seed would publish with nothing binding it to its parent
-    // (`ResealError::AscentLinkDropped`); a root owing no link, handed one,
-    // publishes a link no reader's descent reproduces
-    // (`ResealError::AscentLinkNotOwed`).
+    // Fail-closed BEFORE any seal, both directions — the mint below keys off the
+    // seed alone (see `ResealError::AscentLinkDropped` and `AscentLinkNotOwed`).
     if identity.owes_ascent_link && identity.parent_node_seed.is_none() {
         return Err(ResealError::AscentLinkDropped);
     }

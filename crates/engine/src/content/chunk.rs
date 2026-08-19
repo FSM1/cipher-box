@@ -8,10 +8,10 @@
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, seal_chunk};
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::profile::ContentProfile;
-use crate::entropy::{Entropy, EntropyError, fresh_seed};
+use crate::entropy::{Entropy, EntropyError, fresh_nonce, fresh_seed};
 
 /// The sealed byte overhead one leaf adds to its plaintext chunk:
 /// `nonce(24) || ciphertext || tag(16)`, with ciphertext length equal to
@@ -29,12 +29,9 @@ pub struct ContentKey([u8; KEY_LEN]);
 
 impl ContentKey {
     /// Mint a fresh content key from injected entropy. Fails closed if entropy
-    /// acquisition fails — never substitutes predictable bytes. The staging
-    /// buffer self-zeroizes on every return path (incl. the error path, where
-    /// it may hold partially-written key bytes).
+    /// acquisition fails — never substitutes predictable bytes.
     pub fn generate(entropy: &mut impl Entropy) -> Result<Self, EntropyError> {
-        let bytes: Zeroizing<[u8; KEY_LEN]> = fresh_seed(entropy)?;
-        Ok(Self(*bytes))
+        Ok(Self(*fresh_seed(entropy)?))
     }
 
     /// Adopt caller-supplied key bytes (a restored per-version key). The array
@@ -104,8 +101,7 @@ pub fn seal_one_chunk(
     chunk: &[u8],
     entropy: &mut impl Entropy,
 ) -> Result<SealedChunk, EntropyError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    entropy.fill(&mut nonce)?;
+    let nonce = fresh_nonce(entropy)?;
     let sealed = seal_chunk(key.as_bytes(), &nonce, chunk);
     let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
     Ok(SealedChunk { cid, sealed })

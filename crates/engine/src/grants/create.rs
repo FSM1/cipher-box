@@ -38,7 +38,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use core::fmt;
 use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError, fresh_seed};
+use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_seed};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
@@ -352,8 +352,7 @@ where
     // 4) Mint at read epoch 1 with a FRESH RANDOM override seed (never
     // KDF-derived). The new scope adopts the folder's descendant scope roots as
     // its direct-child-scope index (they now live inside the granted scope).
-    let override_seed: Zeroizing<[u8; SECRET_LEN]> =
-        fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
+    let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
 
     let grantee_section = {
         let identity = ScopeRootIdentity {
@@ -527,10 +526,7 @@ where
         display_name: recipient.display_name.clone(),
         permission: Permission::Read,
     };
-    let mut ephemeral = Zeroizing::new([0u8; 32]);
-    entropy
-        .fill(&mut *ephemeral)
-        .map_err(CreateGrantError::Entropy)?;
+    let ephemeral = fresh_ephemeral(entropy).map_err(CreateGrantError::Entropy)?;
     // Fresh random, never derived: the API keeps only
     // sha256(senderPublicKey : idempotencyKey), so any key an observer can
     // recompute hands it back the sender→recipient edge. The blinded tag is

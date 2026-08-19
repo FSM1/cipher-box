@@ -33,8 +33,6 @@
 //! This primitive is the root cut alone; the descendant re-key runs through the
 //! same [`reseal_scope_root`] helper in [`cascade`](super::cascade).
 
-use zeroize::Zeroizing;
-
 use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
 
@@ -241,7 +239,7 @@ where
     // Mint the fresh random override seed at the scope root (the read-plane cut).
     // `rotate_scope` is this seed's terminal owner: `Zeroizing` wipes it on every
     // return path, including the error paths and a panic unwind.
-    let new_override_seed: Zeroizing<[u8; SECRET_LEN]> =
+    let new_override_seed =
         fresh_seed(entropy).map_err(|e| RotateError::Reseal(ResealError::Entropy(e)))?;
 
     let seeds = ResealSeeds {
@@ -402,21 +400,7 @@ mod tests {
     /// records the publisher saw, the floor it snapshotted at publish time, the
     /// spawned-task count, and the final durable floor.
     #[allow(clippy::type_complexity)]
-    fn run_rotation(
-        publish_result: Result<(), ScopeRootPublishError>,
-    ) -> (
-        Result<RotationOutcome, RotateError>,
-        Vec<ResealedScopeRoot>,
-        Option<Option<u64>>,
-        usize,
-        Option<u64>,
-    ) {
-        run_rotation_with(SeededEntropy::new(9), publish_result)
-    }
-
-    /// [`run_rotation`] over a caller-chosen entropy seam.
-    #[allow(clippy::type_complexity)]
-    fn run_rotation_with<E: Entropy>(
+    fn run_rotation<E: Entropy>(
         mut entropy: E,
         publish_result: Result<(), ScopeRootPublishError>,
     ) -> (
@@ -482,11 +466,9 @@ mod tests {
 
     #[test]
     fn a_silent_entropy_seam_cuts_no_epoch_and_publishes_nothing() {
-        // An all-zero override seed does not weaken the new epoch, it publishes
-        // the old one: the fresh history link seals the pre-rotation seed under a
-        // structure key anyone can re-derive from thirty-two zero bytes. The draw
-        // is refused release-active, before the re-seal.
-        let (outcome, seen, _, spawned, floor) = run_rotation_with(SilentEntropy, Ok(()));
+        // Release-active, before the re-seal: the epoch's fresh history link
+        // would hand out the seed this cut is revoking.
+        let (outcome, seen, _, spawned, floor) = run_rotation(SilentEntropy, Ok(()));
 
         assert!(matches!(
             outcome.expect_err("the zero draw is refused"),
@@ -499,7 +481,8 @@ mod tests {
 
     #[test]
     fn happy_path_publishes_then_bumps_floor_then_enqueues_sweep() {
-        let (outcome, seen, floor_at_publish, spawned, final_floor) = run_rotation(Ok(()));
+        let (outcome, seen, floor_at_publish, spawned, final_floor) =
+            run_rotation(SeededEntropy::new(9), Ok(()));
         let outcome = outcome.expect("rotation succeeds");
         assert_eq!(outcome.new_read_epoch, 5, "read epoch bumped 4 -> 5");
         assert_eq!(
@@ -530,8 +513,10 @@ mod tests {
     fn publish_failure_does_not_bump_floor_or_enqueue_sweep() {
         // The lockout guard: a failed publish leaves the floor untouched (old
         // records still gate-pass) and enqueues no sweep.
-        let (outcome, seen, _floor_at_publish, spawned, final_floor) =
-            run_rotation(Err(ScopeRootPublishError::NotPublished));
+        let (outcome, seen, _floor_at_publish, spawned, final_floor) = run_rotation(
+            SeededEntropy::new(9),
+            Err(ScopeRootPublishError::NotPublished),
+        );
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(seen.len(), 1, "publish was attempted");
         assert_eq!(final_floor, None, "floor NOT raised on a failed publish");
@@ -541,7 +526,7 @@ mod tests {
     #[test]
     fn lost_cas_race_does_not_bump_floor() {
         let (outcome, _seen, _snap, spawned, final_floor) =
-            run_rotation(Err(ScopeRootPublishError::LostRace));
+            run_rotation(SeededEntropy::new(9), Err(ScopeRootPublishError::LostRace));
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(final_floor, None, "a lost race advances no floor");
         assert_eq!(spawned, 0);
