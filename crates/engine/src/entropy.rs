@@ -120,12 +120,25 @@ pub fn fresh_seed<E: Entropy + ?Sized>(
 /// reports success having written nothing seals every body under one fixed
 /// nonce, and two seals under one key at one nonce is a confidentiality break.
 pub fn fresh_nonce<E: Entropy + ?Sized>(entropy: &mut E) -> Result<[u8; NONCE_LEN], EntropyError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    entropy.fill(&mut nonce)?;
-    if nonce.iter().all(|byte| *byte == 0) {
-        return Err(EntropyError::new("entropy seam produced an all-zero nonce"));
+    fresh_bytes(entropy, "nonce")
+}
+
+/// A fresh non-key draw of `N` bytes, or a closed failure.
+///
+/// The same refusal as [`fresh_ephemeral`], for values that are neither keys nor
+/// seeds and so want no [`Zeroizing`]. `what` names the draw in the error.
+pub fn fresh_bytes<const N: usize, E: Entropy + ?Sized>(
+    entropy: &mut E,
+    what: &str,
+) -> Result<[u8; N], EntropyError> {
+    let mut drawn = [0u8; N];
+    entropy.fill(&mut drawn)?;
+    if drawn.iter().all(|byte| *byte == 0) {
+        return Err(EntropyError::new(format!(
+            "entropy seam produced an all-zero {what}"
+        )));
     }
-    Ok(nonce)
+    Ok(drawn)
 }
 
 #[cfg(test)]

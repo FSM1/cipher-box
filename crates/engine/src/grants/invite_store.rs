@@ -1,11 +1,15 @@
-//! The owner's durable record of the invite links it minted — what lets a link
-//! minted in one session be converted or revoked in the next.
+//! The owner's durable record of the invite links it minted and the claims it
+//! has already converted — what lets a link minted in one session be converted
+//! or revoked in the next, and what keeps a claim single-use.
 //!
 //! [`convert_invite_claim`](super::convert_invite_claim) and
 //! [`revoke_invite_link`](super::revoke_invite_link) both take a
 //! [`RecordedInvite`] back as input, and nothing in a resolved record marks a
 //! row as an invite, so this store is the owner's authority over its own links
-//! rather than a cache of published state.
+//! rather than a cache of published state. The spent-claim half
+//! ([`ConvertedClaimRecord`]) is authority the network cannot hold at all: the
+//! mailbox chooses what to redeliver, so only the owner can remember what it
+//! already converted.
 //!
 //! It is therefore sealed HPKE-to-self under the session's `enc-subkey`
 //! (`owner-local`, kind `invite-records`; ADR 0006) rather than written in the
@@ -24,14 +28,17 @@
 //! cut is derived from the record rather than looked up by tag. The
 //! owner-signed commitment caps both: conversion reads the permission there and
 //! treats absence as revocation, and honours the published deadline as a
-//! further restriction. Closing them needs a monotone generation held where the
-//! host cannot roll it back.
+//! further restriction. It caps nothing on the spent-claim half, whose whole
+//! rule is how to read that same absence — a restored blob un-spends claims, and
+//! for a claim whose grant was cut both refusals fail open together. Closing
+//! them needs a monotone generation held where the host cannot roll it back.
 //!
 //! Like its siblings it rides the staging store's opaque key space, on the
 //! [`RetireLedger`](crate::seams::RetireLedger) shape.
 
 use core::cell::RefCell;
 use core::fmt;
+use std::collections::BTreeSet;
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::CodecError;
@@ -45,7 +52,7 @@ use crate::seams::{SeamError, StagingStore, UnixMillis};
 use crate::sync::owner_scoped_key;
 
 use super::accept::{TooLong, fixed, reject_unknown, req, within};
-use super::invite::RecordedInvite;
+use super::invite::{CLAIM_ID_LEN, ConvertedClaimRecord, RecordedInvite};
 
 /// The staging-key prefix the invite records are stored under, scoped per
 /// identity by [`owner_scoped_key`]. `is_bookkeeping` treats the whole prefix as
@@ -56,12 +63,17 @@ use super::invite::RecordedInvite;
 pub const INVITE_RECORDS_PREFIX: &[u8] = b"cbx/iv/";
 
 /// The stored-body grammar version this build writes and can read.
-const INVITE_RECORDS_V: u64 = 1;
+const INVITE_RECORDS_V: u64 = 2;
 
 /// The frozen bound on recorded links, enforced release-active in both codec
 /// directions (AGENTS.md rule 8). One record per live link across every scope
 /// the owner has invited to; it bounds reader CPU and the staging budget alike.
 pub const MAX_INVITE_RECORDS: usize = 1024;
+
+/// The frozen bound on spent-claim records, on the same rule as
+/// [`MAX_INVITE_RECORDS`]. Larger because one link is multi-claim: it bounds the
+/// claims every live link has produced, not the links.
+pub const MAX_CONVERTED_CLAIMS: usize = 4096;
 
 /// Why encoding or decoding a stored record set failed.
 ///
@@ -79,6 +91,12 @@ pub enum InviteRecordsCodecError {
     /// Two records under one tag: no defined authority for that link's
     /// permission or deadline, refused in both directions (AGENTS.md rule 8).
     DuplicateTag,
+    /// Two spent-claim records under one claim id, or two under one
+    /// `(linkTag, tag)` pair. Refused in both directions (AGENTS.md rule 8):
+    /// one record per grantee per link is what bounds the set by the grants the
+    /// owner published, rather than by how many claims a bearer-link holder
+    /// chooses to post.
+    DuplicateClaim,
     /// A recorded deadline of `0`. `mint_invite_grant` refuses one
     /// ([`InviteError::InvalidExpiry`](super::InviteError::InvalidExpiry)), so
     /// reading it as "no deadline" would resurrect a link the mint never made.
@@ -99,6 +117,7 @@ impl fmt::Display for InviteRecordsCodecError {
             InviteRecordsCodecError::Codec(e) => write!(f, "codec: {e}"),
             InviteRecordsCodecError::DidNotOpen(e) => write!(f, "did not open: {}", e.check()),
             InviteRecordsCodecError::DuplicateTag => f.write_str("names one tag twice"),
+            InviteRecordsCodecError::DuplicateClaim => f.write_str("names one conversion twice"),
             InviteRecordsCodecError::ZeroDeadline => f.write_str("records a zero deadline"),
             InviteRecordsCodecError::UnsupportedVersion { version } => {
                 write!(f, "is at version {version}, which is not readable")
@@ -120,23 +139,38 @@ impl<E: Into<CodecError>> From<E> for InviteRecordsCodecError {
     }
 }
 
-/// Durable persistence for the owner's minted invite links.
+/// The owner's whole invite state: the links it minted, and the claims it has
+/// already spent converting.
 ///
-/// Whole-list replacement, like the received-shares store: the caller's list is
-/// the authority, so a revoked link is dropped by persisting the list without
-/// it.
-pub trait InviteStore {
-    /// Durably persist the whole set of recorded links.
-    async fn persist(&self, links: &[RecordedInvite]) -> Result<(), InviteStoreError>;
+/// One unit because the two are read and written together — conversion consults
+/// both and appends to the second — and because a torn pair would let a claim
+/// whose record was lost be converted a second time.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct InviteRecords {
+    /// The live links, the authority for what may be claimed.
+    pub links: Vec<RecordedInvite>,
+    /// The claims already converted, the authority for what may not be claimed
+    /// again.
+    pub claims: Vec<ConvertedClaimRecord>,
+}
 
-    /// The persisted records, or an empty set when the backing holds no entry
+/// Durable persistence for the owner's invite state.
+///
+/// Whole-set replacement, like the received-shares store: the caller's set is
+/// the authority, so a revoked link is dropped by persisting the set without it.
+pub trait InviteStore {
+    /// Durably persist the whole set.
+    async fn persist(&self, records: &InviteRecords) -> Result<(), InviteStoreError>;
+
+    /// The persisted state, or an empty set when the backing holds no entry
     /// at all — the module header states what a dropped entry costs.
     ///
     /// Fail-closed on an entry it cannot read: a link's fragment is already in
     /// a holder's hands, so a stored set this build cannot open is
     /// unrecoverable authority, and reporting it as empty would let the next
-    /// [`persist`](Self::persist) overwrite every link behind it.
-    async fn load(&self) -> Result<Vec<RecordedInvite>, InviteStoreError>;
+    /// [`persist`](Self::persist) overwrite every link behind it and re-admit
+    /// every spent claim.
+    async fn load(&self) -> Result<InviteRecords, InviteStoreError>;
 }
 
 /// Why an invite-store operation failed.
@@ -153,12 +187,20 @@ pub enum InviteStoreError {
     /// reported as an empty set: the next persist would overwrite links whose
     /// fragments are already in holders' hands.
     Unreadable(InviteRecordsCodecError),
-    /// The set to persist holds more than [`MAX_INVITE_RECORDS`]. The stored
-    /// bytes are fine — the offered set is the one past the bound — so a host
-    /// can revoke a live link rather than report corruption.
-    Full,
+    /// The offered set is past a bound. The stored bytes are fine — the offered
+    /// set is the one past it — so a host can act rather than report
+    /// corruption: revoke a live link for `links`, and for `claims` revoke a
+    /// link and drop the records naming it
+    /// ([`ConvertedClaimRecord::link_tag`](super::ConvertedClaimRecord::link_tag)).
+    Full {
+        /// The collection that overflowed, as the stored body spells it.
+        collection: &'static str,
+        /// The bound it passed.
+        limit: usize,
+    },
     /// The offered set is not one this build may store: two records under one
-    /// tag, or a zero deadline. A write-path refusal, so never
+    /// tag, two conversions under one claim id or one `(linkTag, tag)` pair, or
+    /// a zero deadline. A write-path refusal, so never
     /// [`Unreadable`](Self::Unreadable) — nothing was read.
     Encode(InviteRecordsCodecError),
     /// Entropy acquisition failed, so no set is sealed and none is written.
@@ -173,10 +215,9 @@ impl fmt::Display for InviteStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InviteStoreError::Unreadable(e) => write!(f, "the stored invite record set {e}"),
-            InviteStoreError::Full => write!(
-                f,
-                "the invite records already hold {MAX_INVITE_RECORDS} links"
-            ),
+            InviteStoreError::Full { collection, limit } => {
+                write!(f, "the invite records already hold {limit} {collection}")
+            }
             InviteStoreError::Encode(e) => write!(f, "the invite record set to store {e}"),
             InviteStoreError::Entropy(e) => write!(f, "invite records: {e}"),
             InviteStoreError::Seal(e) => write!(f, "invite records seal failed: {}", e.check()),
@@ -223,11 +264,20 @@ impl<'a, St: StagingStore, E: Entropy> StagingInviteStore<'a, St, E> {
 }
 
 impl<St: StagingStore, E: Entropy> InviteStore for StagingInviteStore<'_, St, E> {
-    async fn persist(&self, links: &[RecordedInvite]) -> Result<(), InviteStoreError> {
-        if links.len() > MAX_INVITE_RECORDS {
-            return Err(InviteStoreError::Full);
+    async fn persist(&self, records: &InviteRecords) -> Result<(), InviteStoreError> {
+        if records.links.len() > MAX_INVITE_RECORDS {
+            return Err(InviteStoreError::Full {
+                collection: "links",
+                limit: MAX_INVITE_RECORDS,
+            });
         }
-        let body = encode_records(links).map_err(InviteStoreError::Encode)?;
+        if records.claims.len() > MAX_CONVERTED_CLAIMS {
+            return Err(InviteStoreError::Full {
+                collection: "claims",
+                limit: MAX_CONVERTED_CLAIMS,
+            });
+        }
+        let body = encode_records(records).map_err(InviteStoreError::Encode)?;
         let ephemeral =
             fresh_ephemeral(&mut *self.entropy.borrow_mut()).map_err(InviteStoreError::Entropy)?;
         let blob = seal_owner_local(
@@ -243,9 +293,9 @@ impl<St: StagingStore, E: Entropy> InviteStore for StagingInviteStore<'_, St, E>
         Ok(())
     }
 
-    async fn load(&self) -> Result<Vec<RecordedInvite>, InviteStoreError> {
+    async fn load(&self) -> Result<InviteRecords, InviteStoreError> {
         let Some(blob) = self.staging.staged_bytes(self.staging_key()).await? else {
-            return Ok(Vec::new());
+            return Ok(InviteRecords::default());
         };
         let body = open_owner_local(self.enc_secret, OwnerLocalKind::InviteRecords, &blob)
             .map_err(|e| InviteStoreError::Unreadable(InviteRecordsCodecError::DidNotOpen(e)))?;
@@ -253,18 +303,47 @@ impl<St: StagingStore, E: Entropy> InviteStore for StagingInviteStore<'_, St, E>
     }
 }
 
-/// Encode the durable record set to det-CBOR, records in tag order so one set
-/// has one spelling.
+/// One conversion, as the stored body spells it.
+fn encode_claim(claim: &ConvertedClaimRecord) -> Value {
+    let mut m = Map::new();
+    m.insert("claimId", Value::Bytes(claim.claim_id.to_vec()));
+    m.insert("linkTag", Value::Bytes(claim.link_tag.to_vec()));
+    m.insert("tag", Value::Bytes(claim.tag.to_vec()));
+    Value::Map(m)
+}
+
+/// The spent set is a membership map on two keys: the claim id, and the
+/// `(linkTag, tag)` pair that bounds it to one record per grantee per link.
+fn check_claims_unique(
+    claims: impl Iterator<Item = ConvertedClaimRecord>,
+) -> Result<(), InviteRecordsCodecError> {
+    let mut ids = BTreeSet::new();
+    let mut grantees = BTreeSet::new();
+    for claim in claims {
+        if !ids.insert(claim.claim_id) || !grantees.insert((claim.link_tag, claim.tag)) {
+            return Err(InviteRecordsCodecError::DuplicateClaim);
+        }
+    }
+    Ok(())
+}
+
+/// Encode the durable record set to det-CBOR, links in tag order and claims in
+/// claim-id order so one set has one spelling.
 ///
-/// Rejects the bound, a duplicate tag and a zero deadline release-active — the
-/// three invariants [`decode_records`] hard-rejects (AGENTS.md rule 8). A zero
-/// deadline is `mint_invite_grant`'s
+/// Rejects every bound, a duplicate tag, a repeated conversion and a zero
+/// deadline release-active — the invariants [`decode_records`] hard-rejects
+/// (AGENTS.md rule 8). A zero deadline is `mint_invite_grant`'s
 /// [`InviteError::InvalidExpiry`](super::InviteError::InvalidExpiry): storing
 /// one would durably record a link the reader must refuse to distinguish from
 /// "no deadline".
-fn encode_records(links: &[RecordedInvite]) -> Result<Vec<u8>, InviteRecordsCodecError> {
-    within("links", links.len(), MAX_INVITE_RECORDS)?;
-    let mut sorted: Vec<&RecordedInvite> = links.iter().collect();
+fn encode_records(records: &InviteRecords) -> Result<Vec<u8>, InviteRecordsCodecError> {
+    within("links", records.links.len(), MAX_INVITE_RECORDS)?;
+    within("claims", records.claims.len(), MAX_CONVERTED_CLAIMS)?;
+    let mut claims: Vec<&ConvertedClaimRecord> = records.claims.iter().collect();
+    claims.sort_by_key(|claim| claim.claim_id);
+    check_claims_unique(claims.iter().copied().copied())?;
+    let encoded_claims: Vec<Value> = claims.into_iter().map(encode_claim).collect();
+    let mut sorted: Vec<&RecordedInvite> = records.links.iter().collect();
     sorted.sort_by_key(|link| link.tag);
     if sorted.windows(2).any(|pair| pair[0].tag == pair[1].tag) {
         return Err(InviteRecordsCodecError::DuplicateTag);
@@ -290,6 +369,7 @@ fn encode_records(links: &[RecordedInvite]) -> Result<Vec<u8>, InviteRecordsCode
         encoded.push(Value::Map(m));
     }
     let mut body = Map::new();
+    body.insert("claims", Value::Array(encoded_claims));
     body.insert("links", Value::Array(encoded));
     body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
     Ok(encode_fixed_depth(&Value::Map(body)))
@@ -298,16 +378,30 @@ fn encode_records(links: &[RecordedInvite]) -> Result<Vec<u8>, InviteRecordsCode
 /// Decode a stored record set (strict det-CBOR).
 ///
 /// A missing or mistyped field, an unknown key, an unreadable version, a bound
-/// breach, a duplicate tag or a zero deadline is an error — never a partial set,
-/// which would silently un-record links the owner still holds.
-fn decode_records(bytes: &[u8]) -> Result<Vec<RecordedInvite>, InviteRecordsCodecError> {
+/// breach, a duplicate tag, a repeated conversion or a zero deadline is an
+/// error — never a partial set, which would silently un-record links the owner
+/// still holds or re-admit a claim it already spent.
+fn decode_records(bytes: &[u8]) -> Result<InviteRecords, InviteRecordsCodecError> {
     let tree = decode(bytes)?;
     let map = tree.as_map()?;
-    reject_unknown(map, &["links", "v"])?;
+    reject_unknown(map, &["claims", "links", "v"])?;
     let version = req(map, "v")?.as_unsigned()?;
     if version != INVITE_RECORDS_V {
         return Err(InviteRecordsCodecError::UnsupportedVersion { version });
     }
+    let raw_claims = req(map, "claims")?.as_array()?;
+    within("claims", raw_claims.len(), MAX_CONVERTED_CLAIMS)?;
+    let mut claims: Vec<ConvertedClaimRecord> = Vec::with_capacity(raw_claims.len());
+    for item in raw_claims {
+        let record = item.as_map()?;
+        reject_unknown(record, &["claimId", "linkTag", "tag"])?;
+        claims.push(ConvertedClaimRecord {
+            claim_id: fixed::<CLAIM_ID_LEN>(req(record, "claimId")?, "claimId")?,
+            link_tag: fixed::<32>(req(record, "linkTag")?, "linkTag")?,
+            tag: fixed::<32>(req(record, "tag")?, "tag")?,
+        });
+    }
+    check_claims_unique(claims.iter().copied())?;
     let raw = req(map, "links")?.as_array()?;
     within("links", raw.len(), MAX_INVITE_RECORDS)?;
     let mut links: Vec<RecordedInvite> = Vec::with_capacity(raw.len());
@@ -341,7 +435,7 @@ fn decode_records(bytes: &[u8]) -> Result<Vec<RecordedInvite>, InviteRecordsCode
             expires_at,
         });
     }
-    Ok(links)
+    Ok(InviteRecords { links, claims })
 }
 
 #[cfg(test)]
@@ -365,6 +459,22 @@ mod tests {
             ephemeral_identity_pk: [byte ^ 0x0f; IDENTITY_PUBLIC_LEN],
             ephemeral_enc_pk: [byte ^ 0xf0; SECRET_LEN],
             expires_at,
+        }
+    }
+
+    /// State holding links and no spent claims.
+    fn only(links: &[RecordedInvite]) -> InviteRecords {
+        InviteRecords {
+            links: links.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn spent(byte: u8) -> ConvertedClaimRecord {
+        ConvertedClaimRecord {
+            claim_id: [byte; CLAIM_ID_LEN],
+            link_tag: [byte ^ 0xa5; 32],
+            tag: [byte ^ 0x5a; 32],
         }
     }
 
@@ -408,13 +518,13 @@ mod tests {
             record(0x33, Some(UnixMillis(1_700_000_000_000))),
             record(0x44, None),
         ];
-        block_on(StagingInviteStore::new(&staging, &secret, &entropy).persist(&links))
+        block_on(StagingInviteStore::new(&staging, &secret, &entropy).persist(&only(&links)))
             .expect("persist");
 
         let mut restored =
             block_on(StagingInviteStore::new(&staging, &secret, &entropy).load()).expect("load");
-        restored.sort_by_key(|link| link.tag);
-        assert_eq!(restored, links);
+        restored.links.sort_by_key(|link| link.tag);
+        assert_eq!(restored, only(&links));
     }
 
     /// The disclosure and forgery surface the seal closes: the host must not be
@@ -426,7 +536,7 @@ mod tests {
         let entropy = seeded(22);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
         let link = record(0x33, Some(UnixMillis(1_700_000_000_000)));
-        block_on(store.persist(&[link])).expect("persist");
+        block_on(store.persist(&only(&[link]))).expect("persist");
 
         let stored = block_on(staging.staged_bytes(store.staging_key()))
             .expect("staged")
@@ -449,7 +559,7 @@ mod tests {
         let secret = enc(0x31);
         let entropy = seeded(31);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&[record(0x33, None)])).expect("persist");
+        block_on(store.persist(&only(&[record(0x33, None)]))).expect("persist");
 
         block_on(staging.put_staged_bytes(store.staging_key(), b"not a sealed set"))
             .expect("clobber");
@@ -473,7 +583,7 @@ mod tests {
         let secret = enc(0x32);
         let entropy = seeded(32);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&[record(0x33, None)])).expect("persist");
+        block_on(store.persist(&only(&[record(0x33, None)]))).expect("persist");
 
         block_on(staging.put_staged_bytes(
             store.staging_key(),
@@ -505,7 +615,7 @@ mod tests {
         let secret = enc(0x33);
         let entropy = seeded(33);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        let body = encode_records(&[record(0x33, None)]).expect("encode");
+        let body = encode_records(&only(&[record(0x33, None)])).expect("encode");
         block_on(staging.put_staged_bytes(
             store.staging_key(),
             &sealed_as(&secret, OwnerLocalKind::ContactBook, 33, &body),
@@ -533,11 +643,11 @@ mod tests {
         let entropy = seeded(34);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
         let honest = record(0x33, None);
-        block_on(store.persist(&[honest])).expect("persist");
+        block_on(store.persist(&only(&[honest]))).expect("persist");
 
         let mut forged = honest;
         forged.ephemeral_identity_pk = [0x77; IDENTITY_PUBLIC_LEN];
-        let body = encode_records(&[forged]).expect("encode");
+        let body = encode_records(&only(&[forged])).expect("encode");
         // Sealed to a key the attacker holds — the closest an unprivileged
         // writer of host storage can get to authoring a record.
         block_on(staging.put_staged_bytes(
@@ -564,14 +674,14 @@ mod tests {
         let alice = enc(0x41);
         let bob = enc(0x42);
         block_on(
-            StagingInviteStore::new(&staging, &alice, &entropy).persist(&[record(0x33, None)]),
+            StagingInviteStore::new(&staging, &alice, &entropy)
+                .persist(&only(&[record(0x33, None)])),
         )
         .expect("persist");
 
-        assert!(
-            block_on(StagingInviteStore::new(&staging, &bob, &entropy).load())
-                .expect("load")
-                .is_empty(),
+        assert_eq!(
+            block_on(StagingInviteStore::new(&staging, &bob, &entropy).load()).expect("load"),
+            InviteRecords::default(),
             "one store is shared across accounts; a link must not cross identities"
         );
     }
@@ -583,7 +693,7 @@ mod tests {
         let entropy = RefCell::new(SilentEntropy);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
         assert!(matches!(
-            block_on(store.persist(&[record(0x33, None)])),
+            block_on(store.persist(&only(&[record(0x33, None)]))),
             Err(InviteStoreError::Entropy(_))
         ));
         assert!(
@@ -601,7 +711,7 @@ mod tests {
         let mut clash = record(0x33, None);
         clash.ephemeral_enc_pk = [0x01; SECRET_LEN];
         assert!(matches!(
-            encode_records(&[record(0x33, None), clash]),
+            encode_records(&only(&[record(0x33, None), clash])),
             Err(InviteRecordsCodecError::DuplicateTag)
         ));
 
@@ -619,6 +729,7 @@ mod tests {
             m.insert("tag", Value::Bytes(link.tag.to_vec()));
             Value::Map(m)
         };
+        body.insert("claims", Value::Array(vec![]));
         body.insert(
             "links",
             Value::Array(vec![one(&record(0x33, None)), one(&clash)]),
@@ -630,13 +741,143 @@ mod tests {
         ));
     }
 
+    /// A spent claim is what keeps a claim single-use, so losing it across a
+    /// restart would re-admit every claim the owner already converted.
+    #[test]
+    fn a_spent_claim_survives_a_restart_field_for_field() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x23);
+        let entropy = seeded(23);
+        let state = InviteRecords {
+            links: vec![record(0x33, None)],
+            claims: vec![spent(0x61), spent(0x62)],
+        };
+        block_on(StagingInviteStore::new(&staging, &secret, &entropy).persist(&state))
+            .expect("persist");
+
+        let mut restored =
+            block_on(StagingInviteStore::new(&staging, &secret, &entropy).load()).expect("load");
+        restored.claims.sort_by_key(|claim| claim.claim_id);
+        assert_eq!(restored, state);
+    }
+
+    /// A body carrying `claims`, so a decode test states only its own deviation.
+    fn claims_body(claims: &[ConvertedClaimRecord]) -> Vec<u8> {
+        let mut body = Map::new();
+        body.insert(
+            "claims",
+            Value::Array(claims.iter().map(encode_claim).collect()),
+        );
+        body.insert("links", Value::Array(vec![]));
+        body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
+        encode_fixed_depth(&Value::Map(body))
+    }
+
+    fn claims_only(claims: &[ConvertedClaimRecord]) -> InviteRecords {
+        InviteRecords {
+            claims: claims.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    /// Rule 8: the decoder refuses a repeated conversion, so the encoder must
+    /// too — under one claim id, and under one `(linkTag, tag)` pair, which is
+    /// what keeps the set bounded by the grants the owner actually published
+    /// rather than by how many claims a link holder posts.
+    #[test]
+    fn a_repeated_conversion_is_refused_in_both_directions() {
+        for clash in [
+            {
+                let mut c = spent(0x61);
+                c.tag = [0x07; 32];
+                c
+            },
+            {
+                let mut c = spent(0x61);
+                c.claim_id = [0x07; CLAIM_ID_LEN];
+                c
+            },
+        ] {
+            assert!(matches!(
+                encode_records(&claims_only(&[spent(0x61), clash])),
+                Err(InviteRecordsCodecError::DuplicateClaim)
+            ));
+            assert!(matches!(
+                decode_records(&claims_body(&[spent(0x61), clash])),
+                Err(InviteRecordsCodecError::DuplicateClaim)
+            ));
+        }
+    }
+
+    /// Rule 8: the spent-claim bound is enforced at encode as well as decode.
+    #[test]
+    fn a_claim_set_past_its_bound_is_refused_in_both_directions() {
+        let claims: Vec<ConvertedClaimRecord> = (0..=MAX_CONVERTED_CLAIMS)
+            .map(|i| {
+                let mut claim = spent(0x61);
+                let n = u16::try_from(i).expect("in range").to_be_bytes();
+                claim.claim_id[..2].copy_from_slice(&n);
+                claim.tag[..2].copy_from_slice(&n);
+                claim
+            })
+            .collect();
+        assert!(matches!(
+            encode_records(&claims_only(&claims)),
+            Err(InviteRecordsCodecError::TooLong(TooLong {
+                field: "claims",
+                ..
+            }))
+        ));
+        assert!(matches!(
+            decode_records(&claims_body(&claims)),
+            Err(InviteRecordsCodecError::TooLong(TooLong {
+                field: "claims",
+                ..
+            }))
+        ));
+    }
+
+    /// The downgrade the version bump has to catch: a body at the previous
+    /// grammar carries no `claims` key at all, and reading it as zero spent
+    /// claims would re-admit every claim the owner converted.
+    #[test]
+    fn a_body_at_the_previous_grammar_is_refused_rather_than_read_as_no_spent_claims() {
+        let mut body = Map::new();
+        body.insert("links", Value::Array(vec![]));
+        body.insert("v", Value::Unsigned(INVITE_RECORDS_V - 1));
+        assert!(matches!(
+            decode_records(&encode_fixed_depth(&Value::Map(body))),
+            Err(InviteRecordsCodecError::UnsupportedVersion { version })
+                if version == INVITE_RECORDS_V - 1
+        ));
+    }
+
+    /// A spent-claim record is the authority for one claim's single use, so an
+    /// unknown key in it is refused like one in a link record.
+    #[test]
+    fn a_claim_record_with_an_unknown_key_is_refused() {
+        let mut m = Map::new();
+        m.insert("claimId", Value::Bytes(vec![0x01; CLAIM_ID_LEN]));
+        m.insert("extra", Value::Unsigned(1));
+        m.insert("linkTag", Value::Bytes(vec![0x03; 32]));
+        m.insert("tag", Value::Bytes(vec![0x02; 32]));
+        let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![Value::Map(m)]));
+        body.insert("links", Value::Array(vec![]));
+        body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
+        assert!(matches!(
+            decode_records(&encode_fixed_depth(&Value::Map(body))),
+            Err(InviteRecordsCodecError::Codec(_))
+        ));
+    }
+
     /// Rule 8: `0` is not "no deadline" — the mint refuses it, the decoder
     /// refuses it, and so must the encoder, or a release build would durably
     /// record a link its own reader rejects.
     #[test]
     fn a_zero_deadline_is_refused_in_both_directions() {
         assert!(matches!(
-            encode_records(&[record(0x33, Some(UnixMillis(0)))]),
+            encode_records(&only(&[record(0x33, Some(UnixMillis(0)))])),
             Err(InviteRecordsCodecError::ZeroDeadline)
         ));
 
@@ -649,6 +890,7 @@ mod tests {
         m.insert("expiresAt", Value::Unsigned(0));
         m.insert("tag", Value::Bytes(vec![0x03; 32]));
         let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![]));
         body.insert("links", Value::Array(vec![Value::Map(m)]));
         body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
         assert!(matches!(
@@ -668,7 +910,7 @@ mod tests {
             })
             .collect();
         assert!(matches!(
-            encode_records(&links),
+            encode_records(&only(&links)),
             Err(InviteRecordsCodecError::TooLong(TooLong {
                 field: "links",
                 ..
@@ -678,6 +920,7 @@ mod tests {
         // The decoder's own bound, on a body the encoder would never emit —
         // otherwise this test would only ever exercise one direction.
         let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![]));
         body.insert(
             "links",
             Value::Array(
@@ -712,6 +955,7 @@ mod tests {
     #[test]
     fn a_set_at_an_unreadable_version_is_refused() {
         let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![]));
         body.insert("links", Value::Array(vec![]));
         body.insert("v", Value::Unsigned(INVITE_RECORDS_V + 1));
         assert!(matches!(
@@ -725,6 +969,7 @@ mod tests {
     fn a_set_with_an_unknown_key_is_refused() {
         let mut body = Map::new();
         body.insert("extra", Value::Unsigned(1));
+        body.insert("claims", Value::Array(vec![]));
         body.insert("links", Value::Array(vec![]));
         body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
         assert!(matches!(
@@ -746,6 +991,7 @@ mod tests {
         m.insert("extra", Value::Unsigned(1));
         m.insert("tag", Value::Bytes(vec![0x03; 32]));
         let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![]));
         body.insert("links", Value::Array(vec![Value::Map(m)]));
         body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
         assert!(matches!(
@@ -763,7 +1009,7 @@ mod tests {
         let secret = enc(0x71);
         let entropy = seeded(71);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&[record(0x33, None)])).expect("persist");
+        block_on(store.persist(&only(&[record(0x33, None)]))).expect("persist");
         block_on(staging.put_staged_bytes(b"upload-residue", b"stale")).expect("stage");
 
         assert_eq!(
@@ -782,12 +1028,12 @@ mod tests {
         let secret = enc(0x81);
         let entropy = seeded(81);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
-        block_on(store.persist(&[record(0x33, None)])).expect("first persist");
+        block_on(store.persist(&only(&[record(0x33, None)]))).expect("first persist");
 
         staging.interrupt_staged_write_after(store.staging_key(), 0);
-        assert!(block_on(store.persist(&[])).is_err());
+        assert!(block_on(store.persist(&only(&[]))).is_err());
         assert_eq!(
-            block_on(store.load()).expect("load").len(),
+            block_on(store.load()).expect("load").links.len(),
             1,
             "the set the store already held is still the one it serves"
         );
@@ -798,14 +1044,16 @@ mod tests {
         let staging = InMemoryStagingStore::default();
         let secret = enc(0x52);
         let good = seeded(52);
-        block_on(StagingInviteStore::new(&staging, &secret, &good).persist(&[record(0x33, None)]))
-            .expect("persist");
+        block_on(
+            StagingInviteStore::new(&staging, &secret, &good).persist(&only(&[record(0x33, None)])),
+        )
+        .expect("persist");
 
         let broken = RefCell::new(FailingEntropy);
         let store = StagingInviteStore::new(&staging, &secret, &broken);
-        assert!(block_on(store.persist(&[])).is_err());
+        assert!(block_on(store.persist(&only(&[]))).is_err());
         assert_eq!(
-            block_on(store.load()).expect("load").len(),
+            block_on(store.load()).expect("load").links.len(),
             1,
             "a failed persist never clears the set it could not replace"
         );
@@ -821,13 +1069,13 @@ mod tests {
         let entropy = seeded(53);
         let store = StagingInviteStore::new(&staging, &secret, &entropy);
 
-        block_on(store.persist(&[record(0x33, None)])).expect("first persist");
+        block_on(store.persist(&only(&[record(0x33, None)]))).expect("first persist");
         let first = enc_of(
             &block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged")
                 .expect("stored"),
         );
-        block_on(store.persist(&[record(0x44, None)])).expect("second persist");
+        block_on(store.persist(&only(&[record(0x44, None)]))).expect("second persist");
         let second = enc_of(
             &block_on(staging.staged_bytes(store.staging_key()))
                 .expect("staged")

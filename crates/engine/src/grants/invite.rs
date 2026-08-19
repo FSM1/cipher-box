@@ -22,6 +22,13 @@
 //! with the ephemeral identity; [`convert_invite_claim`] re-anchors it to the
 //! claimant's imported contact as an ordinary personal grant, leaving the link
 //! itself live.
+//!
+//! A claim is single-use. The mailbox chooses what to redeliver, so a claim
+//! carrying no identity of its own is a static blob the server can re-serve
+//! after the owner cut the grant it made, and re-converting it would have the
+//! owner re-sign a set that undoes its own revocation. [`InviteClaim::claim_id`]
+//! is that identity, inside the signed payload, and [`ConvertedClaimRecord`] is
+//! the owner-local memory of what it has spent.
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
@@ -39,7 +46,8 @@ use core::num::NonZeroU64;
 use std::collections::BTreeSet;
 use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_bytes};
+use crate::grants::accept::{fixed, req};
 use crate::grants::contact::import_contact;
 use crate::grants::{
     AuthorityViolation, Contact, GrantRow, enforce_committed_ledger, entry_is_live, mint_grant_row,
@@ -98,6 +106,18 @@ pub enum InviteError {
     LinkNotCommitted,
     /// The link's ledger row is past its deadline, so it grants nothing.
     LinkExpired,
+    /// The claim's id is in the owner's spent set. Ack the item; publish
+    /// nothing.
+    ClaimAlreadyConverted,
+    /// The claim carries an all-zero id, which [`InviteClaim::mint`] never
+    /// draws. Converting it would spend the one id a client with a broken
+    /// entropy seam emits, denying every later claimant on the link.
+    ClaimIdIsZero,
+    /// A fresh claim would re-mint a grant **this link** already produced and
+    /// the owner has since cut. The record is per link, so a link the owner
+    /// mints afterwards is a fresh authorization decision — this refuses only a
+    /// transport-driven resurrection through the link that was cut.
+    GrantWasCut,
     /// The claimant's contact code failed its mandatory binding verify.
     ClaimantContact(CodecError),
     /// The claim asked to be anchored to the link's own throwaway identity.
@@ -135,6 +155,9 @@ impl InviteError {
             Self::NotOwner => "not-owner",
             Self::LinkNotCommitted => "link-not-committed",
             Self::LinkExpired => "link-expired",
+            Self::ClaimAlreadyConverted => "claim-already-converted",
+            Self::ClaimIdIsZero => "claim-id-is-zero",
+            Self::GrantWasCut => "grant-was-cut",
             Self::ClaimantContact(_) => "claimant-contact-invalid",
             Self::ClaimantIsTheEphemeralHalf => "claimant-is-the-ephemeral-half",
             Self::ClaimantIsTheOwner => "claimant-is-the-owner",
@@ -318,8 +341,31 @@ pub fn mint_invite_grant(
     })
 }
 
+/// Byte length of an [`InviteClaim::claim_id`].
+pub const CLAIM_ID_LEN: usize = 16;
+
+/// One conversion the owner has already made — **owner-local state, never
+/// network bytes**, persisted beside the [`RecordedInvite`] set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvertedClaimRecord {
+    /// The spent claim's id.
+    pub claim_id: [u8; CLAIM_ID_LEN],
+    /// The [`RecordedInvite::tag`] of the link the claim came in on.
+    ///
+    /// What makes the set collectable: no claim on a link the owner no longer
+    /// records can convert ([`InviteError::LinkNotCommitted`]), so records whose
+    /// `link_tag` names no live link are dead weight and dropping them re-admits
+    /// nothing. Without that the set only grows, and a bearer-link holder could
+    /// fill it to [`MAX_CONVERTED_CLAIMS`](super::MAX_CONVERTED_CLAIMS) and leave
+    /// the owner unable to persist anything at all.
+    pub link_tag: [u8; 32],
+    /// The blinded tag of the personal grant the conversion minted.
+    pub tag: [u8; 32],
+}
+
 /// The claim a link holder posts to the owner's mailbox: which scope root the
-/// link points at, and the claimant's own contact code to be anchored to.
+/// link points at, the claimant's own contact code to be anchored to, and the
+/// claim's own id.
 ///
 /// Opaque application bytes inside the HPKE seal — app framing, not crypto. Its
 /// authentication is the seal's inner sender signature, which the claimant makes
@@ -327,6 +373,9 @@ pub fn mint_invite_grant(
 /// code inside is self-authenticating and imported fail-closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteClaim {
+    /// Fresh per claim ([`Self::mint`]), inside the signed payload — so a
+    /// redelivery carries the same id, and no other party learns it.
+    pub claim_id: [u8; CLAIM_ID_LEN],
     /// The scope root's opaque `ipnsName` the link points at.
     pub scope_root_name: Vec<u8>,
     /// The claimant's contact code — `{identityPk, encSubkey, bindingSig}`.
@@ -334,9 +383,23 @@ pub struct InviteClaim {
 }
 
 impl InviteClaim {
+    /// Build a claim with a fresh id from the injected entropy seam.
+    pub fn mint<E: Entropy>(
+        entropy: &mut E,
+        scope_root_name: Vec<u8>,
+        contact_code: Vec<u8>,
+    ) -> Result<Self, InviteError> {
+        Ok(Self {
+            claim_id: fresh_bytes(entropy, "claim id").map_err(InviteError::Entropy)?,
+            scope_root_name,
+            contact_code,
+        })
+    }
+
     /// Encode to det-CBOR (canonical key order).
     pub fn encode(&self) -> Vec<u8> {
         let mut m = Map::new();
+        m.insert("claimId", Value::Bytes(self.claim_id.to_vec()));
         m.insert("contactCode", Value::Bytes(self.contact_code.clone()));
         m.insert("scopeRootName", Value::Bytes(self.scope_root_name.clone()));
         encode_fixed_depth(&Value::Map(m))
@@ -356,6 +419,7 @@ impl InviteClaim {
                 .to_vec())
         };
         Ok(Self {
+            claim_id: fixed::<CLAIM_ID_LEN>(req(map, "claimId")?, "claimId")?,
             scope_root_name: field("scopeRootName")?,
             contact_code: field("contactCode")?,
         })
@@ -450,8 +514,9 @@ pub enum ClaimOutcome {
     /// The claimant already held a read grant and claimed a write link, so the
     /// committed entry was raised to write. A claim never lowers a permission.
     Upgraded,
-    /// The claimant already held this grant — a redelivered claim. The set comes
-    /// back untouched and needs no republish.
+    /// The claimant already held this grant at this permission, from another
+    /// link or a grant made outside the invite path. The set comes back
+    /// untouched and needs no republish.
     Unchanged,
 }
 
@@ -469,6 +534,14 @@ pub struct ConvertedClaim {
     pub ledger: Vec<GrantLedgerEntry>,
     /// What this conversion changed.
     pub outcome: ClaimOutcome,
+    /// What the owner must persist to keep this claim single-use, if anything.
+    /// Record it durably before acking the mailbox item, on the same
+    /// ack-after-durable rule the accept flow follows.
+    ///
+    /// `None` when the grantee tag is already recorded: one record per tag is
+    /// what bounds the spent set by the grants the owner actually published,
+    /// rather than by how many claims a bearer-link holder chooses to post.
+    pub record: Option<ConvertedClaimRecord>,
 }
 
 /// Convert a sender-verified invite claim into a personal grant for the
@@ -490,16 +563,19 @@ pub struct ConvertedClaim {
 /// honoured as well, but only ever to shorten a link, since a write-grantee can
 /// re-author that field.
 ///
-/// The caller signs and publishes the returned set, and acks the mailbox item
-/// only once that is durable (`mailbox` ack-after-durable). The transport is
-/// integrity-untrusted and may redeliver: a redelivered claim already converted is
-/// [`ClaimOutcome::Unchanged`], but one whose grant the owner has since cut reads
-/// as a fresh claim, so a caller that revoked a converted grantee must drop claims
-/// deriving that tag rather than re-converting them.
+/// The caller signs and publishes the returned set, and records
+/// [`ConvertedClaim::record`] and acks the mailbox item only once that is durable
+/// (`mailbox` ack-after-durable).
+///
+/// `converted` is the owner's spent set, which is what makes a claim single-use
+/// against a transport that chooses what to redeliver — see
+/// [`InviteError::ClaimAlreadyConverted`] and [`InviteError::GrantWasCut`] for
+/// the two refusals it decides.
 pub fn convert_invite_claim(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
     links: &[RecordedInvite],
+    converted: &[ConvertedClaimRecord],
     item: &VerifiedMailboxItem,
     now: UnixMillis,
 ) -> Result<ConvertedClaim, InviteError> {
@@ -528,6 +604,13 @@ pub fn convert_invite_claim(
         X25519Public::from_bytes(link.ephemeral_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
     if recipient_blinded_tag(owner.enc_secret, &link_enc, name) != Some(link.tag) {
         return Err(InviteError::LinkNotCommitted);
+    }
+    // Bound to a link the owner recorded, so the spent set can be consulted.
+    if claim.claim_id == [0u8; CLAIM_ID_LEN] {
+        return Err(InviteError::ClaimIdIsZero);
+    }
+    if converted.iter().any(|c| c.claim_id == claim.claim_id) {
+        return Err(InviteError::ClaimAlreadyConverted);
     }
     // The owner-signed entry carries the authoritative permission, and its
     // absence is the link's revocation signal.
@@ -570,11 +653,23 @@ pub fn convert_invite_claim(
     )
     .ok_or(InviteError::UnusableClaimantKey)?;
 
+    let committed = scope
+        .commitment
+        .entries
+        .iter()
+        .position(|e| e.tag == row.tag);
+    let already_recorded = converted
+        .iter()
+        .any(|c| c.link_tag == link.tag && c.tag == row.tag);
+    if committed.is_none() && already_recorded {
+        return Err(InviteError::GrantWasCut);
+    }
+
     let mut commitment = scope.commitment.clone();
     let mut ledger = scope.ledger.to_vec();
     // The blinded tag does not depend on permission, so an existing grantee
     // claiming a write link is an upgrade of the entry already committed.
-    let outcome = match commitment.entries.iter().position(|e| e.tag == row.tag) {
+    let outcome = match committed {
         None => {
             commitment.entries.push(row.commitment_entry.clone());
             ledger.push(row.ledger_entry.clone());
@@ -600,11 +695,17 @@ pub fn convert_invite_claim(
         }
     };
     check_publishable(&commitment, &ledger)?;
+    let record = (!already_recorded).then_some(ConvertedClaimRecord {
+        claim_id: claim.claim_id,
+        link_tag: link.tag,
+        tag: row.tag,
+    });
     Ok(ConvertedClaim {
         row,
         commitment,
         ledger,
         outcome,
+        record,
     })
 }
 
@@ -710,7 +811,7 @@ mod tests {
     use crate::rotation::{
         CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
     };
-    use crate::testkit::SeededEntropy;
+    use crate::testkit::{SeededEntropy, SilentEntropy};
     use cipherbox_core::seal::{
         AadContext, GrantLedgerEntry, GrantSection, GrantSetCommitment, GrantSetEntry,
         PreservedFields, STRUCT_TAG_GRANT_BLOB, SignedGrantBlob, StructureSigInput,
@@ -1269,10 +1370,20 @@ mod tests {
         contact_code: Vec<u8>,
         scope_root_name: Vec<u8>,
     ) -> VerifiedMailboxItem {
+        claim_item_id(sender, contact_code, scope_root_name, [0x99; CLAIM_ID_LEN])
+    }
+
+    fn claim_item_id(
+        sender: &EcdsaSigner,
+        contact_code: Vec<u8>,
+        scope_root_name: Vec<u8>,
+        claim_id: [u8; CLAIM_ID_LEN],
+    ) -> VerifiedMailboxItem {
         VerifiedMailboxItem {
             item_id: "claim-1".to_string(),
             sender_identity: sender.verifying_key(),
             payload: InviteClaim {
+                claim_id,
                 scope_root_name,
                 contact_code,
             }
@@ -1293,6 +1404,7 @@ mod tests {
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
             &[l.link],
+            &[],
             &claim_item(&signer, contact_code(&a_id, &a_enc)),
             UnixMillis(0),
         )
@@ -1307,6 +1419,7 @@ mod tests {
             &owner,
             &committed_scope(&first.commitment, &second_sig, &first.ledger),
             &[l.link],
+            &[],
             &claim_item(&signer, contact_code(&b_id, &b_enc)),
             UnixMillis(0),
         )
@@ -1339,6 +1452,7 @@ mod tests {
             &owner,
             &scope,
             &[l.link],
+            &[],
             &claim_item(&signer, contact_code(&id, &enc)),
             UnixMillis(0),
         )
@@ -1384,6 +1498,7 @@ mod tests {
                     &owner,
                     &scope,
                     &[l.link],
+                    &[],
                     &claim_item(&signer, code),
                     UnixMillis(0)
                 )
@@ -1421,6 +1536,7 @@ mod tests {
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
                 &[l.link],
+                &[],
                 &claim_item(&grantee_identity, contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1439,6 +1555,7 @@ mod tests {
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
                 &[l.link],
+                &[],
                 &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1463,6 +1580,7 @@ mod tests {
                 &owner,
                 &scope,
                 &[l.link],
+                &[],
                 &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1476,6 +1594,7 @@ mod tests {
                 &owner,
                 &scope,
                 &[l.link],
+                &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1488,6 +1607,7 @@ mod tests {
                 &owner,
                 &scope,
                 &[l.link, l.link],
+                &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1502,6 +1622,7 @@ mod tests {
                 &owner,
                 &committed_scope(&cut, &cut_sig, &cut_ledger),
                 &[l.link],
+                &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
@@ -1526,6 +1647,7 @@ mod tests {
                 &owner,
                 &scope,
                 &[l.link],
+                &[],
                 &item,
                 UnixMillis(EXPIRES_AT.0 - 1)
             )
@@ -1533,7 +1655,7 @@ mod tests {
             "live one tick before the deadline",
         );
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[l.link], &item, EXPIRES_AT)
+            convert_invite_claim(&owner, &scope, &[l.link], &[], &item, EXPIRES_AT)
                 .unwrap_err()
                 .check(),
             "link-expired",
@@ -1549,6 +1671,7 @@ mod tests {
                 &owner,
                 &committed_scope(&commitment, &sig, &stripped),
                 &[l.link],
+                &[],
                 &item,
                 EXPIRES_AT,
             )
@@ -1560,7 +1683,7 @@ mod tests {
         // And a published deadline alone makes the row inert before any prune.
         let unrecorded = link(0x4e, Permission::Read, None);
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[unrecorded.link], &item, EXPIRES_AT)
+            convert_invite_claim(&owner, &scope, &[unrecorded.link], &[], &item, EXPIRES_AT)
                 .unwrap_err()
                 .check(),
             "link-expired",
@@ -1583,7 +1706,7 @@ mod tests {
             enc_secret: &owner_e,
         };
         assert_eq!(
-            convert_invite_claim(&rogue, &scope, &[l.link], &item, UnixMillis(0))
+            convert_invite_claim(&rogue, &scope, &[l.link], &[], &item, UnixMillis(0))
                 .unwrap_err()
                 .check(),
             "not-owner",
@@ -1604,7 +1727,7 @@ mod tests {
             enc_secret: &foreign_enc,
         };
         assert_eq!(
-            convert_invite_claim(&half, &scope, &[l.link], &item, UnixMillis(0))
+            convert_invite_claim(&half, &scope, &[l.link], &[], &item, UnixMillis(0))
                 .unwrap_err()
                 .check(),
             "link-not-committed",
@@ -1672,29 +1795,43 @@ mod tests {
     }
 
     #[test]
-    fn a_redelivered_claim_converts_to_the_same_grant_and_changes_nothing() {
+    fn a_second_claim_from_a_committed_grantee_changes_nothing() {
         let l = link(0x4e, Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
         let (id, enc) = claimant(0x67);
-        let item = claim_item(&link_signer(0x4e), contact_code(&id, &enc));
+        let name = scope_name();
+        let first_item = claim_item_id(
+            &link_signer(0x4e),
+            contact_code(&id, &enc),
+            name.clone(),
+            [0x11; CLAIM_ID_LEN],
+        );
 
         let first = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
             &[l.link],
-            &item,
+            &[],
+            &first_item,
             UnixMillis(0),
         )
         .expect("converts");
+        let spent = first.record.expect("the first conversion is recorded");
 
         let resigned = sign_grant_set(&owner_identity(), &first.commitment).expect("signs");
         let again = convert_invite_claim(
             &owner,
             &committed_scope(&first.commitment, &resigned, &first.ledger),
             &[l.link],
-            &item,
+            &[spent],
+            &claim_item_id(
+                &link_signer(0x4e),
+                contact_code(&id, &enc),
+                name,
+                [0x22; CLAIM_ID_LEN],
+            ),
             UnixMillis(0),
         )
         .expect("converts");
@@ -1702,6 +1839,39 @@ mod tests {
         assert_eq!(again.outcome, ClaimOutcome::Unchanged);
         assert_eq!(again.commitment, first.commitment);
         assert_eq!(again.ledger, first.ledger);
+        assert_eq!(
+            again.record, None,
+            "one record per grantee per link, so a second claim adds nothing to spend"
+        );
+    }
+
+    /// An all-zero id is the one a client with a broken entropy seam emits.
+    /// Spending it would deny every later claimant on the link, so conversion
+    /// refuses it — the consume side of the draw [`InviteClaim::mint`] refuses.
+    #[test]
+    fn a_claim_carrying_an_all_zero_id_is_refused() {
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+        let keys = Owner::new();
+        let (id, enc) = claimant(0x67);
+        assert_eq!(
+            convert_invite_claim(
+                &keys.authority(),
+                &committed_scope(&commitment, &sig, &ledger),
+                &[l.link],
+                &[],
+                &claim_item_id(
+                    &link_signer(0x4e),
+                    contact_code(&id, &enc),
+                    scope_name(),
+                    [0; CLAIM_ID_LEN],
+                ),
+                UnixMillis(0),
+            )
+            .unwrap_err()
+            .check(),
+            "claim-id-is-zero",
+        );
     }
 
     #[test]
@@ -1717,6 +1887,7 @@ mod tests {
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
             &[read_link.link],
+            &[],
             &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
             UnixMillis(0),
         )
@@ -1729,6 +1900,7 @@ mod tests {
             &owner,
             &committed_scope(&read_grant.commitment, &resigned, &read_grant.ledger),
             &[write_link.link],
+            &[],
             &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
             UnixMillis(0),
         )
@@ -1753,6 +1925,7 @@ mod tests {
             &owner,
             &committed_scope(&upgraded.commitment, &resigned, &upgraded.ledger),
             &[read_link.link],
+            &[],
             &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
             UnixMillis(0),
         )
@@ -1774,6 +1947,7 @@ mod tests {
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
                 &[l.link],
+                &[],
                 &claim_item_for(
                     &link_signer(0x4e),
                     contact_code(&id, &enc),
@@ -1802,7 +1976,7 @@ mod tests {
             payload: b"not det-cbor".to_vec(),
         };
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[l.link], &junk, UnixMillis(0))
+            convert_invite_claim(&owner, &scope, &[l.link], &[], &junk, UnixMillis(0))
                 .unwrap_err()
                 .check(),
             "malformed-claim",
@@ -1816,6 +1990,7 @@ mod tests {
                 &owner,
                 &scope,
                 &[l.link],
+                &[],
                 &claim_item(&link_signer(0x4e), code),
                 UnixMillis(0),
             )
@@ -1848,6 +2023,7 @@ mod tests {
                 &owner,
                 &committed_scope(&commitment, &sig, &[l.row.ledger_entry.clone(), stray]),
                 &[l.link],
+                &[],
                 &item,
                 UnixMillis(0),
             )
@@ -1878,6 +2054,7 @@ mod tests {
                 &owner,
                 &committed_scope(&full_commitment, &full_sig, &full_ledger),
                 &[l.link],
+                &[],
                 &item,
                 UnixMillis(0),
             )
@@ -1890,6 +2067,7 @@ mod tests {
     #[test]
     fn the_claim_payload_round_trips_byte_stable_and_rejects_a_missing_field() {
         let claim = InviteClaim {
+            claim_id: [0x99; CLAIM_ID_LEN],
             scope_root_name: b"k51scoperoot".to_vec(),
             contact_code: b"contact".to_vec(),
         };
@@ -1909,5 +2087,42 @@ mod tests {
             InviteClaim::decode(&short).unwrap_err().check(),
             "missing-field"
         );
+    }
+
+    /// A claim whose id is the wrong width is not a claim this build can spend
+    /// once — the store keys on a fixed-width id, so a short one would truncate
+    /// or a long one would not round-trip.
+    #[test]
+    fn a_claim_id_of_the_wrong_width_is_refused() {
+        for width in [CLAIM_ID_LEN - 1, CLAIM_ID_LEN + 1] {
+            let mut m = Map::new();
+            m.insert("claimId", Value::Bytes(vec![0x01; width]));
+            m.insert("contactCode", Value::Bytes(b"contact".to_vec()));
+            m.insert("scopeRootName", Value::Bytes(b"k51scoperoot".to_vec()));
+            assert_eq!(
+                InviteClaim::decode(&encode_fixed_depth(&Value::Map(m)))
+                    .unwrap_err()
+                    .check(),
+                "invalid-field-length",
+            );
+        }
+    }
+
+    /// A fresh id per claim is what a redelivery cannot fake, so the mint must
+    /// take it from the injected entropy seam rather than any constant.
+    #[test]
+    fn a_minted_claim_takes_its_id_from_the_injected_entropy() {
+        let mut entropy = SeededEntropy::new(3);
+        let first =
+            InviteClaim::mint(&mut entropy, b"name".to_vec(), b"contact".to_vec()).expect("mints");
+        let second =
+            InviteClaim::mint(&mut entropy, b"name".to_vec(), b"contact".to_vec()).expect("mints");
+        assert_ne!(first.claim_id, second.claim_id);
+        assert_ne!(first.claim_id, [0u8; CLAIM_ID_LEN]);
+
+        assert!(matches!(
+            InviteClaim::mint(&mut SilentEntropy, b"name".to_vec(), b"contact".to_vec()),
+            Err(InviteError::Entropy(_))
+        ));
     }
 }
