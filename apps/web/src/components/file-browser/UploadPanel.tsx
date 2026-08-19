@@ -1,3 +1,5 @@
+import { heldBytes, retainedRecords } from '../../engine/snapshotStore';
+import { useSnapshot } from '../../engine/useSnapshot';
 import { isActiveUpload, useDropUpload } from '../../hooks/useDropUpload';
 import { UploadListItem } from './UploadListItem';
 import { UploadZone } from './UploadZone';
@@ -15,6 +17,8 @@ interface UploadPanelProps {
  */
 export function UploadPanel({ folder }: UploadPanelProps) {
   const { uploads, upload, cancel, retry, dismiss } = useDropUpload();
+  const snapshot = useSnapshot();
+  const retained = retainedRecords(snapshot);
 
   return (
     <>
@@ -30,12 +34,19 @@ export function UploadPanel({ folder }: UploadPanelProps) {
             <UploadListItem
               key={entry.id}
               upload={entry}
+              heldBytes={heldBytes(snapshot, entry.opId)}
               onCancel={cancel}
               onRetry={retry}
               onDismiss={dismiss}
             />
           ))}
         </div>
+      )}
+      {retained > 0 && (
+        <p className="upload-panel-retained" data-testid="upload-retained">
+          {retained} queued {retained === 1 ? 'upload' : 'uploads'} from another sign-in or a newer
+          version of this app still take up staging room on this device.
+        </p>
       )}
     </>
   );

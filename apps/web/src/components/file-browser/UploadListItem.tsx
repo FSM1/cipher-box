@@ -4,6 +4,8 @@ import { formatBytes } from '../../utils/format';
 
 interface UploadListItemProps {
   upload: UploadEntry;
+  /** Bytes the drain is waiting on before it starts this row's op, or `null`. */
+  heldBytes: bigint | null;
   onCancel: (id: string) => void;
   onRetry: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -29,10 +31,17 @@ const LABELS: Record<UploadPhase, string> = {
 };
 
 /** One in-flight upload, in the columns the listing below it uses. */
-export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadListItemProps) {
+export function UploadListItem({
+  upload,
+  heldBytes,
+  onCancel,
+  onRetry,
+  onDismiss,
+}: UploadListItemProps) {
   const { id, name, phase, error } = upload;
   const percent = Math.round(upload.progress * 100);
   const settled = !isActiveUpload(phase);
+  const held = heldBytes !== null && !settled;
   const measured = phase === 'uploading';
   // Only the row the client is actually feeding animates; a queued or retrying
   // one has nothing moving to report.
@@ -42,12 +51,14 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
   // is a ceiling, not the settled red of a row that will never publish.
   const transient = phase === 'stalled' || (remedy !== undefined && remedy !== 'nothing');
   const retryable = phase !== 'uploaded' && remedy !== 'nothing';
+  const label = held ? 'waiting for room' : LABELS[phase];
 
   return (
     <div
-      className={`file-list-item upload-row upload-row--${phase}`}
+      className={`file-list-item upload-row upload-row--${phase}${held ? ' upload-row--held' : ''}`}
       data-testid="upload-row"
       data-phase={phase}
+      data-held={held ? 'true' : undefined}
       role="listitem"
     >
       <div className="file-list-item-row-top">
@@ -63,7 +74,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
               aria-label={`Upload progress for ${name}`}
               {...(measured
                 ? { 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 }
-                : { 'aria-valuetext': LABELS[phase] })}
+                : { 'aria-valuetext': label })}
             >
               <div className="upload-row-fill" style={{ width: `${measured ? percent : 0}%` }} />
             </div>
@@ -74,7 +85,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
         <span className="file-list-item-size">{formatBytes(upload.size)}</span>
         <span className="file-list-item-date upload-row-actions">
           <span className="upload-row-status" data-testid="upload-row-status">
-            {phase === 'uploading' ? `${percent}%` : LABELS[phase]}
+            {measured ? `${percent}%` : label}
           </span>
           {!settled && (
             <button
@@ -111,6 +122,12 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           )}
         </span>
       </div>
+      {held && (
+        <p className="upload-row-hold" data-testid="upload-row-hold">
+          Paused until {formatBytes(Number(heldBytes))} of staging room frees up. This upload
+          resumes on its own.
+        </p>
+      )}
       {error !== null && (
         <p
           className={`upload-row-error${transient ? ' upload-row-error--transient' : ''}`}

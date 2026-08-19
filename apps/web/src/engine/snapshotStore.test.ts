@@ -1,6 +1,12 @@
 import { EngineRequestError } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
-import { createSnapshotStore, idleSnapshotStore, isRecoverable } from './snapshotStore';
+import {
+  createSnapshotStore,
+  heldBytes,
+  idleSnapshotStore,
+  isRecoverable,
+  retainedRecords,
+} from './snapshotStore';
 import { ROOT_ID, fakeEngine, flush, view } from './testFakes';
 
 describe('snapshotStore', () => {
@@ -386,5 +392,71 @@ describe('failure classification', () => {
     expect(isRecoverable({ message: 'new', code: 'someFutureCeiling' })).toBe(false);
     expect(isRecoverable({ message: 'no room', code: 'overBudgetStagingBacklog' })).toBe(false);
     expect(isRecoverable({ message: 'worker died' })).toBe(false);
+  });
+});
+
+describe("the drain's over-budget hold", () => {
+  const HELD = 7n;
+  const held = (opId: bigint, neededBytes: bigint) => ({
+    view: { ...view(), blocked: { opId, node: ROOT_ID, neededBytes } },
+    error: null,
+  });
+
+  it('names the bytes the drain is waiting on, for the held op alone', () => {
+    const state = held(HELD, 900n);
+
+    expect(heldBytes(state, HELD)).toBe(900n);
+    expect(heldBytes(state, 8n)).toBeNull();
+  });
+
+  it('holds nothing for a row whose write has not committed yet', () => {
+    expect(heldBytes(held(HELD, 900n), null)).toBeNull();
+  });
+
+  it('holds nothing while the snapshot reports no hold', () => {
+    expect(heldBytes({ view: view(), error: null }, HELD)).toBeNull();
+    expect(heldBytes({ view: null, error: null }, HELD)).toBeNull();
+  });
+
+  it('clears the hold as soon as a later snapshot drops it', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[0].resolve(held(HELD, 900n).view);
+    await flush();
+    expect(heldBytes(store.getSnapshot(), HELD)).toBe(900n);
+
+    // The drain freed room and started the op: a state that clears, so the
+    // hold must not survive the snapshot that no longer reports it.
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[1].resolve(view());
+    await flush();
+    expect(heldBytes(store.getSnapshot(), HELD)).toBeNull();
+  });
+
+  it('keeps a failed pull from resurrecting a hold the last view never had', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[0].resolve(view());
+    await flush();
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[1].reject(new EngineRequestError('at the ceiling', 'tooManyStreams'));
+    await flush();
+
+    expect(heldBytes(store.getSnapshot(), HELD)).toBeNull();
+  });
+});
+
+describe('retained queue entries', () => {
+  it('reports the entries this session is charged for but cannot read', () => {
+    expect(retainedRecords({ view: { ...view(), retainedRecords: 3 }, error: null })).toBe(3);
+  });
+
+  it('reports none until a snapshot has landed', () => {
+    expect(retainedRecords({ view: null, error: null })).toBe(0);
+    expect(retainedRecords(idleSnapshotStore.getSnapshot())).toBe(0);
   });
 });
