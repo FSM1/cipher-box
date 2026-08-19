@@ -70,7 +70,7 @@ use super::reseal::{
 use super::rotate::{
     ResealedScopeRoot, RotateScopePlan, ScopeRootPublishError, ScopeRootPublisher,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, fresh_seed};
 use crate::grants::child_index::canonicalize;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
@@ -342,16 +342,13 @@ where
 
     // Mint the fresh random override seed — the fresh-seed cut that revokes cached
     // access. `Zeroizing` wipes it on every return path, including a panic unwind.
-    let mut fresh_seed = Zeroizing::new([0u8; SECRET_LEN]);
-    entropy
-        .fill(fresh_seed.as_mut())
-        .map_err(|e| CascadeError::Reseal {
-            scope_id,
-            error: ResealError::Entropy(e),
-        })?;
+    let new_override_seed = fresh_seed(entropy).map_err(|e| CascadeError::Reseal {
+        scope_id,
+        error: ResealError::Entropy(e),
+    })?;
 
     let seeds = ResealSeeds {
-        override_seed: &fresh_seed,
+        override_seed: &new_override_seed,
         read_epoch: new_read_epoch,
         // The epoch bump ratchets a fresh history link over the prior seed.
         prev: Some(PrevEpochSeed {
@@ -401,7 +398,7 @@ where
             new_read_epoch,
             epoch_floor,
         },
-        fresh_seed,
+        new_override_seed,
     ))
 }
 
@@ -593,7 +590,7 @@ mod tests {
     use super::*;
     use crate::grants::recipient_blinded_tag;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, GrantSetEntry, Permission, PreservedFields, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
@@ -950,50 +947,40 @@ mod tests {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    fn run(
-        net: FakeNet,
-        root_children: &[u8],
-    ) -> (
+    /// What every cascade run hands back: the outcome, the fake network it ran
+    /// against, its floors, and the number of tasks it spawned.
+    type CascadeRun = (
         Result<CascadeOutcome, CascadeError>,
         FakeNet,
         InMemoryFloorStore,
         usize,
-    ) {
+    );
+
+    fn run(net: FakeNet, root_children: &[u8]) -> CascadeRun {
         let root_index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
         run_with_index(net, root_index)
     }
 
     /// [`run`] with a caller-chosen root child index (custom `ipns_name` labels).
-    #[allow(clippy::type_complexity)]
-    fn run_with_index(
-        net: FakeNet,
-        root_index: Vec<ChildScopeRef>,
-    ) -> (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    ) {
+    fn run_with_index(net: FakeNet, root_index: Vec<ChildScopeRef>) -> CascadeRun {
         run_fx(RootFx::new(net.clone()), net, root_index)
     }
 
     /// [`run_with_index`] over a caller-built root fixture.
-    #[allow(clippy::type_complexity)]
-    fn run_fx(
+    fn run_fx(fx: RootFx, net: FakeNet, root_index: Vec<ChildScopeRef>) -> CascadeRun {
+        run_fx_with(SeededEntropy::new(0xCA5CADE), fx, net, root_index)
+    }
+
+    /// [`run_fx`] over a caller-chosen entropy seam.
+    fn run_fx_with<E: Entropy>(
+        mut entropy: E,
         fx: RootFx,
         net: FakeNet,
         root_index: Vec<ChildScopeRef>,
-    ) -> (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    ) {
+    ) -> CascadeRun {
         let floors = InMemoryFloorStore::default();
         let scheduler = VirtualScheduler::new();
         let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(0xCA5CADE);
             let plan = fx.plan(&root_index);
             cascade_rotate_scope(&mut entropy, &floors, &scheduler, &net, &net, &plan, || {
                 Box::pin(async {})
@@ -1002,6 +989,34 @@ mod tests {
         });
         let spawned = scheduler.take_spawned_tasks().len();
         (outcome, net, floors, spawned)
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_re_keys_nothing() {
+        // Nothing downstream shadows the draw: the seed is minted before
+        // `reseal_scope_root`, and the epoch's own history link would republish
+        // the pre-cascade seed under it.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let (outcome, net, floors, spawned) = run_fx_with(
+            SilentEntropy,
+            RootFx::new(net.clone()),
+            net,
+            vec![childref(0x0a)],
+        );
+
+        assert!(matches!(
+            outcome.expect_err("the zero draw is refused"),
+            CascadeError::Reseal {
+                error: ResealError::Entropy(_),
+                ..
+            },
+        ));
+        assert!(
+            net.published.borrow().is_empty(),
+            "no scope root is published under a zero seed",
+        );
+        assert_eq!(block_on(floors.epoch_floor(&sid(0x00))).unwrap(), None);
+        assert_eq!(spawned, 0);
     }
 
     #[test]

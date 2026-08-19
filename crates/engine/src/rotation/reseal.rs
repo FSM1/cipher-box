@@ -239,6 +239,13 @@ pub enum ResealError {
     /// record this build's own reader permanently rejects. Release-active
     /// (AGENTS.md rule 8).
     AscentLinkDropped,
+    /// A scope root that owes no ascent link was handed a parent node seed to
+    /// mint one from. Every reader re-derives the parent seed from its own
+    /// descent, so a link no descent reproduces is rejected at the gate's ascent
+    /// stage on every read — and the name's sequence floor has already advanced,
+    /// so the last good record cannot be re-adopted. Release-active (AGENTS.md
+    /// rule 8).
+    AscentLinkNotOwed,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
     /// More carried history links than the codec's frozen bound admits — a set
@@ -287,6 +294,9 @@ impl core::fmt::Display for ResealError {
             ResealError::AscentLinkDropped => {
                 f.write_str("descendant scope root re-sealed with no ascent link to bind it")
             }
+            ResealError::AscentLinkNotOwed => {
+                f.write_str("scope root owing no ascent link was handed a parent seed to mint one")
+            }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
@@ -320,6 +330,7 @@ impl ResealError {
             ResealError::TagNotBoundToRecipient => "tag-not-bound-to-recipient",
             ResealError::AscentLinkMismatch => "ascent-link-mismatch",
             ResealError::AscentLinkDropped => "ascent-link-dropped",
+            ResealError::AscentLinkNotOwed => "ascent-link-not-owed",
             ResealError::Entropy(_) => "entropy-error",
             ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
@@ -490,11 +501,13 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::SignerNotCommitted);
     }
 
-    // Fail-closed BEFORE any seal: only `parent_node_seed` mints an ascent link,
-    // so a descendant handed none would publish with nothing binding it to its
-    // parent (see `ResealError::AscentLinkDropped`).
+    // Fail-closed BEFORE any seal, both directions — the mint below keys off the
+    // seed alone (see `ResealError::AscentLinkDropped` and `AscentLinkNotOwed`).
     if identity.owes_ascent_link && identity.parent_node_seed.is_none() {
         return Err(ResealError::AscentLinkDropped);
+    }
+    if !identity.owes_ascent_link && identity.parent_node_seed.is_some() {
+        return Err(ResealError::AscentLinkNotOwed);
     }
 
     // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
@@ -1743,6 +1756,43 @@ mod tests {
                 .expect("the descendant seals")
                 .ascent_link
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn a_root_that_owes_no_ascent_link_is_never_re_sealed_with_one() {
+        // A vault root's readers derive no parent seed, so a minted link is one
+        // no descent reproduces: every read is rejected at the gate's ascent
+        // stage while the name's sequence floor has already moved past the last
+        // good record. Permanent lockout, so the refusal is a runtime `Err` and
+        // this test is active in release.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = ScopeRootIdentity {
+            owes_ascent_link: false,
+            ..identity(
+                &fx,
+                &owner_pub,
+                b"scope-root-name",
+                Some(&fx.parent_node_seed),
+            )
+        };
+        let seed = [0x01; 32];
+        let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let mut e = SeededEntropy::new(11);
+        let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("a link it does not owe");
+        assert_eq!(err.check(), "ascent-link-not-owed");
+
+        // The same identity handed no seed seals, link-less.
+        let ok = identity(&fx, &owner_pub, b"scope-root-name", None);
+        let mut e = SeededEntropy::new(11);
+        assert!(
+            reseal_scope_root(&mut e, &ok, &s, &cs, &[])
+                .expect("the vault root seals")
+                .ascent_link
+                .is_none()
         );
     }
 

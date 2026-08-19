@@ -8,10 +8,10 @@
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, seal_chunk};
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::profile::ContentProfile;
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::{Entropy, EntropyError, fresh_nonce, fresh_seed};
 
 /// The sealed byte overhead one leaf adds to its plaintext chunk:
 /// `nonce(24) || ciphertext || tag(16)`, with ciphertext length equal to
@@ -29,13 +29,9 @@ pub struct ContentKey([u8; KEY_LEN]);
 
 impl ContentKey {
     /// Mint a fresh content key from injected entropy. Fails closed if entropy
-    /// acquisition fails — never substitutes predictable bytes. The staging
-    /// buffer self-zeroizes on every return path (incl. the error path, where
-    /// it may hold partially-written key bytes).
+    /// acquisition fails — never substitutes predictable bytes.
     pub fn generate(entropy: &mut impl Entropy) -> Result<Self, EntropyError> {
-        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
-        entropy.fill(bytes.as_mut())?;
-        Ok(Self(*bytes))
+        Ok(Self(*fresh_seed(entropy)?))
     }
 
     /// Adopt caller-supplied key bytes (a restored per-version key). The array
@@ -105,8 +101,7 @@ pub fn seal_one_chunk(
     chunk: &[u8],
     entropy: &mut impl Entropy,
 ) -> Result<SealedChunk, EntropyError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    entropy.fill(&mut nonce)?;
+    let nonce = fresh_nonce(entropy)?;
     let sealed = seal_chunk(key.as_bytes(), &nonce, chunk);
     let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
     Ok(SealedChunk { cid, sealed })
@@ -115,11 +110,19 @@ pub fn seal_one_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::SeededEntropy;
+    use crate::testkit::{SeededEntropy, SilentEntropy};
     use cipherbox_core::content::{open_chunk, verify_cid};
 
     fn ci() -> ContentProfile {
         ContentProfile::CI
+    }
+
+    #[test]
+    fn a_silent_entropy_seam_mints_no_content_key() {
+        // A seam that reports success having written nothing would seal every
+        // chunk of the version under thirty-two zero bytes — the version's
+        // plaintext readable by anyone. Refused before the key exists.
+        assert!(ContentKey::generate(&mut SilentEntropy).is_err());
     }
 
     #[test]

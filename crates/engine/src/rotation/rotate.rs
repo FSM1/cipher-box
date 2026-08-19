@@ -33,8 +33,6 @@
 //! This primitive is the root cut alone; the descendant re-key runs through the
 //! same [`reseal_scope_root`] helper in [`cascade`](super::cascade).
 
-use zeroize::Zeroizing;
-
 use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
 
@@ -42,7 +40,7 @@ use super::reseal::{
     CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
     reseal_scope_root,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, fresh_seed};
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 
 /// A fully re-sealed scope-root record handed to the [`ScopeRootPublisher`]: its
@@ -241,10 +239,8 @@ where
     // Mint the fresh random override seed at the scope root (the read-plane cut).
     // `rotate_scope` is this seed's terminal owner: `Zeroizing` wipes it on every
     // return path, including the error paths and a panic unwind.
-    let mut new_override_seed = Zeroizing::new([0u8; SECRET_LEN]);
-    entropy
-        .fill(new_override_seed.as_mut())
-        .map_err(|e| RotateError::Reseal(ResealError::Entropy(e)))?;
+    let new_override_seed =
+        fresh_seed(entropy).map_err(|e| RotateError::Reseal(ResealError::Entropy(e)))?;
 
     let seeds = ResealSeeds {
         override_seed: &new_override_seed,
@@ -303,7 +299,7 @@ mod tests {
     use super::*;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
         sign_grant_set,
@@ -404,7 +400,8 @@ mod tests {
     /// records the publisher saw, the floor it snapshotted at publish time, the
     /// spawned-task count, and the final durable floor.
     #[allow(clippy::type_complexity)]
-    fn run_rotation(
+    fn run_rotation<E: Entropy>(
+        mut entropy: E,
         publish_result: Result<(), ScopeRootPublishError>,
     ) -> (
         Result<RotationOutcome, RotateError>,
@@ -429,7 +426,6 @@ mod tests {
         let current_seed = [0xaa; 32];
 
         let outcome = block_on(async {
-            let mut entropy = SeededEntropy::new(9);
             let plan = RotateScopePlan {
                 identity: ScopeRootIdentity {
                     v: 2,
@@ -469,8 +465,24 @@ mod tests {
     }
 
     #[test]
+    fn a_silent_entropy_seam_cuts_no_epoch_and_publishes_nothing() {
+        // Release-active, before the re-seal: the epoch's fresh history link
+        // would hand out the seed this cut is revoking.
+        let (outcome, seen, _, spawned, floor) = run_rotation(SilentEntropy, Ok(()));
+
+        assert!(matches!(
+            outcome.expect_err("the zero draw is refused"),
+            RotateError::Reseal(ResealError::Entropy(_)),
+        ));
+        assert!(seen.is_empty(), "nothing is published under a zero seed");
+        assert_eq!(spawned, 0, "and no lazy wave is enqueued behind it");
+        assert_eq!(floor, None, "the revocation floor never moved");
+    }
+
+    #[test]
     fn happy_path_publishes_then_bumps_floor_then_enqueues_sweep() {
-        let (outcome, seen, floor_at_publish, spawned, final_floor) = run_rotation(Ok(()));
+        let (outcome, seen, floor_at_publish, spawned, final_floor) =
+            run_rotation(SeededEntropy::new(9), Ok(()));
         let outcome = outcome.expect("rotation succeeds");
         assert_eq!(outcome.new_read_epoch, 5, "read epoch bumped 4 -> 5");
         assert_eq!(
@@ -501,8 +513,10 @@ mod tests {
     fn publish_failure_does_not_bump_floor_or_enqueue_sweep() {
         // The lockout guard: a failed publish leaves the floor untouched (old
         // records still gate-pass) and enqueues no sweep.
-        let (outcome, seen, _floor_at_publish, spawned, final_floor) =
-            run_rotation(Err(ScopeRootPublishError::NotPublished));
+        let (outcome, seen, _floor_at_publish, spawned, final_floor) = run_rotation(
+            SeededEntropy::new(9),
+            Err(ScopeRootPublishError::NotPublished),
+        );
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(seen.len(), 1, "publish was attempted");
         assert_eq!(final_floor, None, "floor NOT raised on a failed publish");
@@ -512,7 +526,7 @@ mod tests {
     #[test]
     fn lost_cas_race_does_not_bump_floor() {
         let (outcome, _seen, _snap, spawned, final_floor) =
-            run_rotation(Err(ScopeRootPublishError::LostRace));
+            run_rotation(SeededEntropy::new(9), Err(ScopeRootPublishError::LostRace));
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(final_floor, None, "a lost race advances no floor");
         assert_eq!(spawned, 0);

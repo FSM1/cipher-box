@@ -292,26 +292,51 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
     Ok(())
 }
 
+/// The durable floor an owner-vouched re-point would roll back, if any — the
+/// one definition of the two-stage rule, so the consume side
+/// ([`cold_seed_checked`]) and the produce side that must refuse to sign such a
+/// re-point cannot drift apart (AGENTS.md rule 8).
+///
+/// The read-epoch stage runs **only at the vault anchor**, selected from the
+/// re-point's own scope id against `session_root_scope_id`. At the vault anchor
+/// the read epoch is owner-authored, so a vouched `minReadEpoch` below the
+/// durable floor is an unambiguous rollback. At a shared scope a grantee's
+/// legitimate lazy rotation unseal-advances that same floor *past* the
+/// owner-authored `minReadEpoch`, so the identical comparison would
+/// false-positive into a self-inflicted bricked boot. The write-epoch stage
+/// stays unconditional.
+pub async fn repoint_regression<F: FloorStore>(
+    floors: &F,
+    repoint: &RepointObject,
+    session_root_scope_id: &[u8; 16],
+) -> SeamResult<Option<FloorRegression>> {
+    if repoint.scope_id == *session_root_scope_id
+        && let Some(floor) = read_epoch_floor(floors, &repoint.scope_id).await?
+        && repoint.min_read_epoch < floor
+    {
+        return Ok(Some(FloorRegression::ReadEpoch {
+            floor,
+            vouched: repoint.min_read_epoch,
+        }));
+    }
+    if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id).await?
+        && repoint.write_epoch < floor
+    {
+        return Ok(Some(FloorRegression::WriteEpoch {
+            floor,
+            vouched: repoint.write_epoch,
+        }));
+    }
+    Ok(None)
+}
+
 /// Cold-seed a scope's floors **fail-closed on regression** (the floor law) —
 /// the single checked cold-seed seam production uses.
 ///
-/// Reads the durable floors and rejects before any write if the owner-vouched
-/// re-point would move one backward: a re-point whose `writeEpoch` (any scope),
-/// or whose `minReadEpoch` (the vault anchor only, see below), is strictly below
-/// the durable floor is a rolled-back pointer (a replay past a revocation
-/// boundary), a trust violation never mere staleness. Only when nothing
+/// Reads the durable floors and rejects before any write if the re-point
+/// regresses one ([`repoint_regression`]) — a replay past a revocation
+/// boundary, a trust violation and never mere staleness. Only when nothing
 /// regresses does it advance the floors via the monotonic-max [`cold_seed`].
-///
-/// The read-epoch check runs **only at the vault anchor**, and this function
-/// selects that from the re-point's own scope id against `session_root_scope_id`
-/// — never from a caller, so no wiring can suppress it. At the vault anchor the
-/// read epoch is owner-authored, so a vouched `minReadEpoch` below the durable
-/// floor is an unambiguous owner rollback. At a shared scope a grantee's
-/// legitimate lazy rotation unseal-advances that same floor *past* the
-/// owner-authored `minReadEpoch`, so the identical comparison would
-/// false-positive into a self-inflicted bricked boot. Either way no rollback is
-/// accepted: the write-epoch check stays unconditional and every advance is
-/// monotonic-max.
 ///
 /// Check-then-advance is deliberately not a CAS pair: the engine is the single
 /// writer (blueprint/engine.md "Facade"), and the monotonic-max store backstops
@@ -321,29 +346,11 @@ pub async fn cold_seed_checked<F: FloorStore>(
     repoint: &RepointObject,
     session_root_scope_id: &[u8; 16],
 ) -> Result<(), ColdSeedError> {
-    if repoint.scope_id == *session_root_scope_id {
-        if let Some(floor) = read_epoch_floor(floors, &repoint.scope_id)
-            .await
-            .map_err(ColdSeedError::Seam)?
-        {
-            if repoint.min_read_epoch < floor {
-                return Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
-                    floor,
-                    vouched: repoint.min_read_epoch,
-                }));
-            }
-        }
-    }
-    if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id)
+    if let Some(regression) = repoint_regression(floors, repoint, session_root_scope_id)
         .await
         .map_err(ColdSeedError::Seam)?
     {
-        if repoint.write_epoch < floor {
-            return Err(ColdSeedError::Regression(FloorRegression::WriteEpoch {
-                floor,
-                vouched: repoint.write_epoch,
-            }));
-        }
+        return Err(ColdSeedError::Regression(regression));
     }
     cold_seed(floors, repoint)
         .await
