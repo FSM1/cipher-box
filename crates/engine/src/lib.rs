@@ -84,12 +84,13 @@ pub use net::{
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{
-    ChildIndexResolver, CommittedSet, EagerSet, EnumerationError, PrevEpochSeed, ResealError,
-    ResealSeeds, ResealedScopeRoot, ResolveFailure, RevokeError, RevokedCommittedSet, RotateError,
-    RotateScopePlan, RotationOutcome, RotationTrigger, ScopeExitReport, ScopeExitRotator,
-    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WriteHistory,
-    consume_scope_exit_triggers, enumerate_eager_set, reseal_scope_root, revoke_read_grant,
-    rotate_scope,
+    ChildIndexResolver, CommittedSet, CutRotationReport, CutRotator, EagerSet, EnumerationError,
+    GrantCutPlan, PrevEpochSeed, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
+    RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
+    RotationOutcome, RotationPlanes, RotationTrigger, ScopeExitReport, ScopeExitRotator,
+    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WriteHistory, WriteRevokeKind,
+    consume_scope_exit_triggers, enumerate_eager_set, prune_expired_grants, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope,
 };
 pub use seams::{OwedRetire, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
