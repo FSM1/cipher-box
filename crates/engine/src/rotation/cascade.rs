@@ -125,6 +125,14 @@ pub struct CascadeTarget {
     /// retained window by the re-seal — see
     /// [`reseal_scope_root`](super::reseal::reseal_scope_root).
     pub carried_history_links: Vec<SignedSealed>,
+    /// Whether the record this replaces carried an ascent link, and so whether
+    /// the re-seal owes one
+    /// ([`ScopeRootIdentity::owes_ascent_link`](super::ScopeRootIdentity::owes_ascent_link)).
+    /// Read off the record rather than inferred from the walk, on the rule the
+    /// sweep's [`SweptScope`](super::sweep::SweptScope) already follows: a root
+    /// re-sealed without the link its record carried is orphaned from every
+    /// later gated descent.
+    pub carried_ascent_link: bool,
 }
 
 /// The impure edge that resolves a descendant scope root's current re-seal
@@ -857,6 +865,8 @@ mod tests {
                 write_history_link: Vec::new(),
                 direct_child_scope_index: s.children.clone(),
                 carried_history_links: Vec::new(),
+                // Every scope this resolver reaches is a descendant.
+                carried_ascent_link: true,
             })
         }
     }

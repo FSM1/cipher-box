@@ -11,9 +11,15 @@
 //! The wasm-bindgen-generated `.d.ts` is the single boundary contract that
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
 //! engine structures. Boundary hygiene is structural: `u64`s cross as `bigint`,
-//! binary payloads as `Uint8Array`, and no secret key material crosses at all —
-//! the command surface exposes only intent, the event and read surfaces only
-//! key-free view state and decrypted user content.
+//! binary payloads as `Uint8Array`, and the command surface exposes only
+//! intent while the event and read surfaces carry key-free view state and
+//! decrypted user content.
+//!
+//! One secret crosses, and only because handing it over *is* the feature: an
+//! invite link's bearer capability ([`CommandOutcome::invite_secret`]), which
+//! the host puts in a URL fragment. Residual: wasm-bindgen copies the returned
+//! buffer into the JS heap and frees it unwiped, so those bytes stay readable
+//! in linear memory until the allocator reuses the block.
 
 // wasm-bindgen's macro-generated glue is unsafe by nature and exempt; this
 // forbids only unsafe we would hand-write (there is none).
@@ -22,7 +28,7 @@
 
 use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
-use cipherbox_engine::{Contact, PinMode as EnginePinMode, RetentionPolicy};
+use cipherbox_engine::{Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy};
 use core::num::NonZeroU64;
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
@@ -394,6 +400,7 @@ impl CommandOutcome {
             facade::CommandOutcome::Done => "done",
             facade::CommandOutcome::Queued { .. } => "queued",
             facade::CommandOutcome::ContactImported(_) => "contactImported",
+            facade::CommandOutcome::InviteLinkMinted(_) => "inviteLinkMinted",
         }
         .to_owned()
     }
@@ -421,12 +428,54 @@ impl CommandOutcome {
         self.contact()
             .map(|contact| contact.enc_subkey().to_bytes().to_vec())
     }
+
+    /// `inviteLinkMinted`: the invite secret the link's URL fragment carries —
+    /// **the whole bearer capability**, so a host puts it in the fragment and
+    /// nowhere durable; otherwise `undefined`.
+    ///
+    /// Read it once and put it in the fragment: every call leaves another
+    /// unwiped copy in linear memory (the module header states the residual).
+    #[wasm_bindgen(getter, js_name = inviteSecret)]
+    pub fn invite_secret(&self) -> Option<Vec<u8>> {
+        self.link()
+            .map(|link| link.invite_secret.as_bytes().to_vec())
+    }
+
+    /// `inviteLinkMinted`: the owner's contact code, which the fragment carries
+    /// beside the secret so a claimant can seal its claim to the owner;
+    /// otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = ownerContactCode)]
+    pub fn owner_contact_code(&self) -> Option<Vec<u8>> {
+        self.link().map(|link| link.owner_contact_code.clone())
+    }
+
+    /// `inviteLinkMinted`: the scope root's opaque `ipnsName`, which a claim
+    /// names; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = scopeRootName)]
+    pub fn scope_root_name(&self) -> Option<Vec<u8>> {
+        self.link().map(|link| link.scope_root_name.clone())
+    }
+
+    /// `inviteLinkMinted`: whether the link hands out an extractable subtree
+    /// signing key, which only a write rotation revokes — the bearer-write flag
+    /// a host UI must show; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = isBearerWrite)]
+    pub fn is_bearer_write(&self) -> Option<bool> {
+        self.link().map(|link| link.capability.is_bearer_write())
+    }
 }
 
 impl CommandOutcome {
     /// Wraps an engine command outcome. Never exported to JS.
     pub fn from_facade(inner: facade::CommandOutcome) -> Self {
         Self { inner }
+    }
+
+    fn link(&self) -> Option<&MintedInviteLink> {
+        match &self.inner {
+            facade::CommandOutcome::InviteLinkMinted(link) => Some(link),
+            _ => None,
+        }
     }
 
     fn contact(&self) -> Option<&Contact> {

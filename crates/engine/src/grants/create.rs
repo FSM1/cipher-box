@@ -883,6 +883,8 @@ mod tests {
                 write_history_link: Vec::new(),
                 direct_child_scope_index: Vec::new(),
                 carried_history_links: Vec::new(),
+                // Every scope this resolver reaches is a descendant.
+                carried_ascent_link: true,
             })
         }
     }

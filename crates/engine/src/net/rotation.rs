@@ -119,8 +119,11 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The ancestor seeds every interior scope root's gated read needs.
     pub ancestry: RotationAncestry,
     /// Derives the scope pointer's name for the sweep's consult (owner-only
-    /// material, never published).
-    pub owner_pointer_seed: &'a [u8; SECRET_LEN],
+    /// material, never published). `None` on a pass that runs no sweep, so an
+    /// arm that needs neither the pointer nor its signing key is never handed
+    /// the seed that derives both (store the narrowest derived capability); a
+    /// consult without it refuses rather than skipping.
+    pub owner_pointer_seed: Option<&'a [u8; SECRET_LEN]>,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
     /// The record a re-key is about to replace, handed from the resolve that
@@ -282,6 +285,19 @@ impl RotationAncestry {
             *kdf::node_seed(parent_seed, scope_id).as_bytes(),
         ))
     }
+}
+
+/// Which root binding a gated read must prove.
+///
+/// A descendant's record is bound to its parent by an ascent link the gate
+/// verifies ([`gated_child_root`]) — a `directChildScopeIndex` entry, or one
+/// reparented into a grant's subtree. A vault root carries no ascent link, so
+/// requiring one there would refuse every honest record.
+enum RootAnchor {
+    /// A claimed descendant scope root — proven a child, not merely a root.
+    Descendant,
+    /// The vault root.
+    VaultRoot,
 }
 
 /// One scope root as the adoption gate authenticated it, plus the seeds the
@@ -577,23 +593,24 @@ where
     /// cascade re-keys top-down, so a descendant's record still carries the
     /// ascent link its parent's pre-cascade seed sealed.
     ///
-    /// Caller contract: `scope` is a claimed **descendant** scope root — a
-    /// `directChildScopeIndex` entry, or one reparented into a grant's subtree —
-    /// so the record is proven a child ([`gated_child_root`]), not merely a
-    /// scope root. A scope's *own* root goes through [`Self::gated_root`]
-    /// instead, since a vault root carries no ascent link to require.
+    /// Which binding the gated read must prove is [`RootAnchor`]'s.
     async fn gated_write_plane(
         &self,
         scope: &ChildScopeRef,
+        anchor: RootAnchor,
     ) -> Result<GatedWritePlane, ResolveFailure> {
         let name = scope_name(&scope.ipns_name)?;
         let adopter = self.root_adopter(scope.scope_id);
         let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
             return Err(ResolveFailure::Unavailable);
         };
-        let root = gated_child_root(&adopter, &name, &record_bytes, scope.scope_id)
-            .await
-            .map_err(ResolveFailure::from)?;
+        let root = match anchor {
+            RootAnchor::Descendant => {
+                gated_child_root(&adopter, &name, &record_bytes, scope.scope_id).await
+            }
+            RootAnchor::VaultRoot => gated_scope_root(&adopter, &name, &record_bytes).await,
+        }
+        .map_err(ResolveFailure::from)?;
         let (write_body, write_epoch) = self.write_body(&root, scope.scope_id).await?;
         self.ancestry.record(
             scope.scope_id,
@@ -639,36 +656,27 @@ where
         }
         Ok(())
     }
-}
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> ChildIndexResolver
-    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
-where
-    T: RecordTransport,
-    F: FloorStore,
-{
-    async fn direct_child_index(
+    /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
+    /// gated read, same parked republish base; only the binding differs.
+    pub async fn resolve_vault_root(
         &self,
-        child: &ChildScopeRef,
-    ) -> Result<Vec<ChildScopeRef>, ResolveFailure> {
-        let gated = self.gated_write_plane(child).await?;
-        Ok(gated.write_body.direct_child_scope_index)
+        scope: &ChildScopeRef,
+    ) -> Result<CascadeTarget, ResolveFailure> {
+        self.resolve_at(scope, RootAnchor::VaultRoot).await
     }
-}
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> CascadeResealResolver
-    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
-where
-    T: RecordTransport,
-    F: FloorStore,
-{
-    async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
+    async fn resolve_at(
+        &self,
+        scope: &ChildScopeRef,
+        anchor: RootAnchor,
+    ) -> Result<CascadeTarget, ResolveFailure> {
         let GatedWritePlane {
             name,
             root,
             write_body,
             write_epoch,
-        } = self.gated_write_plane(scope).await?;
+        } = self.gated_write_plane(scope, anchor).await?;
         let GatedScopeRoot {
             envelope,
             section,
@@ -679,7 +687,12 @@ where
         // This build authors exactly `ENVELOPE_V`, so re-sealing a newer
         // client's root under its own `v` would mint structures whose AAD this
         // build can never reproduce (`sync/drain.rs` guards the same downgrade).
-        if envelope.v != ENVELOPE_V {
+        //
+        // The root gate binds `envelope.scope` but not `envelope.id`, and every
+        // AAD a re-seal of this target authors binds the id — so a root whose
+        // record claims another node would be re-sealed under a key no reader
+        // re-derives (the write wave imposes the same binding).
+        if envelope.v != ENVELOPE_V || envelope.id != scope.scope_id {
             return Err(ResolveFailure::Rejected);
         }
         let Some(write_scope_seed) = write_scope_seed else {
@@ -701,6 +714,7 @@ where
             write_history_link: write_body.write_history_link,
             direct_child_scope_index: write_body.direct_child_scope_index,
             carried_history_links: section.history_links,
+            carried_ascent_link: section.ascent_link.is_some(),
         };
         self.gated.park(
             name,
@@ -712,6 +726,34 @@ where
             },
         );
         Ok(target)
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> ChildIndexResolver
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport,
+    F: FloorStore,
+{
+    async fn direct_child_index(
+        &self,
+        child: &ChildScopeRef,
+    ) -> Result<Vec<ChildScopeRef>, ResolveFailure> {
+        let gated = self
+            .gated_write_plane(child, RootAnchor::Descendant)
+            .await?;
+        Ok(gated.write_body.direct_child_scope_index)
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> CascadeResealResolver
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport,
+    F: FloorStore,
+{
+    async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
+        self.resolve_at(scope, RootAnchor::Descendant).await
     }
 }
 
@@ -1079,7 +1121,10 @@ where
         &self,
         scope_id: &[u8; 16],
     ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
-        let pointer = scope_pointer_name(self.owner_pointer_seed, scope_id);
+        let seed = self
+            .owner_pointer_seed
+            .ok_or(SweepResolveFailure::Unavailable)?;
+        let pointer = scope_pointer_name(seed, scope_id);
         let block = match RecordPointerFetch::new(self.transport)
             .fetch(&pointer)
             .await
@@ -2659,7 +2704,7 @@ mod tests {
                     scope_keys: &OwnerSeeds,
                 },
                 ancestry,
-                owner_pointer_seed: &OWNER_POINTER_SEED,
+                owner_pointer_seed: Some(&OWNER_POINTER_SEED),
                 payload_version: PAYLOAD_VERSION,
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
@@ -3407,6 +3452,66 @@ mod tests {
             core::slice::from_ref(&child_ref),
         );
         (root, child, child_ref)
+    }
+
+    /// The vault root carries no ascent link, so the descendant edge refuses
+    /// it — nothing proves it a child of anything. Its own edge reads it, which
+    /// is what a mint or a rotation anchored at the root needs.
+    #[test]
+    fn the_vault_root_resolves_only_through_its_own_edge() {
+        let root = vault_root(SCOPE, Vec::new());
+        let root_ref = child_ref(SCOPE, &root);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        assert_eq!(
+            block_on(harness.net(&[]).resolve(&root_ref)).err(),
+            Some(ResolveFailure::Rejected),
+            "an ascent link the vault root never carries is not evidence it lacks",
+        );
+
+        let target = block_on(harness.net(&[]).resolve_vault_root(&root_ref))
+            .expect("the vault root's own re-seal material");
+        assert_eq!(target.current_read_epoch, OWNER_ROOT_EPOCH);
+        assert!(
+            ct_eq(&target.override_seed, &OWNER_ROOT_SCOPE_SEED),
+            "the seed comes from the gated record's own owner blob",
+        );
+        assert!(ct_eq(
+            &target.write_scope_seed,
+            &OWNER_ROOT_WRITE_SCOPE_SEED
+        ));
+    }
+
+    /// The root gate binds the scope but not the node id, and every AAD a
+    /// re-seal authors binds the id — so a record claiming another node yields
+    /// no re-seal material rather than one re-sealed under a key no reader
+    /// re-derives. Fail-closed on whichever ladder rung catches it first.
+    #[test]
+    fn a_vault_root_record_claiming_another_node_yields_no_reseal_material() {
+        let planted = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: CHILD_SCOPE,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+
+        assert!(
+            block_on(
+                harness
+                    .net(&[])
+                    .resolve_vault_root(&child_ref(SCOPE, &planted))
+            )
+            .is_err(),
+        );
     }
 
     #[test]

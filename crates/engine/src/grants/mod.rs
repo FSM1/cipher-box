@@ -16,6 +16,7 @@ pub mod contact;
 pub mod contact_store;
 pub mod create;
 pub mod invite;
+pub mod invite_mint;
 pub mod invite_store;
 pub mod ledger;
 pub mod owner_entry;
@@ -46,6 +47,7 @@ pub use invite::{
     OwnerAuthority, RecordedInvite, convert_invite_claim, mint_invite_grant, post_invite_claim,
     revoke_invite_link,
 };
+pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
 pub use invite_store::{
     INVITE_RECORDS_PREFIX, InviteRecords, InviteRecordsCodecError, InviteStore, InviteStoreError,
     MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,

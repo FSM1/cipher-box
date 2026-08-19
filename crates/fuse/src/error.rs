@@ -73,6 +73,11 @@ impl From<EngineError> for VfsError {
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
             EngineError::ScopeExitRefused { message } => VfsError::Refused { message },
+            // A node this build cannot act on is a refusal of the target, which
+            // is what `Refused` names — never an unavailability a mount retries.
+            error @ EngineError::UnsupportedTarget { .. } => VfsError::Refused {
+                message: error.to_string(),
+            },
             EngineError::ContentUnavailable { message }
             | EngineError::RefreshFailed { message } => VfsError::Unavailable { message },
             // Retryable once the vault settings resolve or are saved again, and

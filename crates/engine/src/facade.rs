@@ -24,7 +24,7 @@ use std::rc::Rc;
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ReadBody, Version, seal_content_key};
+use cipherbox_core::seal::{ChildScopeRef, ReadBody, Version, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
@@ -40,19 +40,24 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::gate::{GateError, floor};
-use crate::grants::{Contact, ContactStore, ContactStoreError, StagingContactStore};
+use crate::grants::{
+    Contact, ContactStore, ContactStoreError, InviteError, InviteMintError, InviteMintPlan,
+    InviteStoreError, MintedInviteLink, OwnerAuthority, StagingContactStore, StagingInviteStore,
+    mint_invite_link,
+};
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
+use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
-    HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PublishError,
+    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    VaultProvisionNet, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::OwnerSessionKeys;
 use crate::profile::SyncTimingProfile;
-use crate::rotation::derive_write_name;
+use crate::rotation::{ResealError, ResolveFailure, derive_write_name};
 use crate::seams::{
     FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
     StagingStore, UnixMillis,
@@ -339,6 +344,15 @@ pub enum Permission {
     Write,
 }
 
+impl From<Permission> for cipherbox_core::seal::Permission {
+    fn from(permission: Permission) -> Self {
+        match permission {
+            Permission::Read => Self::Read,
+            Permission::Write => Self::Write,
+        }
+    }
+}
+
 /// The staleness ladder (#33 D4): fresh → reconciling → stale → offline.
 /// Availability staleness keeps cached views usable indefinitely; trust
 /// violations are never staleness.
@@ -543,8 +557,19 @@ pub enum Command {
         recipient_identity_public_key: Vec<u8>,
     },
     /// Mint an invite link for a node (#25 D6). The returned URL fragment
-    /// carries the ephemeral secret; response payloads land with the grants
-    /// slice.
+    /// carries the ephemeral secret. `node` must be a scope root — this build
+    /// invites at the vault root only, since inviting to a folder below it
+    /// mints that folder's scope first.
+    ///
+    /// What a host must tell a user before it shows the link: a read grant
+    /// mints a fresh scope at epoch 1, but an invite adds a row to the scope
+    /// root's existing set, so the bearer gets that scope's current seed **and
+    /// the retained history links that walk back from it** — every epoch the
+    /// owner has cut, including cuts made to revoke someone. It carries no
+    /// deadline, and only a write rotation ends a write link
+    /// ([`LinkCapability::BearerWrite`](crate::grants::LinkCapability)).
+    ///
+    /// [`LinkCapability`]: crate::grants::LinkCapability
     CreateInviteLink {
         /// Node to invite to.
         node: NodeId,
@@ -637,6 +662,11 @@ pub enum CommandOutcome {
     /// [`Command::ImportContact`] verified a contact code. Holding the
     /// [`Contact`] is itself the proof its binding signature verified.
     ContactImported(Contact),
+    /// [`Command::CreateInviteLink`] minted a link: recorded, published, and
+    /// only then handed out. The payload is the bearer capability itself
+    /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
+    /// durable.
+    InviteLinkMinted(MintedInviteLink),
 }
 
 impl fmt::Debug for CommandOutcome {
@@ -645,6 +675,7 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::Done => f.write_str("CommandOutcome(done)"),
             CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
             CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
+            CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
         }
     }
 }
@@ -936,6 +967,15 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
+    /// A command named a node this build cannot act on. Neither a refusal of
+    /// the bytes that named it ([`MalformedInput`](EngineError::MalformedInput))
+    /// nor of the whole command ([`Unimplemented`](EngineError::Unimplemented)):
+    /// the command is wired and the node is well-formed, but the rule named
+    /// here rules that node out as its target.
+    UnsupportedTarget {
+        /// The rule that refused; never key material.
+        check: &'static str,
+    },
 }
 
 impl EngineError {
@@ -955,6 +995,60 @@ impl EngineError {
     fn from_entropy(err: crate::entropy::EntropyError) -> Self {
         EngineError::Entropy {
             message: err.message().to_owned(),
+        }
+    }
+
+    /// Map an invite-mint failure on the classes a host acts on: availability
+    /// it may retry, an input or a bound it can change, and a fail-closed
+    /// refusal it must never retry (rule 6).
+    fn from_invite_mint(err: InviteMintError) -> Self {
+        let refused = |check: &'static str| EngineError::MalformedInput { check };
+        match err {
+            InviteMintError::Mint(InviteError::Entropy(e))
+            | InviteMintError::Store(InviteStoreError::Entropy(e))
+            | InviteMintError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
+            // The vault root's own commitment is not signed by this session's
+            // identity key, or the ledger it carries diverges from it: verdicts
+            // on the record, never on the request.
+            e @ InviteMintError::Mint(InviteError::NotOwner | InviteError::Authority(_)) => {
+                EngineError::TrustViolation {
+                    message: e.to_string(),
+                }
+            }
+            InviteMintError::Mint(e) => refused(e.check()),
+            InviteMintError::Sign(e) => refused(e.check()),
+            // Only a mint's own link can overflow the set it offers, and the
+            // host acts on it by revoking a live one.
+            InviteMintError::Store(InviteStoreError::Full { .. }) => refused("invite-records-full"),
+            InviteMintError::Store(InviteStoreError::Encode(_)) => {
+                refused("invite-records-unstorable")
+            }
+            InviteMintError::Store(InviteStoreError::Seal(e)) => refused(e.check()),
+            InviteMintError::Store(InviteStoreError::Seam(e)) => EngineError::Seam {
+                message: e.message().to_owned(),
+            },
+            InviteMintError::Publish(e) if e.is_retryable() => EngineError::Seam {
+                message: e.to_string(),
+            },
+            // A stored set that will not open, a re-seal this build refuses to
+            // sign, a root that is not the vault root, and a rejected publish
+            // are all fail-closed verdicts on the owner's own state.
+            other => EngineError::TrustViolation {
+                message: other.to_string(),
+            },
+        }
+    }
+
+    /// Map the gated read a mint runs first: a rejection is a fail-closed trust
+    /// verdict, and every other verdict is availability.
+    fn from_resolve_failure(err: ResolveFailure) -> Self {
+        match err {
+            ResolveFailure::Rejected => EngineError::TrustViolation {
+                message: err.to_string(),
+            },
+            _ => EngineError::Seam {
+                message: err.to_string(),
+            },
         }
     }
 
@@ -1115,6 +1209,9 @@ impl fmt::Display for EngineError {
                 write!(f, "content key seal failed: [{check}]")
             }
             EngineError::RefreshFailed { message } => write!(f, "refresh failed: {message}"),
+            EngineError::UnsupportedTarget { check } => {
+                write!(f, "unsupported target: {check}")
+            }
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -2759,6 +2856,10 @@ where {
                     },
                 })
             }
+            Command::CreateInviteLink { node, permission } => self
+                .create_invite_link(node, permission)
+                .await
+                .map(CommandOutcome::InviteLinkMinted),
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
@@ -2775,6 +2876,90 @@ where {
                 command: other.name(),
             }),
         }
+    }
+
+    /// Mint an invite link over the vault root's scope: record it, publish the
+    /// row into the owner-signed commitment, and only then hand the bearer
+    /// capability back ([`mint_invite_link`]).
+    ///
+    /// The engine holds no node-to-scope mapping, so a node below the root
+    /// names no scope root this can invite to — a grant there mints the scope
+    /// first, which is the grant-creation arm's job.
+    async fn create_invite_link(
+        &self,
+        node: NodeId,
+        permission: Permission,
+    ) -> Result<MintedInviteLink, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let scope_id = self.snapshot.borrow().root.0;
+        if node.0 != scope_id {
+            return Err(EngineError::UnsupportedTarget {
+                check: "invite-target-is-not-a-scope-root",
+            });
+        }
+        let write_scope_seed =
+            cached_seed(&self.scope_write_seeds, &scope_id).ok_or(EngineError::Seam {
+                message: "no write scope seed is held for the vault root".to_owned(),
+            })?;
+        // Derived, never taken from a record: the blinded tag binds this name,
+        // so a link bound to anything else is one nobody can self-locate.
+        let scope = ChildScopeRef::new(
+            scope_id,
+            derive_write_name(&write_scope_seed, &scope_id)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+        );
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let net = OwnerRotationNet {
+            transport: &self.seams.record_transport,
+            api: api.as_ref(),
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys: OwnerRotationKeys {
+                enc_secret: session.enc_subkey(),
+                identity: &owner_identity,
+                scope_keys: &scope_keys,
+            },
+            ancestry: RotationAncestry::default(),
+            // A mint runs no sweep, so it never consults a scope pointer.
+            owner_pointer_seed: None,
+            payload_version: POINTER_PAYLOAD_VERSION,
+            gated: GatedRoots::default(),
+            swept: SweptScopeState::default(),
+        };
+        let current = net
+            .resolve_vault_root(&scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        mint_invite_link(
+            &OwnerAuthority {
+                identity_signer: session.identity(),
+                enc_secret: session.enc_subkey(),
+            },
+            &net,
+            &StagingInviteStore::new(
+                &self.seams.staging_store,
+                session.enc_subkey(),
+                &self.entropy,
+            ),
+            &self.entropy,
+            &InviteMintPlan {
+                scope: &scope,
+                current: &current,
+                permission: permission.into(),
+                // The command carries no expiry term.
+                expires_at: None,
+            },
+        )
+        .await
+        .map_err(EngineError::from_invite_mint)
     }
 
     /// Seal and publish the vault settings record, then adopt what it
