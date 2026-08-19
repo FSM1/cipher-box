@@ -8,13 +8,20 @@
 //! themselves). One contract, every platform: the v1 per-platform
 //! store-drift class has no home.
 //!
-//! Shape: each kit is one `check` async function that panics (via
+//! Shape: each kit is **one** `check` async function that panics (via
 //! `assert!`) on the first contract violation, so it drops into any test
 //! harness — `#[test]` + `block_on` natively, `wasm_bindgen_test` in the
 //! browser. Kits for durable stores take an `AsyncFnMut() -> S` **factory**;
 //! calling it again must "reopen" the same logical backing (new handle,
 //! same durable state) — that is how durability is asserted without a
 //! process restart. Kits for transports take a live instance.
+//!
+//! One entry point, always: a case a host reaches through a second `check_*`
+//! function is a case a host can omit, and nothing in the type system, CI, or
+//! review says it did. Where a case needs a fault the seam cannot produce on
+//! its own, the lever is a **parameter** of `check` — the completeness argument
+//! is made by the signature, the same way `SeamSet` makes it by field
+//! construction.
 //!
 //! One seam ships no kit, deliberately: `Http` is a pure passthrough, so
 //! its behavior is the live contract suite's job.

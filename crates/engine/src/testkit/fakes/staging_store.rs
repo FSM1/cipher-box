@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
+use crate::testkit::conformance::staging_store::Backing;
 
 struct Inner {
     next_op_id: u64,
@@ -79,9 +80,10 @@ impl InMemoryStagingStore {
             Some((staging_key.to_vec(), budget));
     }
 
-    /// Fails the next write at `staging_key` past `budget` **after** landing
-    /// half of the new bytes — the write-in-place shape of a host whose failed
-    /// put strands a partial record where the key held none.
+    /// Fails the next write at `staging_key` past `budget`, landing half of the
+    /// new bytes when the key held none — the write-in-place shape of a host
+    /// that is failure-atomic on a replacement but strands a partial record on
+    /// a create.
     pub fn strand_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").partial_write_budget =
             Some((staging_key.to_vec(), budget));
@@ -163,8 +165,10 @@ impl StagingStore for InMemoryStagingStore {
             return Err(SeamError::new("put_staged_bytes unavailable"));
         }
         if interrupts(&mut inner.partial_write_budget, staging_key) {
-            let half = bytes[..bytes.len() / 2].to_vec();
-            inner.staged.insert(staging_key.to_vec(), half);
+            if !inner.staged.contains_key(staging_key) {
+                let half = bytes[..bytes.len() / 2].to_vec();
+                inner.staged.insert(staging_key.to_vec(), half);
+            }
             return Err(SeamError::new("put_staged_bytes unavailable"));
         }
         inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
@@ -213,5 +217,25 @@ impl StagingStore for InMemoryStagingStore {
             .values()
             .map(|bytes| bytes.len() as u64)
             .sum())
+    }
+}
+
+/// One [`InMemoryStagingStore`] per conformance-kit [`Backing`]: what a kit
+/// caller's `open` factory hands back, so every phase gets its own initially
+/// empty backing while a repeat call for the same one reopens it.
+#[derive(Clone, Default)]
+pub struct InMemoryStagingBackings {
+    stores: Arc<Mutex<BTreeMap<&'static str, InMemoryStagingStore>>>,
+}
+
+impl InMemoryStagingBackings {
+    /// The store backing `backing`, minted empty on first ask.
+    pub fn open(&self, backing: Backing) -> InMemoryStagingStore {
+        self.stores
+            .lock()
+            .expect("lock")
+            .entry(backing.label())
+            .or_default()
+            .clone()
     }
 }
