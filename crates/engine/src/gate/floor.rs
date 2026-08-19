@@ -270,7 +270,8 @@ pub async fn advance_sequence_on_unseal<F: FloorStore>(
 
 /// Cold-seed a scope's floors from an owner-vouched re-point object. Raises the
 /// read-epoch floor to `minReadEpoch` (the revocation boundary) and the
-/// write-epoch floor to `writeEpoch`, both monotonic-max.
+/// write-epoch floor to `writeEpoch`, both monotonic-max — the two epoch floors
+/// only.
 ///
 /// The [`RepointObject`] argument is only obtainable from a successful
 /// [`open_pointer_payload`](cipherbox_core::payload::open_pointer_payload),
@@ -401,6 +402,38 @@ mod tests {
                 read_epoch_floor(&floors, &SCOPE).await.unwrap(),
                 None,
                 "a child unseal must not move the scope read-epoch floor"
+            );
+        });
+    }
+
+    /// The adopt path's bar. A name with no floor admits its first record, and
+    /// once the floor sits at that sequence the same record is no longer
+    /// strictly newer — which is why a genesis root's sequence floor is left
+    /// unseeded until its own first adopt raises it.
+    #[test]
+    fn strictly_newer_admits_a_first_record_then_refuses_it_at_the_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            check_sequence(&floors, NAME, 1, Strictness::StrictlyNewer)
+                .await
+                .expect("an unseeded floor admits the first record");
+
+            advance_sequence_on_unseal(&floors, NAME, 1).await.unwrap();
+            let err = check_sequence(&floors, NAME, 1, Strictness::StrictlyNewer)
+                .await
+                .expect_err("a record at the floor is not strictly newer");
+            assert!(
+                matches!(
+                    err,
+                    GateError::Rejected(GateRejection {
+                        stage: GateStage::Sequence,
+                        reason: RejectionReason::SequenceNotNewer {
+                            floor: 1,
+                            sequence: 1
+                        },
+                    })
+                ),
+                "{err:?}"
             );
         });
     }
