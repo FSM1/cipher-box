@@ -69,13 +69,13 @@ impl<E: Entropy + ?Sized> Entropy for Box<E> {
 
 /// A shared [`Entropy`] cell as an [`Entropy`] source that re-borrows per draw.
 ///
-/// The engine holds one boxed source behind a [`RefCell`] shared with every
-/// spawned loop, and an async port that takes `&mut dyn Entropy` would
-/// otherwise hold the `RefMut` across each `.await` — a panic the moment a
-/// loop drew from the same cell.
-pub(crate) struct SharedEntropy<'a>(pub &'a RefCell<Box<dyn Entropy>>);
+/// The engine holds one source behind a [`RefCell`] shared with every spawned
+/// loop, and an async port that takes `&mut E` would otherwise hold the `RefMut`
+/// across each `.await` — a panic the moment a loop, or a seam the port itself
+/// drives, drew from the same cell.
+pub(crate) struct SharedEntropy<'a, E: ?Sized>(pub &'a RefCell<E>);
 
-impl Entropy for SharedEntropy<'_> {
+impl<E: Entropy + ?Sized> Entropy for SharedEntropy<'_, E> {
     fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
         self.0.borrow_mut().fill(dest)
     }

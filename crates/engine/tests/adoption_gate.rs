@@ -1593,7 +1593,7 @@ impl ResealedFixture {
             ipns_name: name.as_str().as_bytes(),
             owner_enc_pub: &owner_enc_pub,
             owner_enc_secret: None,
-            parent_node_seed: None,
+            ascent: None,
             owes_ascent_link: false,
             pseudonym_signer: &owner_pseudonym,
         };

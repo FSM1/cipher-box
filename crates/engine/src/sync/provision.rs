@@ -552,7 +552,7 @@ where
             ipns_name: root_name.as_str().as_bytes(),
             owner_enc_pub: &owner_enc_pub,
             owner_enc_secret: Some(plan.owner_enc_secret),
-            parent_node_seed: None,
+            ascent: None,
             owes_ascent_link: false,
             pseudonym_signer: &pseudonym_signer,
         },

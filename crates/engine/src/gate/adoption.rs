@@ -244,10 +244,10 @@ pub struct ReaderContext<'a> {
     /// The reader's own derived scope read key for the read-body unseal.
     pub read_key: &'a [u8; 32],
     /// The reader's cached ancestor node seed — the trusted secret the expected
-    /// ascent keypair re-derives from. Required whenever
-    /// `candidate.grant_section.ascent_link` is `Some`; a `None` here against a
-    /// present ascent link is fail-closed
-    /// (cannot verify).
+    /// ascent keypair re-derives from. Required whenever a **descending** reader
+    /// meets a `candidate.grant_section.ascent_link` of `Some`; a `None` here
+    /// against a present ascent link is fail-closed (cannot verify). A grantee
+    /// ([`SeedBlob::Grantee`]) does not descend and passes `None`.
     pub parent_node_seed: Option<&'a [u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
     /// holder that already possesses the read key.
@@ -556,7 +556,12 @@ pub async fn adopt_deferred<F: FloorStore>(
     let epoch = candidate.envelope.epoch;
     authenticate_section_structures(section, &candidate.envelope)
         .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
-    if let Some(ascent) = &section.ascent_link {
+    // A grantee enters by its own grant blob, not by an ancestor's descent: it
+    // holds no parent node seed, and stage 6 cross-checks the seed that blob
+    // wraps against this record's read key — the same binding the ascent check
+    // makes for a descending reader.
+    let descends = !matches!(reader.seed_blob, Some(SeedBlob::Grantee { .. }));
+    if let Some(ascent) = section.ascent_link.as_ref().filter(|_| descends) {
         // The ascent link is doubly checked: its structure signature (above)
         // proves the committed writer authored it, and this derive-and-verify
         // proves the sealed seed is *this* scope root's.

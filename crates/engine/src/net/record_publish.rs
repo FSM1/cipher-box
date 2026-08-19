@@ -160,7 +160,11 @@ pub struct RecordPublishRequest<'a> {
     pub min_current_sequence: Option<u64>,
 }
 
-/// A fail-closed record-publish failure.
+/// A fail-closed record-publish failure: what the publish *pipeline* reports
+/// about one attempt to move an authored record to the network. The rotation
+/// seams fold it into their own caller-side verdict
+/// ([`RotationPublishError`](crate::rotation::RotationPublishError)), which
+/// classifies an attempt on the retryable-vs-trust axis instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordPublishError {
     /// The head block upload failed; nothing was published.

@@ -36,6 +36,7 @@
 use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
 
+use super::eager_set::ResolveFailure;
 use super::reseal::{
     CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
     reseal_scope_root,
@@ -63,23 +64,32 @@ pub struct ResealedScopeRoot {
     pub section: GrantSection,
 }
 
-/// Why a scope-root publish did not durably land as the freshest record. Every
-/// variant means the rotation must not advance its floor — nothing was cut.
+/// Why a **rotation's** publish did not durably land as the freshest record at
+/// its name. Every variant means the rotation must not advance its floor —
+/// nothing was cut.
+///
+/// The rotation primitives publish two kinds of record — a re-sealed scope root
+/// and, on the sweep and grant-creation paths, a re-sealed interior node — and
+/// this is the verdict on either. It is the *caller's* classification of an
+/// attempt, on rule 6's retryable-vs-trust axis;
+/// [`RecordPublishError`](crate::net::record_publish::RecordPublishError) is the
+/// publish *pipeline's* own report of what went wrong on the wire, which the
+/// rotation seams fold into this.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScopeRootPublishError {
+pub enum RotationPublishError {
     /// Register-first or the record PUT failed; nothing durable landed. Retryable.
     NotPublished,
     /// A concurrent writer's record at a higher sequence won the CAS race; the
     /// caller re-resolves and rebases before retrying.
     LostRace,
-    /// The scope root the publish had to read first failed the adoption gate — a
+    /// The record the publish had to read first failed the adoption gate — a
     /// fail-closed trust violation, never staleness (AGENTS.md rule 6). Kept
     /// distinct from [`Self::NotPublished`] so a forged or transplanted record
     /// is never retried as if it were a flaky endpoint.
     Rejected,
 }
 
-impl ScopeRootPublishError {
+impl RotationPublishError {
     /// Whether re-running the publish could clear this: an availability stall or
     /// a lost race, but never a trust rejection.
     pub fn is_retryable(&self) -> bool {
@@ -87,19 +97,19 @@ impl ScopeRootPublishError {
     }
 }
 
-impl core::fmt::Display for ScopeRootPublishError {
+impl core::fmt::Display for RotationPublishError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ScopeRootPublishError::NotPublished => f.write_str("scope-root record not published"),
-            ScopeRootPublishError::LostRace => f.write_str("scope-root publish lost the CAS race"),
-            ScopeRootPublishError::Rejected => {
-                f.write_str("scope-root record rejected by adoption gate")
+            RotationPublishError::NotPublished => f.write_str("rotation record not published"),
+            RotationPublishError::LostRace => f.write_str("rotation publish lost the CAS race"),
+            RotationPublishError::Rejected => {
+                f.write_str("rotation record rejected by adoption gate")
             }
         }
     }
 }
 
-impl std::error::Error for ScopeRootPublishError {}
+impl std::error::Error for RotationPublishError {}
 
 /// The publish effect of a rotation: CAS-publish a re-sealed scope-root record.
 ///
@@ -117,7 +127,7 @@ pub trait ScopeRootPublisher {
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), ScopeRootPublishError>;
+    ) -> Result<(), RotationPublishError>;
 }
 
 /// The inputs to one scope root's read-plane rotation: its identity, its current
@@ -155,11 +165,16 @@ pub struct RotateScopePlan<'a> {
 /// only after a confirmed floor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RotateError {
+    /// The scope root the rotation had to resolve yielded no plan: its record
+    /// failed the adoption gate, or the rotator holds no seed source in it.
+    /// Fail-closed on the resolve's own axis, so a trust verdict is never
+    /// retried as an availability stall (AGENTS.md rule 6).
+    Resolve(ResolveFailure),
     /// Re-sealing the scope root failed (divergent ledger, unusable recipient
     /// key, or entropy failure) — nothing was published.
     Reseal(ResealError),
     /// The scope-root record did not land — nothing was cut, retry later.
-    Publish(ScopeRootPublishError),
+    Publish(RotationPublishError),
     /// The durable epoch floor could not be raised after a confirmed publish. The
     /// record is published (no lockout); the cut completes on retry.
     Floor(SeamError),
@@ -172,6 +187,7 @@ pub enum RotateError {
 impl core::fmt::Display for RotateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            RotateError::Resolve(e) => write!(f, "scope-root resolve failed: {e}"),
             RotateError::Reseal(e) => write!(f, "re-seal failed: {e}"),
             RotateError::Publish(e) => write!(f, "publish failed: {e}"),
             RotateError::Floor(e) => write!(f, "epoch-floor raise failed: {e}"),
@@ -186,6 +202,7 @@ impl RotateError {
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
+            RotateError::Resolve(_) => "resolve-failed",
             RotateError::Reseal(_) => "reseal-failed",
             RotateError::Publish(_) => "publish-failed",
             RotateError::Floor(_) => "floor-raise-failed",
@@ -316,7 +333,7 @@ mod tests {
     /// it snapshots the floor at publish time so a test can prove publish-before-
     /// floor ordering.
     struct FakePublisher {
-        result: Result<(), ScopeRootPublishError>,
+        result: Result<(), RotationPublishError>,
         seen: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         floor_at_publish: Rc<RefCell<Option<Option<u64>>>>,
         floors: InMemoryFloorStore,
@@ -326,7 +343,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             // Snapshot the durable floor BEFORE the rotation raises it.
             let floor = self.floors.epoch_floor(&SCOPE).await.unwrap();
             *self.floor_at_publish.borrow_mut() = Some(floor);
@@ -402,7 +419,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn run_rotation<E: Entropy>(
         mut entropy: E,
-        publish_result: Result<(), ScopeRootPublishError>,
+        publish_result: Result<(), RotationPublishError>,
     ) -> (
         Result<RotationOutcome, RotateError>,
         Vec<ResealedScopeRoot>,
@@ -433,7 +450,7 @@ mod tests {
                     ipns_name: b"scope-root",
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
@@ -515,7 +532,7 @@ mod tests {
         // records still gate-pass) and enqueues no sweep.
         let (outcome, seen, _floor_at_publish, spawned, final_floor) = run_rotation(
             SeededEntropy::new(9),
-            Err(ScopeRootPublishError::NotPublished),
+            Err(RotationPublishError::NotPublished),
         );
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(seen.len(), 1, "publish was attempted");
@@ -526,7 +543,7 @@ mod tests {
     #[test]
     fn lost_cas_race_does_not_bump_floor() {
         let (outcome, _seen, _snap, spawned, final_floor) =
-            run_rotation(SeededEntropy::new(9), Err(ScopeRootPublishError::LostRace));
+            run_rotation(SeededEntropy::new(9), Err(RotationPublishError::LostRace));
         assert_eq!(outcome.unwrap_err().check(), "publish-failed");
         assert_eq!(final_floor, None, "a lost race advances no floor");
         assert_eq!(spawned, 0);
@@ -561,7 +578,7 @@ mod tests {
                     ipns_name: b"scope-root",
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
@@ -630,7 +647,7 @@ mod tests {
                     ipns_name: b"scope-root",
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },
@@ -694,7 +711,7 @@ mod tests {
                     ipns_name: b"scope-root",
                     owner_enc_pub: &owner_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &fx.pseudonym,
                 },

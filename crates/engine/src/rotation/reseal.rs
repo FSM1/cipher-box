@@ -41,8 +41,8 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
     StructureSigInput, WriteBody, encode_write_body, open_ascent_link, open_history_link, seal,
-    seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_history_link,
-    seal_owner_write_blob, sign_structure,
+    seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
+    seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -50,6 +50,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
+use crate::gate::committed_write_pseudonyms;
 use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
@@ -63,6 +64,25 @@ const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 // least one, or `keep` below underflows and disables the prune in release.
 const _: () = assert!(MAX_RETAINED_HISTORY_LINKS >= 1);
 const _: () = assert!(MAX_RETAINED_HISTORY_LINKS <= MAX_HISTORY_LINKS);
+
+/// The key a re-seal mints a descendant scope root's ascent link under.
+///
+/// The two arms are the two ways a rotator can be entitled to the root: an
+/// ancestor holds the seed the keypair derives from, and a grantee holds only
+/// the public half the record it is replacing already carries (blueprint/
+/// engine.md "rotateScope": a grantee scope-exit rotation re-seals the ascent
+/// link to its public half).
+#[derive(Clone, Copy)]
+pub enum AscentAuthority<'a> {
+    /// The parent node seed: derive the keypair, seal to it, and reopen the
+    /// result as an ancestor reader would ([`verify_ascent_link`]).
+    ParentSeed(&'a [u8; SECRET_LEN]),
+    /// The published ascent public half. A holder with no ancestor seed cannot
+    /// reopen what it seals, so the fresh seed reaches the ancestor's descent
+    /// only if this public half is the one that descent re-derives — which its
+    /// own next read is what proves.
+    CarriedPublic(&'a [u8; 32]),
+}
 
 /// The identity, recipients, and signing capability of one scope root — the
 /// context-that-does-not-change-across-epochs half of a re-seal.
@@ -87,14 +107,14 @@ pub struct ScopeRootIdentity<'a> {
     /// anyway (the sweep, and a root plan built outside this module) leaves that
     /// residual open on itself.
     pub owner_enc_secret: Option<&'a X25519Secret>,
-    /// The parent node seed the ascent link derives its keypair from; `None` at
-    /// the vault root, which carries no ascent link.
-    pub parent_node_seed: Option<&'a [u8; SECRET_LEN]>,
+    /// What this re-seal mints the ascent link under; `None` at the vault root,
+    /// which carries no ascent link.
+    pub ascent: Option<AscentAuthority<'a>>,
     /// Whether this root is a descendant scope root, and so owes an ascent link.
     /// Sourced from what the record being replaced carried, or from the role a
-    /// freshly minted root takes — never from [`Self::parent_node_seed`], which
-    /// is the field that would *produce* the link and so cannot also be the
-    /// evidence one is owed ([`ResealError::AscentLinkDropped`]).
+    /// freshly minted root takes — never from [`Self::ascent`], which is the
+    /// field that would *produce* the link and so cannot also be the evidence one
+    /// is owed ([`ResealError::AscentLinkDropped`]).
     pub owes_ascent_link: bool,
     /// The rotator's writer-pseudonym signer — detached-signs every structure.
     pub pseudonym_signer: &'a Ed25519Signer,
@@ -246,6 +266,10 @@ pub enum ResealError {
     /// so the last good record cannot be re-adopted. Release-active (AGENTS.md
     /// rule 8).
     AscentLinkNotOwed,
+    /// The carried ascent public half is not a usable X25519 point, so an
+    /// ascent link sealed to it could never be opened by the descent it exists
+    /// to serve.
+    UnusableAscentPublic,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
     /// More carried history links than the codec's frozen bound admits — a set
@@ -297,6 +321,9 @@ impl core::fmt::Display for ResealError {
             ResealError::AscentLinkNotOwed => {
                 f.write_str("scope root owing no ascent link was handed a parent seed to mint one")
             }
+            ResealError::UnusableAscentPublic => {
+                f.write_str("carried ascent public half is not a usable X25519 key")
+            }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
@@ -331,6 +358,7 @@ impl ResealError {
             ResealError::AscentLinkMismatch => "ascent-link-mismatch",
             ResealError::AscentLinkDropped => "ascent-link-dropped",
             ResealError::AscentLinkNotOwed => "ascent-link-not-owed",
+            ResealError::UnusableAscentPublic => "unusable-ascent-public",
             ResealError::Entropy(_) => "entropy-error",
             ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
@@ -494,19 +522,21 @@ pub fn reseal_scope_root<E: Entropy>(
     carried_history_links: &[SignedSealed],
 ) -> Result<GrantSection, ResealError> {
     // Fail-closed BEFORE any seal (see `ResealError::SignerNotCommitted`). The
-    // pseudonym pubkey is public, so a plain byte compare is correct.
-    if identity.pseudonym_signer.verifying_key().to_bytes()
-        != committed.commitment.owner_pseudonym_pk
+    // set is the gate's own stage-3 authority set, so an owner and a committed
+    // write grantee are admitted on exactly the terms a reader will re-check.
+    // Pseudonym pubkeys are public, so a plain byte compare is correct.
+    if !committed_write_pseudonyms(committed.commitment)
+        .contains(&identity.pseudonym_signer.verifying_key().to_bytes())
     {
         return Err(ResealError::SignerNotCommitted);
     }
 
     // Fail-closed BEFORE any seal, both directions — the mint below keys off the
     // seed alone (see `ResealError::AscentLinkDropped` and `AscentLinkNotOwed`).
-    if identity.owes_ascent_link && identity.parent_node_seed.is_none() {
+    if identity.owes_ascent_link && identity.ascent.is_none() {
         return Err(ResealError::AscentLinkDropped);
     }
-    if !identity.owes_ascent_link && identity.parent_node_seed.is_some() {
+    if !identity.owes_ascent_link && identity.ascent.is_some() {
         return Err(ResealError::AscentLinkNotOwed);
     }
 
@@ -639,15 +669,27 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Ascent link: the override seed sealed to the parent-derived keypair
     // (interior scope roots only). ---
-    let ascent_link = match identity.parent_node_seed {
-        Some(parent_node_seed) => {
+    let ascent_link = match identity.ascent {
+        Some(authority) => {
+            // Fail closed before any entropy is drawn (see
+            // `ResealError::UnusableAscentPublic`).
+            let recipient = match authority {
+                AscentAuthority::ParentSeed(parent_node_seed) => {
+                    kdf::ascent_keypair(parent_node_seed).public()
+                }
+                AscentAuthority::CarriedPublic(public) => {
+                    X25519Public::from_bytes(*public).ok_or(ResealError::UnusableAscentPublic)?
+                }
+            };
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
             let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
-            let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
+            let link = seal_ascent_link_to(&recipient, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
-            verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
+            if let AscentAuthority::ParentSeed(parent_node_seed) = authority {
+                verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
+            }
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
@@ -950,7 +992,7 @@ mod tests {
             ipns_name,
             owner_enc_pub: owner_pub,
             owner_enc_secret: None,
-            parent_node_seed: parent,
+            ascent: parent.map(AscentAuthority::ParentSeed),
             owes_ascent_link: parent.is_some(),
             pseudonym_signer: &fx.pseudonym,
         }
@@ -1169,8 +1211,8 @@ mod tests {
         .expect("a minted link is the one an ancestor reader opens");
 
         let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64, c: &AadContext| {
-            seal_ascent_link(
-                seed,
+            seal_ascent_link_to(
+                &kdf::ascent_keypair(seed).public(),
                 &[0x07; 32],
                 c,
                 &OverrideSeedPayload::new(carried, epoch),
@@ -1714,7 +1756,7 @@ mod tests {
             ipns_name: b"scope-root-name",
             owner_enc_pub: &owner_pub,
             owner_enc_secret: None,
-            parent_node_seed: None,
+            ascent: None,
             owes_ascent_link: false,
             pseudonym_signer: &wrong_signer,
         };

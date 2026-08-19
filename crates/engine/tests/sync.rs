@@ -23,7 +23,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::profile::SyncTimingProfile;
 use cipherbox_engine::rotation::{
-    RotateError, RotationOutcome, ScopeExitReport, ScopeExitRotator, ScopeRootPublishError,
+    RotateError, RotationOutcome, RotationPublishError, ScopeExitReport, ScopeExitRotator,
     consume_scope_exit_triggers,
 };
 use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
@@ -728,7 +728,7 @@ impl ScopeExitRotator for RecordingRotator {
     ) -> Result<RotationOutcome, RotateError> {
         self.seen.borrow_mut().push(scope_root);
         if self.refuse.contains(&scope_root) {
-            return Err(RotateError::Publish(ScopeRootPublishError::NotPublished));
+            return Err(RotateError::Publish(RotationPublishError::NotPublished));
         }
         Ok(RotationOutcome {
             new_read_epoch: 2,

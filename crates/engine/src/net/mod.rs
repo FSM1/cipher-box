@@ -65,4 +65,7 @@ pub use retire::{
     retire, root_retire_ready,
 };
 pub use revival::{ReviveError, ReviveRequest, revive};
-pub use rotation::{OwnerRotationKeys, OwnerRotationNet, WriteWaveNet};
+pub use rotation::{
+    GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
+    WriteWaveNet,
+};
