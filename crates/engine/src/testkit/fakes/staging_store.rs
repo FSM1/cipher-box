@@ -225,7 +225,7 @@ impl StagingStore for InMemoryStagingStore {
 /// empty backing while a repeat call for the same one reopens it.
 #[derive(Clone, Default)]
 pub struct InMemoryStagingBackings {
-    stores: Arc<Mutex<BTreeMap<&'static str, InMemoryStagingStore>>>,
+    stores: Arc<Mutex<BTreeMap<Backing, InMemoryStagingStore>>>,
 }
 
 impl InMemoryStagingBackings {
@@ -234,7 +234,7 @@ impl InMemoryStagingBackings {
         self.stores
             .lock()
             .expect("lock")
-            .entry(backing.label())
+            .entry(backing)
             .or_default()
             .clone()
     }

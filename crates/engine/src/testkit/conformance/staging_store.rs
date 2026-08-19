@@ -15,7 +15,7 @@ pub const FAILED_PUT_KEY: &[u8] = b"failed-put-key";
 /// phases cannot share a backing with the ordering phase or with each other:
 /// one needs an established record to defend, the next needs a key that has
 /// never been written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Backing {
     /// FIFO ordering, durability, and orphan-GC support.
     Ordering,
@@ -26,6 +26,15 @@ pub enum Backing {
 }
 
 impl Backing {
+    /// Every backing the kit asks for, so a host that has to enumerate them
+    /// (one behind a string boundary, say) reads the set off the kit rather
+    /// than transcribing it.
+    pub const ALL: [Self; 3] = [
+        Self::Ordering,
+        Self::FailedReplacement,
+        Self::FailedFirstPut,
+    ];
+
     /// A stable label a host can key a directory, database name, or map entry
     /// off to keep its backings apart.
     pub fn label(self) -> &'static str {
@@ -42,9 +51,7 @@ impl Backing {
 /// `arm_failed_put` is the fault lever the failure-atomicity phases need and the
 /// kit cannot supply: it must make the named backing's next `put_staged_bytes`
 /// at [`FAILED_PUT_KEY`] fail (exhausted quota, a short write, a denied
-/// directory; the host picks its own). It is a parameter rather than a second
-/// entry point so a host cannot be held to only the half of the contract it
-/// remembered to ask for.
+/// directory; the host picks its own).
 ///
 /// # Panics
 /// Panics on the first contract violation.

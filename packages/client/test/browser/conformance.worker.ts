@@ -16,6 +16,7 @@ import init, {
   runSchedulerConformance,
   runSnapshotCacheConformance,
   runStagingStoreConformance,
+  stagingStoreBackings,
 } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
@@ -165,33 +166,35 @@ async function runStagingDebrisBehavioral(): Promise<void> {
 }
 
 /**
- * One pass of the staging-store kit under `arm`. Each kit backing gets its own
- * store, emptied on the kit's first ask for it and reopened thereafter (the
- * kit's reopen contract). The staged-directory counts afterwards are what no
- * kit assertion can see: an in-flight temp abandoned by a failed put is
- * invisible to `stagedKeys` and `stagedBytesTotal`, so orphan GC could never
- * reclaim it.
+ * The staged-record count each kit backing is left holding, keyed by the kit's
+ * own backing labels. Anything above these counts is in-flight write debris.
  */
+const STAGED_AFTER_KIT: Record<string, number> = {
+  ordering: 1,
+  'failed-replacement': 1,
+  'failed-first-put': 0,
+};
+
+/** One pass of the staging-store kit under `arm`, over its own set of stores. */
 async function runStagingConformance(fault: string, arm: () => void): Promise<void> {
   const storeName = (backing: string): string => `conf-staging-${fault}-${backing}`;
-  const emptied = new Set<string>();
+  const backings = stagingStoreBackings();
+
+  for (const backing of backings) {
+    await deleteDatabase(storeName(backing));
+    await clearOpfsDir(`${storeName(backing)}-staged`);
+  }
+
   await runStagingStoreConformance(
-    async (backing: string) => {
-      if (!emptied.has(backing)) {
-        emptied.add(backing);
-        await deleteDatabase(storeName(backing));
-        await clearOpfsDir(`${storeName(backing)}-staged`);
-      }
-      return new OpfsStagingStore(storeName(backing));
-    },
+    (backing: string) => Promise.resolve(new OpfsStagingStore(storeName(backing))),
     () => Promise.resolve(arm())
   );
 
-  for (const [backing, staged] of [
-    ['ordering', 1],
-    ['failed-replacement', 1],
-    ['failed-first-put', 0],
-  ] as const) {
+  for (const backing of backings) {
+    const staged = STAGED_AFTER_KIT[backing];
+    if (staged === undefined) {
+      throw new Error(`no staged-record count declared for kit backing "${backing}"`);
+    }
     await assertStagedEntryCount(`${storeName(backing)}-staged`, staged);
   }
 }
@@ -279,6 +282,8 @@ async function run(seam: string): Promise<void> {
       // Both OPFS write faults the seam can hit, each against the whole kit.
       // Distinct store names per fault: the kit's handles stay open, and an
       // IndexedDB delete under an open connection blocks rather than clears.
+      // The staged-directory counts afterwards are the debris check no kit
+      // assertion can make.
       for (const [fault, arm] of [
         ['short-write', armShortWrite],
         ['throwing-write', armThrowingWrite],

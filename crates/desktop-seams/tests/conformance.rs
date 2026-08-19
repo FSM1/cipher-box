@@ -39,19 +39,10 @@ fn file_floor_store_passes_the_floor_store_kit() {
     }));
 }
 
-/// The desktop `StagingStore` kit, fault lever included. Both failure-atomicity
-/// phases fail `atomic_write` on its way to the sidecar, by whichever denial the
-/// platform honours:
-///
-/// - a **replacement** put denies the write target — on Unix the `staged/`
-///   directory, so the temp file cannot be created; on Windows the sidecar
-///   itself, which `MoveFileEx` refuses to replace when it is read-only;
-/// - a **first** put removes the still-empty `staged/` directory, so the temp
-///   has nowhere to land. Windows honours no denial on a path that does not
-///   exist yet, and there are no staged bytes to lose;
-///   `FileStagingStore::open` recreates the directory for the kit's read-back.
-///
-/// Either way the failure lands before the key's bytes can change.
+/// The desktop `StagingStore` kit. The fault lever denies the write target for
+/// a replacement put, and for a first put — where Windows honours no denial on
+/// a path that does not exist yet — removes the still-empty `staged/`
+/// directory, which `FileStagingStore::open` recreates for the read-back.
 #[test]
 fn file_staging_store_passes_the_staging_store_kit() {
     let dir = tempfile::tempdir().unwrap();
@@ -60,11 +51,11 @@ fn file_staging_store_passes_the_staging_store_kit() {
     block_on(conformance::staging_store::check(
         async |backing: Backing| FileStagingStore::open(root.join(backing.label())).unwrap(),
         async |backing: Backing| match backing {
+            Backing::Ordering | Backing::FailedReplacement => denial.arm(),
             Backing::FailedFirstPut => {
                 std::fs::remove_dir(root.join(backing.label()).join("staged"))
                     .expect("the kit's lever must be armed, or it proves nothing");
             }
-            _ => denial.arm(),
         },
     ));
 }

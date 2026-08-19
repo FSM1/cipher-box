@@ -30,13 +30,8 @@ use crate::seams_bridge::{
     SnapshotCacheAdapter, StagingStoreAdapter,
 };
 
-/// Calls a JS `() => Promise<T>` and awaits its resolution, labelling any
+/// Calls a JS `(arg) => Promise<T>` and awaits its resolution, labelling any
 /// misuse with `what`.
-async fn call_async(f: &Function, what: &str) -> JsValue {
-    call_async_with(f, &JsValue::UNDEFINED, what).await
-}
-
-/// [`call_async`] for a JS `(arg) => Promise<T>`.
 async fn call_async_with(f: &Function, arg: &JsValue, what: &str) -> JsValue {
     let result = f
         .call1(&JsValue::UNDEFINED, arg)
@@ -52,7 +47,7 @@ async fn call_async_with(f: &Function, arg: &JsValue, what: &str) -> JsValue {
 /// Calls a JS `() => Promise<Seam>` factory and awaits the fresh seam handle
 /// (the conformance kits' "reopen" contract).
 async fn open_seam(factory: &Function) -> JsValue {
-    call_async(factory, "seam factory").await
+    call_async_with(factory, &JsValue::UNDEFINED, "seam factory").await
 }
 
 /// Runs the `FloorStore` conformance kit against a JS `FloorStoreSeam`,
@@ -83,6 +78,17 @@ pub async fn run_snapshot_cache_conformance(factory: Function) {
 /// on a repeat call. `armFailedPut` is the host's fault lever for the same
 /// backing: it must make that backing's next `putStagedBytes` at the kit's key
 /// fail.
+/// The staging-store kit's backing labels, in the order the kit asks for them,
+/// so a JS host prepares and asserts over what the kit declares rather than a
+/// transcribed copy of it.
+#[wasm_bindgen(js_name = stagingStoreBackings)]
+pub fn staging_store_backings() -> Vec<String> {
+    conformance::staging_store::Backing::ALL
+        .iter()
+        .map(|backing| backing.label().to_string())
+        .collect()
+}
+
 #[wasm_bindgen(js_name = runStagingStoreConformance)]
 pub async fn run_staging_store_conformance(open_backing: Function, arm_failed_put: Function) {
     console_error_panic_hook::set_once();
