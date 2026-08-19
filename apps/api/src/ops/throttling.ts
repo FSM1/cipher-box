@@ -69,6 +69,23 @@ export const THROTTLE_SURFACES = {
   /** Content upload: per account; bounded above the write cadence, below abuse. */
   content: { default: { limit: 60, ttl: 60_000 } },
   /**
+   * Pre-reconstruction session mint: per IP, because the caller has no account
+   * yet. Login-shaped in cost and consequence, so it shares the auth cap.
+   */
+  deviceApprovalSession: { default: { limit: 10, ttl: 60_000 } },
+  /**
+   * Opening a rendezvous: per account. Deliberately the tightest surface here —
+   * every request costs a member an approval prompt, so this is the cap that
+   * blunts approval fatigue, not just load.
+   */
+  deviceApprovalRequest: { default: { limit: 3, ttl: 60_000 } },
+  /** Rendezvous polling, both sides: per account, at the few-seconds cadence. */
+  deviceApprovalPoll: { default: { limit: 60, ttl: 60_000 } },
+  /** Answering a rendezvous: per account; one answer per prompt, plus retries. */
+  deviceApprovalRespond: { default: { limit: 30, ttl: 60_000 } },
+  /** Device registry: per account. Registration is once per device, list is chattier. */
+  deviceRegistry: { default: { limit: 30, ttl: 60_000 } },
+  /**
    * Recovery fetch: per account. The revival aid after a >EOL lapse is a rare,
    * deliberate operation (extract the last CID, mint a fresh record), so the cap
    * sits low — enough to sweep a handful of scope names, far below abuse rates.

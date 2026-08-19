@@ -4,7 +4,10 @@ import { AuthMethod } from '../auth/entities/auth-method.entity';
 import { IdentitySubject } from '../auth/entities/identity-subject.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
+import { AccountDevice } from '../device-approval/entities/account-device.entity';
+import { DeviceApproval } from '../device-approval/entities/device-approval.entity';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
+import { AddDeviceApprovals1787155468460 } from '../migrations/1787155468460-AddDeviceApprovals';
 import { AddIdentitySubjects1784800000000 } from '../migrations/1784800000000-AddIdentitySubjects';
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
 import { AddMailboxReceivedAtIndex1784692000000 } from '../migrations/1784692000000-AddMailboxReceivedAtIndex';
@@ -38,6 +41,8 @@ const ENTITIES = [
   MailboxMessage,
   RecordCache,
   IdentitySubject,
+  AccountDevice,
+  DeviceApproval,
 ];
 const MIGRATIONS = [
   InitAuthSchema1784513040045,
@@ -46,6 +51,7 @@ const MIGRATIONS = [
   AddRecordCache1784600557946,
   AddMailboxReceivedAtIndex1784692000000,
   AddIdentitySubjects1784800000000,
+  AddDeviceApprovals1787155468460,
 ];
 
 export interface IntegrationDatabase {

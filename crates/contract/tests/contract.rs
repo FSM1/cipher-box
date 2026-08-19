@@ -1359,3 +1359,166 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         .await
         .expect("ack the delivered pointer");
 }
+
+// --- device approval (blueprint/api.md, Identity and auth) ------------------
+
+/// A raw JSON POST against the live API, returning the status and body. The
+/// device-approval surface is spoken by the host application over plain HTTP,
+/// before the engine has a session to speak through, so the engine's API client
+/// does not own it and the contract is proven the way a client speaks it.
+async fn post_json(base: &str, path: &str, bearer: Option<&str>, body: serde_json::Value) -> u16 {
+    let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+    if let Some(token) = bearer {
+        headers.push(("authorization".to_string(), format!("Bearer {token}")));
+    }
+    ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Post,
+            url: format!("{base}{path}"),
+            headers,
+            body: Some(serde_json::to_vec(&body).expect("serialize")),
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(10_000),
+        })
+        .await
+        .expect("the API answers")
+        .status
+}
+
+/// The access token of a fresh test-login session, read straight off the wire —
+/// the engine's client keeps its own inside.
+async fn test_login_access_token(base: &str, handle: &str) -> String {
+    let response = ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Post,
+            url: format!("{base}/auth/test-login"),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: Some(
+                serde_json::to_vec(
+                    &serde_json::json!({ "handle": handle, "secret": test_login_secret() }),
+                )
+                .expect("serialize"),
+            ),
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(10_000),
+        })
+        .await
+        .expect("the API answers");
+    assert_eq!(
+        response.status, 200,
+        "test login is available on the contract stack"
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&response.body).expect("login json");
+    parsed["accessToken"]
+        .as_str()
+        .expect("an access token")
+        .to_string()
+}
+
+/// A well-formed Ed25519 signature that is not the right one. It passes DTO
+/// validation, so the request reaches the verification the assertion is about.
+fn wrong_device_signature() -> String {
+    "ab".repeat(64)
+}
+
+/// The device-approval surface refuses everything it cannot verify (ADR 0009 D4).
+///
+/// This is the live-wire half of that guarantee: the routes are mounted in a
+/// really-booted API — which a suite that hand-lists controllers cannot show —
+/// and each fails closed. The full rendezvous, from a valid registration to an
+/// approval collected once and its row gone after, needs an identity token
+/// minted from a verified provider credential that no headless suite can
+/// produce, so it is proven against real Postgres in the API integration suite.
+#[tokio::test]
+async fn the_device_approval_surface_is_mounted_and_fails_closed() {
+    let base = require_stack!("the_device_approval_surface_is_mounted_and_fails_closed");
+    let device_key = "cd".repeat(32);
+    let ephemeral_key = format!("02{}", "11".repeat(32));
+
+    // A pre-reconstruction session is not mintable from an unverifiable token.
+    assert_eq!(
+        post_json(
+            &base,
+            "/device-approval/session",
+            None,
+            serde_json::json!({ "identityToken": "not.a.token" }),
+        )
+        .await,
+        401,
+        "an identity token this API did not mint opens no pre-reconstruction session"
+    );
+
+    // The device registry is authenticated.
+    assert_eq!(
+        post_json(
+            &base,
+            "/devices",
+            None,
+            serde_json::json!({
+                "publicKey": device_key,
+                "signature": wrong_device_signature(),
+                "identityToken": "not.a.token",
+            }),
+        )
+        .await,
+        401,
+        "the device registry refuses an anonymous caller"
+    );
+
+    let token = test_login_access_token(&base, "contract-device-approval").await;
+
+    // A wrongly-signed registration is refused even under a real session: the
+    // bearer proves the account, and nothing proves possession of the device key.
+    assert_eq!(
+        post_json(
+            &base,
+            "/devices",
+            Some(&token),
+            serde_json::json!({
+                "publicKey": device_key,
+                "signature": wrong_device_signature(),
+                "identityToken": "not.a.token",
+            }),
+        )
+        .await,
+        401,
+        "a registration whose signature does not verify is refused"
+    );
+
+    // And so is a wrongly-signed rendezvous request.
+    assert_eq!(
+        post_json(
+            &base,
+            "/device-approval/requests",
+            Some(&token),
+            serde_json::json!({
+                "devicePublicKey": device_key,
+                "ephemeralPublicKey": ephemeral_key,
+                "signature": wrong_device_signature(),
+            }),
+        )
+        .await,
+        401,
+        "a request whose signature does not verify opens no rendezvous"
+    );
+
+    // The account's registry is readable and empty — no refusal above wrote.
+    let listed = ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{base}/devices"),
+            headers: vec![("authorization".to_string(), format!("Bearer {token}"))],
+            body: None,
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(10_000),
+        })
+        .await
+        .expect("the API answers");
+    assert_eq!(listed.status, 200);
+    let body: serde_json::Value = serde_json::from_slice(&listed.body).expect("devices json");
+    assert_eq!(
+        body["devices"].as_array().map(Vec::len),
+        Some(0),
+        "no refused registration left a row behind"
+    );
+}

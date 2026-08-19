@@ -63,5 +63,9 @@ export function buildJwtOptions(configService: ConfigService) {
     EmailOtpService,
     { provide: MailProvider, useFactory: buildMailProvider, inject: [ConfigService] },
   ],
+  // Shared, not re-provided: a second IdentityTokenService would hold a
+  // different signing keypair wherever one is generated at boot, so every token
+  // this module minted would fail verification elsewhere.
+  exports: [TokenService, IdentityTokenService],
 })
 export class AuthModule {}

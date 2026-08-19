@@ -8,7 +8,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  accountPublicKey,
+  AuthenticatedRequest,
+  JwtAuthGuard,
+} from '../auth/guards/jwt-auth.guard';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import {
   AckResponseDto,
@@ -52,7 +56,7 @@ export class MailboxController {
     @Body() body: PostMessageDto,
     @Req() request: AuthenticatedRequest
   ): Promise<PostMessageResponseDto> {
-    return this.mailboxService.post(request.user.publicKey, body);
+    return this.mailboxService.post(accountPublicKey(request), body);
   }
 
   @Get('messages')
@@ -65,7 +69,7 @@ export class MailboxController {
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 429, description: 'Per-recipient poll rate limit exceeded' })
   async poll(@Req() request: AuthenticatedRequest): Promise<PollResponseDto> {
-    const { messages } = await this.mailboxService.poll(request.user.publicKey);
+    const { messages } = await this.mailboxService.poll(accountPublicKey(request));
     return { messages: messages as MailboxMessageDto[] };
   }
 
@@ -76,6 +80,6 @@ export class MailboxController {
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 429, description: 'Per-recipient ack rate limit exceeded' })
   ack(@Param('id') id: string, @Req() request: AuthenticatedRequest): Promise<AckResponseDto> {
-    return this.mailboxService.ack(request.user.publicKey, id);
+    return this.mailboxService.ack(accountPublicKey(request), id);
   }
 }

@@ -59,8 +59,19 @@ What left the API relative to v1 — with the design that removed it:
   ephemeral key and never holds plaintext key material. Both halves of the exchange
   carry a device-key signature, and a row's life ends at collection or expiry,
   whichever comes first.
+- **`account_devices`** is the registry that makes those signatures checkable: a
+  device identity key registered under a full session, so the account is proven,
+  with an Ed25519 signature over the account id, so possession is proven. The row
+  also records which identity subject the device signed in through — the only
+  path from the identity token a pre-reconstruction device still holds back to
+  the account whose devices can approve it. An identity subject reaches at most
+  one account, and an identity with no registered device gets no rendezvous at
+  all: that account's path is the recovery phrase (ADR 0009 D2). Revocation is a
+  hard delete, and it is honest about what it does — the device stops approving
+  from now on; nothing it already holds is un-shared (D5).
 - Tables: `users` (keyed by `publicKey`; carries quota-limit override and BYO flag),
-  `auth_methods`, `refresh_tokens`, `device_approvals`, `identity_subjects`.
+  `auth_methods`, `refresh_tokens`, `account_devices`, `device_approvals`,
+  `identity_subjects`.
 - **`identity_subjects`** maps a verified provider identity — hashed, never
   stored in the clear — to the stable subject id the identity token's `sub`
   carries and `loginWithJWT` takes as its `verifierId`. It holds no `user_id`:
@@ -254,8 +265,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 ## Data model (complete)
 
-`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`, `device_approvals`,
-`name_inventory (account, ipnsName)`,
+`users`, `auth_methods`, `identity_subjects`, `refresh_tokens`, `account_devices`,
+`device_approvals`, `name_inventory (account, ipnsName)`,
 `pinned_cids (account, cid, size, advisory)`, `mailbox_messages`,
 `record_cache` (non-canonical). Nothing else. No crypto-bearing rows outlive
 their consumer; revocation-adjacent state is hard-deleted, never soft-flagged.

@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 import { createPublicKey } from 'node:crypto';
 import { Clock } from '../../common/clock';
-import type { IdentitySubjectKind } from '../entities/identity-subject.entity';
+import {
+  IDENTITY_SUBJECT_KINDS,
+  type IdentitySubjectKind,
+} from '../entities/identity-subject.entity';
 
 const KID = 'cipherbox-identity-1';
 const ALGORITHM = 'RS256';
@@ -90,10 +93,34 @@ export class IdentityTokenService implements OnModuleInit {
   }
 
   /**
+   * Verify a token this API minted, and return its claims. Used where a caller
+   * has no CipherBox session yet and an identity token is the only credential
+   * it holds. Issuer and audience are pinned, so a token minted for some other
+   * relying party cannot be replayed here.
+   */
+  async verify(token: string): Promise<IdentityTokenClaims> {
+    const { payload } = await jose.jwtVerify(
+      token,
+      await jose.importJWK(this.publicJwk, ALGORITHM),
+      { issuer: IDENTITY_TOKEN_ISSUER, audience: IDENTITY_TOKEN_AUDIENCE, algorithms: [ALGORITHM] }
+    );
+    const subject = payload.sub;
+    const method = payload.method;
+    if (typeof subject !== 'string' || !isIdentitySubjectKind(method)) {
+      throw new Error('identity token is missing its subject or method claim');
+    }
+    return { subject, method };
+  }
+
+  /**
    * Derived from the public key rather than by stripping fields off the
    * private JWK, so no private field can reach the JWKS by omission.
    */
   private async exportPublicJwk(publicKey: jose.CryptoKey | jose.KeyObject): Promise<jose.JWK> {
     return { ...(await jose.exportJWK(publicKey)), kid: KID, alg: ALGORITHM, use: 'sig' };
   }
+}
+
+function isIdentitySubjectKind(value: unknown): value is IdentitySubjectKind {
+  return typeof value === 'string' && IDENTITY_SUBJECT_KINDS.includes(value as IdentitySubjectKind);
 }

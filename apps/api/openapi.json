@@ -872,6 +872,412 @@
         ]
       }
     },
+    "/devices": {
+      "post": {
+        "operationId": "DeviceController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredDeviceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed publicKey, signature, or label"
+          },
+          "401": {
+            "description": "Missing token, an invalid identity token, or a signature that does not verify"
+          },
+          "409": {
+            "description": "Key or identity already claimed elsewhere, or the device limit is reached"
+          },
+          "429": {
+            "description": "Per-account registry rate limit exceeded"
+          },
+          "503": {
+            "description": "Account serialization contended; retry shortly"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Register this device identity key, proving possession by signing the account id",
+        "tags": [
+          "Devices"
+        ]
+      },
+      "get": {
+        "operationId": "DeviceController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredDeviceListDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-account registry rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The device identity keys registered to the authenticated account",
+        "tags": [
+          "Devices"
+        ]
+      }
+    },
+    "/devices/{id}": {
+      "delete": {
+        "operationId": "DeviceController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalActionResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-account registry rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke a device key: a hard delete. It stops that device approving from now on; it does not un-share what the device already holds (ADR 0009 D5).",
+        "tags": [
+          "Devices"
+        ]
+      }
+    },
+    "/device-approval/session": {
+      "post": {
+        "operationId": "DeviceApprovalSessionController_session",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceApprovalSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceApprovalSessionResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or oversized identity token"
+          },
+          "401": {
+            "description": "Invalid identity token"
+          },
+          "404": {
+            "description": "No registered device can approve this identity"
+          },
+          "429": {
+            "description": "Per-IP session rate limit exceeded"
+          }
+        },
+        "summary": "Exchange a CipherBox identity token for a scoped, non-refreshable pre-reconstruction token",
+        "tags": [
+          "Device Approval"
+        ]
+      }
+    },
+    "/device-approval/requests": {
+      "post": {
+        "operationId": "DeviceApprovalController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApprovalResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed device key, ephemeral key, or signature"
+          },
+          "401": {
+            "description": "Missing token, or the request signature does not verify"
+          },
+          "409": {
+            "description": "Too many pending approval requests"
+          },
+          "429": {
+            "description": "Per-account request rate limit exceeded"
+          },
+          "503": {
+            "description": "Account serialization contended; retry shortly"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Open a rendezvous, signed over the ephemeral key it offers",
+        "tags": [
+          "Device Approval"
+        ]
+      }
+    },
+    "/device-approval/requests/{requestId}": {
+      "get": {
+        "operationId": "DeviceApprovalController_status",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalStatusDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Unknown, expired, or already collected request"
+          },
+          "429": {
+            "description": "Per-account poll rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Poll a rendezvous; a settled one is served once and its row is then gone",
+        "tags": [
+          "Device Approval"
+        ]
+      },
+      "delete": {
+        "operationId": "DeviceApprovalController_cancel",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalActionResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-account poll rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Abandon a rendezvous: hard delete, scoped to the caller account",
+        "tags": [
+          "Device Approval"
+        ]
+      }
+    },
+    "/device-approval/pending": {
+      "get": {
+        "operationId": "DeviceApprovalController_pending",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingApprovalListDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "403": {
+            "description": "A scoped pre-reconstruction token cannot approve"
+          },
+          "429": {
+            "description": "Per-account poll rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "What this account is being asked to approve; requires a full session, not a scoped token",
+        "tags": [
+          "Device Approval"
+        ]
+      }
+    },
+    "/device-approval/requests/{requestId}/respond": {
+      "post": {
+        "operationId": "DeviceApprovalController_respond",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalActionResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Self-approval, or a decision whose sealed factor does not match it"
+          },
+          "401": {
+            "description": "Unregistered responding device, or the response signature does not verify"
+          },
+          "403": {
+            "description": "A scoped pre-reconstruction token cannot approve"
+          },
+          "404": {
+            "description": "Unknown, expired, or already answered request"
+          },
+          "413": {
+            "description": "Sealed factor exceeds 1 KiB"
+          },
+          "429": {
+            "description": "Per-account respond rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Approve or deny, signed by a registered device over the stored ephemeral key",
+        "tags": [
+          "Device Approval"
+        ]
+      }
+    },
     "/recovery/{ipnsName}": {
       "get": {
         "operationId": "RecoveryController_fetch",
@@ -954,6 +1360,14 @@
     {
       "name": "Recovery",
       "description": "Authenticated fetch of non-canonical cached record bytes by name"
+    },
+    {
+      "name": "Devices",
+      "description": "The account device-identity-key registry that binds an approval"
+    },
+    {
+      "name": "Device Approval",
+      "description": "Bulletin-board rendezvous relaying a sealed factor to a device that cannot yet reconstruct"
     }
   ],
   "servers": [],
@@ -1549,6 +1963,272 @@
           "message",
           "statusCode",
           "error"
+        ]
+      },
+      "RegisterDeviceDto": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "Raw Ed25519 device identity public key, lowercase hex"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Ed25519 signature proving possession, over `cipherbox/device-registration/v1`, the authenticated account id, and this publicKey, newline-joined"
+          },
+          "identityToken": {
+            "type": "string",
+            "description": "CipherBox identity token this device signed in with; binds the account to the identity a pre-reconstruction device can present"
+          },
+          "label": {
+            "type": "string",
+            "description": "Display label for the approval prompt; context, not evidence"
+          }
+        },
+        "required": [
+          "publicKey",
+          "signature",
+          "identityToken"
+        ]
+      },
+      "RegisteredDeviceDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "Raw Ed25519 device identity public key, lowercase hex"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601"
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "description": "ISO 8601"
+          }
+        },
+        "required": [
+          "id",
+          "publicKey",
+          "label",
+          "createdAt",
+          "lastSeenAt"
+        ]
+      },
+      "RegisteredDeviceListDto": {
+        "type": "object",
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegisteredDeviceDto"
+            }
+          }
+        },
+        "required": [
+          "devices"
+        ]
+      },
+      "ApprovalActionResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "DeviceApprovalSessionDto": {
+        "type": "object",
+        "properties": {
+          "identityToken": {
+            "type": "string",
+            "description": "A CipherBox identity token for the account being reached"
+          }
+        },
+        "required": [
+          "identityToken"
+        ]
+      },
+      "DeviceApprovalSessionResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Scoped, non-refreshable access token; reaches the device-approval routes only"
+          },
+          "expiresIn": {
+            "type": "number",
+            "description": "Token lifetime in seconds"
+          }
+        },
+        "required": [
+          "accessToken",
+          "expiresIn"
+        ]
+      },
+      "CreateApprovalDto": {
+        "type": "object",
+        "properties": {
+          "devicePublicKey": {
+            "type": "string",
+            "description": "The requesting device identity public key, lowercase hex"
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "Compressed secp256k1 key the factor must be sealed to, lowercase hex"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Ed25519 signature over `cipherbox/device-approval/request/v1`, devicePublicKey and ephemeralPublicKey, newline-joined"
+          }
+        },
+        "required": [
+          "devicePublicKey",
+          "ephemeralPublicKey",
+          "signature"
+        ]
+      },
+      "CreateApprovalResponseDto": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601; the row is gone at this instant"
+          }
+        },
+        "required": [
+          "requestId",
+          "expiresAt"
+        ]
+      },
+      "ApprovalStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied"
+            ]
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "The ephemeral key this rendezvous was opened for"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601"
+          },
+          "sealedFactor": {
+            "type": "string",
+            "description": "Sealed factor, base64; present once approved, and the row is gone after this read"
+          },
+          "responderDevicePublicKey": {
+            "type": "string",
+            "description": "The approving device identity public key"
+          },
+          "responseSignature": {
+            "type": "string",
+            "description": "The approver signature over the decision, the ephemeral key and sealedFactor"
+          }
+        },
+        "required": [
+          "status",
+          "ephemeralPublicKey",
+          "expiresAt"
+        ]
+      },
+      "PendingApprovalDto": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "requesterDevicePublicKey": {
+            "type": "string",
+            "description": "The requesting device identity public key, lowercase hex"
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "Seal to THIS key, once its comparison value matches (ADR 0009 D3)"
+          },
+          "requestSignature": {
+            "type": "string",
+            "description": "The requester signature over the pair above; re-check it before sealing so a substituted ephemeral key is caught without trusting this response"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "ISO 8601"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "ISO 8601"
+          }
+        },
+        "required": [
+          "requestId",
+          "requesterDevicePublicKey",
+          "ephemeralPublicKey",
+          "requestSignature",
+          "createdAt",
+          "expiresAt"
+        ]
+      },
+      "PendingApprovalListDto": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingApprovalDto"
+            }
+          }
+        },
+        "required": [
+          "requests"
+        ]
+      },
+      "RespondApprovalDto": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "deny"
+            ]
+          },
+          "devicePublicKey": {
+            "type": "string",
+            "description": "The approving device identity public key; must be registered"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Ed25519 signature over `cipherbox/device-approval/response/v1`, devicePublicKey, the request id, the decision, the ephemeral key and sealedFactor, newline-joined"
+          },
+          "sealedFactor": {
+            "type": "string",
+            "description": "Opaque ciphertext sealed to the request ephemeral key, base64 (decodes to <= 1 KiB). Required to approve, refused on a denial. Never inspected server-side."
+          }
+        },
+        "required": [
+          "decision",
+          "devicePublicKey",
+          "signature"
         ]
       }
     }

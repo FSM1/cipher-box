@@ -139,6 +139,11 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('Account', 'Per-account quota and the BYO-IPFS toggle')
     .addTag('Content', 'Hosted ingress: quota-gated byte upload to CipherBox Kubo')
     .addTag('Recovery', 'Authenticated fetch of non-canonical cached record bytes by name')
+    .addTag('Devices', 'The account device-identity-key registry that binds an approval')
+    .addTag(
+      'Device Approval',
+      'Bulletin-board rendezvous relaying a sealed factor to a device that cannot yet reconstruct'
+    )
     .build();
   return SwaggerModule.createDocument(app, config);
 }
