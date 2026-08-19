@@ -73,7 +73,7 @@ pub enum DagError {
     LinkCountMismatch,
     /// The assembled root manifest exceeded [`MAX_RESOLVED_RECORD_BYTES`]: the
     /// flat root inlines every leaf CID, so a file past the flat-DAG ceiling
-    /// (~108 GiB) produces a root [`read_block`](super::read::read_block) would
+    /// (~54 GiB) produces a root [`read_block`](super::read::read_block) would
     /// reject on fetch. Fails closed here so the encoder never emits an
     /// unreadable root (AGENTS.md rule 8).
     RootTooLarge {
@@ -546,19 +546,26 @@ mod tests {
 
     #[test]
     fn assemble_fails_closed_when_the_root_exceeds_the_block_cap() {
-        // Each inlined 36-byte CID costs ~38 CBOR bytes, so ~120k links push the
-        // flat root over the 4 MiB cap; `assemble` must fail closed in every
+        // Each inlined 36-byte CID costs ~38 CBOR bytes, so ~60k links push the
+        // flat root over the 2 MiB cap; `assemble` must fail closed in every
         // build (not a release-stripped assert) rather than emit an unreadable
         // root (AGENTS.md rule 8). `plaintext_len = count * chunkSize` keeps the
         // leaf-count invariant satisfied so the size guard is what fires.
         let profile = ContentProfile::CI;
         let chunk_size = profile.chunk_size() as u64;
-        let count = 120_000;
+        let count = 60_000;
         let leaves = dummy_leaves(count);
         match assemble(&leaves, count as u64 * chunk_size, &profile) {
             Err(DagError::RootTooLarge { size, limit }) => {
                 assert!(size > limit, "reported size exceeds the cap");
-                assert_eq!(limit, 4 * 1024 * 1024);
+                assert_eq!(limit, 2 * 1024 * 1024);
+                // The reservation arithmetic must refuse the same root, at the
+                // same size, or a version the encoder will not emit still books
+                // staging budget.
+                assert_eq!(
+                    root_block_len(count as u64 * chunk_size, &profile),
+                    Err(DagError::RootTooLarge { size, limit })
+                );
             }
             other => panic!("expected RootTooLarge, got {other:?}"),
         }
@@ -566,14 +573,17 @@ mod tests {
 
     #[test]
     fn assemble_accepts_a_root_just_under_the_block_cap() {
-        // ~100k links keep the root comfortably under 4 MiB; it assembles Ok and
-        // content-addresses, proving the guard rejects only over-cap roots.
         let profile = ContentProfile::CI;
         let chunk_size = profile.chunk_size() as u64;
-        let count = 100_000;
+        let count = 54_000;
         let leaves = dummy_leaves(count);
         let dag = assemble(&leaves, count as u64 * chunk_size, &profile).unwrap();
-        assert!(dag.root_block.len() <= 4 * 1024 * 1024);
+        assert!(dag.root_block.len() <= MAX_RESOLVED_RECORD_BYTES);
+        assert!(
+            dag.root_block.len() > MAX_RESOLVED_RECORD_BYTES * 9 / 10,
+            "a root {} bytes under the cap does not exercise the boundary",
+            MAX_RESOLVED_RECORD_BYTES - dag.root_block.len()
+        );
         assert!(verify_cid(&dag.content_cid, &dag.root_block).is_ok());
     }
 
@@ -615,9 +625,9 @@ mod tests {
     fn root_block_len_matches_the_assembled_root() {
         for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
             let chunk = profile.chunk_size() as u64;
-            // Every CBOR head width the links array and the `size` uint cross:
-            // 1, 2, 3 and 5 bytes.
-            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 65_535, 65_536] {
+            // Every CBOR head width the links array and the `size` uint cross
+            // below the cap, up to the widest reachable one.
+            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 54_000] {
                 let size = leaves * chunk;
                 let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile)
                     .expect("assembles")

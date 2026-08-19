@@ -23,4 +23,4 @@ pub use received_share_store::InMemoryReceivedShareStore;
 pub use record_store::InMemoryRecordStore;
 pub use scheduler::VirtualScheduler;
 pub use snapshot_cache::InMemorySnapshotCache;
-pub use staging_store::InMemoryStagingStore;
+pub use staging_store::{InMemoryStagingBackings, InMemoryStagingStore};

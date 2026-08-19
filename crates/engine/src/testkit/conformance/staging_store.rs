@@ -1,30 +1,79 @@
-//! Conformance kit: [`StagingStore`] FIFO ordering, durability, and
-//! orphan-GC support.
+//! Conformance kit: [`StagingStore`] FIFO ordering, durability, orphan-GC
+//! support, and `put_staged_bytes` failure atomicity.
 
 use crate::seams::StagingStore;
 
-/// The staging key the failed-put cases write, so a host whose fault injector
-/// is scoped to one key can arm exactly the put the kit makes fail.
+/// The staging key the failure-atomicity phases write, so a host whose fault
+/// injector is scoped to one key can arm exactly the put the kit makes fail.
 pub const FAILED_PUT_KEY: &[u8] = b"failed-put-key";
 
-/// Runs the `StagingStore` contract against an implementation.
+/// Which of the kit's backings the host is being asked for.
 ///
-/// `open` must return a handle over the same durable backing on every call
-/// (reopen semantics); the backing must start empty.
+/// Each names a **distinct** durable backing that starts empty; repeat `open`
+/// calls for the same one must reopen it (new handle, same durable state), which
+/// is how the kit asserts durability without a process restart. The failure
+/// phases cannot share a backing with the ordering phase or with each other:
+/// one needs an established record to defend, the next needs a key that has
+/// never been written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Backing {
+    /// FIFO ordering, durability, and orphan-GC support.
+    Ordering,
+    /// Failure atomicity of a put that replaces an existing record.
+    FailedReplacement,
+    /// Failure atomicity of a put at a key that held nothing.
+    FailedFirstPut,
+}
+
+impl Backing {
+    /// Every backing the kit asks for, so a host that has to enumerate them
+    /// (one behind a string boundary, say) reads the set off the kit rather
+    /// than transcribing it.
+    pub const ALL: [Self; 3] = [
+        Self::Ordering,
+        Self::FailedReplacement,
+        Self::FailedFirstPut,
+    ];
+
+    /// A stable label a host can key a directory, database name, or map entry
+    /// off to keep its backings apart.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ordering => "ordering",
+            Self::FailedReplacement => "failed-replacement",
+            Self::FailedFirstPut => "failed-first-put",
+        }
+    }
+}
+
+/// Runs the whole `StagingStore` contract against an implementation.
 ///
-/// The failure-atomicity half of `put_staged_bytes` needs a fault lever this
-/// function cannot supply, so it lives in [`check_failed_put`] and
-/// [`check_failed_first_put`]; a host passes all three or it is only part-held
-/// to the contract.
+/// `arm_failed_put` is the fault lever the failure-atomicity phases need and the
+/// kit cannot supply: it must make the named backing's next `put_staged_bytes`
+/// at [`FAILED_PUT_KEY`] fail (exhausted quota, a short write, a denied
+/// directory; the host picks its own).
 ///
 /// # Panics
 /// Panics on the first contract violation.
-pub async fn check<S, F>(mut open: F)
+pub async fn check<S, F, G>(mut open: F, mut arm_failed_put: G)
 where
     S: StagingStore,
-    F: AsyncFnMut() -> S,
+    F: AsyncFnMut(Backing) -> S,
+    G: AsyncFnMut(Backing),
 {
-    let store = open().await;
+    ordering_and_durability(&mut open).await;
+    failed_replacement_put(&mut open, &mut arm_failed_put).await;
+    failed_first_put(&mut open, &mut arm_failed_put).await;
+}
+
+/// FIFO ordering, id progression, staged-byte accounting, orphan-GC support,
+/// and the durability of all four across reopen.
+async fn ordering_and_durability<S, F>(open: &mut F)
+where
+    S: StagingStore,
+    F: AsyncFnMut(Backing) -> S,
+{
+    let store = open(Backing::Ordering).await;
 
     // Fresh backing.
     assert!(store.queued_ops().await.unwrap().is_empty());
@@ -90,7 +139,7 @@ where
 
     // Durability: queue order, staged bytes, and id progression survive
     // reopen.
-    let reopened = open().await;
+    let reopened = open(Backing::Ordering).await;
     assert_eq!(
         reopened.queued_ops().await.unwrap(),
         vec![(id_a, b"op-a".to_vec()), (id_c, b"op-c".to_vec())],
@@ -125,7 +174,7 @@ where
     }
     assert!(reopened.queued_ops().await.unwrap().is_empty());
 
-    let drained = open().await;
+    let drained = open(Backing::Ordering).await;
     let id_f = drained.enqueue_op(b"op-f").await.unwrap();
     assert!(
         id_f > id_e,
@@ -133,27 +182,21 @@ where
     );
 }
 
-/// Runs the replacement case of [`StagingStore::put_staged_bytes`]'s failure
-/// atomicity against an implementation: a put that returns `Err` over an
-/// existing record must leave the previous bytes exactly as it found them.
-/// [`check_failed_first_put`] covers the same put into fresh backing.
-///
-/// Separate from [`check`] because it needs a lever [`check`] cannot supply —
-/// `arm_failed_put` must make the next `put_staged_bytes` at
-/// [`FAILED_PUT_KEY`] fail (exhausted quota, a short write, a denied
-/// directory; the host picks its own). Everything the kit does after arming is
-/// a read, so the lever may stay armed. `open` carries [`check`]'s reopen
-/// semantics, and the backing must start empty.
-///
-/// # Panics
-/// Panics on the first contract violation.
-pub async fn check_failed_put<S, F, G>(mut open: F, arm_failed_put: G)
+/// A put that returns `Err` over an existing record must leave the previous
+/// bytes exactly as it found them.
+async fn failed_replacement_put<S, F, G>(open: &mut F, arm_failed_put: &mut G)
 where
     S: StagingStore,
-    F: AsyncFnMut() -> S,
-    G: AsyncFnOnce(),
+    F: AsyncFnMut(Backing) -> S,
+    G: AsyncFnMut(Backing),
 {
-    let store = open().await;
+    let backing = Backing::FailedReplacement;
+    let store = open(backing).await;
+    assert!(
+        store.staged_keys().await.unwrap().is_empty(),
+        "every kit backing is its own, and starts empty"
+    );
+
     let previous = b"the-previously-staged-record";
     store
         .put_staged_bytes(FAILED_PUT_KEY, previous)
@@ -161,7 +204,7 @@ where
         .unwrap();
     let total = store.staged_bytes_total().await.unwrap();
 
-    arm_failed_put().await;
+    arm_failed_put(backing).await;
     assert!(
         store
             .put_staged_bytes(FAILED_PUT_KEY, b"a-longer-replacement-that-must-not-land")
@@ -172,7 +215,7 @@ where
 
     // Read back through a fresh handle: what must survive is the durable
     // record, not what the handle that failed still remembers.
-    let reopened = open().await;
+    let reopened = open(backing).await;
     assert_eq!(
         reopened
             .staged_bytes(FAILED_PUT_KEY)
@@ -197,33 +240,22 @@ where
     );
 }
 
-/// Runs the fresh-backing case of [`StagingStore::put_staged_bytes`]'s failure
-/// atomicity: a put that returns `Err` for a key that held nothing must leave
-/// that key absent — never an empty or half-written record.
-///
-/// A separate entry point rather than a phase of [`check_failed_put`] because
-/// the two cases cannot share one backing: this one needs the lever armed
-/// before the key's first put, while [`check_failed_put`] needs an unarmed put
-/// to establish the bytes it then defends.
-///
-/// `arm_failed_put` and `open` carry [`check_failed_put`]'s contracts, and the
-/// backing must start empty.
-///
-/// # Panics
-/// Panics on the first contract violation.
-pub async fn check_failed_first_put<S, F, G>(mut open: F, arm_failed_put: G)
+/// A put that returns `Err` for a key that held nothing must leave that key
+/// absent — never an empty or half-written record.
+async fn failed_first_put<S, F, G>(open: &mut F, arm_failed_put: &mut G)
 where
     S: StagingStore,
-    F: AsyncFnMut() -> S,
-    G: AsyncFnOnce(),
+    F: AsyncFnMut(Backing) -> S,
+    G: AsyncFnMut(Backing),
 {
-    let store = open().await;
+    let backing = Backing::FailedFirstPut;
+    let store = open(backing).await;
     assert!(
         store.staged_keys().await.unwrap().is_empty(),
-        "this case reads the key's absence as the result, so the backing must start empty"
+        "this phase reads the key's absence as the result, so the backing must start empty"
     );
 
-    arm_failed_put().await;
+    arm_failed_put(backing).await;
     assert!(
         store
             .put_staged_bytes(FAILED_PUT_KEY, b"a-first-record-that-must-not-land")
@@ -234,7 +266,7 @@ where
 
     // Read back through a fresh handle: what must be absent is the durable
     // record, not what the handle that failed still remembers.
-    let reopened = open().await;
+    let reopened = open(backing).await;
     assert_eq!(
         reopened.staged_bytes(FAILED_PUT_KEY).await.unwrap(),
         None,

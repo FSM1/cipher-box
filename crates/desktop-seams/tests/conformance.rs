@@ -19,6 +19,7 @@ use cipherbox_engine::StagingRetireLedger;
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, StagingStore,
 };
+use cipherbox_engine::testkit::conformance::staging_store::Backing;
 use cipherbox_engine::testkit::{block_on, conformance};
 
 mod mock_http;
@@ -38,44 +39,24 @@ fn file_floor_store_passes_the_floor_store_kit() {
     }));
 }
 
+/// The desktop `StagingStore` kit. The fault lever denies the write target for
+/// a replacement put, and for a first put — where Windows honours no denial on
+/// a path that does not exist yet — removes the still-empty `staged/`
+/// directory, which `FileStagingStore::open` recreates for the read-back.
 #[test]
 fn file_staging_store_passes_the_staging_store_kit() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("staging");
-    block_on(conformance::staging_store::check(async || {
-        FileStagingStore::open(&path).unwrap()
-    }));
-}
-
-/// The failed-put kit case. The lever is a permission denial `atomic_write`
-/// hits on its way to the sidecar: on Unix the `staged/` directory is made
-/// unwritable, so the temp file cannot be created; on Windows the sidecar
-/// itself is made read-only, which `MoveFileEx` refuses to replace. Either way
-/// the failure lands before the sidecar's bytes can change.
-#[test]
-fn file_staging_store_passes_the_failed_put_kit() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("staging");
-    let denial = WriteDenial::for_store(&path);
-    block_on(conformance::staging_store::check_failed_put(
-        async || FileStagingStore::open(&path).unwrap(),
-        async || denial.arm(),
-    ));
-}
-
-/// The failed-put kit's fresh-backing case: a first put that fails must land
-/// nothing at the key. Unix only — the lever has to be armed before the key
-/// exists, and Windows honours no denial on a path that is not there yet, so
-/// its leg runs the replacement case above.
-#[cfg(unix)]
-#[test]
-fn file_staging_store_passes_the_failed_first_put_kit() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("staging");
-    let denial = WriteDenial::for_store(&path);
-    block_on(conformance::staging_store::check_failed_first_put(
-        async || FileStagingStore::open(&path).unwrap(),
-        async || denial.arm(),
+    let root = dir.path();
+    let denial = WriteDenial::for_store(&root.join(Backing::FailedReplacement.label()));
+    block_on(conformance::staging_store::check(
+        async |backing: Backing| FileStagingStore::open(root.join(backing.label())).unwrap(),
+        async |backing: Backing| match backing {
+            Backing::Ordering | Backing::FailedReplacement => denial.arm(),
+            Backing::FailedFirstPut => {
+                std::fs::remove_dir(root.join(backing.label()).join("staged"))
+                    .expect("the kit's lever must be armed, or it proves nothing");
+            }
+        },
     ));
 }
 

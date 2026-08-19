@@ -3,9 +3,10 @@
 //! by the kits.
 
 use cipherbox_engine::seams::EndpointId;
+use cipherbox_engine::testkit::conformance::staging_store::FAILED_PUT_KEY;
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailboxHub, InMemoryReceivedShareStore,
-    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore, VirtualScheduler,
+    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingBackings, VirtualScheduler,
 };
 use cipherbox_engine::testkit::{block_on, conformance};
 
@@ -17,8 +18,15 @@ fn in_memory_floor_store_passes_the_floor_store_kit() {
 
 #[test]
 fn in_memory_staging_store_passes_the_staging_store_kit() {
-    let store = InMemoryStagingStore::default();
-    block_on(conformance::staging_store::check(async || store.clone()));
+    let backings = InMemoryStagingBackings::default();
+    block_on(conformance::staging_store::check(
+        async |backing| backings.open(backing),
+        async |backing| {
+            backings
+                .open(backing)
+                .interrupt_staged_write_after(FAILED_PUT_KEY, 0)
+        },
+    ));
 }
 
 #[test]

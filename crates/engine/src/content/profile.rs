@@ -5,14 +5,19 @@
 //! profile, is injected rather than hardcoded at a call site: framing reads the
 //! size from the profile handed in.
 
+use super::chunk::SEALED_LEAF_OVERHEAD;
+use super::limits::MAX_RESOLVED_RECORD_BYTES;
+
 /// The content-plane framing profile. Fixed-size chunking over a flat DAG is
 /// the whole of the frozen shape.
 ///
 /// There is deliberately **no `Default`** (mirrors [`crate::profile`]): every
 /// construction site names its profile, and the chunk size is always a real,
-/// nonzero value — the field is private and every constructor rejects zero, so
-/// a zero chunk size (which would panic framing at `chunks(0)`) is
-/// unrepresentable rather than a fail-late panic.
+/// nonzero value that seals to a block the ingress accepts — the field is
+/// private and every constructor rejects both, so a zero chunk size (which
+/// would panic framing at `chunks(0)`) and one whose leaves this engine's own
+/// [`read_block`](super::read::read_block) would reject are unrepresentable
+/// rather than a fail-late panic or an unpinnable version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentProfile {
     /// Fixed content chunk size in bytes. Every leaf but the last carries
@@ -40,10 +45,13 @@ impl ContentProfile {
     /// reachable from tiny fixtures (blueprint/testing.md "The DX hook").
     pub const CI: Self = Self { chunk_size: 16 };
 
-    /// A custom profile with the given chunk size, or `None` for a zero size —
-    /// the construction site that enforces the nonzero invariant.
+    /// A custom profile with the given chunk size, or `None` for a size that is
+    /// zero or seals past [`MAX_RESOLVED_RECORD_BYTES`] — the construction site
+    /// that fails closed on both, so no injected profile can frame a leaf this
+    /// crate's own reader rejects (AGENTS.md rule 8).
     pub const fn new(chunk_size: usize) -> Option<Self> {
-        if chunk_size == 0 {
+        let sealed = chunk_size.saturating_add(SEALED_LEAF_OVERHEAD as usize);
+        if chunk_size == 0 || sealed > MAX_RESOLVED_RECORD_BYTES {
             None
         } else {
             Some(Self { chunk_size })
@@ -98,5 +106,27 @@ mod tests {
     fn new_rejects_a_zero_chunk_size() {
         assert_eq!(ContentProfile::new(0), None, "zero is unrepresentable");
         assert_eq!(ContentProfile::new(4096).unwrap().chunk_size(), 4096);
+    }
+
+    /// The release-active half of the sealed-leaf ceiling: the const assertion
+    /// in `limits` covers the shipped profile, this covers every injected one.
+    #[test]
+    fn new_rejects_a_chunk_size_that_seals_past_the_block_ceiling() {
+        let largest = MAX_RESOLVED_RECORD_BYTES - SEALED_LEAF_OVERHEAD as usize;
+        assert_eq!(
+            ContentProfile::new(largest).unwrap().chunk_size(),
+            largest,
+            "the largest leaf the ingress accepts is still framable"
+        );
+        assert_eq!(
+            ContentProfile::new(largest + 1),
+            None,
+            "a profile whose leaves this engine's own reader rejects is unrepresentable"
+        );
+        assert_eq!(
+            ContentProfile::new(usize::MAX),
+            None,
+            "no wrap past the cap"
+        );
     }
 }

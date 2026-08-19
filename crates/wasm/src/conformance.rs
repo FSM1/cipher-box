@@ -30,11 +30,11 @@ use crate::seams_bridge::{
     SnapshotCacheAdapter, StagingStoreAdapter,
 };
 
-/// Calls a JS `() => Promise<T>` and awaits its resolution, labelling any
+/// Calls a JS `(arg) => Promise<T>` and awaits its resolution, labelling any
 /// misuse with `what`.
-async fn call_async(f: &Function, what: &str) -> JsValue {
+async fn call_async_with(f: &Function, arg: &JsValue, what: &str) -> JsValue {
     let result = f
-        .call0(&JsValue::UNDEFINED)
+        .call1(&JsValue::UNDEFINED, arg)
         .unwrap_or_else(|_| panic!("{what} must not throw"));
     let promise: Promise = result
         .dyn_into()
@@ -47,7 +47,7 @@ async fn call_async(f: &Function, what: &str) -> JsValue {
 /// Calls a JS `() => Promise<Seam>` factory and awaits the fresh seam handle
 /// (the conformance kits' "reopen" contract).
 async fn open_seam(factory: &Function) -> JsValue {
-    call_async(factory, "seam factory").await
+    call_async_with(factory, &JsValue::UNDEFINED, "seam factory").await
 }
 
 /// Runs the `FloorStore` conformance kit against a JS `FloorStoreSeam`,
@@ -72,47 +72,43 @@ pub async fn run_snapshot_cache_conformance(factory: Function) {
 }
 
 /// Runs the `StagingStore` conformance kit against a JS `StagingStoreSeam`.
+///
+/// `openBacking` is called with the kit's backing label and must resolve a
+/// handle over that backing — distinct durable state per label, the same state
+/// on a repeat call. `armFailedPut` is the host's fault lever for the same
+/// backing: it must make that backing's next `putStagedBytes` at the kit's key
+/// fail.
+/// The staging-store kit's backing labels, in the order the kit asks for them,
+/// so a JS host prepares and asserts over what the kit declares rather than a
+/// transcribed copy of it.
+#[wasm_bindgen(js_name = stagingStoreBackings)]
+pub fn staging_store_backings() -> Vec<String> {
+    conformance::staging_store::Backing::ALL
+        .iter()
+        .map(|backing| backing.label().to_string())
+        .collect()
+}
+
 #[wasm_bindgen(js_name = runStagingStoreConformance)]
-pub async fn run_staging_store_conformance(factory: Function) {
+pub async fn run_staging_store_conformance(open_backing: Function, arm_failed_put: Function) {
     console_error_panic_hook::set_once();
-    conformance::staging_store::check(async || StagingStoreAdapter {
-        js: open_seam(&factory).await.unchecked_into(),
-    })
-    .await;
-}
-
-/// Runs the `StagingStore` failed-put kit case against a JS
-/// `StagingStoreSeam`. `armFailedPut` is the host's fault lever: it must make
-/// the seam's next `putStagedBytes` at the kit's key fail.
-#[wasm_bindgen(js_name = runStagingStoreFailedPutConformance)]
-pub async fn run_staging_store_failed_put_conformance(factory: Function, arm_failed_put: Function) {
-    console_error_panic_hook::set_once();
-    conformance::staging_store::check_failed_put(
-        async || StagingStoreAdapter {
-            js: open_seam(&factory).await.unchecked_into(),
+    conformance::staging_store::check(
+        async |backing: conformance::staging_store::Backing| StagingStoreAdapter {
+            js: call_async_with(
+                &open_backing,
+                &JsValue::from_str(backing.label()),
+                "staging backing factory",
+            )
+            .await
+            .unchecked_into(),
         },
-        async || {
-            call_async(&arm_failed_put, "failed-put arm").await;
-        },
-    )
-    .await;
-}
-
-/// Runs the `StagingStore` failed-first-put kit case against a JS
-/// `StagingStoreSeam`: the same lever, armed before the key's first put, so the
-/// backing this runner is handed must start empty.
-#[wasm_bindgen(js_name = runStagingStoreFailedFirstPutConformance)]
-pub async fn run_staging_store_failed_first_put_conformance(
-    factory: Function,
-    arm_failed_put: Function,
-) {
-    console_error_panic_hook::set_once();
-    conformance::staging_store::check_failed_first_put(
-        async || StagingStoreAdapter {
-            js: open_seam(&factory).await.unchecked_into(),
-        },
-        async || {
-            call_async(&arm_failed_put, "failed-put arm").await;
+        async |backing: conformance::staging_store::Backing| {
+            call_async_with(
+                &arm_failed_put,
+                &JsValue::from_str(backing.label()),
+                "failed-put arm",
+            )
+            .await;
         },
     )
     .await;

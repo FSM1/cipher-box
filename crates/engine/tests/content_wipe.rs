@@ -312,10 +312,10 @@ fn a_mid_read_trust_reject_wipes_what_the_assembly_buffer_already_holds() {
 #[test]
 fn outgrowing_the_assembly_buffer_wipes_the_allocation_it_leaves_behind() {
     const MARKER: u8 = 0xC5;
-    // The assembly buffer preallocates a 4 MiB budget, so growth is only
-    // reachable from a window wider than that: two 2 MiB leaves fill the budget
+    // The assembly buffer preallocates the block-cap budget, so growth is only
+    // reachable from a window wider than that: two 1 MiB leaves fill the budget
     // exactly and a 16-byte tail leaf forces the grow.
-    const BIG_CHUNK: usize = 2 * 1024 * 1024;
+    const BIG_CHUNK: usize = 1024 * 1024;
     let profile = ContentProfile::new(BIG_CHUNK).expect("nonzero chunk size");
     let mut plaintext = vec![MARKER; BIG_CHUNK];
     plaintext.extend_from_slice(&vec![0x11u8; BIG_CHUNK]);
