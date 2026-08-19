@@ -41,13 +41,14 @@ pub use create::{
     ParentScopePlan, create_read_grant,
 };
 pub use invite::{
-    ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim, InviteError,
-    InviteRevocation, LinkCapability, MintedInvite, OwnerAuthority, RecordedInvite,
-    convert_invite_claim, mint_invite_grant, post_invite_claim, revoke_invite_link,
+    CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
+    EphemeralInvitee, InviteClaim, InviteError, InviteRevocation, LinkCapability, MintedInvite,
+    OwnerAuthority, RecordedInvite, convert_invite_claim, mint_invite_grant, post_invite_claim,
+    revoke_invite_link,
 };
 pub use invite_store::{
-    INVITE_RECORDS_PREFIX, InviteRecordsCodecError, InviteStore, InviteStoreError,
-    MAX_INVITE_RECORDS, StagingInviteStore,
+    INVITE_RECORDS_PREFIX, InviteRecords, InviteRecordsCodecError, InviteStore, InviteStoreError,
+    MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
