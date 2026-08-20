@@ -1,12 +1,15 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { App } from './App';
-import { authStore } from './stores/auth.store';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from './test/authFakes';
 
-function renderAt(path: string) {
-  const Providers = pageWrapper(fakeEngineClient().client, fakeCoreKitSession().session);
+/** `signedIn` renders a tab whose Core Kit session outlived the page. */
+function renderAt(path: string, signedIn = false) {
+  const Providers = pageWrapper(
+    fakeEngineClient().client,
+    fakeCoreKitSession({ loggedIn: signedIn }).session
+  );
   return render(
     <Providers>
       <MemoryRouter initialEntries={[path]}>
@@ -16,25 +19,21 @@ function renderAt(path: string) {
   );
 }
 
-afterEach(() => authStore.signedOut());
-
 describe('App routes', () => {
   it('renders the login page at the root', () => {
     renderAt('/');
     expect(screen.getByRole('heading', { name: 'CipherBox' })).toBeDefined();
   });
 
-  it('renders the vault browser for the vault root when no node id is routed', () => {
-    authStore.signedIn('google', 'user@example.test');
-    renderAt('/files');
-    expect(screen.getByTestId('app-shell')).toBeDefined();
-    expect(screen.getByTestId('file-browser')).toBeDefined();
+  it('renders the vault browser for the vault root when no node id is routed', async () => {
+    renderAt('/files', true);
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(await screen.findByTestId('file-browser')).toBeDefined();
   });
 
-  it('keys the vault browser on the routed node id', () => {
-    authStore.signedIn('google', 'user@example.test');
-    renderAt(`/files/${'0a'.repeat(16)}`);
-    expect(screen.getByTestId('file-browser')).toBeDefined();
+  it('keys the vault browser on the routed node id', async () => {
+    renderAt(`/files/${'0a'.repeat(16)}`, true);
+    expect(await screen.findByTestId('file-browser')).toBeDefined();
   });
 
   it('sends a signed-out tab away from the vault browser', async () => {

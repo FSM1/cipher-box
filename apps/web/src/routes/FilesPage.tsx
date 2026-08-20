@@ -1,24 +1,13 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/useAuth';
+import { useEngineAccount } from '../engine/useEngineSession';
 import { FileBrowser } from '../components/file-browser/FileBrowser';
 import { AppShell } from '../components/layout/AppShell';
 
-/**
- * The vault browser. No route guard framework: an unauthenticated tab redirects
- * on facade auth state (blueprint/web-client.md "Composition").
- */
+/** The vault browser, behind `RequireAuth`. */
 export function FilesPage() {
-  const { isAuthenticated, isSignedOut } = useAuth();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (isSignedOut) navigate('/');
-  }, [isSignedOut, navigate]);
-
+  const account = useEngineAccount();
   return (
     <AppShell>
-      {isAuthenticated ? (
+      {account !== null ? (
         <FileBrowser />
       ) : (
         <p className="file-browser-loading" data-testid="files-signing-in">

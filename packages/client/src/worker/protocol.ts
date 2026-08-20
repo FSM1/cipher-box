@@ -17,6 +17,8 @@
  * command: it streams chunk by chunk through a write handle.
  */
 
+import { isBuffer } from '../buffers.js';
+
 /** Grant permission level (mirrors the facade `Permission`). */
 export type Permission = 'read' | 'write';
 
@@ -127,12 +129,12 @@ export interface ByoIpfsConfigDescriptor {
   endpoint: string;
   kind: ByoKind;
   /**
-   * Bearer credential, `null` for a provider that needs none. Bytes rather
-   * than a string, which cannot be overwritten. A descriptor is cloned rather
-   * than transferred, so this scrubs the worker's copy only — the sender keeps
-   * one it owns and must wipe itself.
+   * Bearer credential, `null` for a provider that needs none. A transferable
+   * buffer rather than a string, which cannot be overwritten: every hop moves
+   * it ([`commandTransfer`]), so the receiving realm is the only holder left
+   * and is the terminal owner that scrubs it.
    */
-  accessToken: Uint8Array | null;
+  accessToken: ArrayBuffer | null;
 }
 
 /** The member's placement, provider and retention choice, as data. */
@@ -170,6 +172,24 @@ export type CommandDescriptor =
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   | { kind: 'logout' };
+
+/**
+ * The buffers a command descriptor owns, for the `transfer` list of the send
+ * that carries it. A transfer detaches the sender, so the credential inside a
+ * settings command exists in exactly one realm at a time and its receiver is
+ * the terminal owner that scrubs it (AGENTS.md 7); a clone would leave an
+ * unwiped copy at every hop.
+ *
+ * Reads the bearer by shape rather than by `kind`, so a descriptor this build
+ * cannot serve still loses its credential on the route that drops it, and takes
+ * it unvalidated: a relay reads one off an untrusted port.
+ */
+export function commandTransfer(command: unknown): Transferable[] {
+  const token = (
+    command as { settings?: { byo?: { accessToken?: unknown } | null } | null } | null | undefined
+  )?.settings?.byo?.accessToken;
+  return isBuffer(token) ? [token] : [];
+}
 
 /**
  * What one command produced, as data (mirrors the facade `CommandOutcome`).

@@ -1,7 +1,10 @@
 /**
- * UI-owned auth chrome: who is signed in and how. Vault state, tokens, and key
- * material live below the facade (blueprint/web-client.md "UI state law").
- * Memory only — `email` is PII and this store is never persisted.
+ * UI-owned auth chrome: how the session was established and what to display for
+ * it. Whether the tab *has* a session is the engine's word, read through
+ * `useEngineAccount` — this store has no say in it, so there is no second
+ * answer to desync from the first (blueprint/web-client.md "UI state law").
+ * Vault state, tokens, and key material live below the facade. Memory only —
+ * `email` is PII and this store is never persisted.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -10,7 +13,6 @@ import { useSyncExternalStore } from 'react';
 export type LoginMethod = 'google' | 'email' | 'wallet';
 
 export interface AuthState {
-  readonly isAuthenticated: boolean;
   /** Absent for wallet logins, which carry no email. */
   readonly email: string | null;
   readonly method: LoginMethod | null;
@@ -29,7 +31,6 @@ export interface AuthState {
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
-  isAuthenticated: false,
   email: null,
   method: null,
   recoveryRequired: false,
@@ -43,7 +44,6 @@ function set(next: AuthState): void {
   // `useSyncExternalStore` bails out on snapshot identity, so a repeat login
   // with identical values must not mint a new object and re-render consumers.
   if (
-    next.isAuthenticated === state.isAuthenticated &&
     next.email === state.email &&
     next.method === state.method &&
     next.recoveryRequired === state.recoveryRequired &&
@@ -68,7 +68,6 @@ export const authStore = {
     // Drop an email a wallet login had no business carrying rather than hold
     // PII the state contract declares absent.
     set({
-      isAuthenticated: true,
       email: method === 'wallet' ? null : email,
       method,
       recoveryRequired: false,

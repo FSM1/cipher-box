@@ -10,6 +10,7 @@
  * consumes it), and events arrive as key-free view descriptors.
  */
 
+import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -18,6 +19,7 @@ import type {
   Permission,
   SnapshotDescriptor,
   StreamHandle,
+  VaultSettingsDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -195,6 +197,24 @@ export class EngineFacade {
     return this.command({ kind: 'rotateNow', node });
   }
 
+  /**
+   * Saves the member's placement, provider and retention choice. A BYO bearer is
+   * moved to the engine, not copied, so the caller's buffer is detached — and a
+   * spent one cannot be re-sent: a retry re-reads its source, as `start` does.
+   *
+   * A bearer that is not a transferable buffer is refused here rather than sent,
+   * because the worker hard-rejects it after every hop has already cloned it
+   * (AGENTS.md 8): the copy it would leave behind is a live credential.
+   */
+  saveVaultSettings(settings: VaultSettingsDescriptor): Promise<CommandOutcomeDescriptor> {
+    const token = settings.byo?.accessToken;
+    if (token != null && !isBuffer(token)) {
+      wipeBytes(token);
+      return Promise.reject(new Error('accessToken must be a transferable buffer'));
+    }
+    return this.command({ kind: 'saveVaultSettings', settings });
+  }
+
   /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(): Promise<string> {
     return this.transport.siweChallenge();
@@ -204,10 +224,7 @@ export class EngineFacade {
     return this.command({ kind: 'siweLogin', message, signature });
   }
 
-  private command(
-    descriptor: CommandDescriptor,
-    transfer: Transferable[] = []
-  ): Promise<CommandOutcomeDescriptor> {
-    return this.transport.command(descriptor, transfer);
+  private command(descriptor: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    return this.transport.command(descriptor);
   }
 }

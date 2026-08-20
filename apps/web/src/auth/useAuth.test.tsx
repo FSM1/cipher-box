@@ -60,7 +60,7 @@ describe('useAuth recovery phrase', () => {
     expect(coreKit.calls.phrases).toEqual([FAKE_PHRASE]);
     expect(result.current.auth.recoveryRequired).toBe(false);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
-    expect(authStore.getState()).toMatchObject({ isAuthenticated: true });
+    expect(result.current.auth.isAuthenticated).toBe(true);
   });
 
   it('keeps the prompt up for another attempt after a wrong phrase', async () => {
@@ -150,8 +150,9 @@ describe('useAuth', () => {
       },
     ]);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
+    // Signed in because the engine took the secret, not because the chrome said so.
+    expect(result.current.auth.isAuthenticated).toBe(true);
     expect(authStore.getState()).toMatchObject({
-      isAuthenticated: true,
       method: 'google',
       email: 'user@example.test',
     });
@@ -190,7 +191,8 @@ describe('useAuth', () => {
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     // The engine's own SIWE login is not what a first wallet login travels.
     expect(engine.calls.siwe).toEqual([]);
-    expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: 'wallet' });
+    expect(result.current.auth.isAuthenticated).toBe(true);
+    expect(authStore.getState()).toMatchObject({ method: 'wallet' });
   });
 
   it('reads the SIWE nonce from the API, which the engine cannot answer pre-start', async () => {
@@ -217,7 +219,7 @@ describe('useAuth', () => {
 
     expect(engine.calls.logouts).toBe(1);
     expect(coreKit.calls.logouts).toBe(1);
-    expect(authStore.getState().isAuthenticated).toBe(false);
+    expect(result.current.auth.isAuthenticated).toBe(false);
     // The re-export capability must not outlive the session it belonged to.
     await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
   });
@@ -233,7 +235,8 @@ describe('useAuth', () => {
     });
 
     expect(coreKit.calls.logouts).toBe(1);
-    expect(authStore.getState().isAuthenticated).toBe(false);
+    // The engine is zeroized whatever it answered, so the tab is signed out.
+    expect(result.current.auth.isAuthenticated).toBe(false);
     expect(result.current.auth.error).toBe('engine gone');
   });
 
@@ -262,7 +265,44 @@ describe('useAuth', () => {
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
     // The identity token carries no email claim, so a session restored without
     // a fresh login has no address to show until the member signs in again.
-    expect(authStore.getState()).toMatchObject({ isAuthenticated: true, email: null });
+    expect(authStore.getState()).toMatchObject({ email: null });
+  });
+
+  it('re-opens the resume window when the engine is replaced under a live session', async () => {
+    let hold = false;
+    let release!: () => void;
+    const engine = fakeEngineClient({
+      start: () => (hold ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve()),
+    });
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
+    // A Core Kit logout that fails leaves the session live under the engine the
+    // failed logout replaced.
+    const session = {
+      ...coreKit.session,
+      logout: () => Promise.reject(new Error('core kit gone')),
+    };
+    const { result } = renderHook(() => useAuth(), {
+      wrapper: authWrapper(engine.client, session),
+    });
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+
+    hold = true;
+    await act(async () => {
+      await result.current.logout().catch(() => undefined);
+    });
+
+    // Read before the handoff is let go, so a failure here cannot strand the
+    // login flow's in-flight latch over the rest of the suite.
+    await waitFor(() => expect(engine.calls.started).toHaveLength(2));
+    const signedOutDuringHandoff = result.current.isSignedOut;
+    await act(async () => {
+      release();
+      await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+    });
+
+    // The replacement owes that session a handoff of its own, so the tab had not
+    // decided yet; a guard reading it as signed out redirects over a live login.
+    expect(signedOutDuringHandoff).toBe(false);
   });
 
   it('leaves the tab signed out and disarmed when the engine refuses the secret', async () => {
@@ -276,7 +316,7 @@ describe('useAuth', () => {
       await result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN).catch(() => undefined);
     });
 
-    expect(authStore.getState().isAuthenticated).toBe(false);
+    expect(result.current.auth.isAuthenticated).toBe(false);
     expect(result.current.auth.error).toBe('trust violation');
     await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
     // A Core Kit session the engine refused is ended rather than left resident.
@@ -300,7 +340,7 @@ describe('useAuth', () => {
       await result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN).catch(() => undefined);
     });
 
-    expect(authStore.getState().isAuthenticated).toBe(false);
+    expect(result.current.auth.isAuthenticated).toBe(false);
     expect(engine.calls.started).toEqual([]);
     await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
   });
@@ -361,7 +401,7 @@ describe('useAuth against an engine another account holds', () => {
     expect(result.current.auth.heldElsewhere).toEqual({ heldBy: 'other-account' });
     // A one-line banner cannot say what to do about it, so none is rendered.
     expect(result.current.auth.error).toBeNull();
-    expect(authStore.getState().isAuthenticated).toBe(false);
+    expect(result.current.auth.isAuthenticated).toBe(false);
     // The credential the engine refused does not outlive the refusal.
     expect(coreKit.calls.logouts).toBe(1);
   });
@@ -396,6 +436,6 @@ describe('useAuth against an engine another account holds', () => {
     await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
 
     expect(result.current.auth.heldElsewhere).toBeNull();
-    expect(authStore.getState()).toMatchObject({ isAuthenticated: true });
+    expect(result.current.auth.isAuthenticated).toBe(true);
   });
 });

@@ -7,8 +7,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EngineHeldElsewhereError } from '@cipherbox/client';
-import { createLoginFlow, RecoveryRequiredError, type LoginProgress } from '@cipherbox/login';
+import {
+  createLoginFlow,
+  RecoveryRequiredError,
+  type LoginFlow,
+  type LoginProgress,
+} from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
+import { useEngineAccount } from '../engine/useEngineSession';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
 import type { RecoveryEnrollment } from './coreKit';
@@ -27,7 +33,8 @@ export interface Auth {
   isReady: boolean;
   /**
    * True once the tab knows it has no session — the check settled signed out,
-   * or Core Kit could never answer it.
+   * Core Kit could never answer it, or the engine gave the session up. Routes
+   * that need a vault redirect on this.
    */
   isSignedOut: boolean;
   /** True while a restore, login, or logout is in flight. */
@@ -64,14 +71,21 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { isAuthenticated, recoveryRequired, recoveryEnrolled } = useAuthState();
+  const { recoveryRequired, recoveryEnrolled } = useAuthState();
+  // The engine's word, not this tab's: a logout in another tab zeroizes the one
+  // engine the origin has, and a UI reading its own store would keep rendering
+  // a vault over it.
+  const isAuthenticated = useEngineAccount() !== null;
 
   const [isBusy, setIsBusy] = useState(false);
+  // *Which* handoff has settled, not merely that one has: `flow.resume` latches
+  // on the session and the facade together, so a replacement of either owes the
+  // engine a fresh attempt that consumers must await in turn.
+  const [resumedFlow, setResumedFlow] = useState<LoginFlow<WebCollected> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
-  const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
 
   const progress = useMemo<LoginProgress>(
     () => ({
@@ -109,6 +123,13 @@ export function useAuth(): Auth {
       }),
     [client, collector, exchange, progress, rebuildEngine, secrets, session]
   );
+
+  // A Core Kit session that outlived the page still owes the engine its secret,
+  // so the tab has not decided yet; a guard reading that as signed out would
+  // throw the member out of their own vault. It ends whether or not the handoff
+  // worked — a failed one leaves no vault to guard.
+  const resuming = isReady && resumedFlow !== flow && (session?.isLoggedIn() ?? false);
+  const isSignedOut = !isAuthenticated && !resuming && (isReady || status === 'unavailable');
 
   /** The recovery prompt is a transition, not a failure the host renders. */
   const attempt = useCallback(async (login: Promise<void>): Promise<void> => {
@@ -175,7 +196,13 @@ export function useAuth(): Auth {
   // secret; without this the tab renders logged-out over a live login.
   useEffect(() => {
     if (!isReady || isAuthenticated) return;
-    void flow.resume();
+    let live = true;
+    void flow.resume().finally(() => {
+      if (live) setResumedFlow(flow);
+    });
+    return () => {
+      live = false;
+    };
   }, [flow, isAuthenticated, isReady]);
 
   return {

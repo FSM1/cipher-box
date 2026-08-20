@@ -12,12 +12,14 @@ import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import type { EngineHostLike } from './worker/engineHost.js';
+import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultSettingsDescriptor,
   WorkerMessage,
   WriteHandle,
   WriteTarget,
@@ -67,6 +69,15 @@ export const TEST_ACCOUNT_ID = 'acct01';
 /** What a `SecretSource` double re-derives for a failover promotion. */
 export function fakeLoginSecret(bytes: number[] = [1]): LoginSecret {
   return { secret: Uint8Array.from(bytes).buffer, accountId: TEST_ACCOUNT_ID };
+}
+
+/** Vault settings naming a member's own provider, the one credential-bearing command. */
+export function byoSettings(accessToken: ArrayBuffer | null): VaultSettingsDescriptor {
+  return {
+    pinMode: 'external',
+    byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken },
+    keepLatestVersions: null,
+  };
 }
 
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
@@ -425,6 +436,8 @@ export function collect(value: unknown): { bytesHex: string; text: string } {
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
 export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
+  /** What each `command` was asked to move rather than copy. */
+  readonly commandTransfers: Transferable[][] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
@@ -463,8 +476,14 @@ export class FakeEngineTransport implements EngineTransport {
   }
 
   command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
-    this.commands.push(command);
-    return this.respond(command);
+    const transfer = commandTransfer(command);
+    this.commandTransfers.push(transfer);
+    // `LocalTransport` moves a descriptor's buffers into the worker; model that,
+    // so a sender reading one afterwards fails exactly as it would in a browser.
+    // The responder is the receiver, so it answers over the delivered clone.
+    const delivered = transfer.length > 0 ? structuredClone(command, { transfer }) : command;
+    this.commands.push(delivered);
+    return this.respond(delivered);
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {

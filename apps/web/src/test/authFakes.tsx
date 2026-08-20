@@ -42,6 +42,11 @@ export interface EngineCalls {
   logouts: number;
 }
 
+/**
+ * The engine as a host reads it: a `start` the engine resolved *is* the session,
+ * and tearing the client down ends it — so a test drives sign-in through the
+ * engine, exactly as `EngineClient` publishes it.
+ */
 export function fakeEngineClient(
   overrides: Partial<Record<'start' | 'logout', () => Promise<void>>> = {}
 ) {
@@ -52,12 +57,25 @@ export function fakeEngineClient(
     siwe: [],
     siweChallenges: 0,
   };
+  const sessionListeners = new Set<() => void>();
+  let account: string | null = null;
+  const holds = (next: string | null): void => {
+    if (account === next) return;
+    account = next;
+    for (const listener of [...sessionListeners]) listener();
+  };
   const client = {
+    subscribeSession(listener: () => void) {
+      sessionListeners.add(listener);
+      return () => sessionListeners.delete(listener);
+    },
+    signedInAccount: () => account,
     facade: {
-      start(secret: ArrayBuffer) {
+      async start(secret: ArrayBuffer, accountId: string) {
         calls.started.push(secret);
         calls.secrets.push(new Uint8Array(secret).slice());
-        return overrides.start?.() ?? Promise.resolve();
+        await (overrides.start?.() ?? Promise.resolve());
+        holds(accountId);
       },
       siweChallenge() {
         calls.siweChallenges += 1;
@@ -67,16 +85,25 @@ export function fakeEngineClient(
         calls.siwe.push({ message, signature });
         return Promise.resolve();
       },
-      logout() {
+      async logout() {
         calls.logouts += 1;
-        return overrides.logout?.() ?? Promise.resolve();
+        // The engine is zeroized either way: `EngineFacade.logout` tears the
+        // transport down whatever the command answers.
+        try {
+          await (overrides.logout?.() ?? Promise.resolve());
+        } finally {
+          holds(null);
+        }
       },
       subscribe: () => () => undefined,
       snapshot: () => new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
     },
     reportFocus: () => undefined,
-    dispose: () => Promise.resolve(),
+    dispose() {
+      holds(null);
+      return Promise.resolve();
+    },
   } as unknown as EngineClient;
   return { client, calls };
 }

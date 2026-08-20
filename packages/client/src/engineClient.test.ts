@@ -465,6 +465,236 @@ describe('EngineClient leadership + transport swap', () => {
     vi.unstubAllGlobals();
   });
 
+  it('publishes the account the engine holds, and clears it when the client goes', async () => {
+    const { tab } = origin();
+    const client = tab();
+    const changes: Array<string | null> = [];
+    client.subscribeSession(() => changes.push(client.signedInAccount()));
+    await tick();
+
+    // Nothing is signed in until an engine has answered a start for it.
+    expect(client.signedInAccount()).toBeNull();
+    await startTab(client);
+    expect(client.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+    await client.dispose();
+
+    expect(client.signedInAccount()).toBeNull();
+    expect(changes).toEqual([TEST_ACCOUNT_ID, null]);
+  });
+
+  it('drops the session when a promotion cannot cold-start the engine it hosts', async () => {
+    const { tab } = origin();
+    const errors: Error[] = [];
+    const secretSource = {
+      provideSecret: (): Promise<LoginSecret> => Promise.reject(new Error('no session to export')),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource, onError: (error) => errors.push(error) });
+    await tick();
+    await startTab(leader);
+    await startTab(follower, [9]);
+    expect(follower.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+    // The leader goes; this tab wins the lock but cannot re-derive its keys, so
+    // the engine its UI was rendering over no longer exists anywhere.
+    await leader.dispose();
+    await tick();
+    await tick();
+
+    expect(follower.signedInAccount()).toBeNull();
+    expect(errors.map((error) => error.message)).toEqual(['no session to export']);
+    await follower.dispose();
+  });
+
+  it('gives the lock up when a tab with a session greets an engine-less leader', async () => {
+    const { tab, liveWorkers } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret([5])),
+    };
+    // The lock winner never signs in — a stale front-door tab, or one that just
+    // logged out — so it holds no keys to serve anyone with.
+    const idle = tab();
+    const signingIn = tab({ secretSource });
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+
+    await startTab(signingIn);
+
+    // The sign-in lands rather than being refused: the engine-less leader stood
+    // down and this tab cold-started the origin's engine itself.
+    expect(signingIn.currentRole()).toBe('leader');
+    expect(signingIn.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+    expect(idle.currentRole()).toBe('follower');
+    expect(idle.signedInAccount()).toBeNull();
+    expect(liveWorkers()).toBe(1); // still exactly one writer per origin
+
+    await signingIn.dispose();
+    await idle.dispose();
+  });
+
+  it('signs a second tab in on the engine the first one won the lock and started', async () => {
+    const { tab, liveWorkers } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret([5])),
+    };
+    const idle = tab();
+    const first = tab({ secretSource });
+    const second = tab({ secretSource });
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+
+    // Both greet the engine-less leader, which stands down once — so only one
+    // of them is promoted. The other is served by it, and a start that resolves
+    // is the proof: the wait for an engine rejects, it never resolves.
+    await Promise.all([startTab(first), startTab(second)]);
+
+    expect([first.currentRole(), second.currentRole()].sort()).toEqual(['follower', 'leader']);
+    expect(first.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+    expect(second.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+    expect(liveWorkers()).toBe(1);
+
+    await first.dispose();
+    await second.dispose();
+    await idle.dispose();
+  });
+
+  it('lets its own cold start outrun the wait for a leader to step aside', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { tab } = origin();
+      let release!: (secret: LoginSecret) => void;
+      const secretSource = {
+        provideSecret: (): Promise<LoginSecret> =>
+          new Promise<LoginSecret>((resolve) => (release = resolve)),
+      };
+      const idle = tab();
+      const signingIn = tab({ secretSource });
+      await tick();
+
+      const started = startTab(signingIn);
+      // The engine-less leader has stood down and this tab is opening the engine
+      // its own start waits for; a cold start is network-bound work, so the
+      // hand-off deadline no longer applies to it.
+      for (let i = 0; i < 20 && release === undefined; i += 1) await tick();
+      expect(release).toBeTypeOf('function');
+      await vi.advanceTimersByTimeAsync(60_000);
+      release(fakeLoginSecret([5]));
+
+      // A rejection here would tell the login flow to end a Core Kit session the
+      // engine coming up behind it is about to serve.
+      await expect(started).resolves.toBeUndefined();
+      expect(signingIn.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+      await signingIn.dispose();
+      await idle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hosts again after standing down, once the tab it stepped aside for goes', async () => {
+    const { tab } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret([5])),
+    };
+    const idle = tab();
+    const signingIn = tab({ secretSource });
+    await tick();
+    await startTab(signingIn);
+    expect(idle.currentRole()).toBe('follower');
+
+    // Standing down re-queues rather than retiring: a member who signs in here
+    // next has a tab that can still host the origin's engine.
+    await signingIn.dispose();
+    await tick();
+    await tick();
+
+    expect(idle.currentRole()).toBe('leader');
+    await idle.dispose();
+  });
+
+  it('stops asking leaders to step aside once its sign-in has given up', async () => {
+    const { tab, workers } = origin();
+    const errors: Error[] = [];
+    const host = tab();
+    // Signed in through the host, but unable to host itself: when the host goes,
+    // its promotion aborts, which retires it from the election for good.
+    const stranded = tab({
+      secretSource: {
+        provideSecret: (): Promise<LoginSecret> => Promise.reject(new Error('no session')),
+      },
+      onError: (error) => errors.push(error),
+    });
+    await tick();
+    await startTab(host);
+    await startTab(stranded, [9]);
+
+    await host.dispose();
+    for (let i = 0; i < 6; i += 1) await tick();
+    expect(errors).toHaveLength(1);
+    expect(stranded.signedInAccount()).toBeNull();
+
+    const idle = tab();
+    for (let i = 0; i < 6; i += 1) await tick();
+    expect(idle.currentRole()).toBe('leader');
+    const spawned = workers.length;
+
+    await expect(startTab(stranded)).rejects.toThrow();
+    for (let i = 0; i < 20; i += 1) await tick();
+
+    // Without this the tab greets every new leadership under an account nothing
+    // here holds, each stands down and is elected again, and the origin churns
+    // a fresh engine worker per cycle for as long as both tabs are open.
+    expect(workers.length).toBeLessThanOrEqual(spawned + 1);
+    expect(idle.currentRole()).toBe('leader');
+
+    await stranded.dispose();
+    await idle.dispose();
+  });
+
+  it('holds the lock steady between two tabs that have no session to host', async () => {
+    const { tab } = origin();
+    const a = tab();
+    const b = tab();
+    await tick();
+    const leader = a.currentRole() === 'leader' ? a : b;
+
+    // Only a greeting that names an account asks a leader to stand down, and a
+    // tab with no session never sends one — so two engine-less tabs have no way
+    // to pass the lock back and forth between them.
+    for (let i = 0; i < 10; i += 1) await tick();
+
+    expect(leader.currentRole()).toBe('leader');
+    expect((leader === a ? b : a).currentRole()).toBe('follower');
+    await a.dispose();
+    await b.dispose();
+  });
+
+  it('keeps a refusal that names another account, engine-less or not', async () => {
+    const { tab } = origin();
+    const leader = tab();
+    const other = tab({
+      secretSource: {
+        provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
+      },
+    });
+    await tick();
+    await startTab(leader);
+
+    // The origin's engine holds someone else's vault: no step-aside, no wait —
+    // the tab is told where the engine went so it can say so.
+    await expect(other.facade.start(new ArrayBuffer(0), 'acct02')).rejects.toMatchObject({
+      name: 'EngineHeldElsewhereError',
+      heldBy: TEST_ACCOUNT_ID,
+    });
+    expect(leader.currentRole()).toBe('leader');
+    expect(other.signedInAccount()).toBeNull();
+
+    await leader.dispose();
+    await other.dispose();
+  });
+
   it('refuses a stream handle across a leader change while this tab stays a follower', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();

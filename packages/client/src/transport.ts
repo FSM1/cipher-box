@@ -10,6 +10,7 @@
  */
 
 import { CorrelatedTransport } from './correlatedTransport.js';
+import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -36,10 +37,11 @@ export interface EngineTransport {
    */
   start(secret: ArrayBuffer, accountId: string): Promise<void>;
   /**
-   * Sends one command and resolves with what it produced; `transfer` lists any
-   * owned buffers to move, not copy.
+   * Sends one command and resolves with what it produced. Any buffer the
+   * descriptor owns is moved rather than copied ([`commandTransfer`]), so a
+   * credential inside one exists in a single realm at a time.
    */
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor>;
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor>;
   /** Opens a write handle for `size` plaintext bytes of streamed content. */
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   /** Feeds the next slice to an open handle (the buffer is moved, not copied). */
@@ -132,7 +134,8 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    const transfer = commandTransfer(command);
     return this.request<CommandOutcomeDescriptor>(
       this.ready,
       (id) => this.worker.postMessage({ type: 'command', id, command }, transfer),

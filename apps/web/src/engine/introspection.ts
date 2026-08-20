@@ -11,7 +11,6 @@
 import { fromHex, toHex } from '@cipherbox/client';
 import { handOffLoginSecret } from '@cipherbox/login';
 import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
-import { authStore } from '../stores/auth.store';
 
 /**
  * A structured-clone-safe projection of an engine descriptor: `Uint8Array`
@@ -64,12 +63,11 @@ export function installIntrospection(client: EngineClient): EngineClient {
   });
 
   window.__CIPHERBOX_ENGINE__ = {
-    async signIn(loginSecretHex, accountId) {
-      await handOffLoginSecret(client.facade, {
+    signIn(loginSecretHex, accountId) {
+      return handOffLoginSecret(client.facade, {
         _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
         accountId: () => accountId,
       });
-      authStore.signedIn(null);
     },
     async snapshot() {
       const view = await client.facade.snapshot(null);

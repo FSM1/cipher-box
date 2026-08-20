@@ -35,6 +35,7 @@ export { LeaderElection } from './leadership.js';
 export type { LockManagerLike, LockGrant, ElectionRole } from './leadership.js';
 export { BroadcastTransport, EngineHeldElsewhereError } from './broadcastTransport.js';
 export { LeaderRelay } from './leaderRelay.js';
+export type { LeaderRelayOptions } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
 export { ServiceWorkerCourier, defaultCourier, unavailableCourier } from './portCourier.js';
@@ -70,4 +71,8 @@ export type {
   WriteTarget,
   WriteHandle,
   StreamHandle,
+  PinMode,
+  ByoKind,
+  ByoIpfsConfigDescriptor,
+  VaultSettingsDescriptor,
 } from './worker/protocol.js';

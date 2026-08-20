@@ -17,8 +17,9 @@
  */
 
 import { BROADCAST_CHANNEL_NAME, newClientId, type BroadcastChannelLike } from './broadcast.js';
-import { BroadcastTransport } from './broadcastTransport.js';
+import { BroadcastTransport, EngineHeldElsewhereError } from './broadcastTransport.js';
 import { fanOut, unknownHandle } from './correlatedTransport.js';
+import { asError } from './errorMessage.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
@@ -79,6 +80,21 @@ export interface EngineClientConfig {
 
 export type EngineClientRole = 'follower' | 'leader' | 'closed';
 
+/** A `start` waiting for an engine it can use, and the deadline bounding it. */
+interface ParkedStart {
+  /** Drops the deadline; this tab is opening the engine the start waits for. */
+  hold(): void;
+  settle(failure: Error | null): void;
+}
+
+/**
+ * How long a start that reached no engine waits for one to arrive. Bounded so a
+ * peer that will not step aside surfaces as the refusal it made rather than as
+ * a hang; each step is a lock hand-off, so a handful of engine-less tabs still
+ * clear well inside it.
+ */
+const YIELD_TIMEOUT_MS = 5000;
+
 /**
  * One engine plane's open handles, as this client's own id → the live engine's.
  *
@@ -135,10 +151,16 @@ export class EngineClient implements EngineTransport {
   private innerUnsub!: () => void;
   private readonly listeners = new Set<EngineEventListener>();
 
-  // The account this tab's engine holds; `null` until a start resolves, which is
-  // also how an active vault is told from a tab that was elected before login: a
-  // follower promoted while active must re-derive keys.
+  // The account the engine this tab reaches holds; `null` until a start resolves
+  // against it. This is the tab's session, published to `subscribeSession`.
   private accountId: string | null = null;
+  // The account a `start` in flight named. `accountId` carries it once an engine
+  // answers; together they are this tab's claim on one, which is what a
+  // promotion cold-starts for and what stops a signed-in tab yielding.
+  private pendingLogin: string | null = null;
+  private readonly sessionListeners = new Set<() => void>();
+  // Starts parked on an engine for this tab becoming reachable (`awaitEngine`).
+  private readonly parkedStarts = new Set<ParkedStart>();
   private ownFocus: Uint8Array | null = null;
 
   constructor(private readonly config: EngineClientConfig) {
@@ -152,9 +174,7 @@ export class EngineClient implements EngineTransport {
     // op queue and every staged byte, not just cache.
     void requestStoragePersistence()
       .then((persisted) => config.onStoragePersistence?.(persisted))
-      .catch((error: unknown) =>
-        config.onError?.(error instanceof Error ? error : new Error(String(error)))
-      );
+      .catch((error: unknown) => config.onError?.(asError(error)));
 
     this.election = new LeaderElection(
       config.locks,
@@ -170,6 +190,23 @@ export class EngineClient implements EngineTransport {
     return this.role;
   }
 
+  /**
+   * Subscribes to this tab's session state; `useSyncExternalStore`-shaped, so a
+   * host reads sign-in from the engine rather than from a store of its own
+   * (blueprint/web-client.md "UI state law"). Returns an unsubscribe.
+   */
+  readonly subscribeSession = (listener: () => void): (() => void) => {
+    this.sessionListeners.add(listener);
+    return () => this.sessionListeners.delete(listener);
+  };
+
+  /**
+   * The account the origin's engine holds for this tab, or `null` when it holds
+   * none — never signed in, torn down, and could not be cold-started all read
+   * the same, because none of them backs a vault.
+   */
+  readonly signedInAccount = (): string | null => this.accountId;
+
   // --- EngineTransport ---
 
   start(secret: ArrayBuffer, accountId: string): Promise<void> {
@@ -179,16 +216,124 @@ export class EngineClient implements EngineTransport {
     // keyless transport gets no secret, and a closed client no transport at all:
     // we scrub the buffer we decided not to use right here, rather than in a
     // callee that would be zeroing someone else's.
-    if (this.role !== 'leader') new Uint8Array(secret).fill(0);
+    const asFollower = this.role !== 'leader';
+    if (asFollower) new Uint8Array(secret).fill(0);
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
-    return this.current.start(secret, accountId).then(() => {
-      this.accountId = accountId;
-      this.relay?.serves(accountId);
+    // Named before the send: a promotion landing mid-start must cold-start for
+    // this account rather than take the lock as an engine-less leader.
+    this.pendingLogin = accountId;
+    return this.current.start(secret, accountId).then(
+      () => {
+        this.holdsAccount(accountId);
+        this.relay?.serves(accountId);
+      },
+      (error: unknown) => this.startOnNextEngine(error, accountId, asFollower)
+    );
+  }
+
+  /**
+   * A follower start that reached no engine waits for the next one instead of
+   * reporting a refusal the member cannot act on: an engine-less leader steps
+   * aside for a tab that has a session, and whichever tab then wins the lock
+   * either cold-starts here or adopts this tab's port.
+   *
+   * A refusal naming another account is final — the origin's one engine is not
+   * this tab's to take, whatever the lock does next — as is a leader-path
+   * failure, where the engine itself refused the secret, and a closed election,
+   * which no promotion can ever settle.
+   */
+  private startOnNextEngine(error: unknown, accountId: string, asFollower: boolean): Promise<void> {
+    const refusal = asError(error);
+    const heldByOther = error instanceof EngineHeldElsewhereError && error.heldBy !== null;
+    const settled =
+      !asFollower || heldByOther || this.election.role === 'closed'
+        ? Promise.reject(refusal)
+        : this.awaitEngine(accountId, refusal);
+    return settled.catch((failure: unknown) => {
+      // The claim ends with the start that made it. A tab still holding one asks
+      // every engine-less leader after it to step aside — and each stands down,
+      // re-queues and is elected again, churning leadership for a session that
+      // never was — and cold-starts for it on its own promotion.
+      this.pendingLogin = null;
+      if (this.accountId === null && this.role === 'follower') {
+        (this.current as BroadcastTransport).forgetAccount();
+      }
+      throw failure;
     });
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
-    return this.current.command(command, transfer);
+  /**
+   * Waits for an engine holding `accountId` to become reachable, settling with
+   * `refusal` when the wait runs out or ends on some other account: a wait that
+   * ended without an engine is the refusal it started from.
+   */
+  private awaitEngine(accountId: string, refusal: Error): Promise<void> {
+    if (this.accountId === accountId) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      let deadline: ReturnType<typeof setTimeout> | null = null;
+      const parked: ParkedStart = {
+        hold: () => {
+          if (deadline !== null) clearTimeout(deadline);
+          deadline = null;
+        },
+        settle: (failure) => {
+          parked.hold();
+          this.parkedStarts.delete(parked);
+          if (failure === null && this.accountId === accountId) resolve();
+          else reject(failure ?? refusal);
+        },
+      };
+      deadline = setTimeout(() => parked.settle(refusal), YIELD_TIMEOUT_MS);
+      this.parkedStarts.add(parked);
+    });
+  }
+
+  /**
+   * This tab reached an engine holding `accountId` — its own, or a leader's that
+   * adopted its port. Either answers a start parked on the origin finding one,
+   * so a tab served by whoever won the lock is not left rendering signed out.
+   */
+  private reachedEngine(accountId: string): void {
+    this.holdsAccount(accountId);
+    this.settleParkedStarts(null);
+  }
+
+  /** Settles every start parked on an engine becoming reachable. */
+  private settleParkedStarts(failure: Error | null): void {
+    fanOut(
+      [...this.parkedStarts].map((parked) => parked.settle),
+      failure
+    );
+  }
+
+  /**
+   * Stops the parked deadlines: this tab is starting the engine they wait for,
+   * and a cold start is network-bound work rather than the lock hand-off the
+   * deadline bounds. `abortPromotion` still settles them if it never opens.
+   */
+  private holdParkedStarts(): void {
+    for (const parked of this.parkedStarts) parked.hold();
+  }
+
+  /**
+   * Records what the engine this tab reaches holds, publishing the change. An
+   * engine's answer supersedes the claim a start made, whether it granted one or
+   * took the last one away.
+   */
+  private holdsAccount(accountId: string | null): void {
+    this.pendingLogin = null;
+    if (this.accountId === accountId) return;
+    this.accountId = accountId;
+    fanOut(this.sessionListeners, undefined);
+  }
+
+  /** Whether this tab has a login an engine should be hosting. */
+  private get hasLogin(): boolean {
+    return this.pendingLogin !== null || this.accountId !== null;
+  }
+
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    return this.current.command(command);
   }
 
   async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
@@ -285,8 +430,28 @@ export class EngineClient implements EngineTransport {
     this.innerUnsub();
     this.relay?.close();
     this.current.close();
+    this.holdsAccount(null);
+    this.settleParkedStarts(new Error('engine client closed'));
     await this.election.close();
     this.channel.close();
+  }
+
+  /**
+   * An engine-less leader steps aside for a tab that has a session: only the
+   * lock holder can cold-start an engine, and this one holds no keys to do it
+   * with, so every other tab on the origin is blocked until it gives the lock
+   * up. Only a leader with no login of its own ever yields, so two engine-less
+   * tabs cannot pass the lock between themselves.
+   */
+  private yieldLeadership(): void {
+    if (this.role !== 'leader' || this.hasLogin) return;
+    this.innerUnsub();
+    this.relay?.close();
+    this.relay = null;
+    this.current.close();
+    this.role = 'follower';
+    this.installFollower();
+    this.election.requeue();
   }
 
   /** Installs the live transport, retiring the handles the previous one held. */
@@ -314,8 +479,11 @@ export class EngineClient implements EngineTransport {
       {
         // A tab that is already signed in keeps its account across a rebuilt
         // transport: a promotion that aborts must not leave it greeting for none.
-        accountId: this.accountId ?? undefined,
+        // The claim, not just the engine's answer — a tab refused by an
+        // engine-less leader has to greet the next one under its account.
+        accountId: this.accountId ?? this.pendingLogin ?? undefined,
         onLeadershipChange: () => this.retireHandles(),
+        onAdopted: (accountId) => this.reachedEngine(accountId),
       }
     );
     this.swapCurrent(follower);
@@ -342,7 +510,7 @@ export class EngineClient implements EngineTransport {
    */
   private async promote(): Promise<void> {
     if (this.role === 'closed') return;
-    const wasActiveFollower = this.accountId !== null;
+    const hasSession = this.hasLogin;
 
     // Drop the follower transport now: a command in flight rejects so the UI
     // retries it against the new leader, and a command issued during the
@@ -359,11 +527,12 @@ export class EngineClient implements EngineTransport {
       const worker = this.config.spawnWorker();
       local = new LocalTransport(worker);
 
-      if (wasActiveFollower) {
+      if (hasSession) {
+        this.holdParkedStarts();
         const { secret, accountId } = await this.provideFailoverSecret();
         try {
           await local.start(secret, accountId);
-          this.accountId = accountId;
+          this.holdsAccount(accountId);
         } finally {
           // This frame owns the re-derived buffer until a transfer detaches it
           // (`SecretSource`); a start that failed before the post did not.
@@ -381,9 +550,14 @@ export class EngineClient implements EngineTransport {
       this.role = 'leader';
       this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
-      this.relay = new LeaderRelay(this.channel, local, this.courier, this.config.locks);
+      this.relay = new LeaderRelay(this.channel, local, this.courier, this.config.locks, {
+        onEngineWanted: () => this.yieldLeadership(),
+      });
       this.relay.serves(this.accountId);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
+      // Only once the transport is live: a start this releases must find an
+      // engine it can already use.
+      this.settleParkedStarts(null);
     } catch (error) {
       this.abortPromotion(local, error);
     }
@@ -401,12 +575,18 @@ export class EngineClient implements EngineTransport {
     // mirrors the next leader. `local` is null when the throw beat transport
     // construction — there is nothing to tear down, only the lock to release.
     local?.close();
+    const failure = asError(error);
+    // Cleared before the follower is rebuilt, which greets under it: the engine
+    // this tab was to host does not exist, so neither does its session, and a
+    // UI rendering signed in over it would be rendering a dead one.
+    this.holdsAccount(null);
     if (this.role !== 'closed') {
       this.role = 'follower';
       this.installFollower();
       void this.election.close();
     }
-    this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+    this.settleParkedStarts(failure);
+    this.config.onError?.(failure);
   }
 
   private fanOut(event: Parameters<EngineEventListener>[0]): void {

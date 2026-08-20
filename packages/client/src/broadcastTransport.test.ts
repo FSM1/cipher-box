@@ -11,6 +11,7 @@ import { LeaderRelay, type LeaderRelayOptions } from './leaderRelay.js';
 import { unavailableCourier } from './portCourier.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import {
+  byoSettings,
   emptySnapshot,
   FakeBus,
   FakeChannelPort,
@@ -21,7 +22,7 @@ import {
   TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
-import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = (): Promise<void> => after(0);
@@ -126,7 +127,7 @@ describe('one engine per origin is one account per origin', () => {
     );
 
     await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
-    await expect(follower.command({ kind: 'manualRefresh' }, [])).rejects.toBeInstanceOf(
+    await expect(follower.command({ kind: 'manualRefresh' })).rejects.toBeInstanceOf(
       EngineHeldElsewhereError
     );
     expect(engine.snapshots).toEqual([]);
@@ -213,7 +214,7 @@ describe('one engine per origin is one account per origin', () => {
 describe('broadcast transport ↔ leader relay', () => {
   it('routes a follower command to the leader engine and correlates the response', async () => {
     const { engine, follower } = wire();
-    await follower.command({ kind: 'delete', node: new Uint8Array(16) }, []);
+    await follower.command({ kind: 'delete', node: new Uint8Array(16) });
     expect(engine.commands.map((c) => c.kind)).toEqual(['delete']);
   });
 
@@ -225,7 +226,7 @@ describe('broadcast transport ↔ leader relay', () => {
       Promise.resolve({ kind: 'contactImported', identityPublicKey, encPublicKey });
 
     await expect(
-      follower.command({ kind: 'importContact', contactCode: new Uint8Array([1, 2]) }, [])
+      follower.command({ kind: 'importContact', contactCode: new Uint8Array([1, 2]) })
     ).resolves.toEqual({ kind: 'contactImported', identityPublicKey, encPublicKey });
   });
 
@@ -281,7 +282,7 @@ describe('broadcast transport ↔ leader relay', () => {
     // a `cb:portResult` error string — a real leak vector for secret bytes
     // bleeding into an error message. A hygienic engine rejects generically.
     engine.respond = () => Promise.reject(new Error('command failed'));
-    await follower.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
+    await follower.command({ kind: 'manualRefresh' }).catch(() => undefined);
 
     // Plus every EventDescriptor variant, including the byte- and string-bearing
     // ones the relay forwards verbatim.
@@ -350,6 +351,40 @@ describe('broadcast transport ↔ leader relay', () => {
     expect([...plaintext]).toEqual([0, 0, 0, 0]);
   });
 
+  it('moves a command bearer onto the port rather than cloning it to the leader', async () => {
+    const { ports, engine, relay, follower } = wire();
+    await startFollower(relay, follower);
+    const accessToken = new TextEncoder().encode('s3cret').buffer as ArrayBuffer;
+    const answered: Uint8Array[] = [];
+    engine.respond = (command) => {
+      answered.push(bearerOf(command));
+      return Promise.resolve({ kind: 'done' });
+    };
+
+    await follower.command(settingsSaveOf(accessToken));
+
+    // The credential leaves this tab's heap outright and arrives intact two
+    // hops later, so no same-origin context between them holds a copy.
+    expect(accessToken.byteLength).toBe(0);
+    expect(ports.transfers.some((list) => list[0] === accessToken)).toBe(true);
+    expect(bearerOf(engine.commands[0])).toEqual(new TextEncoder().encode('s3cret'));
+    // The engine acts on the bearer it was delivered, not on a spent descriptor.
+    expect(answered).toEqual([new TextEncoder().encode('s3cret')]);
+  });
+
+  it('wipes a command bearer it never gets onto a port', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    relayOn(bus, new FakeEngineTransport(), ports.courier('leader'));
+    // No port to move the credential out over, so this tab stays its owner.
+    const follower = followerOn(bus, 'follower-1', unavailableCourier);
+    const bearer = new TextEncoder().encode('s3cret');
+
+    await expect(follower.command(settingsSaveOf(bearer.buffer as ArrayBuffer))).rejects.toThrow();
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+  });
+
   it('keeps upload plaintext and command arguments off the channel', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
@@ -369,10 +404,7 @@ describe('broadcast transport ↔ leader relay', () => {
     );
     await follower.pushChunk(handle, plaintext.buffer.slice(0));
     await follower.commitWrite(handle);
-    await follower.command(
-      { kind: 'rename', node: new Uint8Array(16), newName: 'tax-return.pdf' },
-      []
-    );
+    await follower.command({ kind: 'rename', node: new Uint8Array(16), newName: 'tax-return.pdf' });
     await tick();
 
     // Election and rendezvous only: no write step, no command, no arguments.
@@ -432,12 +464,12 @@ describe('broadcast transport ↔ leader relay', () => {
   it('rejects in-flight and later commands once the follower transport closes', async () => {
     const { engine, follower } = wire();
     engine.respond = () => new Promise(() => undefined); // never settles
-    const inFlight = follower.command({ kind: 'manualRefresh' }, []);
+    const inFlight = follower.command({ kind: 'manualRefresh' });
     await tick();
     follower.close();
 
     await expect(inFlight).rejects.toThrow('closed');
-    await expect(follower.command({ kind: 'manualRefresh' }, [])).rejects.toThrow('closed');
+    await expect(follower.command({ kind: 'manualRefresh' })).rejects.toThrow('closed');
   });
 
   it('folds follower focus into the union and forces a refresh', async () => {
@@ -708,7 +740,7 @@ describe('broadcast transport ↔ leader relay', () => {
       attacker.postMessage({ type: 'cb:portHost', address: 'impostor' });
     });
 
-    const command = follower.command({ kind: 'manualRefresh' }, []);
+    const command = follower.command({ kind: 'manualRefresh' });
     let commandSettled = false;
     void command.then(
       () => (commandSettled = true),
@@ -881,6 +913,24 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engineB.snapshots).toHaveLength(1);
   });
 
+  it('rejects in-flight work retryably when the tab forgets the account it greeted with', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    engine.respondSnapshot = () => new Promise(() => undefined); // the leader never answers
+    const relay = relayOn(bus, engine, ports.courier('leader'));
+    const follower = followerOn(bus, 'f', ports.courier('f'));
+    await startFollower(relay, follower);
+
+    const inFlight = follower.snapshot(new Uint8Array(16));
+    await tick();
+    // The port is closed at this end, so no notice from the leader can settle
+    // what was riding it.
+    follower.forgetAccount();
+
+    await expect(inFlight).rejects.toThrow(/retry/);
+  });
+
   it('notifies an adopted read port that it is closing when the leader steps down', async () => {
     const bus = new FakeBus();
     const engine = new FakeEngineTransport();
@@ -924,7 +974,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await startFollower(relayA, follower); // leader A present
 
-    const inFlight = follower.command({ kind: 'manualRefresh' }, []);
+    const inFlight = follower.command({ kind: 'manualRefresh' });
     await tick();
 
     // Leader A steps down: the in-flight command rejects retryably, never hangs.
@@ -932,7 +982,7 @@ describe('broadcast transport ↔ leader relay', () => {
     await expect(inFlight).rejects.toThrow(/retry/);
 
     // A command issued while no leader is present parks on the re-armed gate.
-    const queued = follower.command({ kind: 'manualRefresh' }, []);
+    const queued = follower.command({ kind: 'manualRefresh' });
     let settled = false;
     void queued.then(
       () => (settled = true),
@@ -1095,7 +1145,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await startFollower(relay, follower);
 
-    const pending = follower.command({ kind: 'manualRefresh' }, []);
+    const pending = follower.command({ kind: 'manualRefresh' });
     let settled = false;
     void pending.then(
       () => (settled = true),
@@ -1166,6 +1216,19 @@ async function dialLeader(ports: FakeCourierNetwork, clientId: string): Promise<
 /** What the relay posted down a port, by wire type. */
 function replies(port: FakeChannelPort, type: string): Array<Record<string, unknown>> {
   return (port.posted as Array<Record<string, unknown>>).filter((m) => m.type === type);
+}
+
+/** The one credential-bearing command, as a descriptor. */
+function settingsSaveOf(accessToken: ArrayBuffer): CommandDescriptor {
+  return { kind: 'saveVaultSettings', settings: byoSettings(accessToken) };
+}
+
+/** The bearer bytes a relayed settings command arrived with. */
+function bearerOf(command: CommandDescriptor | undefined): Uint8Array {
+  if (command?.kind !== 'saveVaultSettings' || !command.settings.byo?.accessToken) {
+    throw new Error('the relayed command carried no bearer');
+  }
+  return new Uint8Array(command.settings.byo.accessToken);
 }
 
 describe('leader relay write handles', () => {
@@ -1344,6 +1407,74 @@ describe('leader relay write handles', () => {
     expect(replies(rebrokered, 'cb:portResult')).toContainEqual(
       expect.objectContaining({ requestId: 1, ok: true, result: 9n })
     );
+  });
+
+  it('carries a BYO bearer on to the engine by transfer, keeping no copy in the leader tab', async () => {
+    const { engine, leaderPort } = await portBench();
+    const bearer = new TextEncoder().encode('s3cret');
+
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      requestId: 1,
+      command: settingsSaveOf(bearer.buffer as ArrayBuffer),
+    });
+    await tick();
+
+    expect(engine.commandTransfers[0]).toHaveLength(1);
+    expect(bearer.byteLength).toBe(0);
+    expect(bearerOf(engine.commands[0])).toEqual(new TextEncoder().encode('s3cret'));
+  });
+
+  it('wipes a BYO bearer it drops for a malformed command', async () => {
+    const { engine, leaderPort } = await portBench();
+    const bearer = new TextEncoder().encode('s3cret');
+
+    // No `requestId`, so nothing can be answered — but the bearer already
+    // crossed by transfer, leaving the relay its last owner.
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      command: settingsSaveOf(bearer.buffer as ArrayBuffer),
+    });
+    await tick();
+
+    expect([...bearer]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(engine.commands).toEqual([]);
+  });
+
+  it('moves a BYO bearer on even for a command kind this build does not serve', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.respond = () => Promise.reject(new EngineRequestError('unknown command kind'));
+    const bearer = new TextEncoder().encode('s3cret');
+
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      requestId: 1,
+      command: { kind: 'saveVaultSettingsV2', settings: byoSettings(bearer.buffer as ArrayBuffer) },
+    });
+    await tick();
+
+    // The credential is found by shape, not by `kind`, so a version-skewed
+    // sender's bearer still leaves the leader realm rather than resting in it.
+    expect(engine.commandTransfers[0]).toHaveLength(1);
+    expect(bearer.byteLength).toBe(0);
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 1, ok: false })
+    );
+  });
+
+  it('wipes a BYO bearer it drops for a command whose kind is not a string', async () => {
+    const { engine, leaderPort } = await portBench();
+    const bearer = new TextEncoder().encode('s3cret');
+
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      requestId: 1,
+      command: { kind: 42, settings: byoSettings(bearer.buffer as ArrayBuffer) },
+    });
+    await tick();
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+    expect(engine.commands).toEqual([]);
   });
 
   it('wipes a transferred chunk it drops for a malformed request', async () => {

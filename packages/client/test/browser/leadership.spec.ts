@@ -534,7 +534,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     await b.dispose();
   });
 
-  test('a follower is refused while the tab hosting the engine has started none', async ({
+  test('an engine-less leader stands down so the tab with a session can sign in', async ({
     context,
   }) => {
     const { lockName, channelName } = names();
@@ -543,19 +543,44 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
 
     await a.create(lockName, channelName);
     await b.create(lockName, channelName);
-    const leader = (await a.role()) === 'leader' ? a : b;
-    const follower = leader === a ? b : a;
+    const idle = (await a.role()) === 'leader' ? a : b;
+    const signingIn = idle === a ? b : a;
 
-    // The leader never signed in, so it holds no keys to serve anyone with. A
-    // start that resolved here would report a session the origin cannot back.
-    expect(await follower.start(TEST_ACCOUNT_ID)).toContain('held by no account');
-
-    // ...and the same tab starts cleanly once the host tab holds that account.
-    expect(await leader.start(TEST_ACCOUNT_ID)).toBe('ok');
-    expect(await follower.start(TEST_ACCOUNT_ID)).toBe('ok');
-    expect(await follower.createFile('after-the-host-signed-in.txt')).toBe('ok');
+    // The lock winner never signed in, so it holds no keys to serve anyone with
+    // — and only the lock holder can cold-start an engine. It gives the lock up
+    // rather than leave the whole origin unable to sign in.
+    expect(await signingIn.start(TEST_ACCOUNT_ID)).toBe('ok');
+    await signingIn.waitForRole('leader');
+    await idle.waitForRole('follower');
+    expect(await signingIn.createFile('after-the-handover.txt')).toBe('ok');
 
     await a.dispose();
     await b.dispose();
+  });
+
+  test('a signing-in tab reaches the lock past a queue of tabs that have no session', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const tabs = [
+      harness(await openTab(context)),
+      harness(await openTab(context)),
+      harness(await openTab(context)),
+    ];
+    for (const tab of tabs) await tab.create(lockName, channelName);
+    const roles = await Promise.all(tabs.map((tab) => tab.role()));
+    // `create` returns on a settled election, so a split other than one holder
+    // and two queued tabs means the roles were read too early.
+    expect(roles.filter((role) => role === 'follower')).toHaveLength(2);
+    const signingIn = tabs[roles.lastIndexOf('follower')];
+
+    // Each engine-less holder steps aside and re-queues *behind* the tab it
+    // stepped aside for, so the queue drains toward the session rather than
+    // passing the lock around the tabs that cannot use it.
+    expect(await signingIn.start(TEST_ACCOUNT_ID)).toBe('ok');
+    await signingIn.waitForRole('leader');
+    expect(await signingIn.createFile('after-the-queue-drained.txt')).toBe('ok');
+
+    for (const tab of tabs) await tab.dispose();
   });
 });

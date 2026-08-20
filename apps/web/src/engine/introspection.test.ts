@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installIntrospection } from './introspection';
-import { authStore } from '../stores/auth.store';
 import { fakeEngine, flush, ROOT_ID, view } from './testFakes';
 
 describe('installIntrospection', () => {
   beforeEach(() => {
     delete window.__CIPHERBOX_ENGINE__;
-    authStore.signedOut();
   });
 
   afterEach(() => {
@@ -120,7 +118,7 @@ describe('installIntrospection', () => {
       expect(window.__CIPHERBOX_ENGINE__?.events()).toEqual([]);
     });
 
-    it('signs the chrome in once the engine has taken the secret', async () => {
+    it('cold-starts the engine, which is the session the UI renders', async () => {
       const engine = fakeEngine();
       const start = vi.fn().mockResolvedValue(undefined);
       (engine.client.facade as unknown as { start: unknown }).start = start;
@@ -129,19 +127,19 @@ describe('installIntrospection', () => {
       await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32), 'e2eaccount');
 
       expect(start).toHaveBeenCalledOnce();
-      // The chrome names no login method: an injected cold start is none of them.
-      expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: null });
+      expect((start.mock.calls[0] as unknown[])[1]).toBe('e2eaccount');
     });
 
-    it('refuses a secret that is not a 32-byte scalar, leaving the chrome signed out', async () => {
+    it('refuses a secret that is not a 32-byte scalar, starting no engine', async () => {
       const engine = fakeEngine();
-      (engine.client.facade as unknown as { start: unknown }).start = vi.fn();
+      const start = vi.fn();
+      (engine.client.facade as unknown as { start: unknown }).start = start;
       installIntrospection(engine.client);
 
       await expect(
         window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(31), 'e2eaccount')
       ).rejects.toThrow('not a 32-byte scalar');
-      expect(authStore.getState().isAuthenticated).toBe(false);
+      expect(start).not.toHaveBeenCalled();
     });
   });
 });

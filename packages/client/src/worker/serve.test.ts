@@ -236,7 +236,7 @@ describe('serveEngine read requests', () => {
       code: 'contentUnavailable',
     });
     // The failures were per-request, never fatal: the next read still answers.
-    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toEqual({
+    await expect(transport.command({ kind: 'manualRefresh' })).resolves.toEqual({
       kind: 'done',
     });
   });
@@ -261,7 +261,7 @@ describe('serveEngine read requests', () => {
       settled.push('download');
       return bytes;
     });
-    const command = transport.command({ kind: 'manualRefresh' }, []).then(() => {
+    const command = transport.command({ kind: 'manualRefresh' }).then(() => {
       settled.push('command');
     });
 
@@ -436,7 +436,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     ]);
     expect(toUi.some((entry) => entry.message.type === 'fatal')).toBe(false);
     // The transport is alive: a post-event command still round-trips.
-    await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toEqual({
+    await expect(transport.command({ kind: 'manualRefresh' })).resolves.toEqual({
       kind: 'done',
     });
   });
