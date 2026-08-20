@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::seal::{ChildScopeRef, PreservedFields, ReadBody};
 
 use super::eager_set::ResolveFailure;
-use super::rotate::ScopeRootPublishError;
+use super::rotate::RotationPublishError;
 use crate::grants::child_index::{canonicalize, repair_observed};
 use crate::seams::Scheduler;
 use cipherbox_core::hex::lower as hex_lower;
@@ -237,7 +237,7 @@ pub trait SweepPublisher {
         &self,
         scope: &ChildScopeRef,
         node: &LaggingNode<'_>,
-    ) -> Result<(), ScopeRootPublishError>;
+    ) -> Result<(), RotationPublishError>;
 
     /// Republish `scope`'s scope root carrying `index` as its
     /// `directChildScopeIndex` — the #38 D6 self-heal. Metadata-only: the
@@ -247,7 +247,7 @@ pub trait SweepPublisher {
         &self,
         scope: &ChildScopeRef,
         index: &[ChildScopeRef],
-    ) -> Result<(), ScopeRootPublishError>;
+    ) -> Result<(), RotationPublishError>;
 }
 
 /// A completed sweep pass. Every node the walk reached is accounted for in
@@ -321,16 +321,16 @@ pub enum SweepError {
     Publish {
         /// The node whose record did not land.
         node_id: [u8; 16],
-        /// The publish failure (never [`ScopeRootPublishError::LostRace`] — a
+        /// The publish failure (never [`RotationPublishError::LostRace`] — a
         /// lost race drops the node and re-resolves).
-        error: ScopeRootPublishError,
+        error: RotationPublishError,
     },
     /// The repaired direct-child-scope index could not be published.
     IndexRepair {
         /// The scope whose index repair did not land.
         scope_id: [u8; 16],
         /// The publish failure.
-        error: ScopeRootPublishError,
+        error: RotationPublishError,
     },
 }
 
@@ -608,7 +608,7 @@ where
                 .flagged_indexes
                 .extend(omitted.iter().map(|root| root.scope_id)),
             // Never landed, so never flagged; the next pass re-derives it.
-            Err(ScopeRootPublishError::LostRace) => {}
+            Err(RotationPublishError::LostRace) => {}
             Err(error) => {
                 return Err(SweepError::IndexRepair {
                     scope_id: scope_ref.scope_id,
@@ -633,7 +633,7 @@ where
             // The one spec-mandated non-abort per-node path. The winner may be a
             // non-advancing ordinary write, so the node is not proven converged;
             // `run_sweep` re-resolves it until a pass drops nothing.
-            Err(ScopeRootPublishError::LostRace) => outcome.dropped_lost_race.push(node.node_id),
+            Err(RotationPublishError::LostRace) => outcome.dropped_lost_race.push(node.node_id),
             Err(error) => {
                 return Err(SweepError::Publish {
                     node_id: node.node_id,
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn an_index_repair_that_lost_the_cas_is_not_flagged() {
         let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
-        net.state.borrow_mut().index_repair_fault = Some(ScopeRootPublishError::LostRace);
+        net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::LostRace);
 
         let outcome = run(&net, 0x00).expect("sweep");
         assert!(
@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn an_index_repair_that_did_not_land_fails_closed() {
         let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
-        net.state.borrow_mut().index_repair_fault = Some(ScopeRootPublishError::NotPublished);
+        net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::NotPublished);
 
         let err = run(&net, 0x00).expect_err("fails closed");
         assert_eq!(err.check(), "index-repair-failed");
@@ -933,7 +933,7 @@ mod tests {
         let net = FakeNet::new(5, &[0x01, 0x0a])
             .node(0x01, 1, &[])
             .scope_root(0x0a, false)
-            .fault(0x01, ScopeRootPublishError::NotPublished);
+            .fault(0x01, RotationPublishError::NotPublished);
 
         let err = run(&net, 0x00).expect_err("the node publish aborts");
         assert_eq!(err.check(), "publish-failed");
@@ -1192,7 +1192,7 @@ mod tests {
     fn a_node_that_did_not_publish_aborts_rather_than_claiming_convergence() {
         let net = FakeNet::new(5, &[0x01])
             .node(0x01, 1, &[])
-            .fault(0x01, ScopeRootPublishError::NotPublished);
+            .fault(0x01, RotationPublishError::NotPublished);
         let err = run(&net, 0x00).expect_err("fails closed");
         assert!(matches!(err, SweepError::Publish { node_id, .. } if node_id == id(0x01)));
         assert!(err.is_retryable());
@@ -1202,7 +1202,7 @@ mod tests {
     fn a_publish_the_publisher_refused_is_never_retried() {
         let net = FakeNet::new(5, &[0x01])
             .node(0x01, 1, &[])
-            .fault(0x01, ScopeRootPublishError::Rejected);
+            .fault(0x01, RotationPublishError::Rejected);
         let err = run(&net, 0x00).expect_err("fails closed");
         assert!(!err.is_retryable(), "a trust rejection is fatal");
     }
@@ -1212,7 +1212,7 @@ mod tests {
         let net = FakeNet::new(5, &[0x01, 0x02])
             .node(0x01, 1, &[])
             .node(0x02, 1, &[])
-            .fault(0x02, ScopeRootPublishError::NotPublished);
+            .fault(0x02, RotationPublishError::NotPublished);
         run(&net, 0x00).expect_err("aborts on B");
         assert_eq!(net.epoch(0x01), 5, "A converged before the abort");
         assert_eq!(net.epoch(0x02), 1);
@@ -1228,7 +1228,7 @@ mod tests {
         let net = FakeNet::new(5, &[0x01, 0x02])
             .node(0x01, 1, &[])
             .node(0x02, 1, &[])
-            .fault(0x01, ScopeRootPublishError::LostRace);
+            .fault(0x01, RotationPublishError::LostRace);
         let outcome = run(&net, 0x00).expect("sweep");
         assert_eq!(outcome.dropped_lost_race, vec![id(0x01)]);
         assert_eq!(outcome.converged, vec![id(0x02)]);
@@ -1291,7 +1291,7 @@ mod tests {
     fn the_driver_gives_up_on_a_persistent_availability_stall() {
         let net = FakeNet::new(5, &[0x01])
             .node(0x01, 1, &[])
-            .fault(0x01, ScopeRootPublishError::NotPublished);
+            .fault(0x01, RotationPublishError::NotPublished);
         let err = drive(&net, 3, 2).expect_err("the stall surfaces");
         assert_eq!(err.check(), "publish-failed");
         assert_eq!(net.publishes(0x01), 3, "one attempt per allowed pass");

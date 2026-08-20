@@ -2,10 +2,11 @@
 //! engine.md "Resolve/publish pipeline", "Adoption gate and floors").
 //!
 //! The resolve pipeline routes every fetched record through [`Adopter::adopt`];
-//! this is the concrete owner-arm implementation for the vault's own root. It
-//! assembles the content-plane [`Candidate`] — recover the head CID anchor from
-//! the signed record, fetch the head block fail-closed on a CID mismatch, decode
-//! the envelope and its grant section — then builds the owner's [`ReaderContext`]
+//! this is the concrete implementation for a scope root, on either entry arm
+//! ([`SeedSource`]). It assembles the
+//! content-plane [`Candidate`] — recover the head CID anchor from the signed
+//! record, fetch the head block fail-closed on a CID mismatch, decode the
+//! envelope and its grant section — then builds the reader's [`ReaderContext`]
 //! and calls [`gate::adopt`](crate::gate::adopt). The adopter adds **no** trust
 //! logic: it only assembles inputs; every trust decision (commitment, structure
 //! signatures, seed cross-checks, read-body unseal, floor law) stays in the gate.
@@ -23,13 +24,13 @@ use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, GrantSection, ReadBody, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerBlob, SignedOwnerWriteBlob, decode_envelope,
-    decode_grant_section, grant_section_bytes, open_owner_blob, open_owner_write_blob,
-    open_read_body,
+    AadContext, Envelope, GrantSection, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerWriteBlob, decode_envelope,
+    decode_grant_section, grant_section_bytes, open_grant_blob, open_owner_blob,
+    open_owner_write_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
@@ -39,11 +40,31 @@ use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, floor,
 };
+use crate::grants::{recipient_blinded_tag, self_locate_signed};
 use crate::seams::{FloorStore, Http, SeamError};
 
-/// The cold-start owner-root [`Adopter`]. Borrows the content-plane seams and
-/// the owner's identity/sealing material from the live session; the vault owner
-/// is the terminal owner of its own key material, so nothing is zeroized here.
+/// Where a reader's copy of a scope root's read seed lives in the record it is
+/// gating — the one axis the owner arm and the grantee arm differ on. The
+/// reader is the terminal owner of the secret each arm borrows.
+enum SeedSource<'a> {
+    /// The vault owner: the record's owner blob, plus its owner-write-blob for
+    /// cold-start write-plane recovery.
+    Owner(&'a X25519Secret),
+    /// A grantee: the one grant blob filed under the blinded tag this device
+    /// re-derives from its pairwise ECDH with the **verified contact's**
+    /// encryption subkey — never a key the record supplies (`grants/ledger.rs`
+    /// self-location). A write grant's blob also conveys the write scope seed.
+    Grantee {
+        /// The grantee's own X25519 encryption secret.
+        enc_secret: &'a X25519Secret,
+        /// The verified contact's encryption subkey: the blinded-tag ECDH peer.
+        owner_enc_pub: &'a X25519Public,
+    },
+}
+
+/// The cold-start scope-root [`Adopter`]. Borrows the content-plane seams and
+/// the reader's identity/sealing material from the live session; a reader is the
+/// terminal owner of its own key material, so nothing is zeroized here.
 pub struct RootAdopter<'a, H, F> {
     /// Content read sources (accelerator + public fallbacks).
     gateway: &'a Gateway,
@@ -51,9 +72,8 @@ pub struct RootAdopter<'a, H, F> {
     http: &'a H,
     /// The durable floor store the gate reads and advances.
     floors: &'a F,
-    /// The owner's X25519 encryption secret — opens the root owner blob to
-    /// recover the scope seed.
-    owner_enc_secret: &'a X25519Secret,
+    /// Where this reader's copy of the scope read seed lives in the record.
+    seeds: SeedSource<'a>,
     /// The contact-anchored owner identity verifier (the gate's stage-2 anchor).
     owner_identity: &'a EcdsaVerifier,
     /// The vault root scope id (the AAD scope binding and the read-epoch floor
@@ -86,11 +106,54 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
         owner_identity: &'a EcdsaVerifier,
         root_scope_id: [u8; 16],
     ) -> Self {
+        Self::over(
+            gateway,
+            http,
+            floors,
+            SeedSource::Owner(owner_enc_secret),
+            owner_identity,
+            root_scope_id,
+        )
+    }
+
+    /// The same adopter for a **grantee**: the seed comes from this device's own
+    /// grant blob, and `owner_identity` stays the contact-anchored owner the
+    /// gate's stage 2 verifies the commitment under.
+    pub fn for_grantee(
+        gateway: &'a Gateway,
+        http: &'a H,
+        floors: &'a F,
+        enc_secret: &'a X25519Secret,
+        owner_enc_pub: &'a X25519Public,
+        owner_identity: &'a EcdsaVerifier,
+        root_scope_id: [u8; 16],
+    ) -> Self {
+        Self::over(
+            gateway,
+            http,
+            floors,
+            SeedSource::Grantee {
+                enc_secret,
+                owner_enc_pub,
+            },
+            owner_identity,
+            root_scope_id,
+        )
+    }
+
+    fn over(
+        gateway: &'a Gateway,
+        http: &'a H,
+        floors: &'a F,
+        seeds: SeedSource<'a>,
+        owner_identity: &'a EcdsaVerifier,
+        root_scope_id: [u8; 16],
+    ) -> Self {
         Self {
             gateway,
             http,
             floors,
-            owner_enc_secret,
+            seeds,
             owner_identity,
             root_scope_id,
             assembled: RefCell::new(None),
@@ -267,11 +330,14 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         if env.scope != self.root_scope_id {
             return Ok(None);
         }
-        let Ok(read_scope_seed) =
-            self.open_read_scope_seed(env, &candidate.grant_section.owner_blob)
-        else {
+        let Ok(opened) = self.open_seeds(env, &candidate.grant_section, name) else {
             return Ok(None);
         };
+        let OpenedSeeds {
+            read_scope_seed,
+            grant_write_scope_seed,
+            ..
+        } = opened;
         // Unseal-confirm the seed, exactly as stage 6 does for an adopt: a seed
         // that does not derive the key this record's own body opens under is not
         // this scope's seed.
@@ -280,14 +346,14 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         let Ok(read_body) = open_read_body(env, &read_key) else {
             return Ok(None);
         };
-        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
-            None => None,
-            // Map a recovery seam to availability, never a trust verdict.
-            Some(owb) => match self.recover_write_scope_seed(env, owb).await {
-                Ok(seed) => seed,
-                Err(GateError::Seam(seam)) => return Err(seam),
-                Err(GateError::Rejected(_)) => return Ok(None),
-            },
+        // Map a recovery seam to availability, never a trust verdict.
+        let write_scope_seed = match self
+            .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
+            .await
+        {
+            Ok(seed) => seed,
+            Err(GateError::Seam(seam)) => return Err(seam),
+            Err(GateError::Rejected(_)) => return Ok(None),
         };
         Ok(Some(RecoveredScopeRoot {
             envelope: candidate.envelope,
@@ -310,15 +376,17 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     ) -> Result<(Candidate, AdoptOutcome), GateError> {
         let candidate = self.assemble_candidate(name, record_bytes).await?;
 
-        // Step 6 — owner-blob ReaderContext. The vault owner recovers its own root
-        // scope seed from the record's owner blob (the read-plane seed source) and
-        // derives the read key; the gate re-opens the same blob, cross-checks the
-        // seed derives this key, and unseals the read-body.
+        // Step 6 — the reader's own seed source. Whichever arm supplies it, the
+        // recovered seed derives the read key and the gate re-opens the same
+        // blob, cross-checks the seed derives that key, and unseals the
+        // read-body.
         let env = &candidate.envelope;
-        let owner_blob = &candidate.grant_section.owner_blob;
-        let owner_blob_aad = owner_blob_aad(env);
-        let read_scope_seed = self
-            .open_read_scope_seed(env, owner_blob)
+        let OpenedSeeds {
+            blob,
+            read_scope_seed,
+            grant_write_scope_seed,
+        } = self
+            .open_seeds(env, &candidate.grant_section, name)
             .map_err(|e| reject(GateStage::Unseal, e))?;
 
         // The derived read key is secret; this fn is its terminal owner, so it
@@ -333,17 +401,12 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             scope_id: self.root_scope_id,
             read_key: &read_key,
             parent_node_seed: self.parent_node_seed.as_deref(),
-            seed_blob: Some(SeedBlob::Owner {
-                enc_secret: self.owner_enc_secret,
-                enc: owner_blob.enc,
-                ciphertext: owner_blob.ciphertext.clone(),
-                aad: owner_blob_aad,
-            }),
+            seed_blob: Some(blob),
         };
 
-        // Step 7 — the gate owns all trust; the owner reader surfaces no gate write
-        // seed (that arm is the write-grantee's). The owner's own write-scope seed
-        // is recovered from the owner-write-blob below for cold-start self-renewal.
+        // Step 7 — the gate owns all trust. The write seed it surfaces for a
+        // write grantee, and the owner-write-blob recovery below, are the same
+        // capability reached through each arm's own material.
         let (adopted, _) = match adopt(self.floors, &reader, &candidate).await {
             Ok(pass) => pass,
             Err(err) => {
@@ -366,11 +429,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             }
         };
 
-        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
-            // Re-authorable, NOT a trust failure — held keyless.
-            None => None,
-            Some(owb) => self.recover_write_scope_seed(env, owb).await?,
-        };
+        let write_scope_seed = self
+            .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
+            .await?;
         let node_id = env.id;
         Ok((
             candidate,
@@ -384,21 +445,86 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     }
 }
 
+/// The reader's own seed source inside one record: the blob the gate re-opens,
+/// the read scope seed it wraps, and — for a write grant — the write scope seed
+/// it also conveys. Terminal owner of both seeds: they zeroize on drop.
+struct OpenedSeeds<'a> {
+    blob: SeedBlob<'a>,
+    read_scope_seed: Zeroizing<[u8; 32]>,
+    /// `None` on the owner arm (whose write seed comes from the owner-write
+    /// blob) and for a read-only grant.
+    grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
-    /// Open the record's owner blob with the owner's own encryption secret and
-    /// take the scope read seed it wraps.
-    fn open_read_scope_seed(
+    /// Open this reader's seed source in `section` and take the seeds it wraps.
+    ///
+    /// A grantee locates its blob by the tag its own pairwise ECDH derives at
+    /// `name`, so a section carrying no blob for this device is unopenable —
+    /// the definitive revocation signal (`grants/revocation.rs`), and here a
+    /// fail-closed refusal rather than a stall.
+    fn open_seeds(
         &self,
         env: &Envelope,
-        owner_blob: &SignedOwnerBlob,
-    ) -> Result<Zeroizing<[u8; 32]>, CodecError> {
-        let payload = open_owner_blob(
-            self.owner_enc_secret,
-            &owner_blob.enc,
-            &owner_blob_aad(env),
-            &owner_blob.ciphertext,
-        )?;
-        Ok(Zeroizing::new(*payload.override_seed()))
+        section: &GrantSection,
+        name: &IpnsName,
+    ) -> Result<OpenedSeeds<'_>, CodecError> {
+        match &self.seeds {
+            SeedSource::Owner(enc_secret) => {
+                let blob = &section.owner_blob;
+                let aad = blob_aad(env, STRUCT_TAG_OWNER_BLOB);
+                let payload = open_owner_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext)?;
+                Ok(OpenedSeeds {
+                    read_scope_seed: Zeroizing::new(*payload.override_seed()),
+                    grant_write_scope_seed: None,
+                    blob: SeedBlob::Owner {
+                        enc_secret,
+                        enc: blob.enc,
+                        ciphertext: blob.ciphertext.clone(),
+                        aad,
+                    },
+                })
+            }
+            SeedSource::Grantee {
+                enc_secret,
+                owner_enc_pub,
+            } => {
+                let tag =
+                    recipient_blinded_tag(enc_secret, owner_enc_pub, name.as_str().as_bytes())
+                        .ok_or(TrustViolation::HpkeNonContributory)?;
+                // A blob at your tag is not enough: the tag must be in the
+                // owner-signed commitment, whose permission — not the blob's own
+                // contents — is authority (CONTEXT.md "Grant blob"; the same
+                // check `grants/accept.rs` makes on first entry). Stage 2 anchors
+                // that commitment to the owner identity a beat later, and a
+                // record failing either is rejected whole.
+                let committed = section
+                    .commitment
+                    .entries
+                    .iter()
+                    .find(|entry| entry.tag == tag)
+                    .ok_or(TrustViolation::CommitmentInvalid)?;
+                let blob = self_locate_signed(&section.grant_blobs, &tag)
+                    .ok_or(TrustViolation::HpkeOpenFailed)?;
+                let aad = blob_aad(env, STRUCT_TAG_GRANT_BLOB);
+                let payload = open_grant_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext)?;
+                Ok(OpenedSeeds {
+                    read_scope_seed: Zeroizing::new(*payload.read_scope_seed()),
+                    grant_write_scope_seed: match committed.permission {
+                        Permission::Write => {
+                            payload.write_scope_seed().map(|seed| Zeroizing::new(*seed))
+                        }
+                        Permission::Read => None,
+                    },
+                    blob: SeedBlob::Grantee {
+                        enc_secret,
+                        enc: blob.enc,
+                        ciphertext: blob.ciphertext.clone(),
+                        aad,
+                    },
+                })
+            }
+        }
     }
 
     /// Recover the owner's write-scope seed (a KDF non-edge the owner cannot
@@ -415,6 +541,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// read epoch (`gate/adoption.rs`); this only reads the seed it wraps.
     async fn recover_write_scope_seed(
         &self,
+        enc_secret: &X25519Secret,
         env: &Envelope,
         owb: &SignedOwnerWriteBlob,
     ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
@@ -424,12 +551,26 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         else {
             return Ok(None);
         };
-        Ok(open_write_scope_seed_at(
-            self.owner_enc_secret,
-            env,
-            owb,
-            wf,
-        ))
+        Ok(open_write_scope_seed_at(enc_secret, env, owb, wf))
+    }
+
+    /// The scope write seed this reader is entitled to: the owner recovers it
+    /// from the record's owner-write-blob (a KDF non-edge it cannot re-derive),
+    /// a write grantee reads it straight out of its own grant blob.
+    async fn write_scope_seed(
+        &self,
+        env: &Envelope,
+        section: &GrantSection,
+        grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        match (&self.seeds, &section.owner_write_blob) {
+            (SeedSource::Owner(enc_secret), Some(owb)) => {
+                self.recover_write_scope_seed(enc_secret, env, owb).await
+            }
+            // Re-authorable, NOT a trust failure — held keyless.
+            (SeedSource::Owner(_), None) => Ok(None),
+            (SeedSource::Grantee { .. }, _) => Ok(grant_write_scope_seed),
+        }
     }
 }
 
@@ -521,14 +662,14 @@ pub(crate) async fn assemble_head_envelope<H: Http>(
     Ok((sequence, envelope))
 }
 
-/// The structured AAD an owner blob is sealed under.
-fn owner_blob_aad(env: &Envelope) -> AadContext {
+/// The structured AAD a seed-bearing structure of `env` is sealed under.
+fn blob_aad(env: &Envelope, struct_tag: u8) -> AadContext {
     AadContext {
         v: env.v,
         id: env.id,
         scope: env.scope,
         epoch: env.epoch,
-        struct_tag: STRUCT_TAG_OWNER_BLOB,
+        struct_tag,
     }
 }
 

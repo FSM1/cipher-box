@@ -21,10 +21,11 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, Envelope, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    GrantSetEntry, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY,
-    SignedSealed, WriteBody, decode_envelope, decode_write_body, has_grant_section,
-    open_owner_blob, open_read_body, sign_grant_set, unseal,
+    AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
+    GrantSetCommitment, GrantSetEntry, Permission, PreservedFields, ReadBody,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, SignedSealed, WriteBody,
+    decode_envelope, decode_write_body, has_grant_section, open_grant_blob, open_owner_blob,
+    open_read_body, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -47,22 +48,27 @@ use super::retire::{retire, root_retire_ready};
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::content::root_block_cid;
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, SharedEntropy};
+use crate::facade::NodeId;
 use crate::gate::{GateError, RejectionReason, floor};
-use crate::grants::{enforce_committed_ledger, entry_tag_is_bound, mint_grant_row};
+use crate::grants::{
+    enforce_committed_ledger, entry_tag_is_bound, mint_grant_row, recipient_self_location,
+    self_locate_signed,
+};
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
-    CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, LaggingNode, NodeRef,
-    PrevEpochSeed, RepointChannel, RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot,
-    ResolveFailure, ResumedWriteWave, ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher,
+    AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
+    LaggingNode, NodeRef, PrevEpochSeed, RepointChannel, RepublishedNode, ResealError, ResealSeeds,
+    ResealedScopeRoot, ResolveFailure, ResumedWriteWave, RotateError, RotateScopePlan,
+    RotationOutcome, RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher,
     SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
     WriteHistory, WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    derive_write_name, reseal_scope_root, seed_at_epoch,
+    derive_write_name, reseal_scope_root, rotate_scope, seed_at_epoch,
 };
-use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
+use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{PointerFetch, open_repoint, scope_pointer_name, scope_pointer_signer};
 
@@ -347,7 +353,7 @@ fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, ResolveFailure> {
 fn new_override_seed(
     enc_secret: &X25519Secret,
     record: &ResealedScopeRoot,
-) -> Result<Zeroizing<[u8; SECRET_LEN]>, ScopeRootPublishError> {
+) -> Result<Zeroizing<[u8; SECRET_LEN]>, RotationPublishError> {
     let owner_blob = &record.section.owner_blob;
     let aad = AadContext {
         v: ENVELOPE_V,
@@ -357,17 +363,17 @@ fn new_override_seed(
         struct_tag: STRUCT_TAG_OWNER_BLOB,
     };
     let payload = open_owner_blob(enc_secret, &owner_blob.enc, &aad, &owner_blob.ciphertext)
-        .map_err(|_| ScopeRootPublishError::Rejected)?;
+        .map_err(|_| RotationPublishError::Rejected)?;
     Ok(Zeroizing::new(*payload.override_seed()))
 }
 
 /// Carry a resolve verdict into the publish arm without laundering a
 /// fail-closed trust violation into a retryable transport failure (rule 6).
-fn publish_verdict(failure: ResolveFailure) -> ScopeRootPublishError {
+fn publish_verdict(failure: ResolveFailure) -> RotationPublishError {
     match failure {
-        ResolveFailure::Unavailable => ScopeRootPublishError::NotPublished,
+        ResolveFailure::Unavailable => RotationPublishError::NotPublished,
         ResolveFailure::Rejected | ResolveFailure::ConflictingChildLabel => {
-            ScopeRootPublishError::Rejected
+            RotationPublishError::Rejected
         }
     }
 }
@@ -380,21 +386,37 @@ fn publish_verdict(failure: ResolveFailure) -> ScopeRootPublishError {
 /// pass built, and stays retryable: it is reached from a record the next pass
 /// re-resolves, and a permanent verdict on it would let anyone who can grow that
 /// record block the owner's revocation for good.
-fn author_verdict(refusal: AuthorError) -> ScopeRootPublishError {
+fn author_verdict(refusal: AuthorError) -> RotationPublishError {
     if refusal.is_trust_refusal() {
-        ScopeRootPublishError::Rejected
+        RotationPublishError::Rejected
     } else {
-        ScopeRootPublishError::NotPublished
+        RotationPublishError::NotPublished
+    }
+}
+
+/// Carry a publish-pipeline failure onto rule 6's axis. An API that echoes back
+/// an address other than the one we uploaded is not answering about our block,
+/// and an empty head CID is this build's own release-active refusal to sign
+/// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
+/// pass authored, so a retry re-authors and re-charges a head block forever
+/// without converging. Everything else, including a body this pass built too
+/// large, stays retryable: those inputs are attacker-influenced, and a permanent
+/// verdict on them would let anyone who can grow a record block the rotation.
+fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
+    match error {
+        RecordPublishError::HeadCidMismatch { .. }
+        | RecordPublishError::Publish(PublishError::EmptyHeadCid) => RotationPublishError::Rejected,
+        _ => RotationPublishError::NotPublished,
     }
 }
 
 /// A fresh per-seal nonce from the injected entropy seam.
-fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], ScopeRootPublishError> {
+fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], RotationPublishError> {
     let mut nonce = [0u8; 24];
     entropy
         .borrow_mut()
         .fill(&mut nonce)
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        .map_err(|_| RotationPublishError::NotPublished)?;
     Ok(nonce)
 }
 
@@ -518,6 +540,28 @@ async fn gated_child_root<H: Http, F: FloorStore>(
     Ok(gated)
 }
 
+/// Unseal a gated scope root's write-body under the write scope seed the reader
+/// recovered, at the durable write-epoch floor, and report that floor — the AAD
+/// epoch the seed's own recovery already bound, and the write epoch a re-seal of
+/// this root must republish at. A root held keyless has no readable write-body —
+/// availability, not a trust verdict.
+async fn write_plane_of<F: FloorStore>(
+    floors: &F,
+    envelope: &Envelope,
+    section: &GrantSection,
+    write_scope_seed: &[u8; SECRET_LEN],
+    scope_id: [u8; 16],
+) -> Result<(WriteBody, u64), ResolveFailure> {
+    let Some(write_epoch) = floor::write_epoch_floor(floors, &scope_id)
+        .await
+        .map_err(|_| ResolveFailure::Unavailable)?
+    else {
+        return Err(ResolveFailure::Unavailable);
+    };
+    let body = open_write_body(envelope, section, &scope_id, write_scope_seed, write_epoch)?;
+    Ok((body, write_epoch))
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerRotationNet<'_, T, H, C, F, Sch, E>
 where
     T: RecordTransport,
@@ -558,34 +602,6 @@ where
         }
     }
 
-    /// Unseal a gated scope root's write-body under the owner's recovered write
-    /// scope seed at the durable write-epoch floor, and report that floor — the
-    /// AAD epoch the owner-write-blob's own recovery already bound, and the
-    /// write epoch a re-seal of this root must republish at. A root held keyless
-    /// has no readable write-body — availability, not a trust verdict.
-    async fn write_body(
-        &self,
-        root: &GatedScopeRoot,
-        scope_id: [u8; 16],
-    ) -> Result<(WriteBody, u64), ResolveFailure> {
-        let (Some(write_scope_seed), Some(write_epoch)) = (
-            root.write_scope_seed.as_deref(),
-            floor::write_epoch_floor(self.floors, &scope_id)
-                .await
-                .map_err(|_| ResolveFailure::Unavailable)?,
-        ) else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let body = open_write_body(
-            &root.envelope,
-            &root.section,
-            &scope_id,
-            write_scope_seed,
-            write_epoch,
-        )?;
-        Ok((body, write_epoch))
-    }
-
     /// The prologue both read edges share: gate `scope`'s record under the
     /// caller's own label, unseal its write body, and extend the ancestry with
     /// the seed the pass just proved so the next level down can derive its own
@@ -611,7 +627,19 @@ where
             RootAnchor::VaultRoot => gated_scope_root(&adopter, &name, &record_bytes).await,
         }
         .map_err(ResolveFailure::from)?;
-        let (write_body, write_epoch) = self.write_body(&root, scope.scope_id).await?;
+        // A root held keyless has no readable write-body — availability, not a
+        // trust verdict.
+        let Some(write_scope_seed) = root.write_scope_seed.as_deref() else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let (write_body, write_epoch) = write_plane_of(
+            self.floors,
+            &root.envelope,
+            &root.section,
+            write_scope_seed,
+            scope.scope_id,
+        )
+        .await?;
         self.ancestry.record(
             scope.scope_id,
             &root.read_scope_seed,
@@ -623,38 +651,6 @@ where
             write_body,
             write_epoch,
         })
-    }
-
-    /// The two durable-floor mirrors of gate rejects this build would itself make
-    /// on the record about to be signed — release-active, because a signed record
-    /// cannot be unpublished (security rule 8):
-    ///
-    /// - the read epoch must not sit below the durable revocation floor (stage 5);
-    /// - the write epoch must not sit below the durable write floor, which the
-    ///   owner-write-blob's AAD binds — below it the root publishes write-plane
-    ///   dead, and floors are monotonic, so it can never be rotated back.
-    ///
-    /// Runs **after** this pass's gated read of the scope root, which may itself
-    /// advance the read-epoch floor: measured before it, the floor comparison
-    /// would miss a cut minted below the epoch that read just adopted.
-    async fn check_publishable(
-        &self,
-        record: &ResealedScopeRoot,
-    ) -> Result<(), ScopeRootPublishError> {
-        let floors = self.floors;
-        let scope_id = &record.scope_id;
-        let read_floor = floor::read_epoch_floor(floors, scope_id)
-            .await
-            .map_err(|_| ScopeRootPublishError::NotPublished)?
-            .unwrap_or(0);
-        let write_floor = floor::write_epoch_floor(floors, scope_id)
-            .await
-            .map_err(|_| ScopeRootPublishError::NotPublished)?
-            .unwrap_or(0);
-        if record.read_epoch < read_floor || record.write_epoch < write_floor {
-            return Err(ScopeRootPublishError::Rejected);
-        }
-        Ok(())
     }
 
     /// [`CascadeResealResolver::resolve`] at [`RootAnchor::VaultRoot`]. Same
@@ -757,6 +753,148 @@ where
     }
 }
 
+/// The seams a re-sealed scope root's publish runs on — the tail both rotation
+/// arms share once each has recovered, from its own blob, the override seed the
+/// fresh section wraps.
+struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+    transport: &'a T,
+    api: &'a ApiClient<H, C>,
+    floors: &'a F,
+    scheduler: &'a Sch,
+    profile: &'a SyncTimingProfile,
+    entropy: &'a RefCell<E>,
+    /// The contact-anchored owner identity the authored root must verify under
+    /// (`author_scope_root_with_section`'s pre-publish mirror of gate stage 2).
+    owner_identity: &'a EcdsaVerifier,
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> RootPublish<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    /// The two durable-floor mirrors of gate rejects this build would itself make
+    /// on the record about to be signed — release-active, because a signed record
+    /// cannot be unpublished (security rule 8):
+    ///
+    /// - the read epoch must not sit below the durable revocation floor (stage 5);
+    /// - the write epoch must not sit below the durable write floor, which the
+    ///   owner-write-blob's AAD binds — below it the root publishes write-plane
+    ///   dead, and floors are monotonic, so it can never be rotated back.
+    ///
+    /// Runs **after** this pass's gated read of the scope root, which may itself
+    /// advance the read-epoch floor: measured before it, the floor comparison
+    /// would miss a cut minted below the epoch that read just adopted.
+    async fn check_publishable(
+        &self,
+        record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError> {
+        let scope_id = &record.scope_id;
+        let read_floor = floor::read_epoch_floor(self.floors, scope_id)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?
+            .unwrap_or(0);
+        let write_floor = floor::write_epoch_floor(self.floors, scope_id)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?
+            .unwrap_or(0);
+        if record.read_epoch < read_floor || record.write_epoch < write_floor {
+            return Err(RotationPublishError::Rejected);
+        }
+        Ok(())
+    }
+
+    /// Author `record`'s envelope over `current` — the record it replaces — dry
+    /// run it, and CAS-publish it register-first at `name`.
+    async fn run(
+        &self,
+        name: &IpnsName,
+        record: &ResealedScopeRoot,
+        override_seed: &[u8; SECRET_LEN],
+        current: RepublishBase,
+    ) -> Result<(), RotationPublishError> {
+        self.check_publishable(record).await?;
+
+        let node_seed = kdf::node_seed(override_seed, &record.scope_id);
+        let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
+        let nonce = nonce(self.entropy)?;
+        let head = author_scope_root_with_section(
+            EnvelopeAuthoring {
+                node_id: record.scope_id,
+                scope_id: record.scope_id,
+                epoch: record.read_epoch,
+                read_key: &read_key,
+                nonce: &nonce,
+                body: &current.read_body,
+                carried_unknown: current.unknown,
+                carried_epoch_tag_unknown: current.epoch_tag_unknown,
+            },
+            name,
+            &record.section,
+            self.owner_identity,
+        )
+        .map_err(author_verdict)?;
+
+        let write_scope_seed = current
+            .write_scope_seed
+            .as_deref()
+            .ok_or(RotationPublishError::NotPublished)?;
+
+        let binding = HeadBinding {
+            node_id: record.scope_id,
+            scope_id: record.scope_id,
+            epoch: record.read_epoch,
+        };
+        let preflighted = preflight(&binding, &read_key, &head)
+            .map_err(|_| RotationPublishError::NotPublished)?;
+
+        let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
+        let receipt = publish_record(
+            self.transport,
+            self.api,
+            self.floors,
+            self.scheduler,
+            self.profile,
+            &RecordPublishRequest {
+                name,
+                signer: &signer,
+                head: &preflighted,
+                content_cids: Vec::new(),
+                min_current_sequence: None,
+            },
+        )
+        .await
+        .map_err(record_publish_verdict)?;
+
+        match receipt.outcome {
+            PublishOutcome::Published { .. } => Ok(()),
+            PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
+            // Acked but not read back as ours: nothing is proven durable, and
+            // re-publishing is idempotent-in-sequence.
+            PublishOutcome::Unconfirmed { .. } => Err(RotationPublishError::NotPublished),
+        }
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    H: Http,
+{
+    fn root_publish(&self) -> RootPublish<'_, T, H, C, F, Sch, E> {
+        RootPublish {
+            transport: self.transport,
+            api: self.api,
+            floors: self.floors,
+            scheduler: self.scheduler,
+            profile: self.profile,
+            entropy: self.entropy,
+            owner_identity: self.keys.identity,
+        }
+    }
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPublisher
     for OwnerRotationNet<'_, T, H, C, F, Sch, E>
 where
@@ -768,7 +906,7 @@ where
     async fn publish_scope_root(
         &self,
         record: &ResealedScopeRoot,
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
 
@@ -784,66 +922,398 @@ where
                     .map_err(|verdict| publish_verdict(verdict.into()))?,
             ),
         };
-        self.check_publishable(record).await?;
+        self.root_publish()
+            .run(&name, record, &override_seed, current)
+            .await
+    }
+}
 
-        let node_seed = kdf::node_seed(&override_seed, &record.scope_id);
-        let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
-        let nonce = nonce(self.entropy)?;
-        let head = author_scope_root_with_section(
-            EnvelopeAuthoring {
-                node_id: record.scope_id,
-                scope_id: record.scope_id,
-                epoch: record.read_epoch,
-                read_key: &read_key,
-                nonce: &nonce,
-                body: &current.read_body,
-                carried_unknown: current.unknown,
-                carried_epoch_tag_unknown: current.epoch_tag_unknown,
-            },
-            &name,
-            &record.section,
-            self.keys.identity,
+// ---------------------------------------------------------------------------
+// The grantee arm: the flat scope-exit cut of one granted scope root
+// (blueprint/engine.md "rotateScope" — grantee scope-exit rotations are flat,
+// self-contained, offline; every old-seed holder is a live grantee that receives
+// the new seed, so no cascade).
+// ---------------------------------------------------------------------------
+
+/// The grantee key material the scope-exit rotation runs under. The grantee is
+/// the terminal owner of its own key material, so nothing here is zeroized.
+pub struct GranteeRotationKeys<'a> {
+    /// Opens this device's own grant blob — its seed source, and the key the
+    /// re-sealed section must reopen under before it is signed.
+    pub enc_secret: &'a X25519Secret,
+    /// The **verified contact's** encryption subkey: the blinded-tag ECDH peer
+    /// this device self-locates under, the pairwise input its writer pseudonym
+    /// derives from, and the owner-blob recipient every re-seal wraps to. Never
+    /// a key the record supplies (`grants/accept.rs`).
+    pub owner_enc_pub: &'a X25519Public,
+    /// The contact-anchored owner identity: the adoption gate's stage-2 anchor.
+    pub owner_identity: &'a EcdsaVerifier,
+}
+
+/// One scope root this device holds a grant for.
+///
+/// A [`NodeId`] locates nothing on its own, and a grantee cannot derive a scope
+/// root's name — that derivation runs off the write scope seed only the record
+/// itself conveys — so the pairing is caller-held, from the accept flow that
+/// adopted the share.
+pub struct GrantedScopeRoot {
+    /// The scope id, which is also its scope root's node id.
+    pub scope_id: [u8; 16],
+    /// The name the scope root's record lives at.
+    pub ipns_name: IpnsName,
+}
+
+/// The grantee-arm rotation seams over the live net plane.
+pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+    /// The record-plane transport: fan-out GET for the read, CAS PUT for the
+    /// publish.
+    pub transport: &'a T,
+    /// The API client: register-first and the head-block upload.
+    pub api: &'a ApiClient<H, C>,
+    /// Content read sources for the head block.
+    pub gateway: &'a Gateway,
+    /// The HTTP seam the content fetch rides.
+    pub http: &'a H,
+    /// The durable floors the adoption gate reads and advances.
+    pub floors: &'a F,
+    /// The scheduler the publish pipeline's background re-PUT and the cut's
+    /// lazy-wave sweep ride.
+    pub scheduler: &'a Sch,
+    /// The publish pipeline's timing policy.
+    pub profile: &'a SyncTimingProfile,
+    /// Injected entropy — the per-seal nonce source (determinism law).
+    pub entropy: &'a RefCell<E>,
+    /// The grantee material.
+    pub keys: GranteeRotationKeys<'a>,
+    /// The granted scope roots this device can rotate. A trigger naming a scope
+    /// absent here is one this device holds no grant for.
+    pub granted: &'a [GrantedScopeRoot],
+    /// Builds the lazy-wave sweep task `rotate_scope` enqueues once the cut is
+    /// durable ([`rotate_scope`]'s third effect).
+    pub sweep: &'a dyn Fn([u8; 16]) -> BoxedTask,
+    /// The record a cut is about to replace, handed from the read that gated it
+    /// to the publish (see [`GatedRoots`]). One rotation pass per net.
+    pub gated: GatedRoots,
+}
+
+/// One granted scope root as this device gated it, held so the
+/// [`RotateScopePlan`](crate::rotation::RotateScopePlan) can borrow it. Terminal
+/// owner of the seeds its own grant blob wrapped: they zeroize on drop.
+struct GranteePlan {
+    /// The ascent link's published public half — all a holder with no ancestor
+    /// seed can re-seal to ([`AscentAuthority::CarriedPublic`]).
+    ascent_public: [u8; 32],
+    /// The read epoch the record publishes at; the cut publishes at `+ 1`.
+    read_epoch: u64,
+    section: GrantSection,
+    write_body: WriteBody,
+    write_epoch: u64,
+    read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    pointer_read_key: Zeroizing<[u8; SECRET_LEN]>,
+    /// The writer pseudonym this device detach-signs every re-sealed structure
+    /// under — the key its own committed entry names.
+    pseudonym: Ed25519Signer,
+}
+
+/// The structured AAD a scope root's grant blob at `epoch` is sealed under
+/// (`id == scope == scope_id`, as at every scope root).
+fn grant_blob_aad(scope_id: [u8; 16], epoch: u64) -> AadContext {
+    AadContext {
+        v: ENVELOPE_V,
+        id: scope_id,
+        scope: scope_id,
+        epoch,
+        struct_tag: STRUCT_TAG_GRANT_BLOB,
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> GranteeRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport,
+    F: FloorStore,
+{
+    /// The scope root `scope` names, from the caller-held inventory. A trigger
+    /// naming a scope this device holds no grant for is refused rather than read
+    /// under an unheld label.
+    fn granted_root(&self, scope: NodeId) -> Result<&GrantedScopeRoot, ResolveFailure> {
+        self.granted
+            .iter()
+            .find(|granted| granted.scope_id == scope.0)
+            .ok_or(ResolveFailure::Rejected)
+    }
+
+    /// This device's pairwise ECDH with the verified contact and the blinded tag
+    /// it derives at `name` — one shared secret for both, as `mint_grant_row`
+    /// derives the owner's half of the same pair.
+    fn self_location(&self, name: &IpnsName) -> Option<(SecretBytes, [u8; 32])> {
+        recipient_self_location(
+            self.keys.enc_secret,
+            self.keys.owner_enc_pub,
+            name.as_str().as_bytes(),
         )
-        .map_err(author_verdict)?;
+    }
 
-        let write_scope_seed = current
-            .write_scope_seed
-            .as_deref()
-            .ok_or(ScopeRootPublishError::NotPublished)?;
+    /// This device's own grant blob in `section`, opened under `aad`. `None`
+    /// when no blob is filed at `tag` — at a fresh owner-signed record that
+    /// absence is the definitive revocation signal (`grants/revocation.rs`), and
+    /// here a fail-closed refusal.
+    fn open_own_grant(
+        &self,
+        section: &GrantSection,
+        tag: &[u8; 32],
+        aad: &AadContext,
+    ) -> Option<GrantBlobPayload> {
+        let blob = self_locate_signed(&section.grant_blobs, tag)?;
+        open_grant_blob(self.keys.enc_secret, &blob.enc, aad, &blob.ciphertext).ok()
+    }
 
-        let binding = HeadBinding {
-            node_id: record.scope_id,
-            scope_id: record.scope_id,
-            epoch: record.read_epoch,
+    /// The freshest verified record at this scope root's name, gated under this
+    /// device's own grant blob with the contact-anchored owner as the stage-2
+    /// anchor. Idempotent: a record at this name's own sequence floor recovers
+    /// through [`reread_at_floor`], so a pass that aborted before publishing can
+    /// read again.
+    async fn gated_root(
+        &self,
+        granted: &GrantedScopeRoot,
+    ) -> Result<GatedScopeRoot, RootGateVerdict> {
+        let name = &granted.ipns_name;
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, name).await else {
+            return Err(RootGateVerdict::Unavailable);
         };
-        let preflighted = preflight(&binding, &read_key, &head)
-            .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        let adopter = RootAdopter::for_grantee(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.keys.enc_secret,
+            self.keys.owner_enc_pub,
+            self.keys.owner_identity,
+            granted.scope_id,
+        );
+        gated_scope_root(&adopter, name, &record_bytes).await
+    }
 
-        let signer = SessionIdentity::write_name_signer(write_scope_seed, &record.scope_id);
-        let receipt = publish_record(
-            self.transport,
-            self.api,
+    /// Gate the scope root and assemble everything its flat cut re-seals, parking
+    /// the read the publish will need ([`GatedRoots`]).
+    ///
+    /// The committed set, the ledger and the direct-child-scope index are carried
+    /// **verbatim**: a grantee re-wraps blobs for the committed tag set and can
+    /// neither extend nor shrink it, and no descendant scope root is re-keyed
+    /// (the eager-set law's grantee arm).
+    async fn resolve_plan(
+        &self,
+        granted: &GrantedScopeRoot,
+    ) -> Result<GranteePlan, ResolveFailure> {
+        let gated = self
+            .gated_root(granted)
+            .await
+            .map_err(ResolveFailure::from)?;
+        let GatedScopeRoot {
+            envelope,
+            section,
+            read_body,
+            read_scope_seed,
+            write_scope_seed,
+        } = gated;
+        // This build authors exactly `ENVELOPE_V`, so re-sealing a newer client's
+        // root under its own `v` would mint structures whose AAD this build can
+        // never reproduce (`sync/drain.rs` guards the same downgrade).
+        if envelope.v != ENVELOPE_V {
+            return Err(ResolveFailure::Rejected);
+        }
+        // A read-only grant conveys no write scope seed, so this device can sign
+        // no record at this name — a permanent capability verdict, never a stall.
+        let Some(write_scope_seed) = write_scope_seed else {
+            return Err(ResolveFailure::Rejected);
+        };
+        let (write_body, write_epoch) = write_plane_of(
+            self.floors,
+            &envelope,
+            &section,
+            &write_scope_seed,
+            granted.scope_id,
+        )
+        .await?;
+        // A granted scope root is anchored under a parent scope, so it always
+        // carries an ascent link; a record missing one has had it stripped, and
+        // republishing without one severs every ancestor's descent for good.
+        let ascent_public = section
+            .ascent_link
+            .as_ref()
+            .map(|link| link.ascent_public)
+            .ok_or(ResolveFailure::Rejected)?;
+        let (pairwise, tag) = self
+            .self_location(&granted.ipns_name)
+            .ok_or(ResolveFailure::Rejected)?;
+        // The owner-signed commitment, never the blob's contents, says what this
+        // device may do here; publishing the root is a write.
+        if section
+            .commitment
+            .entries
+            .iter()
+            .find(|entry| entry.tag == tag)
+            .map(|entry| entry.permission)
+            != Some(Permission::Write)
+        {
+            return Err(ResolveFailure::Rejected);
+        }
+        // The commitment binds `(tag, permission)` but never `recipientEncPk`,
+        // and a committed co-writer authors the ledger — so a row swapped under
+        // this device's own tag would re-wrap its next seed to a key it does not
+        // hold. The rows this device cannot check are the residual
+        // [`ResealError::TagNotBoundToRecipient`] names.
+        let own_row = write_body
+            .grant_ledger
+            .iter()
+            .find(|entry| entry.tag == tag)
+            .ok_or(ResolveFailure::Rejected)?;
+        if own_row.recipient_enc_pk != self.keys.enc_secret.public().to_bytes() {
+            return Err(ResolveFailure::Rejected);
+        }
+        let grant = self
+            .open_own_grant(
+                &section,
+                &tag,
+                &grant_blob_aad(granted.scope_id, envelope.epoch),
+            )
+            .ok_or(ResolveFailure::Rejected)?;
+        let pseudonym = SessionIdentity::grantee_writer_pseudonym_signer(
+            pairwise.as_bytes(),
+            &granted.scope_id,
+        );
+
+        let plan = GranteePlan {
+            ascent_public,
+            read_epoch: envelope.epoch,
+            section,
+            write_body,
+            write_epoch,
+            read_scope_seed,
+            write_scope_seed: write_scope_seed.clone(),
+            pointer_read_key: Zeroizing::new(*grant.pointer_read_key()),
+            pseudonym,
+        };
+        self.gated.park(
+            granted.ipns_name.clone(),
+            RepublishBase {
+                read_body,
+                unknown: envelope.unknown,
+                epoch_tag_unknown: envelope.epoch_tag_unknown,
+                write_scope_seed: Some(write_scope_seed),
+            },
+        );
+        Ok(plan)
+    }
+
+    fn root_publish(&self) -> RootPublish<'_, T, H, C, F, Sch, E> {
+        RootPublish {
+            transport: self.transport,
+            api: self.api,
+            floors: self.floors,
+            scheduler: self.scheduler,
+            profile: self.profile,
+            entropy: self.entropy,
+            owner_identity: self.keys.owner_identity,
+        }
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPublisher
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    async fn publish_scope_root(
+        &self,
+        record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError> {
+        let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
+        // [`new_override_seed`]'s grantee mirror, on the same release-active
+        // rule: a section this rotator can no longer reopen is never signed
+        // (security rule 8), and that is permanent for these bytes.
+        let (_, tag) = self
+            .self_location(&name)
+            .ok_or(RotationPublishError::Rejected)?;
+        let grant = self
+            .open_own_grant(
+                &record.section,
+                &tag,
+                &grant_blob_aad(record.scope_id, record.read_epoch),
+            )
+            .ok_or(RotationPublishError::Rejected)?;
+        let override_seed = Zeroizing::new(*grant.read_scope_seed());
+
+        // The read [`Self::resolve_plan`] gated parks the body and the envelope
+        // fields a republish preserves ([`GatedRoots`]).
+        let current = self
+            .gated
+            .take(&name)
+            .ok_or(RotationPublishError::NotPublished)?;
+        self.root_publish()
+            .run(&name, record, &override_seed, current)
+            .await
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeExitRotator
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    async fn rotate_on_scope_exit(
+        &self,
+        scope_root: NodeId,
+    ) -> Result<RotationOutcome, RotateError> {
+        let granted = self
+            .granted_root(scope_root)
+            .map_err(RotateError::Resolve)?;
+        let source = self
+            .resolve_plan(granted)
+            .await
+            .map_err(RotateError::Resolve)?;
+        let plan = RotateScopePlan {
+            identity: ScopeRootIdentity {
+                v: ENVELOPE_V,
+                scope_id: granted.scope_id,
+                ipns_name: granted.ipns_name.as_str().as_bytes(),
+                owner_enc_pub: self.keys.owner_enc_pub,
+                owner_enc_secret: None,
+                ascent: Some(AscentAuthority::CarriedPublic(&source.ascent_public)),
+                // A granted scope root is anchored under a parent scope, so it
+                // always owes one — evidence independent of the field that mints
+                // it ([`ScopeRootIdentity::owes_ascent_link`]).
+                owes_ascent_link: true,
+                pseudonym_signer: &source.pseudonym,
+            },
+            committed: CommittedSet {
+                commitment: &source.section.commitment,
+                commitment_sig: &source.section.commitment_sig,
+                grant_ledger: &source.write_body.grant_ledger,
+                direct_child_scope_index: &source.write_body.direct_child_scope_index,
+            },
+            current_override_seed: &source.read_scope_seed,
+            current_read_epoch: source.read_epoch,
+            write_scope_seed: &source.write_scope_seed,
+            write_epoch: source.write_epoch,
+            write_history_link: &source.write_body.write_history_link,
+            pointer_read_key: &source.pointer_read_key,
+            carried_history_links: &source.section.history_links,
+        };
+        rotate_scope(
+            &mut SharedEntropy(self.entropy),
             self.floors,
             self.scheduler,
-            self.profile,
-            &RecordPublishRequest {
-                name: &name,
-                signer: &signer,
-                head: &preflighted,
-                content_cids: Vec::new(),
-                min_current_sequence: None,
-            },
+            self,
+            &plan,
+            || (self.sweep)(granted.scope_id),
         )
         .await
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
-
-        match receipt.outcome {
-            PublishOutcome::Published { .. } => Ok(()),
-            PublishOutcome::LostRace { .. } => Err(ScopeRootPublishError::LostRace),
-            // Acked but not read back as ours: nothing is proven durable, and
-            // re-publishing is idempotent-in-sequence.
-            PublishOutcome::Unconfirmed { .. } => Err(ScopeRootPublishError::NotPublished),
-        }
     }
 }
 
@@ -915,10 +1385,10 @@ fn read_verdict(error: GateError) -> SweepResolveFailure {
 /// Carry a re-seal refusal into the sweep's publish arm on rule 6's axis: every
 /// variant but entropy is this build's own fail-closed verdict on material the
 /// pass already gated, so re-sealing the same inputs reaches it again.
-fn reseal_publish_verdict(error: ResealError) -> ScopeRootPublishError {
+fn reseal_publish_verdict(error: ResealError) -> RotationPublishError {
     match error {
-        ResealError::Entropy(_) => ScopeRootPublishError::NotPublished,
-        _ => ScopeRootPublishError::Rejected,
+        ResealError::Entropy(_) => RotationPublishError::NotPublished,
+        _ => RotationPublishError::Rejected,
     }
 }
 
@@ -1070,10 +1540,6 @@ where
         if root.envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::Rejected);
         }
-        let (write_body, write_epoch) = self
-            .write_body(&root, scope.scope_id)
-            .await
-            .map_err(SweepResolveFailure::from)?;
         let GatedScopeRoot {
             envelope,
             section,
@@ -1081,7 +1547,18 @@ where
             read_scope_seed,
             write_scope_seed,
         } = root;
+        // A root held keyless has no readable write-body — availability, not a
+        // trust verdict.
         let write_scope_seed = write_scope_seed.ok_or(SweepResolveFailure::Unavailable)?;
+        let (write_body, write_epoch) = write_plane_of(
+            self.floors,
+            &envelope,
+            &section,
+            &write_scope_seed,
+            scope.scope_id,
+        )
+        .await
+        .map_err(SweepResolveFailure::from)?;
         let children = body_children(&read_body);
         let read_epoch = envelope.epoch;
         self.swept.park(SweptScopeSource {
@@ -1193,10 +1670,10 @@ where
         &self,
         scope: &ChildScopeRef,
         node: &LaggingNode<'_>,
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         let source = self
             .swept_scope(scope)
-            .map_err(|_| ScopeRootPublishError::Rejected)?;
+            .map_err(|_| RotationPublishError::Rejected)?;
         let name = scope_name(node.ipns_name).map_err(publish_verdict)?;
         // Release-active (security rule 8), both halves. The seam's own
         // invariant: a node is only ever sealed at the epoch of the scope root
@@ -1205,14 +1682,14 @@ where
         // read-epoch floor after that gated read, and a record cannot be
         // unpublished — so re-read the floor rather than trusting the snapshot.
         if node.read_epoch != source.read_epoch {
-            return Err(ScopeRootPublishError::Rejected);
+            return Err(RotationPublishError::Rejected);
         }
         let read_floor = floor::read_epoch_floor(self.floors, &source.scope_id)
             .await
-            .map_err(|_| ScopeRootPublishError::NotPublished)?
+            .map_err(|_| RotationPublishError::NotPublished)?
             .unwrap_or(0);
         if node.read_epoch < read_floor {
-            return Err(ScopeRootPublishError::Rejected);
+            return Err(RotationPublishError::Rejected);
         }
         let read_key = read_key_for(&source.read_scope_seed, &node.node_id);
         let nonce = nonce(self.entropy)?;
@@ -1234,7 +1711,7 @@ where
             epoch: node.read_epoch,
         };
         let preflighted = preflight(&binding, &read_key, &head)
-            .map_err(|_| ScopeRootPublishError::NotPublished)?;
+            .map_err(|_| RotationPublishError::NotPublished)?;
         let signer = SessionIdentity::write_name_signer(&source.write_scope_seed, &node.node_id);
         let receipt = publish_record(
             self.transport,
@@ -1256,12 +1733,12 @@ where
             },
         )
         .await
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        .map_err(|_| RotationPublishError::NotPublished)?;
 
         match receipt.outcome {
             PublishOutcome::Published { .. } => Ok(()),
-            PublishOutcome::LostRace { .. } => Err(ScopeRootPublishError::LostRace),
-            PublishOutcome::Unconfirmed { .. } => Err(ScopeRootPublishError::NotPublished),
+            PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
+            PublishOutcome::Unconfirmed { .. } => Err(RotationPublishError::NotPublished),
         }
     }
 
@@ -1269,13 +1746,13 @@ where
         &self,
         scope: &ChildScopeRef,
         index: &[ChildScopeRef],
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         // Keyed on `scope`, so the repair can only ever republish the root this
         // pass gated, at the name it gated it under — never a name the walk did
         // not resolve current.
         let source = self
             .swept_scope(scope)
-            .map_err(|_| ScopeRootPublishError::Rejected)?;
+            .map_err(|_| RotationPublishError::Rejected)?;
         let owner_enc_pub = self.keys.enc_secret.public();
         let pseudonym_signer = self.keys.scope_keys.writer_pseudonym(&source.scope_id);
         let pointer_read_key = self.keys.scope_keys.pointer_read_key(&source.scope_id);
@@ -1287,7 +1764,10 @@ where
                 ipns_name: &scope.ipns_name,
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: Some(self.keys.enc_secret),
-                parent_node_seed: source.parent_node_seed.as_deref(),
+                ascent: source
+                    .parent_node_seed
+                    .as_deref()
+                    .map(AscentAuthority::ParentSeed),
                 owes_ascent_link: source.carried_ascent_link,
                 pseudonym_signer: &pseudonym_signer,
             },
@@ -1617,6 +2097,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::AscentLinkMismatch
         | ResealError::AscentLinkDropped
         | ResealError::AscentLinkNotOwed
+        | ResealError::UnusableAscentPublic
         | ResealError::TooManyHistoryLinks
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
@@ -1973,7 +2454,7 @@ where
                 ipns_name: node.new_name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: Some(self.owner_enc_secret),
-                parent_node_seed: self.parent_node_seed,
+                ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
                 owes_ascent_link: plane.section.ascent_link.is_some(),
                 pseudonym_signer: &pseudonym_signer,
             },
@@ -2415,11 +2896,11 @@ mod tests {
     use cipherbox_core::seal::{
         AscentLink, ChildRef, GrantBlobPayload, GrantSetCommitment, NodeKind, Permission,
         STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, decode_envelope,
-        decode_grant_section, encode_envelope, encode_grant_section, grant_section_bytes,
-        open_ascent_link, open_grant_blob, open_history_link, open_owner_history_link,
-        open_owner_write_blob, open_read_body, seal_read_body, set_grant_section, sign_grant_set,
-        verify_grant_set,
+        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, StructureSigInput,
+        decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
+        encode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob,
+        open_history_link, open_owner_history_link, open_owner_write_blob, open_read_body, seal,
+        seal_read_body, set_grant_section, sign_grant_set, sign_structure, verify_grant_set,
     };
     use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -2614,7 +3095,7 @@ mod tests {
     }
 
     impl<T: RecordTransport + Clone> Harness<T> {
-        fn build(make: impl FnOnce(InMemoryRecordStore) -> T) -> Self {
+        fn build(make: impl FnOnce(InMemoryRecordStore, ScriptedHttp) -> T) -> Self {
             let world = FakeWorld::new();
             let device = world.device(b"owner");
             let http = device.http.clone();
@@ -2627,7 +3108,7 @@ mod tests {
             );
             let store = device.record_store.clone();
             Self {
-                transport: make(store.clone()),
+                transport: make(store.clone(), http.clone()),
                 store,
                 world,
                 http,
@@ -2724,14 +3205,14 @@ mod tests {
 
     impl Harness<InMemoryRecordStore> {
         fn plain() -> Self {
-            Self::build(|store| store)
+            Self::build(|store, _| store)
         }
     }
 
     impl Harness<RacingTransport> {
         fn racing(key: &str, winner: Vec<u8>) -> Self {
             let key = key.to_owned();
-            Self::build(move |store| RacingTransport {
+            Self::build(move |store, _| RacingTransport {
                 inner: store,
                 winner: Arc::new(Mutex::new(Some((key, winner)))),
             })
@@ -2917,7 +3398,7 @@ mod tests {
                 ipns_name: fixture.name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
-                parent_node_seed: None,
+                ascent: None,
                 owes_ascent_link: false,
                 pseudonym_signer: &pseudonym,
             },
@@ -3015,7 +3496,7 @@ mod tests {
         cut.section.owner_blob.ciphertext[last] ^= 0xff;
 
         let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
-        assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+        assert_eq!(outcome, Err(RotationPublishError::Rejected));
         assert!(
             !outcome.unwrap_err().is_retryable(),
             "these bytes will never open — re-running the sweep cannot help",
@@ -3035,7 +3516,7 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::Rejected),
+            Err(RotationPublishError::Rejected),
         );
     }
 
@@ -3056,7 +3537,7 @@ mod tests {
                     .net_rooted(RotationAncestry::default())
                     .publish_scope_root(&cut)
             ),
-            Err(ScopeRootPublishError::Rejected),
+            Err(RotationPublishError::Rejected),
             "no ancestor seed means the gate cannot verify the ascent link",
         );
         block_on(
@@ -3085,7 +3566,7 @@ mod tests {
             corrupt(&mut cut);
 
             let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
-            assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+            assert_eq!(outcome, Err(RotationPublishError::Rejected));
             assert!(!outcome.unwrap_err().is_retryable());
             let endpoint = &harness.store.endpoints()[0];
             assert_eq!(
@@ -3107,7 +3588,7 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::Rejected),
+            Err(RotationPublishError::Rejected),
         );
     }
 
@@ -3127,7 +3608,7 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&stale)),
-            Err(ScopeRootPublishError::Rejected),
+            Err(RotationPublishError::Rejected),
         );
         let endpoint = &harness.store.endpoints()[0];
         assert_eq!(
@@ -3150,7 +3631,7 @@ mod tests {
         let cut = cut(&root, SCOPE, floor);
 
         let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
-        assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+        assert_eq!(outcome, Err(RotationPublishError::Rejected));
         assert!(
             !outcome.unwrap_err().is_retryable(),
             "a trust rejection is never retryable",
@@ -3275,7 +3756,7 @@ mod tests {
                     ipns_name: root.name.as_str().as_bytes(),
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &pseudonym,
                 },
@@ -3374,7 +3855,7 @@ mod tests {
                 ipns_name: name.as_str().as_bytes(),
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
-                parent_node_seed,
+                ascent: parent_node_seed.map(AscentAuthority::ParentSeed),
                 owes_ascent_link: parent_node_seed.is_some(),
                 pseudonym_signer: &pseudonym,
             },
@@ -3786,7 +4267,7 @@ mod tests {
                     ipns_name: root.name.as_str().as_bytes(),
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &pseudonym,
                 },
@@ -4040,8 +4521,656 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::LostRace),
+            Err(RotationPublishError::LostRace),
             "a lost CAS race is reported, never a silent drop",
+        );
+    }
+
+    // --- The grantee arm: the flat scope-exit cut --------------------------
+
+    /// The granted scope this device holds a write grant in — an **interior**
+    /// scope root, so its record carries the ascent link a grantee can only
+    /// re-seal to its published public half.
+    const GRANTEE_SCOPE: [u8; 16] = [0x9c; 16];
+    /// A device holding no grant in `GRANTEE_SCOPE` at all.
+    const OUTSIDER_ENC_SCALAR: [u8; 32] = [0xa3; 32];
+
+    fn grantee_enc() -> X25519Secret {
+        X25519Secret::from_scalar([0xa1; 32])
+    }
+
+    /// The row the owner mints for this device at the granted root's own name —
+    /// the tag it self-locates under and the pseudonym its re-seal signs with.
+    fn grantee_row(name: &IpnsName, permission: Permission) -> GrantRow {
+        let identity = EcdsaSigner::from_scalar(&[0xa2; 32]).expect("valid scalar");
+        mint_grant_row(
+            &owner_enc(),
+            identity.verifying_key().to_sec1(),
+            &grantee_enc().public(),
+            &GRANTEE_SCOPE,
+            name.as_str().as_bytes(),
+            permission,
+        )
+        .expect("a contributory recipient key")
+    }
+
+    /// The ancestor seed the granted scope root's ascent link derives from.
+    fn grantee_parent_node_seed() -> [u8; 32] {
+        *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &GRANTEE_SCOPE).as_bytes()
+    }
+
+    /// A staged, gate-passing granted scope root committing `grants` and naming
+    /// `child_scope_index` as its descendant scope roots.
+    fn granted_scope_root_with(
+        grants: Vec<GrantRow>,
+        child_scope_index: Vec<ChildScopeRef>,
+    ) -> OwnerRootFixture {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: GRANTEE_SCOPE,
+            root_id: GRANTEE_SCOPE,
+            children: Vec::new(),
+            child_scope_index,
+            parent_node_seed: Some(grantee_parent_node_seed()),
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants,
+        })
+    }
+
+    fn granted_scope_root(
+        permission: Permission,
+        child_scope_index: Vec<ChildScopeRef>,
+    ) -> OwnerRootFixture {
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        granted_scope_root_with(vec![grantee_row(&name, permission)], child_scope_index)
+    }
+
+    type GranteeNet<'a, T> = GranteeRotationNet<
+        'a,
+        T,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        InMemoryFloorStore,
+        VirtualScheduler,
+        SeededEntropy,
+    >;
+
+    /// A staged granted scope root plus everything a grantee net borrows, owned
+    /// together so one call sets a case up.
+    struct GranteeWorld<T> {
+        harness: Harness<T>,
+        root: OwnerRootFixture,
+        granted: Vec<GrantedScopeRoot>,
+        enc_secret: X25519Secret,
+        owner_enc_pub: X25519Public,
+        /// The sweep `rotate_scope` enqueues; these cases assert the cut, not
+        /// the lazy wave it hands the scheduler.
+        sweep: Box<dyn Fn([u8; 16]) -> BoxedTask>,
+    }
+
+    impl<T: RecordTransport + Clone + 'static> GranteeWorld<T> {
+        fn staged(harness: Harness<T>, root: OwnerRootFixture) -> Self {
+            harness.stage(GRANTEE_SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            Self {
+                granted: vec![GrantedScopeRoot {
+                    scope_id: GRANTEE_SCOPE,
+                    ipns_name: root.name.clone(),
+                }],
+                harness,
+                root,
+                enc_secret: grantee_enc(),
+                owner_enc_pub: owner_enc().public(),
+                sweep: Box::new(|_| Box::pin(async {})),
+            }
+        }
+
+        fn net(&self) -> GranteeNet<'_, T> {
+            GranteeRotationNet {
+                transport: &self.harness.transport,
+                api: &self.harness.api,
+                gateway: &self.harness.gateway,
+                http: &self.harness.http,
+                floors: &self.harness.floors,
+                scheduler: &self.harness.world.scheduler,
+                profile: &self.harness.profile,
+                entropy: &self.harness.entropy,
+                keys: GranteeRotationKeys {
+                    enc_secret: &self.enc_secret,
+                    owner_enc_pub: &self.owner_enc_pub,
+                    owner_identity: &self.harness.identity,
+                },
+                granted: &self.granted,
+                sweep: self.sweep.as_ref(),
+                gated: GatedRoots::default(),
+            }
+        }
+
+        fn cut(&self) -> Result<RotationOutcome, RotateError> {
+            block_on(self.net().rotate_on_scope_exit(NodeId(GRANTEE_SCOPE)))
+        }
+    }
+
+    /// Republish `root`'s record carrying `section` instead of its own, at the
+    /// next sequence — what anyone holding the scope's write seed can put on the
+    /// wire, since no structure signature covers the ascent link's public half
+    /// or its presence.
+    fn republish_section<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        root: &OwnerRootFixture,
+        section: GrantSection,
+    ) {
+        let mut envelope = root.envelope.clone();
+        set_grant_section(
+            &mut envelope,
+            encode_grant_section(&section).expect("the section encodes"),
+        );
+        let block = encode_envelope(&envelope).expect("the envelope encodes");
+        let cid = root_block_cid(&block);
+        harness
+            .blocks
+            .lock()
+            .expect("lock")
+            .insert(cid.clone(), block);
+        let record = record_for(&GRANTEE_SCOPE, &cid, 2);
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, root.name.as_str(), record.clone());
+        }
+    }
+
+    /// Republish `root` with `ledger` in its write body, re-sealed under the
+    /// scope write seed and re-signed under the pseudonym the commitment names —
+    /// what a committed co-writer can put on the wire, since the commitment binds
+    /// `(tag, permission)` and never `recipientEncPk`.
+    fn republish_ledger<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        root: &OwnerRootFixture,
+        ledger: Vec<GrantLedgerEntry>,
+    ) {
+        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        let write_key = kdf::write_key(write_seed.as_bytes());
+        let ctx = AadContext {
+            v: ENVELOPE_V,
+            id: GRANTEE_SCOPE,
+            scope: GRANTEE_SCOPE,
+            epoch: OWNER_ROOT_EPOCH,
+            struct_tag: STRUCT_TAG_WRITE_BODY,
+        };
+        let body = WriteBody {
+            grant_ledger: ledger,
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let sealed = seal(
+            write_key.as_bytes(),
+            &[0x5a; 24],
+            &ctx,
+            &encode_write_body(&body).expect("the write body encodes"),
+        );
+        let input = StructureSigInput::over_ciphertext(
+            GRANTEE_SCOPE,
+            OWNER_ROOT_EPOCH,
+            STRUCT_TAG_WRITE_BODY,
+            None,
+            &sealed,
+        );
+        let mut section = root.grant_section.clone();
+        section.write_body = SignedSealed {
+            signature: sign_structure(&Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED), &input)
+                .to_bytes(),
+            sealed,
+            unknown: PreservedFields::new(),
+        };
+        republish_section(harness, root, section);
+    }
+
+    fn plain_world(permission: Permission) -> GranteeWorld<InMemoryRecordStore> {
+        GranteeWorld::staged(Harness::plain(), granted_scope_root(permission, Vec::new()))
+    }
+
+    #[test]
+    fn a_grantee_cut_lands_and_re_adopts_through_this_builds_own_gate() {
+        let world = plain_world(Permission::Write);
+
+        let outcome = world
+            .cut()
+            .expect("the flat cut completes over the production seams");
+
+        assert_eq!(outcome.new_read_epoch, OWNER_ROOT_EPOCH + 1);
+        assert_eq!(outcome.epoch_floor, OWNER_ROOT_EPOCH + 1);
+        let (_, envelope) = published_head(&world.harness, &world.root.name);
+        assert_eq!(
+            envelope.epoch,
+            OWNER_ROOT_EPOCH + 1,
+            "the record standing at the name is the cut"
+        );
+        assert_eq!(
+            block_on(world.net().gated_root(&world.granted[0])).map(|_| ()),
+            Ok(()),
+            "the cut this grantee signed passes its own gate on read-back",
+        );
+    }
+
+    #[test]
+    fn a_grantee_cut_re_seals_the_ascent_link_the_owners_descent_still_opens() {
+        // A grantee holds no ancestor seed, so it re-seals to the public half the
+        // record carries; the owner's descent must recover the FRESH seed from it
+        // or the cut orphans the scope from above.
+        let world = plain_world(Permission::Write);
+        world.cut().expect("the flat cut completes");
+
+        let section = published_section(&world.harness, &world.root.name);
+        let link = section
+            .ascent_link
+            .expect("an interior root keeps its ascent link");
+        let ctx = AadContext {
+            v: ENVELOPE_V,
+            id: GRANTEE_SCOPE,
+            scope: GRANTEE_SCOPE,
+            epoch: OWNER_ROOT_EPOCH + 1,
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        };
+        let descended = open_ascent_link(
+            &grantee_parent_node_seed(),
+            &ctx,
+            &AscentLink {
+                ascent_public: link.ascent_public,
+                enc: link.enc,
+                ciphertext: link.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("the ancestor's own descent opens the re-sealed link");
+        assert!(
+            ct_eq(
+                descended.override_seed(),
+                &published_override_seed(
+                    &world.harness,
+                    &world.root.name,
+                    GRANTEE_SCOPE,
+                    OWNER_ROOT_EPOCH + 1,
+                ),
+            ),
+            "the ascent link and the owner blob carry the one seed the cut minted",
+        );
+    }
+
+    #[test]
+    fn a_grantee_cut_is_flat_and_carries_the_committed_set_verbatim() {
+        // The eager-set law's grantee arm: the single root republishes and no
+        // descendant scope root is re-keyed, over a set the grantee can neither
+        // extend nor shrink (#26 D5).
+        let harness = Harness::plain();
+        let descendant = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        harness.stage(CHILD_SCOPE, &descendant, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref(CHILD_SCOPE, &descendant)];
+        let world = GranteeWorld::staged(
+            harness,
+            granted_scope_root(Permission::Write, index.clone()),
+        );
+        let endpoint = &world.harness.store.endpoints()[0];
+        let descendant_before = world
+            .harness
+            .store
+            .record_at(endpoint, descendant.name.as_str())
+            .expect("the descendant is staged");
+
+        world.cut().expect("the flat cut completes");
+
+        assert_eq!(
+            world
+                .harness
+                .store
+                .record_at(endpoint, descendant.name.as_str()),
+            Some(descendant_before),
+            "no descendant scope root is re-keyed by a grantee rotation",
+        );
+        let section = published_section(&world.harness, &world.root.name);
+        assert_eq!(
+            section.commitment, world.root.grant_section.commitment,
+            "the owner-signed committed set crosses the rotation byte-identical",
+        );
+        assert_eq!(
+            section.commitment_sig, world.root.grant_section.commitment_sig,
+            "and so does the owner signature over it",
+        );
+        let net = world.net();
+        let (_, tag) = net
+            .self_location(&world.root.name)
+            .expect("a contributory contact key");
+        let grant = net
+            .open_own_grant(
+                &section,
+                &tag,
+                &grant_blob_aad(GRANTEE_SCOPE, OWNER_ROOT_EPOCH + 1),
+            )
+            .expect("this device's blob is re-wrapped at the new epoch");
+        let body = open_write_body(
+            &published_head(&world.harness, &world.root.name).1,
+            &section,
+            &GRANTEE_SCOPE,
+            grant.write_scope_seed().expect("a write grant"),
+            OWNER_ROOT_EPOCH,
+        )
+        .expect("the write body opens under the unchanged write plane");
+        assert_eq!(
+            body.direct_child_scope_index, index,
+            "the descendant scope index is carried forward, not walked",
+        );
+    }
+
+    #[test]
+    fn a_grantee_pass_that_already_adopted_the_root_can_read_it_again() {
+        // A rotation reads in order to re-key, so a pass that aborted before
+        // publishing must be able to read the unchanged record again — otherwise
+        // its own sequence floor locks the cut out for good (`reread_at_floor`).
+        let world = plain_world(Permission::Write);
+        block_on(world.net().gated_root(&world.granted[0]))
+            .expect("the first read adopts and raises the floor");
+
+        assert!(
+            world.cut().is_ok(),
+            "the cut still completes over the record this net already adopted",
+        );
+    }
+
+    #[test]
+    fn a_device_holding_no_grant_blob_cannot_assemble_a_plan() {
+        // The absence of a blob at our tag in a fresh owner-signed record is the
+        // definitive revocation signal, so it is a trust verdict and never a
+        // retryable stall (AGENTS.md rule 6).
+        let mut world = plain_world(Permission::Write);
+        world.enc_secret = X25519Secret::from_scalar(OUTSIDER_ENC_SCALAR);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_blob_under_a_tag_the_commitment_does_not_commit_is_refused() {
+        // Any committed writer can mint a blob at a revoked reader's tag; only
+        // the owner-signed commitment says who holds a grant (CONTEXT.md
+        // "Grant blob").
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        let mut row = grantee_row(&name, Permission::Write);
+        // The blob and the ledger row stay; the owner's commitment drops the tag,
+        // exactly as a revoke leaves it before the writer re-plants the blob.
+        row.commitment_entry = GrantSetEntry::new([0xee; 32], Permission::Write, [0u8; 32]);
+        let world = GranteeWorld::staged(
+            Harness::plain(),
+            granted_scope_root_with(vec![row], Vec::new()),
+        );
+
+        assert_eq!(
+            block_on(world.net().gated_root(&world.granted[0])).map(|_| ()),
+            Err(RootGateVerdict::Rejected),
+            "the gated read refuses it, so no reader trusts the grant either",
+        );
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_trigger_naming_an_unheld_scope_is_refused_before_any_read() {
+        let mut world = plain_world(Permission::Write);
+        world.granted.clear();
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_read_only_grantee_cuts_nothing() {
+        // A read grant commits no write permission, so it can sign no record at
+        // the scope root's name — permanent, never a stall.
+        let world = plain_world(Permission::Read);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_grantee_cut_refuses_a_root_whose_ascent_link_was_stripped() {
+        // `ascentPublic` and the link's presence are covered by no structure
+        // signature, so anyone holding the write scope seed can drop the link.
+        // Re-publishing without one would sever the owner's descent for good.
+        let world = plain_world(Permission::Write);
+        let mut stripped = world.root.grant_section.clone();
+        stripped.ascent_link = None;
+        republish_section(&world.harness, &world.root, stripped);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_grantee_cut_refuses_a_ledger_row_that_swapped_its_own_recipient_key() {
+        // The commitment binds `(tag, permission)` but not `recipientEncPk`, so a
+        // co-writer could redirect this device's own next seed to a key it does
+        // not hold — while its blob at the current epoch still opens.
+        let world = plain_world(Permission::Write);
+        let mut row = grantee_row(&world.root.name, Permission::Write).ledger_entry;
+        row.recipient_enc_pk = X25519Secret::from_scalar([0x66; 32]).public().to_bytes();
+        republish_ledger(&world.harness, &world.root, vec![row]);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    #[test]
+    fn a_grantee_cut_that_loses_the_cas_race_is_retryable() {
+        let root = granted_scope_root(Permission::Write, Vec::new());
+        let winner = record_for(&GRANTEE_SCOPE, &root.head_cid_str, 9);
+        let world = GranteeWorld::staged(Harness::racing(root.name.as_str(), winner), root);
+
+        let error = world
+            .cut()
+            .expect_err("the concurrent writer wins the race");
+        assert_eq!(
+            error,
+            RotateError::Publish(RotationPublishError::LostRace),
+            "a lost race is reported, never a silent drop",
+        );
+        assert!(
+            matches!(&error, RotateError::Publish(publish) if publish.is_retryable()),
+            "and it stays retryable",
+        );
+    }
+
+    #[test]
+    fn a_rotation_publish_refusal_this_pass_authored_is_never_retried() {
+        // A mis-echoed CID and an empty head CID are verdicts on what this pass
+        // authored, so a retry re-authors them and refuses again. A size refusal
+        // is attacker-influenced and stays retryable (rule 6 axis).
+        for deterministic in [
+            RecordPublishError::HeadCidMismatch {
+                expected: "bafy-ours".to_owned(),
+                returned: "bafy-theirs".to_owned(),
+            },
+            RecordPublishError::Publish(PublishError::EmptyHeadCid),
+        ] {
+            assert_eq!(
+                record_publish_verdict(deterministic),
+                RotationPublishError::Rejected,
+            );
+        }
+        assert!(
+            record_publish_verdict(RecordPublishError::Publish(PublishError::RecordTooLarge {
+                size: 1,
+                limit: 0,
+            }))
+            .is_retryable(),
+            "a size refusal on an attacker-influenced record stays retryable",
+        );
+    }
+
+    /// A transport that snapshots the HTTP calls already made the first time a
+    /// record reaches the record plane, so a test can prove the name was
+    /// registered before anything was published under it.
+    #[derive(Clone)]
+    struct RegisterWatch {
+        inner: InMemoryRecordStore,
+        http: ScriptedHttp,
+        before_first_put: Arc<Mutex<Option<Vec<String>>>>,
+    }
+
+    impl RecordTransport for RegisterWatch {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            self.inner.endpoints()
+        }
+
+        async fn get_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
+        }
+
+        async fn put_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            record: &[u8],
+        ) -> SeamResult<()> {
+            {
+                let mut seen = self.before_first_put.lock().expect("lock");
+                if seen.is_none() {
+                    *seen = Some(
+                        self.http
+                            .requests()
+                            .into_iter()
+                            .map(|request| request.url)
+                            .collect(),
+                    );
+                }
+            }
+            self.inner.put_record(endpoint, routing_key, record).await
+        }
+    }
+
+    #[test]
+    fn a_grantee_cut_registers_its_name_before_it_publishes_under_it() {
+        let watch = Arc::new(Mutex::new(None));
+        let harness = Harness::build({
+            let watch = Arc::clone(&watch);
+            move |inner, http| RegisterWatch {
+                inner,
+                http,
+                before_first_put: watch,
+            }
+        });
+        let world =
+            GranteeWorld::staged(harness, granted_scope_root(Permission::Write, Vec::new()));
+
+        world.cut().expect("the flat cut completes");
+
+        let before = watch
+            .lock()
+            .expect("lock")
+            .clone()
+            .expect("the cut reached the record plane");
+        assert!(
+            before.iter().any(|url| url.ends_with("/registry/register")),
+            "the name is registered before any record is published under it",
+        );
+    }
+
+    #[test]
+    fn the_owner_and_grantee_arms_cut_the_same_scope_root_the_same_way() {
+        // Both arms are legal on this root: the owner holds its owner blob, the
+        // grantee holds a write grant in the same committed set. Whoever cuts, the
+        // published record must be the same cut.
+        let cut_by = |grantee: bool| {
+            let world = plain_world(Permission::Write);
+            let name = world.root.name.clone();
+            if grantee {
+                world.cut().expect("the grantee arm cuts");
+            } else {
+                let harness = &world.harness;
+                let pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
+                let owner_enc_pub = owner_enc().public();
+                let parent_node_seed = grantee_parent_node_seed();
+                let net = harness.net_rooted(
+                    RotationAncestry::default()
+                        .under_parent_node_seed(GRANTEE_SCOPE, &parent_node_seed),
+                );
+                let mut entropy = SeededEntropy::new(31);
+                block_on(rotate_scope(
+                    &mut entropy,
+                    &harness.floors,
+                    &harness.world.scheduler,
+                    &net,
+                    &RotateScopePlan {
+                        identity: ScopeRootIdentity {
+                            v: ENVELOPE_V,
+                            scope_id: GRANTEE_SCOPE,
+                            ipns_name: name.as_str().as_bytes(),
+                            owner_enc_pub: &owner_enc_pub,
+                            owner_enc_secret: None,
+                            ascent: Some(AscentAuthority::ParentSeed(&parent_node_seed)),
+                            owes_ascent_link: true,
+                            pseudonym_signer: &pseudonym,
+                        },
+                        committed: CommittedSet {
+                            commitment: &world.root.grant_section.commitment,
+                            commitment_sig: &world.root.grant_section.commitment_sig,
+                            grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
+                            direct_child_scope_index: &[],
+                        },
+                        current_override_seed: &OWNER_ROOT_SCOPE_SEED,
+                        current_read_epoch: OWNER_ROOT_EPOCH,
+                        write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
+                        write_epoch: OWNER_ROOT_EPOCH,
+                        write_history_link: &[],
+                        pointer_read_key: &POINTER_READ_KEY,
+                        carried_history_links: &[],
+                    },
+                    || Box::pin(async {}),
+                ))
+                .expect("the owner arm cuts");
+            }
+            let (_, envelope) = published_head(&world.harness, &name);
+            let section = published_section(&world.harness, &name);
+            (
+                envelope.epoch,
+                section.commitment,
+                section.grant_blobs.len(),
+            )
+        };
+
+        let (owner_epoch, owner_commitment, owner_blobs) = cut_by(false);
+        let (grantee_epoch, grantee_commitment, grantee_blobs) = cut_by(true);
+        assert_eq!(
+            owner_epoch, grantee_epoch,
+            "both arms cut to the same epoch"
+        );
+        assert_eq!(
+            owner_commitment, grantee_commitment,
+            "neither arm may touch the owner-signed committed set",
+        );
+        assert_eq!(
+            owner_blobs, grantee_blobs,
+            "both re-wrap one blob per committed grant",
         );
     }
 
@@ -5339,6 +6468,7 @@ mod tests {
             ResealError::AscentLinkMismatch,
             ResealError::AscentLinkDropped,
             ResealError::AscentLinkNotOwed,
+            ResealError::UnusableAscentPublic,
             ResealError::TooManyHistoryLinks,
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
@@ -5360,6 +6490,7 @@ mod tests {
                 | ResealError::AscentLinkMismatch
                 | ResealError::AscentLinkDropped
                 | ResealError::AscentLinkNotOwed
+                | ResealError::UnusableAscentPublic
                 | ResealError::TooManyHistoryLinks
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending
@@ -5703,6 +6834,16 @@ mod tests {
         );
         let mut entropy = SeededEntropy::new(13);
 
+        // Each plane's clock is authored by its own authority (#38 D1), so the
+        // read-epoch floors must sit exactly where an ordinary read of these
+        // records leaves them once the whole wave has run — at the rotating
+        // scope, and at every descendant scope root the enumeration adopts.
+        let floors_before = [SCOPE, CHILD_SCOPE].map(|scope| {
+            block_on(harness.floors.raise_epoch_floor(&scope, OWNER_ROOT_EPOCH))
+                .expect("floor raise");
+            block_on(floor::read_epoch_floor(&harness.floors, &scope)).expect("floor read")
+        });
+
         let outcome = block_on(rotate_scope_write(
             &mut entropy,
             &net,
@@ -5710,6 +6851,14 @@ mod tests {
             &write_plan(&staged.root, &owner),
         ))
         .expect("the wave completes over the production seams");
+
+        let floors_after = [SCOPE, CHILD_SCOPE].map(|scope| {
+            block_on(floor::read_epoch_floor(&harness.floors, &scope)).expect("floor read")
+        });
+        assert_eq!(
+            floors_after, floors_before,
+            "a write rotation advances the write epoch and moves no read-epoch floor",
+        );
 
         let fresh = SeededEntropy::first_draw(13);
         assert_eq!(outcome.new_write_epoch, OWNER_ROOT_EPOCH + 1);

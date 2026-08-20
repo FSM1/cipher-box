@@ -160,7 +160,9 @@ pub struct RecordPublishRequest<'a> {
     pub min_current_sequence: Option<u64>,
 }
 
-/// A fail-closed record-publish failure.
+/// A fail-closed record-publish failure: what the publish *pipeline* reports
+/// about one attempt, which the rotation seams fold into their own
+/// [`RotationPublishError`](crate::rotation::RotationPublishError).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordPublishError {
     /// The head block upload failed; nothing was published.

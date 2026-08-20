@@ -65,10 +65,12 @@ impl RotationTrigger {
 /// retention law; this seam owns assembling the root's
 /// [`RotateScopePlan`](super::rotate::RotateScopePlan) from its resolved record
 /// and running [`rotate_scope`](super::rotate::rotate_scope) over the live
-/// plane. The grantee-arm implementation over the real transport is not landed.
+/// plane — [`GranteeRotationNet`](crate::net::GranteeRotationNet) over the real
+/// transport.
 pub trait ScopeExitRotator {
     /// Run the flat, grantee-triggered [`RotationTrigger::ScopeExit`] cut at
-    /// `scope_root`. `Err` means nothing was cut.
+    /// `scope_root`. `Err` means nothing was cut, with the single documented
+    /// exception of [`RotateError::Floor`].
     async fn rotate_on_scope_exit(
         &self,
         scope_root: NodeId,
@@ -636,7 +638,7 @@ mod tests {
             self.seen.borrow_mut().push(scope_root);
             if self.refuse.contains(&scope_root) {
                 return Err(RotateError::Publish(
-                    super::super::rotate::ScopeRootPublishError::NotPublished,
+                    super::super::rotate::RotationPublishError::NotPublished,
                 ));
             }
             Ok(RotationOutcome {

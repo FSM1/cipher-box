@@ -246,8 +246,8 @@ pub struct ReaderContext<'a> {
     /// The reader's cached ancestor node seed — the trusted secret the expected
     /// ascent keypair re-derives from. Required whenever
     /// `candidate.grant_section.ascent_link` is `Some`; a `None` here against a
-    /// present ascent link is fail-closed
-    /// (cannot verify).
+    /// present ascent link is fail-closed (cannot verify). The one exception is
+    /// a reader entering by its own grant blob, which descends from nobody.
     pub parent_node_seed: Option<&'a [u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
     /// holder that already possesses the read key.
@@ -329,6 +329,21 @@ pub fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<[u8; 3
         .chain(writers)
         .filter(|pk| seen.insert(*pk))
         .collect()
+}
+
+/// Whether `pseudonym_pk` is one of a scope root's committed write-capable
+/// pseudonyms — [`committed_write_pseudonyms`]'s membership test, without
+/// materialising the set. The set the gate authenticates a section against, so a
+/// re-seal can bind its own signer to exactly it (fail-closed symmetry).
+pub fn is_committed_write_pseudonym(
+    commitment: &GrantSetCommitment,
+    pseudonym_pk: &[u8; 32],
+) -> bool {
+    commitment.owner_pseudonym_pk == *pseudonym_pk
+        || commitment
+            .entries
+            .iter()
+            .any(|e| e.permission == Permission::Write && e.pseudonym_pk == *pseudonym_pk)
 }
 
 /// Trial-verifier over a section's committed write-capable pseudonyms, pinning
@@ -556,7 +571,14 @@ pub async fn adopt_deferred<F: FloorStore>(
     let epoch = candidate.envelope.epoch;
     authenticate_section_structures(section, &candidate.envelope)
         .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
-    if let Some(ascent) = &section.ascent_link {
+    // A reader entering by its own grant blob descends from nobody, and stage 6
+    // cross-checks the seed that blob wraps against this record's read key — the
+    // same binding this check makes for a descending reader. A reader that does
+    // hold an ancestor seed still verifies under it, so the two fields cannot
+    // disagree into a skipped check.
+    let by_grant_alone = reader.parent_node_seed.is_none()
+        && matches!(reader.seed_blob, Some(SeedBlob::Grantee { .. }));
+    if let Some(ascent) = section.ascent_link.as_ref().filter(|_| !by_grant_alone) {
         // The ascent link is doubly checked: its structure signature (above)
         // proves the committed writer authored it, and this derive-and-verify
         // proves the sealed seed is *this* scope root's.

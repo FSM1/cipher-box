@@ -37,9 +37,9 @@ use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
 use cipherbox_engine::rotation::{
     CascadeResealResolver, CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, ScopeRootIdentity, ScopeRootPublishError,
-    ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode,
-    SweptScope, WriteHistory,
+    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
+    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
+    WriteHistory,
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
@@ -1203,7 +1203,7 @@ impl SweepPublisher for LocalNet {
         &self,
         _scope: &ChildScopeRef,
         _node: &LaggingNode<'_>,
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         Ok(())
     }
 
@@ -1211,7 +1211,7 @@ impl SweepPublisher for LocalNet {
         &self,
         _scope: &ChildScopeRef,
         _index: &[ChildScopeRef],
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         Ok(())
     }
 }
@@ -1226,7 +1226,7 @@ impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
         _record: &ResealedScopeRoot,
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         Ok(())
     }
 }
@@ -1309,7 +1309,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
                 ipns_name: b"contract-parent-scope-root",
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
-                parent_node_seed: None,
+                ascent: None,
                 owes_ascent_link: false,
                 pseudonym_signer: &owner_pseudonym,
             },

@@ -25,8 +25,8 @@ use cipherbox_core::suite::secret::SecretBytes;
 
 use crate::entropy::Entropy;
 use crate::rotation::{
-    CascadeTarget, CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, WriteHistory, reseal_scope_root,
+    CascadeTarget, CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, RotationPublishError,
+    ScopeRootIdentity, ScopeRootPublisher, WriteHistory, reseal_scope_root,
 };
 use crate::seams::UnixMillis;
 
@@ -113,7 +113,7 @@ pub enum InviteMintError {
     /// after all, which is the one state nothing can revoke. Until a prune
     /// path exists, each failed publish spends a slot toward
     /// [`MAX_INVITE_RECORDS`](super::MAX_INVITE_RECORDS).
-    Publish(ScopeRootPublishError),
+    Publish(RotationPublishError),
 }
 
 impl fmt::Display for InviteMintError {
@@ -188,7 +188,7 @@ pub async fn mint_invite_link<P: ScopeRootPublisher, S: InviteStore, E: Entropy>
             ipns_name: &plan.scope.ipns_name,
             owner_enc_pub: &current.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
-            parent_node_seed: None,
+            ascent: None,
             owes_ascent_link: current.carried_ascent_link,
             pseudonym_signer: &current.pseudonym_signer,
         },
@@ -297,9 +297,9 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             if self.refuse {
-                return Err(ScopeRootPublishError::NotPublished);
+                return Err(RotationPublishError::NotPublished);
             }
             self.published.borrow_mut().push(record.clone());
             Ok(())

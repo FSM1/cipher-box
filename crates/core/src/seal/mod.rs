@@ -48,8 +48,9 @@ pub use grant::{
     encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
     encode_override_seed_payload, encode_owner_write_blob_payload, open_ascent_link,
     open_grant_blob, open_history_link, open_owner_blob, open_owner_history_link,
-    open_owner_write_blob, seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob,
-    seal_owner_history_link, seal_owner_write_blob, sign_grant_set, verify_grant_set,
+    open_owner_write_blob, seal_ascent_link, seal_ascent_link_to, seal_grant_blob,
+    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
+    sign_grant_set, verify_grant_set,
 };
 pub use op_record::{
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, decode_op_record_header, op_record_aad,

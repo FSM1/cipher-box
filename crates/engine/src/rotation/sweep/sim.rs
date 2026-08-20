@@ -7,7 +7,7 @@ use super::{
     LaggingNode, NodeRef, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild,
     SweptNode, SweptScope,
 };
-use crate::rotation::ScopeRootPublishError;
+use crate::rotation::RotationPublishError;
 use cipherbox_core::seal::{ChildRef, ChildScopeRef, NodeKind, PreservedFields, ReadBody};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -69,7 +69,7 @@ pub(crate) struct FakeNode {
     is_scope_root: bool,
     publishes: u32,
     /// A persistent publish fault.
-    fault: Option<ScopeRootPublishError>,
+    fault: Option<RotationPublishError>,
     /// The next `n` publishes lose the CAS **without** advancing the epoch —
     /// a non-advancing ordinary writer winning the race.
     lost_race_next: u32,
@@ -107,7 +107,7 @@ pub(crate) struct NetState {
     pub(crate) pointer: Option<Vec<u8>>,
     /// The published index, once a repair lands.
     pub(crate) repaired_index: Option<Vec<ChildScopeRef>>,
-    pub(crate) index_repair_fault: Option<ScopeRootPublishError>,
+    pub(crate) index_repair_fault: Option<RotationPublishError>,
     /// `(parent, child)` pairs the parent names at a caller-chosen `ipnsName`.
     pub(crate) child_names: HashMap<(u8, u8), Vec<u8>>,
 }
@@ -167,7 +167,7 @@ impl FakeNet {
         self
     }
 
-    pub(crate) fn fault(self, byte: u8, fault: ScopeRootPublishError) -> Self {
+    pub(crate) fn fault(self, byte: u8, fault: RotationPublishError) -> Self {
         self.with(byte, |node| node.fault = Some(fault))
     }
 
@@ -322,13 +322,13 @@ impl SweepPublisher for FakeNet {
         &self,
         _scope: &ChildScopeRef,
         node: &LaggingNode<'_>,
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         let mut state = self.state.borrow_mut();
         let entry = state.nodes.get_mut(&node.node_id).expect("node");
         entry.publishes += 1;
         if entry.lost_race_next > 0 {
             entry.lost_race_next -= 1;
-            return Err(ScopeRootPublishError::LostRace);
+            return Err(RotationPublishError::LostRace);
         }
         match &entry.fault {
             None => {
@@ -337,9 +337,9 @@ impl SweepPublisher for FakeNet {
             }
             // A concurrent *sweeper* winner: its record is at our epoch, so
             // the node re-resolves converged on the next pass.
-            Some(ScopeRootPublishError::LostRace) => {
+            Some(RotationPublishError::LostRace) => {
                 entry.epoch = entry.epoch.max(node.read_epoch);
-                Err(ScopeRootPublishError::LostRace)
+                Err(RotationPublishError::LostRace)
             }
             Some(error) => Err(error.clone()),
         }
@@ -349,7 +349,7 @@ impl SweepPublisher for FakeNet {
         &self,
         _scope: &ChildScopeRef,
         index: &[ChildScopeRef],
-    ) -> Result<(), ScopeRootPublishError> {
+    ) -> Result<(), RotationPublishError> {
         self.index_repairs.set(self.index_repairs.get() + 1);
         let mut state = self.state.borrow_mut();
         if let Some(error) = state.index_repair_fault.clone() {

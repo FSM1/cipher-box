@@ -31,10 +31,10 @@
 //!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`.
 //!
 //! [`ChildIndexResolver`], [`CascadeResealResolver`], [`ScopeRootPublisher`],
-//! [`SweepResolver`], [`SweepPublisher`], [`WriteSubtreeResolver`] and
-//! [`WriteWavePublisher`] have production implementations over the real
-//! transport in [`crate::net::rotation`]. [`ScopeExitRotator`] and
-//! [`CutRotator`] have no production implementation yet; tests fake them.
+//! [`ScopeExitRotator`], [`SweepResolver`], [`SweepPublisher`],
+//! [`WriteSubtreeResolver`] and [`WriteWavePublisher`] have production
+//! implementations over the real transport in [`crate::net::rotation`].
+//! [`CutRotator`] has no production implementation yet; tests fake it.
 
 pub mod cascade;
 pub mod eager_set;
@@ -52,11 +52,11 @@ pub use eager_set::{
     ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
 };
 pub use reseal::{
-    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
-    reseal_scope_root, seed_at_epoch,
+    AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
+    WriteHistory, reseal_scope_root, seed_at_epoch,
 };
 pub use rotate::{
-    ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, ScopeRootPublishError,
+    ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
     ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{

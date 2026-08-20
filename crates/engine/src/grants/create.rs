@@ -44,9 +44,9 @@ use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
-    CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds, ResealedScopeRoot,
-    ResolveFailure, ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, SweepError,
-    SweepPublisher, SweepResolver, WriteHistory, converge_subtree, derive_write_name,
+    AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
+    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
+    SweepError, SweepPublisher, SweepResolver, WriteHistory, converge_subtree, derive_write_name,
     reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
@@ -190,7 +190,7 @@ pub enum CreateGrantError {
     Mint(ResealError),
     /// Publishing the grantee scope root failed (register-first: nothing was
     /// pushed, so this is still fail-closed).
-    Publish(ScopeRootPublishError),
+    Publish(RotationPublishError),
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
     /// grantee root and any earlier-re-keyed descendants are committed; this one
     /// keeps its old parent derivation (grantee cannot yet descend into it).
@@ -216,14 +216,14 @@ pub enum CreateGrantError {
         /// The descendant whose re-keyed record did not land.
         scope_id: [u8; 16],
         /// The publish failure.
-        error: ScopeRootPublishError,
+        error: RotationPublishError,
     },
     /// Re-sealing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference.
     ParentMint(ResealError),
     /// Publishing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference.
-    ParentPublish(ScopeRootPublishError),
+    ParentPublish(RotationPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed.
     /// Post-publish: both scope roots are published and the parent index is
     /// updated; only the share pointer is missing. A retry posts a fresh item —
@@ -361,7 +361,7 @@ where
             ipns_name: name_bytes,
             owner_enc_pub: grantee.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
-            parent_node_seed: Some(grantee.parent_node_seed),
+            ascent: Some(AscentAuthority::ParentSeed(grantee.parent_node_seed)),
             // A grant on an interior folder anchors a scope under its parent.
             owes_ascent_link: true,
             pseudonym_signer: owner.pseudonym_signer,
@@ -426,7 +426,7 @@ where
             ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
             owner_enc_secret: Some(owner.enc_secret),
-            parent_node_seed: Some(&parent_node_seed),
+            ascent: Some(AscentAuthority::ParentSeed(&parent_node_seed)),
             owes_ascent_link: true,
             pseudonym_signer: &target.pseudonym_signer,
         };
@@ -648,19 +648,19 @@ mod tests {
     #[derive(Clone)]
     struct FakeNet {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
-        publish_result: Result<(), ScopeRootPublishError>,
+        publish_result: Result<(), RotationPublishError>,
         publish_calls: Rc<RefCell<usize>>,
         /// Every read-seam entry: the sweep's three resolver calls and the
         /// cascade re-seal resolve. A refusal that must land before the
         /// convergence gate leaves this at zero.
         resolve_calls: Rc<RefCell<usize>>,
-        fail_after: Option<(usize, ScopeRootPublishError)>,
+        fail_after: Option<(usize, RotationPublishError)>,
         /// Interior nodes **inside** the granted folder: id → published epoch.
         interior: Rc<RefCell<Vec<InteriorNodeState>>>,
         /// Interior nodes of the same scope but **outside** the granted folder.
         outside: Rc<RefCell<Vec<InteriorNodeState>>>,
         /// What an interior-node re-seal publish returns.
-        node_publish_result: Result<(), ScopeRootPublishError>,
+        node_publish_result: Result<(), RotationPublishError>,
         node_publishes: Rc<RefCell<Vec<[u8; 16]>>>,
         /// A node the sweep cannot resolve at all.
         unresolvable: Option<[u8; 16]>,
@@ -669,7 +669,7 @@ mod tests {
     }
 
     impl FakeNet {
-        fn new(publish_result: Result<(), ScopeRootPublishError>) -> Self {
+        fn new(publish_result: Result<(), RotationPublishError>) -> Self {
             Self {
                 published: Rc::new(RefCell::new(Vec::new())),
                 publish_result,
@@ -688,7 +688,7 @@ mod tests {
         /// Succeed every publish up to (excluding) the `n`th, then fail with
         /// `err` — models a grantee publish that lands and a later parent
         /// publish that loses the race.
-        fn new_fail_after(n: usize, err: ScopeRootPublishError) -> Self {
+        fn new_fail_after(n: usize, err: RotationPublishError) -> Self {
             Self {
                 fail_after: Some((n, err)),
                 ..Self::new(Ok(()))
@@ -708,7 +708,7 @@ mod tests {
             self
         }
 
-        fn node_publish(mut self, result: Result<(), ScopeRootPublishError>) -> Self {
+        fn node_publish(mut self, result: Result<(), RotationPublishError>) -> Self {
             self.node_publish_result = result;
             self
         }
@@ -827,7 +827,7 @@ mod tests {
             &self,
             _scope: &ChildScopeRef,
             node: &LaggingNode<'_>,
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             self.node_publishes.borrow_mut().push(node.node_id);
             self.node_publish_result.clone()?;
             for (node_id, epoch) in self
@@ -847,7 +847,7 @@ mod tests {
             &self,
             _scope: &ChildScopeRef,
             _index: &[ChildScopeRef],
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             Ok(())
         }
     }
@@ -893,7 +893,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             let call = {
                 let mut c = self.publish_calls.borrow_mut();
                 let call = *c;
@@ -1007,7 +1007,7 @@ mod tests {
                 ipns_name: PARENT_NAME,
                 owner_enc_pub: &owner_enc_pub,
                 owner_enc_secret: None,
-                parent_node_seed: None,
+                ascent: None,
                 owes_ascent_link: false,
                 pseudonym_signer: &owner_pseudonym,
             },
@@ -1138,7 +1138,7 @@ mod tests {
                     ipns_name: PARENT_NAME,
                     owner_enc_pub: &owner_enc_pub,
                     owner_enc_secret: None,
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &owner_pseudonym,
                 },
@@ -1271,7 +1271,7 @@ mod tests {
         // posted.
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, 1)
-            .node_publish(Err(ScopeRootPublishError::LostRace));
+            .node_publish(Err(RotationPublishError::LostRace));
         let (outcome, published, hub) = run(7, &[], net, &[]);
 
         match outcome {
@@ -1370,7 +1370,7 @@ mod tests {
         let (outcome, published, hub) = run(
             7,
             &[],
-            FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+            FakeNet::new_fail_after(1, RotationPublishError::LostRace),
             &[],
         );
 
@@ -1403,7 +1403,7 @@ mod tests {
         let (outcome, published, hub) = run(
             7,
             &subtree,
-            FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+            FakeNet::new_fail_after(1, RotationPublishError::LostRace),
             &[],
         );
 

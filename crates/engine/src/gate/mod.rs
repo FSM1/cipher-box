@@ -25,4 +25,5 @@ pub use adoption::{
 // and suite, which are external crates. Stage 3 alone is a partial verdict.
 pub use adoption::{
     authenticate_section_structures, committed_write_pseudonyms, for_each_structure,
+    is_committed_write_pseudonym,
 };

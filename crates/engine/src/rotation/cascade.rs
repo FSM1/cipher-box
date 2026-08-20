@@ -64,12 +64,10 @@ use cipherbox_core::suite::x25519::X25519Public;
 
 use super::eager_set::{ResolveFailure, bind_child_labels};
 use super::reseal::{
-    CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory,
-    reseal_scope_root,
+    AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
+    WriteHistory, reseal_scope_root,
 };
-use super::rotate::{
-    ResealedScopeRoot, RotateScopePlan, ScopeRootPublishError, ScopeRootPublisher,
-};
+use super::rotate::{ResealedScopeRoot, RotateScopePlan, RotationPublishError, ScopeRootPublisher};
 use crate::entropy::{Entropy, fresh_seed};
 use crate::grants::child_index::canonicalize;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
@@ -218,7 +216,7 @@ pub enum CascadeError {
         /// The scope whose record did not land.
         scope_id: [u8; 16],
         /// The publish failure.
-        error: ScopeRootPublishError,
+        error: RotationPublishError,
     },
     /// The durable epoch floor could not be raised after a confirmed publish. The
     /// record is published (no lockout); the cut completes on retry. Retryable.
@@ -532,7 +530,7 @@ where
                     ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
                     owner_enc_secret: root_plan.identity.owner_enc_secret,
-                    parent_node_seed: Some(&child_parent_node_seed),
+                    ascent: Some(AscentAuthority::ParentSeed(&child_parent_node_seed)),
                     owes_ascent_link: true,
                     pseudonym_signer: &target.pseudonym_signer,
                 },
@@ -707,7 +705,7 @@ mod tests {
         scopes: Rc<RefCell<HashMap<[u8; 16], NetScope>>>,
         published: Rc<RefCell<HashMap<[u8; 16], ResealedScopeRoot>>>,
         resolve_faults: Rc<RefCell<HashMap<[u8; 16], ResolveFailure>>>,
-        publish_faults: Rc<RefCell<HashMap<[u8; 16], ScopeRootPublishError>>>,
+        publish_faults: Rc<RefCell<HashMap<[u8; 16], RotationPublishError>>>,
     }
 
     impl FakeNet {
@@ -755,7 +753,7 @@ mod tests {
             self
         }
 
-        fn publish_fault(self, byte: u8, error: ScopeRootPublishError) -> Self {
+        fn publish_fault(self, byte: u8, error: RotationPublishError) -> Self {
             self.publish_faults.borrow_mut().insert(sid(byte), error);
             self
         }
@@ -875,7 +873,7 @@ mod tests {
         async fn publish_scope_root(
             &self,
             record: &ResealedScopeRoot,
-        ) -> Result<(), ScopeRootPublishError> {
+        ) -> Result<(), RotationPublishError> {
             if let Some(err) = self.publish_faults.borrow().get(&record.scope_id) {
                 return Err(err.clone());
             }
@@ -936,7 +934,7 @@ mod tests {
                     ipns_name: b"ipns-00",
                     owner_enc_pub: &self.owner_pub,
                     owner_enc_secret: self.bind_owner_enc_secret.then_some(&self.net.owner.enc),
-                    parent_node_seed: None,
+                    ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
@@ -1335,7 +1333,7 @@ mod tests {
         // that cannot install the fresh seed is a hole, not a tolerated drop.
         let net = FakeNet::new()
             .scope(0x0a, 4, &[])
-            .publish_fault(0x0a, ScopeRootPublishError::NotPublished);
+            .publish_fault(0x0a, RotationPublishError::NotPublished);
         let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
         let err = outcome.expect_err("unpublished descendant fails closed");
         assert_eq!(err.check(), "publish-failed");
@@ -1351,7 +1349,7 @@ mod tests {
     fn a_publish_the_publisher_refused_is_fatal_not_retryable() {
         let net = FakeNet::new()
             .scope(0x0a, 4, &[])
-            .publish_fault(0x0a, ScopeRootPublishError::Rejected);
+            .publish_fault(0x0a, RotationPublishError::Rejected);
         let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
         let err = outcome.expect_err("a refused publish fails closed");
         assert_eq!(err.check(), "publish-failed");
@@ -1365,7 +1363,7 @@ mod tests {
         // install), where the idempotent sweep would merely drop and re-resolve.
         let net = FakeNet::new()
             .scope(0x0a, 4, &[])
-            .publish_fault(0x0a, ScopeRootPublishError::LostRace);
+            .publish_fault(0x0a, RotationPublishError::LostRace);
         let (outcome, _net, _f, _s) = run(net, &[0x0a]);
         let err = outcome.expect_err("lost race aborts the cascade");
         assert_eq!(err.check(), "publish-failed");
