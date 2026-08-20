@@ -246,23 +246,23 @@ impl ReceivedSharesList {
             .collect()
     }
 
+    /// Ambiguity is decided over **every** bookmark, before `keep` or name
+    /// validity narrows the field: a claimant this call would discard still
+    /// claims the id, and dropping it first would let the survivor answer for an
+    /// id two sharers hold.
     fn paired(&self, keep: impl Fn(&ReceivedShare) -> bool) -> Vec<GrantedScopeRoot> {
-        let mut named: Vec<([u8; 16], IpnsName)> = self
-            .entries
-            .iter()
-            .filter(|share| keep(share))
-            .filter_map(|share| {
-                let text = core::str::from_utf8(&share.scope_root_name).ok()?;
-                Some((share.scope_id, IpnsName::parse(text).ok()?))
-            })
-            .collect();
-        named.sort_by_key(|(scope_id, _)| *scope_id);
-        named
-            .chunk_by(|(a, _), (b, _)| a == b)
+        let mut claimed: Vec<&ReceivedShare> = self.entries.iter().collect();
+        claimed.sort_by_key(|share| share.scope_id);
+        claimed
+            .chunk_by(|a, b| a.scope_id == b.scope_id)
             .filter(|run| run.len() == 1)
-            .map(|run| GrantedScopeRoot {
-                scope_id: run[0].0,
-                ipns_name: run[0].1.clone(),
+            .filter(|run| keep(run[0]))
+            .filter_map(|run| {
+                let text = core::str::from_utf8(&run[0].scope_root_name).ok()?;
+                Some(GrantedScopeRoot {
+                    scope_id: run[0].scope_id,
+                    ipns_name: IpnsName::parse(text).ok()?,
+                })
             })
             .collect()
     }
@@ -1127,11 +1127,6 @@ mod tests {
         assert_eq!(list.writable_scope_refs().len(), 1);
     }
 
-    /// `scopeId` is authored by the sharer and bound to nothing outside its own
-    /// record, so two sharers can present the same one. This list is keyed by
-    /// name, so both bookmarks are legitimately held — but answering for the id
-    /// with either would aim a rotation at one sharer's root while the revokee on
-    /// the other keeps a live seed.
     #[test]
     fn a_scope_id_two_bookmarks_claim_answers_for_neither() {
         let mut list = ReceivedSharesList::new();
@@ -1147,8 +1142,34 @@ mod tests {
         );
     }
 
-    /// Nothing resolves at a name that is not a well-formed IPNS name, so it
-    /// names no rotation destination.
+    #[test]
+    fn a_read_only_claimant_still_makes_the_id_ambiguous_for_the_sweep_round() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Read));
+
+        assert!(
+            list.writable_scope_refs().is_empty(),
+            "the write half must not answer for an id the read half also claims"
+        );
+        assert!(list.granted_scope_roots().is_empty());
+    }
+
+    #[test]
+    fn a_claimant_with_an_unusable_name_still_makes_the_id_ambiguous() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        let mut junk = share_at([0x5c; 16], &a_name(0x32), Permission::Write);
+        junk.scope_root_name = b"not-an-ipns-name".to_vec();
+        list.reconcile(junk);
+
+        assert!(
+            list.granted_scope_roots().is_empty(),
+            "an unresolvable name is still a claim on the id"
+        );
+        assert!(list.writable_scope_refs().is_empty());
+    }
+
     #[test]
     fn a_bookmark_whose_stored_name_is_unusable_pairs_with_nothing() {
         let mut list = ReceivedSharesList::new();
@@ -1159,8 +1180,6 @@ mod tests {
         assert!(list.granted_scope_roots().is_empty());
     }
 
-    /// The wave re-seals and republishes, so a read-only share could only fail to
-    /// publish — once per cadence, forever (blueprint/engine.md "sweep").
     #[test]
     fn a_read_only_share_joins_no_sweep_round() {
         let mut list = ReceivedSharesList::new();

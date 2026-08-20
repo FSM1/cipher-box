@@ -107,7 +107,12 @@ pub(crate) struct NetState {
     /// resolved `after` times — a node an early pass reached and a later one
     /// cannot.
     pub(crate) delayed_node_faults: HashMap<[u8; 16], (SweepResolveFailure, u32)>,
-    /// Resolves served per node, the counter `delayed_node_faults` arms against.
+    /// Nodes a concurrent mint turns into a descendant scope root once they have
+    /// already been resolved `after` times — interior to an early pass, a
+    /// boundary to a later one.
+    pub(crate) delayed_scope_roots: HashMap<[u8; 16], u32>,
+    /// Resolves served per node, the counter `delayed_node_faults` and
+    /// `delayed_scope_roots` arm against.
     pub(crate) resolves: HashMap<[u8; 16], u32>,
     /// The scope pointer's `currentRootName`, if the scope was re-pointed.
     pub(crate) pointer: Option<Vec<u8>>,
@@ -197,6 +202,16 @@ impl FakeNet {
             .borrow_mut()
             .delayed_node_faults
             .insert(id(byte), (reason, after));
+        self
+    }
+
+    /// Serve `byte` as an interior node for `after` resolves, then as a
+    /// descendant scope root.
+    pub(crate) fn becomes_scope_root_after(self, byte: u8, after: u32) -> Self {
+        self.state
+            .borrow_mut()
+            .delayed_scope_roots
+            .insert(id(byte), after);
         self
     }
 
@@ -330,7 +345,11 @@ impl SweepResolver for FakeNet {
             .nodes
             .get(&child.node_id)
             .ok_or(SweepResolveFailure::Unavailable)?;
-        if node.is_scope_root {
+        let minted = state
+            .delayed_scope_roots
+            .get(&child.node_id)
+            .is_some_and(|after| served > *after);
+        if node.is_scope_root || minted {
             return Ok(SweptChild::ScopeRoot(ChildScopeRef::new(
                 child.node_id,
                 child.ipns_name.clone(),

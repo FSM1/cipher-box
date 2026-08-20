@@ -10,6 +10,7 @@
 //! through the engine's public sync surface.
 
 use core::cell::RefCell;
+use core::num::NonZeroU64;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -846,7 +847,7 @@ fn an_intra_scope_move_rotates_nothing() {
 #[test]
 fn create_delete_rename_and_content_edits_rotate_nothing() {
     let base = granted_scope_tree();
-    let cases: [(&str, Op); 4] = [
+    let cases: [(&str, Op); 5] = [
         (
             "create",
             Op::create(
@@ -864,9 +865,20 @@ fn create_delete_rename_and_content_edits_rotate_nothing() {
             "update-content",
             Op::update_content(id(12), staged(b"edit"), None, 1, AT),
         ),
+        (
+            "prune",
+            Op::prune(id(12), NonZeroU64::new(1).expect("nonzero"), 1, AT),
+        ),
     ];
 
     for (label, op) in cases {
+        // The structural claim, asserted at its source: every arm of rebase_one
+        // but the two relocation ones hardcodes a `None` trigger, so the replay
+        // assertion below cannot fail on its own.
+        assert!(
+            op.scope_exit_source().is_none(),
+            "{label} carries no scope crossing"
+        );
         let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
         assert!(
             report.scope_exit_triggers.is_empty(),

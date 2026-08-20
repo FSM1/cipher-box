@@ -676,11 +676,13 @@ fn conflict(node_id: [u8; 16]) -> SweepError {
 /// even though the final pass finds it already at the epoch, so a sibling forcing
 /// a re-run cannot erase the host's only notice of an index self-heal (#38 D6).
 ///
-/// The residual buckets are the **final** pass's alone: each is re-derived from
-/// published records every pass, so an earlier pass's answer no longer holds. The
-/// union yields to them — a node the final pass could not read is reported only
-/// there, keeping [`SweepOutcome`]'s one-node-one-bucket guarantee true of the
-/// aggregate as well as of each pass.
+/// The buckets the final pass re-derives are that pass's alone: each is read back
+/// from published records every pass, so an earlier pass's answer no longer
+/// holds. The union yields to them — a node the final pass could not read, or
+/// that now reads as a descendant scope root, is reported only there, keeping
+/// [`SweepOutcome`]'s one-node-one-bucket guarantee true of the aggregate as well
+/// as of each pass. `flagged_indexes` is not in that partition: it records an
+/// index repair, which by construction co-occurs with a skipped scope root.
 #[derive(Default)]
 struct Cumulative {
     converged: BTreeSet<[u8; 16]>,
@@ -702,13 +704,14 @@ impl Cumulative {
             flagged_indexes,
             last,
         } = self;
-        let residual: BTreeSet<[u8; 16]> = last
+        let final_verdicts: BTreeSet<[u8; 16]> = last
             .dropped_lost_race
             .iter()
             .copied()
             .chain(last.unreachable_nodes())
+            .chain(last.skipped_scope_roots.iter().copied())
             .collect();
-        converged.retain(|node| !residual.contains(node));
+        converged.retain(|node| !final_verdicts.contains(node));
         SweepOutcome {
             // A node an early pass re-sealed reads as already-at-epoch later;
             // counting it in both buckets would claim it never needed work.
@@ -1442,6 +1445,33 @@ mod tests {
         assert!(
             outcome.already_converged.is_empty(),
             "both nodes lagged; neither is a no-op"
+        );
+    }
+
+    /// A node a concurrent mint promotes to a descendant scope root between
+    /// passes belongs to the cascade now, not to this sweep. Leaving it in
+    /// `converged` too would let a host read it as swept interior state and skip
+    /// the cascade rotation — a revokee keeping a live seed.
+    #[test]
+    fn a_node_converged_early_then_minted_a_scope_root_is_reported_skipped_only() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .becomes_scope_root_after(0x01, 1)
+            .lost_race_next(0x02, 1);
+
+        let outcome = drive(&net, 3, 1).expect("converges on the second pass");
+
+        assert_eq!(outcome.skipped_scope_roots, vec![id(0x01)]);
+        assert_eq!(
+            outcome.converged,
+            vec![id(0x02)],
+            "the final pass's verdict is the one that holds"
+        );
+        assert_eq!(
+            outcome.flagged_indexes,
+            vec![id(0x01)],
+            "the index self-heal is a separate axis, not a competing bucket"
         );
     }
 
