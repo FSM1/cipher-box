@@ -739,6 +739,10 @@ impl Cumulative {
 /// residual surfaced, so a host racing a persistently hot writer — or a name it
 /// cannot fetch — sees what is left rather than a false "complete".
 ///
+/// `still_running` is consulted between passes, so a caller whose session has
+/// ended stops the wave at the next pass boundary rather than only at its own
+/// bound — the same granularity the resolve tick's liveness check gives.
+///
 /// # Caller contract
 ///
 /// An `Ok` outcome is convergence-complete **only when both
@@ -753,6 +757,7 @@ pub async fn run_sweep<S, R, P>(
     scope: &ChildScopeRef,
     cadence: Duration,
     max_passes: u32,
+    still_running: &dyn Fn() -> bool,
 ) -> Result<SweepOutcome, SweepError>
 where
     S: Scheduler,
@@ -767,12 +772,12 @@ where
             Ok(pass) => {
                 let again = pass.worth_another_pass();
                 cumulative.absorb(pass);
-                if !again || attempts >= max_passes {
+                if !again || attempts >= max_passes || !still_running() {
                     return Ok(cumulative.finish());
                 }
                 scheduler.sleep(cadence).await;
             }
-            Err(e) if e.is_retryable() && attempts < max_passes => {
+            Err(e) if e.is_retryable() && attempts < max_passes && still_running() => {
                 scheduler.sleep(cadence).await;
             }
             Err(e) => return Err(e),
@@ -811,7 +816,9 @@ pub async fn run_sweep_job<S, R, P>(
             return;
         };
         for scope in &scopes {
-            let result = run_sweep(scheduler, resolver, publisher, scope, cadence, 1).await;
+            // The job's session boundary is `round()` answering `None`.
+            let result =
+                run_sweep(scheduler, resolver, publisher, scope, cadence, 1, &|| true).await;
             report(scope, &result);
         }
     }
@@ -1355,6 +1362,7 @@ mod tests {
             &scope_ref(0x00),
             Duration::from_secs(30),
             max_passes,
+            &|| true,
         ));
         assert_eq!(
             scheduler.now(),

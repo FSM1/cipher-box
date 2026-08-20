@@ -50,6 +50,9 @@ const RECIPIENT_SECRET: [u8; 32] = [0x5B; 32];
 /// plaintexts (blueprint/core.md "Crypto suite").
 const POINTER_SEAL_ENTROPY_SEED: u64 = 0;
 const ROOT_SEAL_ENTROPY_SEED: u64 = 1;
+/// The seeded root's committed set varies per fixture, so its seal entropy must
+/// too: one (key, nonce) pair must never cover two plaintexts, and every other
+/// input to these seals is a module constant.
 /// The seeded root body's seal nonce, and the share pointer's HPKE ephemeral,
 /// for the same reason.
 const ROOT_BODY_NONCE: [u8; 24] = [0x31; 24];
@@ -128,7 +131,7 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
     let ledger: Vec<_> = grants.iter().map(|row| row.ledger_entry.clone()).collect();
     let pointer_read_key = owner_pointer_read_key();
     let section = reseal_scope_root(
-        &mut SeededEntropy::new(ROOT_SEAL_ENTROPY_SEED),
+        &mut SeededEntropy::new(ROOT_SEAL_ENTROPY_SEED + grants.len() as u64),
         &ScopeRootIdentity {
             v: ENVELOPE_V,
             scope_id: SCOPE,

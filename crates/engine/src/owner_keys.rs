@@ -149,4 +149,39 @@ mod tests {
             &keys.pointer_read_key(&other),
         ));
     }
+    /// The spawned sweep signs under the owned arm while every other rotation
+    /// signs under the borrowed one, and a scope's `ownerPseudonymPk` is
+    /// committed epoch-free and never revised — so a divergence between them is
+    /// a permanent `SignerNotCommitted` on every later rotation of that scope,
+    /// discoverable only in production.
+    #[test]
+    fn the_owned_arm_reproduces_the_session_arm_for_every_scope() {
+        let session = session();
+        let borrowed = OwnerSessionKeys::new(&session);
+        let owned = OwnerSeedKeys::of(&session);
+
+        for scope in [[0x00u8; 16], SCOPE, [0xff; 16]] {
+            assert_eq!(
+                borrowed.writer_pseudonym(&scope).verifying_key().to_bytes(),
+                owned.writer_pseudonym(&scope).verifying_key().to_bytes(),
+                "the two arms must name one committed pseudonym per scope",
+            );
+            assert!(ct_eq(
+                &borrowed.pointer_read_key(&scope),
+                &owned.pointer_read_key(&scope),
+            ));
+        }
+    }
+
+    /// The seed the sweep's pointer consult derives its name from is the
+    /// session's own, not a per-scope key derived from it.
+    #[test]
+    fn the_owned_arm_carries_the_sessions_pointer_seed() {
+        let session = session();
+        let owned = OwnerSeedKeys::of(&session);
+        assert!(ct_eq(
+            owned.pointer_seed(),
+            kdf::owner_pointer_seed(&SECRET).as_bytes(),
+        ));
+    }
 }

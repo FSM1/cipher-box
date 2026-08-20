@@ -44,8 +44,8 @@ use crate::gate::{GateError, floor};
 use crate::grants::{
     AcceptError, AcceptOutcome, Contact, ContactStore, ContactStoreError, CreateGrantError,
     GrantRecipient, GranteeScopePlan, InviteError, InviteMintError, InviteMintPlan,
-    InviteStoreError, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, SharePointer,
+    InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, SharePointer,
     StagingContactStore, StagingInviteStore, StagingReceivedShareStore, accept_share,
     create_read_grant, mint_invite_link, recipient_blinded_tag, resolve_recipient,
 };
@@ -1230,6 +1230,13 @@ impl EngineError {
             AcceptError::Gate(e) => EngineError::from_gate(e),
             AcceptError::Ack(e) => EngineError::from_seam(e),
             AcceptError::Persist(e) => EngineError::from_received_share_store(e),
+            // No blob at your tag on an owner-signed record is the definitive
+            // "you were removed" (`grants/revocation.rs`), never a claim that the
+            // record is forged — a host that could not tell them apart would
+            // report a revocation as an attack.
+            AcceptError::NoBlobAtTag => EngineError::MalformedInput {
+                check: "no-grant-at-your-tag",
+            },
             trust => EngineError::TrustViolation {
                 message: trust.to_string(),
             },
@@ -1564,7 +1571,7 @@ fn subtree_child_scopes(
                 check: "grant-cannot-place-a-child-scope",
             });
         }
-        if scope_root == node || rendered.is_descendant_of(scope_root, node) {
+        if rendered.is_descendant_of(scope_root, node) {
             inside.push(child.clone());
         }
     }
@@ -2041,8 +2048,18 @@ const POINTER_PAYLOAD_VERSION: u64 = 1;
 type TickLoopSpawner = Box<dyn FnOnce(IpnsName)>;
 
 /// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
-/// ([`rotate_scope`]'s third effect), for one scope id.
-type SweepTaskFactory = Rc<dyn Fn([u8; 16]) -> BoxedTask>;
+/// ([`rotate_scope`]'s third effect), over the scope root the rotation read and
+/// the ancestor seed it read it under.
+type SweepTaskFactory = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+
+/// The session material a spawned sweep opens and re-seals under, held in a cell
+/// the engine empties on drop so teardown revokes it rather than waiting out the
+/// task ([`Engine::tick_enc_subkey`] carries the tick loop's on the same terms).
+struct SweepKeys {
+    enc_secret: X25519Secret,
+    owner_identity: EcdsaVerifier,
+    scope_keys: OwnerSeedKeys,
+}
 
 /// How many sweep passes one enqueued task runs before it gives up and leaves
 /// the remainder to the next rotation or ordinary write. The idle sweep cadence
@@ -2179,11 +2196,13 @@ pub struct Engine<T: SeamTypes> {
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
     /// Builds the sweep task every rotation arm enqueues. Built at
-    /// [`start`](Self::start) for the same reason the tick loop is — a spawned
-    /// task is `'static` and the command path's seam bounds are narrower — and
-    /// emptied on drop like [`tick_enc_subkey`](Self::tick_enc_subkey), because
-    /// the closure holds the owner's two rotation seeds.
+    /// [`start`](Self::start) for the same reason the tick loop is: a spawned
+    /// task is `'static`, and the command path's seam bounds are narrower.
     sweep_tasks: RefCell<Option<SweepTaskFactory>>,
+    /// What a spawned sweep opens and signs with, shared with every task it
+    /// produces and emptied on drop — the tasks read through this cell, so
+    /// teardown revokes the material instead of waiting out the last pass.
+    sweep_keys: Rc<RefCell<Option<Rc<SweepKeys>>>>,
     /// Where this session's bytes go, decided at [`start`](Self::start) from the
     /// vault settings load and re-decided by a settings save, and shared with
     /// the drain. Carries its own provenance, because an assumed placement must
@@ -2254,6 +2273,7 @@ impl<T: SeamTypes> Engine<T> {
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
                 sweep_tasks: RefCell::new(None),
+                sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
                 byo_reconciled: Cell::new(false),
                 api: None,
@@ -2499,6 +2519,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut sweep_tasks) = self.sweep_tasks.try_borrow_mut() {
             *sweep_tasks = None;
         }
+        if let Ok(mut keys) = self.sweep_keys.try_borrow_mut() {
+            *keys = None;
+        }
         if let Ok(mut placement) = self.placement.try_borrow_mut() {
             *placement = None;
         }
@@ -2737,78 +2760,77 @@ where {
         T::FloorStore: Clone + 'static,
     {
         let session = self.session.as_ref()?;
-        let keys = Rc::new(OwnerSeedKeys::of(session));
-        let enc_secret = session.enc_subkey().clone();
-        let owner_identity = session.owner_identity();
+        *self.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
+            enc_secret: session.enc_subkey().clone(),
+            owner_identity: session.owner_identity(),
+            scope_keys: OwnerSeedKeys::of(session),
+        }));
+        let held = self.sweep_keys.clone();
         let transport = self.seams.record_transport.clone();
         let floors = self.seams.floor_store.clone();
         let scheduler = self.seams.scheduler.clone();
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
         let entropy = self.entropy.clone();
-        let write_seeds = self.scope_write_seeds.clone();
         let alive = self.alive.clone();
         let profile = self.profile;
 
-        Some(Rc::new(move |scope_id: [u8; 16]| {
-            let keys = keys.clone();
-            let enc_secret = enc_secret.clone();
-            let api = api.clone();
-            let transport = transport.clone();
-            let floors = floors.clone();
-            let scheduler = scheduler.clone();
-            let http = http.clone();
-            let gateway = gateway.clone();
-            let entropy = entropy.clone();
-            let write_seeds = write_seeds.clone();
-            let alive = alive.clone();
-            Box::pin(async move {
-                if !alive.get() {
-                    return;
-                }
-                // A scope root's name derives from its write scope seed, so a
-                // scope this session holds no seed for cannot be walked.
-                let Some(write_seed) = cached_seed(&write_seeds, &scope_id) else {
-                    return;
-                };
-                let scope = ChildScopeRef::new(
-                    scope_id,
-                    derive_write_name(&write_seed, &scope_id)
-                        .as_str()
-                        .as_bytes()
-                        .to_vec(),
-                );
-                let net = OwnerRotationNet {
-                    transport: &transport,
-                    api: api.as_ref(),
-                    gateway: &gateway,
-                    http: &http,
-                    floors: &floors,
-                    scheduler: &scheduler,
-                    profile: &profile,
-                    entropy: &entropy,
-                    keys: OwnerRotationKeys {
-                        enc_secret: &enc_secret,
-                        identity: &owner_identity,
-                        scope_keys: keys.as_ref(),
-                    },
-                    ancestry: RotationAncestry::default(),
-                    owner_pointer_seed: Some(keys.pointer_seed()),
-                    payload_version: POINTER_PAYLOAD_VERSION,
-                    gated: GatedRoots::default(),
-                    swept: SweptScopeState::default(),
-                };
-                let _ = run_sweep(
-                    &scheduler,
-                    &net,
-                    &net,
-                    &scope,
-                    profile.poll_cadence,
-                    SWEEP_MAX_PASSES,
-                )
-                .await;
-            }) as BoxedTask
-        }))
+        Some(Rc::new(
+            move |scope: ChildScopeRef, parent_node_seed: Option<Zeroizing<[u8; 32]>>| {
+                let held = held.clone();
+                let api = api.clone();
+                let transport = transport.clone();
+                let floors = floors.clone();
+                let scheduler = scheduler.clone();
+                let http = http.clone();
+                let gateway = gateway.clone();
+                let entropy = entropy.clone();
+                let alive = alive.clone();
+                Box::pin(async move {
+                    // The pass owns a copy for exactly its own duration; the
+                    // engine emptied the cell if the session is already gone.
+                    let Some(keys) = held.borrow().clone() else {
+                        return;
+                    };
+                    let net = OwnerRotationNet {
+                        transport: &transport,
+                        api: api.as_ref(),
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        scheduler: &scheduler,
+                        profile: &profile,
+                        entropy: &entropy,
+                        keys: OwnerRotationKeys {
+                            enc_secret: &keys.enc_secret,
+                            identity: &keys.owner_identity,
+                            scope_keys: &keys.scope_keys,
+                        },
+                        // An interior scope root's every gated read must prove
+                        // its ascent link, so the walk carries the ancestor seed
+                        // the rotation read it under.
+                        ancestry: RotationAncestry::default()
+                            .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
+                        owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
+                        payload_version: POINTER_PAYLOAD_VERSION,
+                        gated: GatedRoots::default(),
+                        swept: SweptScopeState::default(),
+                    };
+                    // The wave is idempotent and every later write advances it,
+                    // so a pass that does not converge is left to the next one.
+                    let _ = run_sweep(
+                        &scheduler,
+                        &net,
+                        &net,
+                        &scope,
+                        profile.poll_cadence,
+                        SWEEP_MAX_PASSES,
+                        &|| alive.get() && held.borrow().is_some(),
+                    )
+                    .await;
+                }) as BoxedTask
+            },
+        ))
     }
 
     /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
@@ -3580,7 +3602,7 @@ where {
                     pointer_read_key: &current.pointer_read_key,
                     carried_history_links: &current.carried_history_links,
                 },
-                || sweep(target.scope.scope_id),
+                || sweep(target.scope.clone(), target.parent_node_seed.clone()),
             )
             .await
         })
@@ -3670,7 +3692,7 @@ where {
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.snapshot.borrow().root.0,
-            sweep: &*sweep,
+            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
         };
         self.bounded_rotation(async || rotate_on_cut(&rotator, node, &cut).await)
             .await
@@ -3720,6 +3742,15 @@ where {
             .ok_or(EngineError::UnknownNode)?
             .name()
             .to_owned();
+        // The recipient's own received-shares codec hard-rejects a longer label,
+        // so a pointer carrying one is an item they can never store and never
+        // ack — it would redeliver until its TTL. Refuse it here, where the name
+        // is still the owner's to change (AGENTS.md rule 8).
+        if display_name.len() > MAX_DISPLAY_NAME_BYTES {
+            return Err(EngineError::MalformedInput {
+                check: "grant-display-name-too-long",
+            });
+        }
 
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
@@ -3740,6 +3771,15 @@ where {
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
+
+        // The share pointer is sealed under the parent record's envelope version
+        // and opened under the one this build authors, so a divergence would mint
+        // a grant whose pointer no accept can open.
+        if current.v != ENVELOPE_V {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-parent-envelope-version-unsupported",
+            });
+        }
 
         // A second grant on the same folder would mint another scope at epoch 1,
         // replacing the seed every existing grantee of it holds — a silent
@@ -3854,6 +3894,14 @@ where {
             .await?;
         let pointer = SharePointer::decode(&item.payload)
             .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
+        // Bind the pointer to the contact before it names anything to fetch, so
+        // one imported peer cannot steer a resolve at a scope root of their
+        // choosing. The accept flow re-checks it against the same contact.
+        if pointer.sharer_identity_pk != contact.identity_pk().to_sec1() {
+            return Err(EngineError::TrustViolation {
+                message: AcceptError::SharerMismatch.to_string(),
+            });
+        }
         let name = parsed_scope_name(&pointer.scope_root_name)?;
         let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
             .await
