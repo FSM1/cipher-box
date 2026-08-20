@@ -255,6 +255,22 @@ impl Map {
             .map(|i| self.entries.remove(i).1)
     }
 
+    /// Drop the entries whose index is `true` in `cut`, wiping each value that
+    /// goes, in one compaction — a removal per key would be quadratic in the
+    /// entry count, which a caller cutting an attacker-sized map cannot afford.
+    /// Indices are into [`Map::entries`]; a short `cut` keeps the rest.
+    pub(crate) fn cut_at(&mut self, cut: &[bool]) {
+        let mut index = 0;
+        self.entries.retain_mut(|(_, value)| {
+            let keep = !cut.get(index).copied().unwrap_or(false);
+            index += 1;
+            if !keep {
+                value.zeroize_bytes();
+            }
+            keep
+        });
+    }
+
     pub fn contains_key(&self, key: &str) -> bool {
         self.get(key).is_some()
     }

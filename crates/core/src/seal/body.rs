@@ -474,17 +474,11 @@ impl PreservedFields {
         self.0.insert(key, value);
     }
 
-    /// Drop `key`, reporting whether the set carried it. The set is the terminal
-    /// owner of the clones it holds, so the lifted value is wiped here rather
-    /// than handed back.
-    pub(crate) fn remove(&mut self, key: &str) -> bool {
-        match self.0.remove(key) {
-            Some(mut value) => {
-                value.zeroize_bytes();
-                true
-            }
-            None => false,
-        }
+    /// Drop the entries marked in `cut`, indexed as [`Self::entries`] yields
+    /// them. The set is the terminal owner of the clones it holds, so each
+    /// value that goes is wiped here rather than handed back.
+    pub(crate) fn cut_at(&mut self, cut: &[bool]) {
+        self.0.cut_at(cut);
     }
 }
 

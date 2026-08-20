@@ -345,7 +345,7 @@ pub enum DeadLetterReason {
     BaseSuperseded,
     /// Every attempt authored a record over the block ceiling, so the node's
     /// listing has to be split rather than retried.
-    RecordTooLarge,
+    HeadTooLarge,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -364,7 +364,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
                 DeadLetterReason::ContentUnrecoverable
             }
             facade::DeadLetterReason::BaseSuperseded => DeadLetterReason::BaseSuperseded,
-            facade::DeadLetterReason::RecordTooLarge => DeadLetterReason::RecordTooLarge,
+            facade::DeadLetterReason::HeadTooLarge => DeadLetterReason::HeadTooLarge,
         }
     }
 }

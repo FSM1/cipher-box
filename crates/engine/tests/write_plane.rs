@@ -1739,7 +1739,7 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
         dead_letters,
         vec![DeadLetter {
             op_id,
-            reason: DeadLetterReason::RecordTooLarge
+            reason: DeadLetterReason::HeadTooLarge
         }]
     );
     assert!(

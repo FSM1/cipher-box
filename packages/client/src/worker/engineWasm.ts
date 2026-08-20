@@ -202,6 +202,6 @@ export interface EngineWasm {
     readonly AttemptsExhausted: number;
     readonly ContentUnrecoverable: number;
     readonly BaseSuperseded: number;
-    readonly RecordTooLarge: number;
+    readonly HeadTooLarge: number;
   };
 }

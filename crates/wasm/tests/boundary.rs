@@ -485,3 +485,26 @@ fn a_bearer_the_engine_would_refuse_never_builds_a_config() {
         );
     }
 }
+
+/// The `deadLetterReason` ordinals the TypeScript side decodes against
+/// (`packages/client/src/testkit.ts`, and the raw numbers its unit tests feed).
+/// A variant inserted mid-enum renumbers every one after it, and both sides go
+/// on passing while production maps every later reason to the wrong string —
+/// so the numbering is pinned here rather than left to append-only discipline.
+#[wasm_bindgen_test]
+fn every_dead_letter_reason_crosses_at_the_ordinal_typescript_decodes() {
+    for (reason, ordinal) in [
+        (facade::DeadLetterReason::TargetGone, 0),
+        (facade::DeadLetterReason::DestinationGone, 1),
+        (facade::DeadLetterReason::DestinationInsideTarget, 2),
+        (facade::DeadLetterReason::SuffixExhausted, 3),
+        (facade::DeadLetterReason::Undecodable, 4),
+        (facade::DeadLetterReason::PayloadRefused, 5),
+        (facade::DeadLetterReason::AttemptsExhausted, 6),
+        (facade::DeadLetterReason::ContentUnrecoverable, 7),
+        (facade::DeadLetterReason::BaseSuperseded, 8),
+        (facade::DeadLetterReason::HeadTooLarge, 9),
+    ] {
+        assert_eq!(DeadLetterReason::from(reason) as u32, ordinal, "{reason:?}");
+    }
+}

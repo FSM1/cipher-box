@@ -24,8 +24,8 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
-    cut_carried_unknown, decode_grant_section, encode_envelope, encode_grant_section,
-    grant_section_bytes, has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
+    decode_grant_section, encode_envelope_within, encode_grant_section, grant_section_bytes,
+    has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -259,25 +259,13 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
     Ok(envelope)
 }
 
-/// Encode the authored envelope, cutting carried unknown fields rather than
-/// refusing a record they pushed past [`MAX_RESOLVED_RECORD_BYTES`]
-/// (blueprint/core.md: a carried set is **truncated, never refused**).
-///
-/// The carried set comes off a resolved record, which may itself run to the
-/// ceiling, so anyone who can publish at a node — a committed write-grantee, a
-/// compromised sibling device — could otherwise stop every later publish there,
-/// the owner's revoking rotation included. What remains refusable is the body
+/// Encode the authored envelope within the ceiling every block read enforces,
+/// so a carried set that would overflow it is cut rather than refused
+/// ([`encode_envelope_within`]). What is still refusable past that is the body
 /// this pass built, which no cut shrinks.
 fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
-    let mut block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
-    // One cut covers the whole overflow, so this converges in at most a second
-    // pass however many fields the carried set holds.
-    while block.len() > MAX_RESOLVED_RECORD_BYTES {
-        if cut_carried_unknown(&mut envelope, block.len() - MAX_RESOLVED_RECORD_BYTES) == 0 {
-            break;
-        }
-        block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
-    }
+    let block = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
+        .map_err(AuthorError::Seal)?;
     if block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(AuthorError::HeadTooLarge {
             size: block.len(),
@@ -462,6 +450,31 @@ mod tests {
         )]
         .into_iter()
         .collect()
+    }
+
+    /// A folder listing larger than one record can carry — the author's own
+    /// work, which no cut of a carried set shrinks.
+    fn folder_past_the_read_cap() -> ReadBody {
+        let children = (0..40_000u32)
+            .map(|i| ChildRef {
+                id: {
+                    let mut id = [0u8; 16];
+                    id[..4].copy_from_slice(&i.to_be_bytes());
+                    id
+                },
+                name: "x".repeat(96),
+                ipns_name: i.to_be_bytes().to_vec(),
+                kind: NodeKind::File,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            })
+            .collect();
+        ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children,
+            unknown: PreservedFields::new(),
+        }
     }
 
     #[test]
@@ -722,39 +735,16 @@ mod tests {
         // Release-active (security rule 8): every block read refuses an
         // over-cap body, so authoring one would sign a pointer to a block this
         // build's own reader always rejects — an unopenable node.
-        let children = (0..40_000u32)
-            .map(|i| ChildRef {
-                id: {
-                    let mut id = [0u8; 16];
-                    id[..4].copy_from_slice(&i.to_be_bytes());
-                    id
-                },
-                name: "x".repeat(96),
-                ipns_name: i.to_be_bytes().to_vec(),
-                kind: NodeKind::File,
-                link_counter: 1,
-                unknown: PreservedFields::new(),
-            })
-            .collect();
-        let body = ReadBody::Folder {
-            created_at: 0,
-            modified_at: 0,
-            children,
-            unknown: PreservedFields::new(),
-        };
         assert!(
             matches!(
-                author_child_envelope(authoring(&body, PreservedFields::new())).unwrap_err(),
+                author_child_envelope(authoring(&folder_past_the_read_cap(), PreservedFields::new()))
+                    .unwrap_err(),
                 AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
             ),
             "an over-cap head must fail closed on the produce side"
         );
     }
 
-    /// blueprint/core.md: an attacker-influenced carried set is truncated,
-    /// never refused. The set comes off a resolved record, so anyone who can
-    /// publish at this node could otherwise stop every later publish there —
-    /// including the rotation that revokes them.
     #[test]
     fn a_carried_set_that_would_overflow_the_read_cap_is_cut_rather_than_refused() {
         let carried: PreservedFields = [
@@ -809,35 +799,15 @@ mod tests {
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
     }
 
-    /// The body is this pass's own work, not a carried set, so no cut shrinks
-    /// it and the produce-side refusal stands (security rule 8).
+    /// No cut reaches the body, so the produce-side refusal stands even where
+    /// the carried set was cut to nothing (security rule 8).
     #[test]
     fn a_body_over_the_read_cap_is_still_refused_after_every_cut() {
-        let children = (0..40_000u32)
-            .map(|i| ChildRef {
-                id: {
-                    let mut id = [0u8; 16];
-                    id[..4].copy_from_slice(&i.to_be_bytes());
-                    id
-                },
-                name: "x".repeat(96),
-                ipns_name: i.to_be_bytes().to_vec(),
-                kind: NodeKind::File,
-                link_counter: 1,
-                unknown: PreservedFields::new(),
-            })
-            .collect();
-        let body = ReadBody::Folder {
-            created_at: 0,
-            modified_at: 0,
-            children,
-            unknown: PreservedFields::new(),
-        };
         let carried: PreservedFields = [("bloat".to_owned(), Value::Bytes(vec![0xab; 4096]))]
             .into_iter()
             .collect();
         assert!(matches!(
-            author_child_envelope(authoring(&body, carried)).unwrap_err(),
+            author_child_envelope(authoring(&folder_past_the_read_cap(), carried)).unwrap_err(),
             AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
         ));
     }
