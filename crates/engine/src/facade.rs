@@ -65,10 +65,10 @@ use crate::net::{
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CascadeResealResolver, CommittedSet, GrantCutPlan, ResealError, ResealSeeds,
-    ResolveFailure, RevokeError, RotateError, RotateOnCutError, RotateScopePlan, ScopeRootIdentity,
-    WriteHistory, WriteRevokeKind, derive_write_name, revoke_read_grant, revoke_write_grant,
-    rotate_on_cut, rotate_scope, run_sweep,
+    AscentAuthority, CascadeResealResolver, CascadeTarget, CommittedSet, GrantCutPlan, ResealError,
+    ResealSeeds, ResolveFailure, RevokeError, RotateError, RotateOnCutError, RotateScopePlan,
+    ScopeRootIdentity, WriteHistory, WriteRevokeKind, derive_write_name, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet,
@@ -1507,12 +1507,46 @@ impl RetryableRotation for RotateOnCutError {
 /// root indexed under a scope that no longer contains it is a descendant the
 /// eager cascade never reaches, which is a silent revocation hole rather than a
 /// stale bookmark.
+/// The owner rotation arm over one engine's seam family.
+type OwnerNet<'a, T> = OwnerRotationNet<
+    'a,
+    <T as SeamTypes>::RecordTransport,
+    <T as SeamTypes>::Http,
+    <T as SeamTypes>::CredentialStore,
+    <T as SeamTypes>::FloorStore,
+    <T as SeamTypes>::Scheduler,
+    Box<dyn Entropy>,
+>;
+
 /// A scope root this session acts on as its owner, and the ancestor node seed a
 /// gated read of an interior one needs. `None` at the vault root, which carries
 /// no ascent link to prove.
 struct OwnerScope {
     scope: ChildScopeRef,
     parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+impl OwnerScope {
+    /// `ancestry` carrying this scope's own ancestor seed when it is anchored
+    /// below the vault root — the seed its ascent link is gated against.
+    fn anchored(&self, ancestry: RotationAncestry) -> RotationAncestry {
+        match &self.parent_node_seed {
+            Some(seed) => ancestry.under_parent_node_seed(self.scope.scope_id, seed),
+            None => ancestry,
+        }
+    }
+
+    /// This scope root's current re-seal material, read through the adoption
+    /// gate under the binding its anchor demands.
+    async fn gated<T: SeamTypes>(
+        &self,
+        net: &OwnerNet<'_, T>,
+    ) -> Result<CascadeTarget, ResolveFailure> {
+        match self.parent_node_seed {
+            Some(_) => net.resolve(&self.scope).await,
+            None => net.resolve_vault_root(&self.scope).await,
+        }
+    }
 }
 
 /// A scope root's opaque `ipnsName` bytes as a parsed name. A record plane
@@ -3475,15 +3509,7 @@ where {
         keys: OwnerRotationKeys<'a>,
         ancestry: RotationAncestry,
         owner_pointer_seed: Option<&'a [u8; 32]>,
-    ) -> OwnerRotationNet<
-        'a,
-        T::RecordTransport,
-        T::Http,
-        T::CredentialStore,
-        T::FloorStore,
-        T::Scheduler,
-        Box<dyn Entropy>,
-    > {
+    ) -> OwnerNet<'a, T> {
         OwnerRotationNet {
             transport: &self.seams.record_transport,
             api: api.as_ref(),
@@ -3594,26 +3620,21 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
-        let OwnerScope {
-            scope,
-            parent_node_seed,
-        } = self
+        let target = self
             .owner_scope(node, api, owner_keys(), "rotate-target-is-not-a-scope-root")
             .await?;
 
         self.bounded_rotation(async || {
-            let ancestry = match &parent_node_seed {
-                Some(seed) => {
-                    RotationAncestry::default().under_parent_node_seed(scope.scope_id, seed)
-                }
-                None => RotationAncestry::default(),
-            };
-            let net = self.owner_rotation_net(api, owner_keys(), ancestry, None);
-            let current = match &parent_node_seed {
-                Some(_) => net.resolve(&scope).await,
-                None => net.resolve_vault_root(&scope).await,
-            }
-            .map_err(RotateError::Resolve)?;
+            let net = self.owner_rotation_net(
+                api,
+                owner_keys(),
+                target.anchored(RotationAncestry::default()),
+                None,
+            );
+            let current = target
+                .gated::<T>(&net)
+                .await
+                .map_err(RotateError::Resolve)?;
             rotate_scope(
                 &mut SharedEntropy(&self.entropy),
                 &self.seams.floor_store,
@@ -3622,11 +3643,14 @@ where {
                 &RotateScopePlan {
                     identity: ScopeRootIdentity {
                         v: current.v,
-                        scope_id: scope.scope_id,
-                        ipns_name: &scope.ipns_name,
+                        scope_id: target.scope.scope_id,
+                        ipns_name: &target.scope.ipns_name,
                         owner_enc_pub: &current.owner_enc_pub,
                         owner_enc_secret: Some(session.enc_subkey()),
-                        ascent: parent_node_seed.as_deref().map(AscentAuthority::ParentSeed),
+                        ascent: target
+                            .parent_node_seed
+                            .as_deref()
+                            .map(AscentAuthority::ParentSeed),
                         owes_ascent_link: current.carried_ascent_link,
                         pseudonym_signer: &current.pseudonym_signer,
                     },
@@ -3644,7 +3668,7 @@ where {
                     pointer_read_key: &current.pointer_read_key,
                     carried_history_links: &current.carried_history_links,
                 },
-                || sweep(scope.scope_id),
+                || sweep(target.scope.scope_id),
             )
             .await
         })
@@ -3679,31 +3703,27 @@ where {
             scope_keys: &scope_keys,
         };
         let owner_pointer_seed = session.owner_pointer_seed();
-        let OwnerScope {
-            scope,
-            parent_node_seed,
-        } = self
+        let target = self
             .owner_scope(node, api, owner_keys(), "revoke-target-is-not-a-scope-root")
             .await?;
-        let scope_root_name = scope_name(&scope.ipns_name)?;
-
-        let ancestry = match &parent_node_seed {
-            Some(seed) => RotationAncestry::default().under_parent_node_seed(scope.scope_id, seed),
-            None => RotationAncestry::default(),
-        };
-        let net = self.owner_rotation_net(api, owner_keys(), ancestry, None);
-        let current = match &parent_node_seed {
-            Some(_) => net.resolve(&scope).await,
-            None => net.resolve_vault_root(&scope).await,
-        }
-        .map_err(EngineError::from_resolve_failure)?;
+        let scope_root_name = scope_name(&target.scope.ipns_name)?;
+        let net = self.owner_rotation_net(
+            api,
+            owner_keys(),
+            target.anchored(RotationAncestry::default()),
+            None,
+        );
+        let current = target
+            .gated::<T>(&net)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
 
         // The owner's half of the same pairwise ECDH the recipient self-locates
         // under, so the tag is derived here and never taken from a caller.
         let tag = recipient_blinded_tag(
             session.enc_subkey(),
             &contact.enc_subkey(),
-            &scope.ipns_name,
+            &target.scope.ipns_name,
         )
         .ok_or(EngineError::MalformedInput {
             check: "unusable-recipient-key",
@@ -3742,8 +3762,8 @@ where {
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
-            scope_id: scope.scope_id,
-            parent_node_seed: parent_node_seed.as_deref(),
+            scope_id: target.scope.scope_id,
+            parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.snapshot.borrow().root.0,
             sweep: &|scope_id| sweep(scope_id),
         };
