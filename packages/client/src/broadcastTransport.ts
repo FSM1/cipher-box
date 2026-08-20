@@ -449,6 +449,9 @@ export class BroadcastTransport extends CorrelatedTransport {
     if (this.accountId === null) return;
     this.accountId = null;
     this.dropPort(retryError());
+    // The port is closed at this end, so no `cb:portClosed` can arrive to settle
+    // what was in flight over it.
+    this.rejectPending(retryError());
   }
 
   /**

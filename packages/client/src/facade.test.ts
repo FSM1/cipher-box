@@ -163,6 +163,42 @@ describe('EngineFacade', () => {
     expect([...view]).toEqual(new Array(view.length).fill(0));
   });
 
+  it('scrubs a refused bearer over its own range, not the buffer behind it', async () => {
+    const backing = new ArrayBuffer(12);
+    new Uint8Array(backing).fill(0xaa);
+    const view = new Uint8Array(backing, 4, 6);
+    view.set(new TextEncoder().encode('s3cret'));
+
+    await expect(
+      new EngineFacade(new FakeTransport()).saveVaultSettings({
+        ...byoSettings(null),
+        byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: view as never },
+      })
+    ).rejects.toThrow('accessToken must be a transferable buffer');
+
+    // The bytes around the credential are the caller's, not the facade's to clear.
+    const expected = new Uint8Array(backing.byteLength).fill(0xaa);
+    expected.fill(0, 4, 10);
+    expect([...new Uint8Array(backing)]).toEqual([...expected]);
+  });
+
+  it('scrubs a refused bearer a SharedArrayBuffer backs', async () => {
+    const shared = new SharedArrayBuffer(6);
+    const view = new Uint8Array(shared);
+    view.set(new TextEncoder().encode('s3cret'));
+
+    // Shared memory is not transferable, so the refusal is the only thing that
+    // ever ends this credential.
+    await expect(
+      new EngineFacade(new FakeTransport()).saveVaultSettings({
+        ...byoSettings(null),
+        byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: view as never },
+      })
+    ).rejects.toThrow('accessToken must be a transferable buffer');
+
+    expect([...view]).toEqual(new Array(view.length).fill(0));
+  });
+
   it('streams a new file through begin/push/commit and returns the op id', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);

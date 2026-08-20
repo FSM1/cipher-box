@@ -10,6 +10,11 @@
 
 const byteLengthOf = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get;
 
+const sharedByteLengthOf =
+  typeof SharedArrayBuffer === 'undefined'
+    ? undefined
+    : Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')?.get;
+
 /** An `ArrayBuffer`'s length, or `null` for anything that is not one. */
 export function bufferLength(value: unknown): number | null {
   try {
@@ -35,4 +40,29 @@ export function wipeTransfer(transfer: Iterable<unknown> | undefined): void {
     const length = bufferLength(item);
     if (length !== null && length > 0) new Uint8Array(item as ArrayBuffer).fill(0);
   }
+}
+
+/** A `SharedArrayBuffer`'s length, or `null` for anything that is not one. */
+function sharedLength(value: unknown): number | null {
+  try {
+    return (sharedByteLengthOf?.call(value) as number | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scrubs the bytes a refused argument still holds. A view is cleared over its
+ * own range, because the backing store can carry unrelated caller data, and a
+ * `SharedArrayBuffer` is handled here because it never enters a transfer list.
+ */
+export function wipeBytes(value: unknown): void {
+  if (ArrayBuffer.isView(value)) {
+    if (value.byteLength > 0) {
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength).fill(0);
+    }
+    return;
+  }
+  const shared = sharedLength(value);
+  if (shared !== null && shared > 0) new Uint8Array(value as SharedArrayBuffer).fill(0);
 }

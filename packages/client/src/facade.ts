@@ -10,7 +10,7 @@
  * consumes it), and events arrive as key-free view descriptors.
  */
 
-import { isBuffer, wipeTransfer } from './buffers.js';
+import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -209,7 +209,7 @@ export class EngineFacade {
   saveVaultSettings(settings: VaultSettingsDescriptor): Promise<CommandOutcomeDescriptor> {
     const token = settings.byo?.accessToken;
     if (token != null && !isBuffer(token)) {
-      wipeTransfer(ArrayBuffer.isView(token) ? [(token as ArrayBufferView).buffer] : undefined);
+      wipeBytes(token);
       return Promise.reject(new Error('accessToken must be a transferable buffer'));
     }
     return this.command({ kind: 'saveVaultSettings', settings });

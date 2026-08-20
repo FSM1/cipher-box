@@ -355,6 +355,11 @@ describe('broadcast transport ↔ leader relay', () => {
     const { ports, engine, relay, follower } = wire();
     await startFollower(relay, follower);
     const accessToken = new TextEncoder().encode('s3cret').buffer as ArrayBuffer;
+    const answered: Uint8Array[] = [];
+    engine.respond = (command) => {
+      answered.push(bearerOf(command));
+      return Promise.resolve({ kind: 'done' });
+    };
 
     await follower.command(settingsSaveOf(accessToken));
 
@@ -363,6 +368,8 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(accessToken.byteLength).toBe(0);
     expect(ports.transfers.some((list) => list[0] === accessToken)).toBe(true);
     expect(bearerOf(engine.commands[0])).toEqual(new TextEncoder().encode('s3cret'));
+    // The engine acts on the bearer it was delivered, not on a spent descriptor.
+    expect(answered).toEqual([new TextEncoder().encode('s3cret')]);
   });
 
   it('wipes a command bearer it never gets onto a port', async () => {
@@ -904,6 +911,24 @@ describe('broadcast transport ↔ leader relay', () => {
     relayOn(bus, engineB, ports.courier('leaderB')).serves(TEST_ACCOUNT_ID);
     await expect(queued).resolves.toMatchObject({ staleness: 'fresh' });
     expect(engineB.snapshots).toHaveLength(1);
+  });
+
+  it('rejects in-flight work retryably when the tab forgets the account it greeted with', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    engine.respondSnapshot = () => new Promise(() => undefined); // the leader never answers
+    const relay = relayOn(bus, engine, ports.courier('leader'));
+    const follower = followerOn(bus, 'f', ports.courier('f'));
+    await startFollower(relay, follower);
+
+    const inFlight = follower.snapshot(new Uint8Array(16));
+    await tick();
+    // The port is closed at this end, so no notice from the leader can settle
+    // what was riding it.
+    follower.forgetAccount();
+
+    await expect(inFlight).rejects.toThrow(/retry/);
   });
 
   it('notifies an adopted read port that it is closing when the leader steps down', async () => {

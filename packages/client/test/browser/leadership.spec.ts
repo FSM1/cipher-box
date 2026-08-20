@@ -569,6 +569,9 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     ];
     for (const tab of tabs) await tab.create(lockName, channelName);
     const roles = await Promise.all(tabs.map((tab) => tab.role()));
+    // `create` returns on a settled election, so a split other than one holder
+    // and two queued tabs means the roles were read too early.
+    expect(roles.filter((role) => role === 'follower')).toHaveLength(2);
     const signingIn = tabs[roles.lastIndexOf('follower')];
 
     // Each engine-less holder steps aside and re-queues *behind* the tab it

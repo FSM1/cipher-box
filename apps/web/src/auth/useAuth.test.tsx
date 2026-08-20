@@ -268,6 +268,43 @@ describe('useAuth', () => {
     expect(authStore.getState()).toMatchObject({ email: null });
   });
 
+  it('re-opens the resume window when the engine is replaced under a live session', async () => {
+    let hold = false;
+    let release!: () => void;
+    const engine = fakeEngineClient({
+      start: () => (hold ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve()),
+    });
+    const coreKit = fakeCoreKitSession({ loggedIn: true });
+    // A Core Kit logout that fails leaves the session live under the engine the
+    // failed logout replaced.
+    const session = {
+      ...coreKit.session,
+      logout: () => Promise.reject(new Error('core kit gone')),
+    };
+    const { result } = renderHook(() => useAuth(), {
+      wrapper: authWrapper(engine.client, session),
+    });
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+
+    hold = true;
+    await act(async () => {
+      await result.current.logout().catch(() => undefined);
+    });
+
+    // Read before the handoff is let go, so a failure here cannot strand the
+    // login flow's in-flight latch over the rest of the suite.
+    await waitFor(() => expect(engine.calls.started).toHaveLength(2));
+    const signedOutDuringHandoff = result.current.isSignedOut;
+    await act(async () => {
+      release();
+      await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+    });
+
+    // The replacement owes that session a handoff of its own, so the tab had not
+    // decided yet; a guard reading it as signed out redirects over a live login.
+    expect(signedOutDuringHandoff).toBe(false);
+  });
+
   it('leaves the tab signed out and disarmed when the engine refuses the secret', async () => {
     const engine = fakeEngineClient({ start: () => Promise.reject(new Error('trust violation')) });
     const coreKit = fakeCoreKitSession();

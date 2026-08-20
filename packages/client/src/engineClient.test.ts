@@ -577,6 +577,7 @@ describe('EngineClient leadership + transport swap', () => {
       // its own start waits for; a cold start is network-bound work, so the
       // hand-off deadline no longer applies to it.
       for (let i = 0; i < 20 && release === undefined; i += 1) await tick();
+      expect(release).toBeTypeOf('function');
       await vi.advanceTimersByTimeAsync(60_000);
       release(fakeLoginSecret([5]));
 

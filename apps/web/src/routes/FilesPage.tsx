@@ -4,9 +4,10 @@ import { AppShell } from '../components/layout/AppShell';
 
 /** The vault browser, behind `RequireAuth`. */
 export function FilesPage() {
+  const account = useEngineAccount();
   return (
     <AppShell>
-      {useEngineAccount() !== null ? (
+      {account !== null ? (
         <FileBrowser />
       ) : (
         <p className="file-browser-loading" data-testid="files-signing-in">

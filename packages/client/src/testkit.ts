@@ -480,8 +480,10 @@ export class FakeEngineTransport implements EngineTransport {
     this.commandTransfers.push(transfer);
     // `LocalTransport` moves a descriptor's buffers into the worker; model that,
     // so a sender reading one afterwards fails exactly as it would in a browser.
-    this.commands.push(transfer.length > 0 ? structuredClone(command, { transfer }) : command);
-    return this.respond(command);
+    // The responder is the receiver, so it answers over the delivered clone.
+    const delivered = transfer.length > 0 ? structuredClone(command, { transfer }) : command;
+    this.commands.push(delivered);
+    return this.respond(delivered);
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
