@@ -11,7 +11,8 @@ const REASONS: Record<DeadLetterReason, string> = {
   attemptsExhausted: 'it failed too many times',
   contentUnrecoverable: 'its content could not be recovered',
   baseSuperseded: 'someone else saved a newer version first, so this edit was not published',
-  headTooLarge: 'this folder holds too many items to save in one record; split it into subfolders',
+  headTooLarge:
+    "this item's record grew too large to save; a folder this big has to be split into subfolders",
 };
 
 /**

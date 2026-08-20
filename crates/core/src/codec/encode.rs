@@ -90,13 +90,13 @@ fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
     Ok(())
 }
 
-/// The byte length of a text item: its head plus its UTF-8 bytes.
 /// The exact number of bytes [`encode`] emits for a map key. The key half of
 /// [`encoded_len`], for a caller weighing what one whole entry costs.
 pub fn encoded_key_len(key: &str) -> usize {
     text_len(key)
 }
 
+/// The byte length of a text item: its head plus its UTF-8 bytes.
 pub(super) fn text_len(t: &str) -> usize {
     head_len(t.len() as u64) + t.len()
 }

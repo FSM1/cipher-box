@@ -23,7 +23,7 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
+    CarriedCut, ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
     decode_grant_section, encode_envelope_within, encode_grant_section, grant_section_bytes,
     has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
 };
@@ -143,6 +143,10 @@ pub struct AuthoredHead {
     pub block: Vec<u8>,
     /// `block`'s content CID as a record `Value` spells it.
     pub cid: String,
+    /// The carried keys the encode had to drop to fit the block ceiling. A cut
+    /// is data destroyed under pressure someone else applied, so a publisher
+    /// reports it rather than doing it quietly.
+    pub cut: CarriedCut,
 }
 
 /// The inputs one node's envelope is sealed from. `carried_*` are the unknown
@@ -264,7 +268,7 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
 /// ([`encode_envelope_within`]). What is still refusable past that is the body
 /// this pass built, which no cut shrinks.
 fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
-    let block = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
+    let (block, cut) = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
         .map_err(AuthorError::Seal)?;
     if block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(AuthorError::HeadTooLarge {
@@ -277,6 +281,7 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
         envelope,
         block,
         cid,
+        cut,
     })
 }
 

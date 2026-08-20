@@ -20,8 +20,8 @@ use crate::suite::aead::{KEY_LEN, NONCE_LEN};
 
 use super::aad::{AadContext, STRUCT_TAG_READ_BODY};
 use super::body::{
-    PreservedFields, ReadBody, bytes_fixed, collect_unknown, decode_read_body, encode_read_body,
-    merge_unknown, req,
+    PreservedFields, ReadBody, assert_unknown_disjoint, bytes_fixed, collect_unknown,
+    decode_read_body, encode_read_body, merge_unknown, req,
 };
 
 /// A node's kind-uniform envelope. `scope`/`epoch` are the flattened `epochTag`
@@ -106,39 +106,57 @@ const WRITE_SEALED_KEY: &str = "writeSealed";
 /// unknown fields").
 const UNCUTTABLE: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
 
-/// Encode `env`, cutting carried unknown fields until the block fits `limit`.
-/// The block still exceeds `limit` when the typed fields alone do — that part is
-/// the author's own work, and no cut shrinks it.
+/// What an [`encode_envelope_within`] cut destroyed: the carried keys it
+/// dropped, in the order it dropped them. Empty when nothing was cut.
+///
+/// A cut fires only under attacker-sized pressure and it destroys data, so it is
+/// something to report rather than something to do quietly (blueprint/engine.md
+/// "never a silent failure"). The keys are safe to surface: they come off a
+/// published record.
+pub type CarriedCut = Vec<String>;
+
+/// Encode `env`, cutting carried unknown fields until the block fits `limit`,
+/// and report what the cut took. The block still exceeds `limit` when the typed
+/// fields alone do — that part is the author's own work, and no cut shrinks it.
 ///
 /// A carried set is **truncated, never refused** (blueprint/core.md, "Carried
 /// unknown fields"): it comes off a resolved record, so anyone who can publish
 /// at a name could otherwise stop every later publish there. `env` is left
 /// holding exactly what the returned block encodes, so no caller can pair a cut
 /// block with an uncut envelope.
-///
-/// Cuts run largest-first, so an honest carried field survives an inflated
-/// neighbour, and ties fall to the set's own canonical order.
-pub fn encode_envelope_within(env: &mut Envelope, limit: usize) -> Result<Vec<u8>, CodecError> {
+pub fn encode_envelope_within(
+    env: &mut Envelope,
+    limit: usize,
+) -> Result<(Vec<u8>, CarriedCut), CodecError> {
     let block = encode_envelope(env)?;
     let Some(excess) = block.len().checked_sub(limit) else {
-        return Ok(block);
+        return Ok((block, CarriedCut::new()));
     };
-    if cut_carried_unknown(env, excess) == 0 {
-        return Ok(block);
+    let cut = cut_carried_unknown(env, excess);
+    if cut.is_empty() {
+        return Ok((block, cut));
     }
     // One pass, not a fixpoint: a cut covers the whole excess in value bytes
     // alone, and dropping an entry frees its key and framing on top of that.
-    encode_envelope(env)
+    Ok((encode_envelope(env)?, cut))
 }
 
-/// Cut cuttable carried fields, largest first, until `excess` encoded bytes have
-/// gone or nothing cuttable is left. Reports the bytes cut.
+/// Cut cuttable carried fields until `excess` encoded bytes have gone or nothing
+/// cuttable is left, reporting the keys taken.
 ///
 /// Ranked and compacted rather than removed key by key: the carried set is
 /// attacker-sized, and a removal per key is quadratic in what they carried.
-fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> usize {
+///
+/// Largest first, so the fewest fields go and one pass relieves the pressure
+/// rather than leaving the next edit to cut again. That is a *count* bound, not
+/// a byte bound: a party padding a record below the size of an honest field can
+/// aim the first cut at it. What keeps that from mattering is that no cuttable
+/// field carries a trust decision — the two that do are [`UNCUTTABLE`] — and the
+/// fix for the day one does is a marker the field carries on the wire, not a
+/// ranking this side can guess.
+fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> CarriedCut {
     // `entries()` is canonically ordered and the sort is stable, so ranking on
-    // the length alone is deterministic without carrying the keys along.
+    // the cost alone is deterministic without carrying the keys along.
     let mut ranked: Vec<(usize, bool, usize)> = entry_costs(&env.unknown)
         .map(|(cost, index)| (cost, false, index))
         .chain(entry_costs(&env.epoch_tag_unknown).map(|(cost, index)| (cost, true, index)))
@@ -147,38 +165,47 @@ fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> usize {
 
     let mut top = vec![false; env.unknown.len()];
     let mut tag = vec![false; env.epoch_tag_unknown.len()];
+    let mut taken = CarriedCut::new();
     let mut cut = 0usize;
     for (cost, in_epoch_tag, index) in ranked {
         if cut >= excess {
             break;
         }
-        let marks = if in_epoch_tag { &mut tag } else { &mut top };
+        let (marks, fields) = if in_epoch_tag {
+            (&mut tag, &env.epoch_tag_unknown)
+        } else {
+            (&mut top, &env.unknown)
+        };
         marks[index] = true;
+        taken.push(fields.entries()[index].0.clone());
         cut = cut.saturating_add(cost);
     }
     env.unknown.cut_at(&top);
     env.epoch_tag_unknown.cut_at(&tag);
-    cut
+    taken
 }
 
-/// What each cuttable field costs on the wire, with its index in `fields`. A
-/// value [`encoded_len`] cannot measure is unencodable, so it sorts first.
+/// What each cuttable field costs on the wire, with its index in `fields`.
+/// [`encode_envelope`] runs first and refuses anything [`encoded_len`] cannot
+/// measure, so an unmeasurable field never reaches the ranking.
 fn entry_costs(fields: &PreservedFields) -> impl Iterator<Item = (usize, usize)> + '_ {
     fields
         .entries()
         .iter()
         .enumerate()
         .filter(|(_, (key, _))| !UNCUTTABLE.contains(&key.as_str()))
-        .map(|(index, (key, value))| {
-            let cost = encoded_len(value)
-                .map(|len| len + encoded_key_len(key))
-                .unwrap_or(usize::MAX);
-            (cost, index)
+        .filter_map(|(index, (key, value))| {
+            Some((encoded_len(value).ok()? + encoded_key_len(key), index))
         })
 }
 
 /// Encode an envelope to its canonical det-CBOR plaintext.
 pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
+    // [`merge_unknown`] skips a carried key that collides with a typed one, so
+    // without this the block would decode back to a different envelope than the
+    // one encoded — and a cut would budget for bytes never on the wire.
+    assert_unknown_disjoint(&env.unknown, ENVELOPE_KNOWN)?;
+    assert_unknown_disjoint(&env.epoch_tag_unknown, EPOCH_TAG_KNOWN)?;
     let mut epoch_tag = Map::new();
     epoch_tag.insert("epoch", Value::Unsigned(env.epoch));
     epoch_tag.insert("scope", Value::Bytes(env.scope.to_vec()));
@@ -501,7 +528,7 @@ mod truncation_tests {
             fields(&[("bloat", 4096), ("small", 8), ("mid", 512)]),
             PreservedFields::new(),
         );
-        let block = encode_envelope_within(&mut env, limit).expect("encodes");
+        let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert!(block.len() <= limit);
         assert_eq!(keys(&env.unknown), vec!["small"]);
         assert_eq!(
@@ -518,7 +545,7 @@ mod truncation_tests {
         let limit = limit_carrying(carried.clone(), tag.clone());
         let mut env = envelope(carried, tag);
         let before = env.clone();
-        let block = encode_envelope_within(&mut env, limit).expect("encodes");
+        let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert_eq!(env, before);
         assert_eq!(block, encode_envelope(&before).expect("encodes"));
     }
@@ -533,7 +560,7 @@ mod truncation_tests {
             fields(&[("grantSection", 512), ("writeSealed", 512)]),
             PreservedFields::new(),
         );
-        let block = encode_envelope_within(&mut env, limit).expect("encodes");
+        let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert!(block.len() > limit, "the caller refuses; the cut does not");
         assert_eq!(keys(&env.unknown), vec!["writeSealed", "grantSection"]);
     }
@@ -542,7 +569,7 @@ mod truncation_tests {
     fn an_epoch_tag_field_is_cuttable_and_ranked_against_the_top_level() {
         let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
         let mut env = envelope(fields(&[("small", 8)]), fields(&[("tagBloat", 4096)]));
-        let block = encode_envelope_within(&mut env, limit).expect("encodes");
+        let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert!(block.len() <= limit);
         assert!(env.epoch_tag_unknown.is_empty());
         assert_eq!(keys(&env.unknown), vec!["small"]);
@@ -558,7 +585,7 @@ mod truncation_tests {
             fields(&[("a", 64), ("b", 64), ("c", 64), ("d", 64)]),
             PreservedFields::new(),
         );
-        let block = encode_envelope_within(&mut env, limit).expect("encodes");
+        let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert!(block.len() <= limit);
         assert_eq!(env.unknown.len(), 2, "and stops there");
     }
@@ -575,5 +602,69 @@ mod truncation_tests {
         };
         assert_eq!(cut_once(), Some("b".to_owned()));
         assert_eq!(cut_once(), cut_once());
+    }
+
+    /// A cut destroys data under pressure someone else applied, so what it took
+    /// has to be reportable rather than inferable.
+    #[test]
+    fn a_cut_reports_the_carried_keys_it_dropped() {
+        let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
+        let mut env = envelope(
+            fields(&[("bloat", 4096), ("small", 8), ("mid", 512)]),
+            PreservedFields::new(),
+        );
+        let (_, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+        assert_eq!(cut, vec!["bloat".to_owned(), "mid".to_owned()]);
+    }
+
+    #[test]
+    fn an_encode_that_cuts_nothing_reports_nothing() {
+        let carried = fields(&[("a", 8)]);
+        let limit = limit_carrying(carried.clone(), PreservedFields::new());
+        let mut env = envelope(carried, PreservedFields::new());
+        let (_, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+        assert!(cut.is_empty());
+    }
+
+    /// Release-active (AGENTS.md rule 8): [`merge_unknown`] skips a carried key
+    /// that collides with a typed one, so encoding it would emit a block that
+    /// decodes back to a different envelope.
+    #[test]
+    fn a_carried_key_that_collides_with_a_typed_one_is_refused_at_encode() {
+        for (unknown, tag) in [
+            (fields(&[("v", 8)]), PreservedFields::new()),
+            (PreservedFields::new(), fields(&[("epoch", 8)])),
+        ] {
+            let env = envelope(unknown, tag);
+            assert_eq!(
+                encode_envelope(&env).unwrap_err().check(),
+                "unknown-field-collision"
+            );
+        }
+    }
+
+    /// A future refactor routing the cut through [`Map::zeroize_bytes`] would
+    /// set the terminal wiped mark and make the map unencodable — the whole
+    /// point of the cut being to leave it encodable.
+    #[test]
+    fn a_cut_leaves_the_surviving_carried_values_intact_and_encodable() {
+        let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
+        let mut env = envelope(
+            fields(&[("bloat", 4096), ("small", 8)]),
+            PreservedFields::new(),
+        );
+        encode_envelope_within(&mut env, limit).expect("encodes");
+        assert_eq!(env.unknown.get("small"), Some(&Value::Bytes(vec![0xab; 8])));
+        encode_envelope(&env).expect("the surviving map still encodes");
+    }
+
+    #[test]
+    fn a_cut_that_empties_both_carried_sets_still_round_trips() {
+        let limit = limit_carrying(PreservedFields::new(), PreservedFields::new());
+        let mut env = envelope(fields(&[("a", 512)]), fields(&[("t", 512)]));
+        let (block, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+        assert_eq!(cut.len(), 2);
+        assert!(env.unknown.is_empty() && env.epoch_tag_unknown.is_empty());
+        assert_eq!(decode_envelope(&block).expect("decodes"), env);
     }
 }
