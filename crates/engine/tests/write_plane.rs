@@ -7381,6 +7381,9 @@ fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
+    // A published record, so the hosted placement is the member's own — an
+    // assumed one latches nothing (blueprint/engine.md "Settings-load policy").
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
     // The account carries the flag an external session set; this one is hosted.
     blocks.advisory_quota.store(true, Ordering::Relaxed);
     blocks.byo_down.store(true, Ordering::Relaxed);

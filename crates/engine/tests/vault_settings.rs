@@ -32,9 +32,10 @@ use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DefaultsReason, Engine, EngineError,
-    EventStream, Gateway, GatewayConfig, LoginSecret, NodeId, OrphanHeads, ProviderError,
-    RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError, StoragePolicy,
-    SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
+    EventStream, Gateway, GatewayConfig, LoginSecret, NodeId, OrphanHeads, PlacementRefusal,
+    ProviderError, RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError,
+    StoragePolicy, SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings,
+    settings_name,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -2084,40 +2085,73 @@ fn a_renewal_never_re_signs_a_settings_record_a_second_device_superseded() {
 #[test]
 fn a_saved_placement_binds_the_running_session() {
     let world = FakeWorld::new();
-    let blocks = Blocks::default().on_a_byo_account();
+    let blocks = Blocks::default();
     let device = world.device(b"me");
     let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
 
-    // Cold start found no record, so this session places on the hosted leg and
-    // the first write reconciles the account off its stale BYO flag.
-    open_and_drop_a_write(&mut engine);
-    assert_eq!(blocks.byo_patches(), vec![r#"{"byo":false}"#.to_owned()]);
+    // Cold start found no record, so this session writes under the assumed
+    // first-run default — which authenticates nothing and latches nothing.
+    open_and_drop_a_write(&mut engine).expect("the assumed default admits the write");
+    assert!(
+        blocks.byo_patches().is_empty(),
+        "an assumed placement must not write the account's own flag",
+    );
 
     block_on(engine.command(Command::SaveVaultSettings {
         settings: external_only(),
     }))
     .expect("the save publishes");
-    open_and_drop_a_write(&mut engine);
+    open_and_drop_a_write(&mut engine).expect("the saved External placement admits the write");
 
     assert_eq!(
         blocks.byo_patches(),
-        vec![r#"{"byo":false}"#.to_owned(), r#"{"byo":true}"#.to_owned()],
-        "the saved External placement rebound the session and re-armed the flag",
+        vec![r#"{"byo":true}"#.to_owned()],
+        "the saved External placement rebound the session and armed the flag",
+    );
+}
+
+/// The whole of #1084's residual, one layer out: a fresh device against an
+/// adversary who withholds the settings record holds no durable mark, so it
+/// assumes the hosted default. The account's own BYO flag contradicts it, and
+/// contradiction is the one direction that server-controlled signal may be read
+/// in — so the write is refused rather than placed on a store the member never
+/// chose, and the account-wide flag a device that authenticated nothing must
+/// never rewrite is left exactly as it stood.
+#[test]
+fn an_assumed_first_run_never_clears_the_accounts_byo_flag() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default().on_a_byo_account();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    let refused = open_and_drop_a_write(&mut engine);
+    assert!(
+        matches!(
+            refused,
+            Err(EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::UnprovenFirstRun),
+            })
+        ),
+        "got {refused:?}",
+    );
+    assert!(
+        blocks.byo_patches().is_empty(),
+        "a device that authenticated no settings record issued a PATCH",
     );
 }
 
 /// Open a write and abandon it: the quota pre-flight the open runs is what
 /// reads the session's placement.
-fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) {
+fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) -> Result<(), EngineError> {
     let handle = block_on(engine.begin_write(
         WriteTarget::NewFile {
             parent: NodeId([0u8; 16]),
             name: "placement-probe.txt".to_owned(),
         },
         4,
-    ))
-    .expect("the write opens");
+    ))?;
     block_on(engine.abort_write(handle));
+    Ok(())
 }
 
 /// The API answering about a block other than the one uploaded is a fail-closed
