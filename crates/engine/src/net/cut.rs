@@ -28,8 +28,8 @@ use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
     CommittedSet, CutRotator, ResolveFailure, RevokedCommittedSet, RotateScopePlan,
-    RotateScopeWritePlan, ScopeRootIdentity, WritePublishError, WriteRotateError,
-    WriteRotationOutcome, cascade_rotate_scope, rotate_scope_write,
+    RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError, WriteRotationOutcome,
+    cascade_rotate_scope, rotate_scope_write,
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -233,13 +233,12 @@ where
         // Re-read after the read arm: a full revoke re-keyed the scope, and the
         // wave derives every per-node read key from the seed that cut published.
         let current = self.resolve(&scope).await.map_err(resolve_failed)?;
+        // The durable floor is the owner-vouched `minReadEpoch` the re-point
+        // carries; a scope that has never been rotated has none, and its record's
+        // own epoch is the floor a reader would derive.
         let min_read_epoch = floor::read_epoch_floor(self.floors, &scope_root.0)
             .await
-            .map_err(|_| WriteRotateError::Publish {
-                stage: "floor",
-                node_id: scope_root.0,
-                error: WritePublishError::NotLanded,
-            })?
+            .map_err(|_| resolve_failed(ResolveFailure::Unavailable))?
             .unwrap_or(current.current_read_epoch);
 
         let net = WriteWaveNet {
