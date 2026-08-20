@@ -10,9 +10,11 @@
 //!   the [`cascade`] (each eager-set descendant, fresh seed), and by the sweep.
 //! - [`rotate`] — `rotateScope`, the read-plane root cut: mint a fresh override
 //!   seed, re-seal, publish CAS, raise `minReadEpoch`, enqueue the sweep.
-//! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface, and
-//!   the driver that turns a replay's queued scope-exit triggers into one flat
-//!   `rotateScope` per source scope root.
+//! - [`trigger`] — the blueprint's five triggers: the owner-only committed-set
+//!   cuts (read revoke, write revoke/downgrade, discovered link expiry), the
+//!   driver that turns a replay's queued scope-exit triggers into one flat
+//!   `rotateScope` per source scope root, and the driver that takes a cut
+//!   through the planes it demands.
 //! - [`sweep`] — the lazy wave over a scope's **interior nodes**: re-seal every
 //!   node whose epoch lags its scope's, plus the idle-cadence driver and the
 //!   direct-child-scope index self-heal. Descendant scope roots are eager-set
@@ -31,8 +33,8 @@
 //! [`ChildIndexResolver`], [`CascadeResealResolver`], [`ScopeRootPublisher`],
 //! [`SweepResolver`], [`SweepPublisher`], [`WriteSubtreeResolver`] and
 //! [`WriteWavePublisher`] have production implementations over the real
-//! transport in [`crate::net::rotation`]. [`ScopeExitRotator`] has no production
-//! implementation yet; tests fake it.
+//! transport in [`crate::net::rotation`]. [`ScopeExitRotator`] and
+//! [`CutRotator`] have no production implementation yet; tests fake them.
 
 pub mod cascade;
 pub mod eager_set;
@@ -67,6 +69,8 @@ pub use sweep::{
     SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, sweep_pass,
 };
 pub use trigger::{
-    RevokeError, RevokedCommittedSet, RotationTrigger, ScopeExitReport, ScopeExitRotator,
-    consume_scope_exit_triggers, revoke_read_grant,
+    CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
+    RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport, ScopeExitRotator,
+    WriteRevokeKind, consume_scope_exit_triggers, prune_expired_grants, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut,
 };

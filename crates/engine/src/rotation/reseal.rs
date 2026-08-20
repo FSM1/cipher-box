@@ -1567,13 +1567,17 @@ mod tests {
         let revoked = X25519Secret::from_scalar([0xcc; 32]);
         let revoked_tag = [0xc3; 32];
 
+        // A real name: the cut binds the commitment to the scope it names.
+        let scope_name = super::super::rotate_write::derive_write_name(&[0x5a; 32], &SCOPE);
+        let scope_name_bytes = scope_name.as_str().as_bytes();
+
         let entries = vec![
             GrantSetEntry::new(Fixture::read_tag(), Permission::Read, [0x02; 32]),
             GrantSetEntry::new(revoked_tag, Permission::Read, [0x04; 32]),
             GrantSetEntry::new(Fixture::write_tag(), Permission::Write, [0x03; 32]),
         ];
         let commitment = GrantSetCommitment {
-            ipns_name: b"n".to_vec(),
+            ipns_name: scope_name_bytes.to_vec(),
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
             entries,
             unknown: PreservedFields::new(),
@@ -1604,11 +1608,14 @@ mod tests {
             .unwrap()
             .to_compact();
         let cut = super::super::trigger::revoke_read_grant(
-            &commitment,
-            &commitment_sig,
-            &ledger,
+            &super::super::trigger::GrantCutPlan {
+                commitment: &commitment,
+                commitment_sig: &commitment_sig,
+                grant_ledger: &ledger,
+                scope_root_name: &scope_name,
+                owner_signer: &fx.owner_ecdsa,
+            },
             &revoked_tag,
-            &fx.owner_ecdsa,
         )
         .expect("revoke");
         assert!(
@@ -1620,7 +1627,7 @@ mod tests {
             "revokee gone from commitment"
         );
 
-        let id = identity(&fx, &owner_pub, b"n", None);
+        let id = identity(&fx, &owner_pub, scope_name_bytes, None);
         let new_seed = [0xef; 32];
         let s = seeds(
             &new_seed,
