@@ -69,7 +69,8 @@ impl RotationTrigger {
 /// transport.
 pub trait ScopeExitRotator {
     /// Run the flat, grantee-triggered [`RotationTrigger::ScopeExit`] cut at
-    /// `scope_root`. `Err` means nothing was cut.
+    /// `scope_root`. `Err` means nothing was cut, with the single documented
+    /// exception of [`RotateError::Floor`].
     async fn rotate_on_scope_exit(
         &self,
         scope_root: NodeId,

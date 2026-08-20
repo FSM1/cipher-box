@@ -395,14 +395,17 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 }
 
 /// Carry a publish-pipeline failure onto rule 6's axis. An API that echoes back
-/// an address other than the one we uploaded is not answering about our block —
-/// deterministic, so a retry re-uploads and re-charges a head block forever
+/// an address other than the one we uploaded is not answering about our block,
+/// and an empty head CID is this build's own release-active refusal to sign
+/// `/ipfs/` ([`PublishError::EmptyHeadCid`]) — both deterministic on what this
+/// pass authored, so a retry re-authors and re-charges a head block forever
 /// without converging. Everything else, including a body this pass built too
 /// large, stays retryable: those inputs are attacker-influenced, and a permanent
 /// verdict on them would let anyone who can grow a record block the rotation.
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
-        RecordPublishError::HeadCidMismatch { .. } => RotationPublishError::Rejected,
+        RecordPublishError::HeadCidMismatch { .. }
+        | RecordPublishError::Publish(PublishError::EmptyHeadCid) => RotationPublishError::Rejected,
         _ => RotationPublishError::NotPublished,
     }
 }
@@ -4987,6 +4990,33 @@ mod tests {
         assert!(
             matches!(&error, RotateError::Publish(publish) if publish.is_retryable()),
             "and it stays retryable",
+        );
+    }
+
+    #[test]
+    fn a_rotation_publish_refusal_this_pass_authored_is_never_retried() {
+        // A mis-echoed CID and an empty head CID are verdicts on what this pass
+        // authored, so a retry re-authors them and refuses again. A size refusal
+        // is attacker-influenced and stays retryable (rule 6 axis).
+        for deterministic in [
+            RecordPublishError::HeadCidMismatch {
+                expected: "bafy-ours".to_owned(),
+                returned: "bafy-theirs".to_owned(),
+            },
+            RecordPublishError::Publish(PublishError::EmptyHeadCid),
+        ] {
+            assert_eq!(
+                record_publish_verdict(deterministic),
+                RotationPublishError::Rejected,
+            );
+        }
+        assert!(
+            record_publish_verdict(RecordPublishError::Publish(PublishError::RecordTooLarge {
+                size: 1,
+                limit: 0,
+            }))
+            .is_retryable(),
+            "a size refusal on an attacker-influenced record stays retryable",
         );
     }
 
