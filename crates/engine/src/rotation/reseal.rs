@@ -44,14 +44,14 @@ use cipherbox_core::seal::{
     seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
     seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
-use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
+use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
-use crate::grants::{enforce_committed_ledger, entry_tag_is_bound};
+use crate::grants::{bound_recipient, enforce_committed_ledger, row_is_owner_attested};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window
@@ -106,14 +106,15 @@ pub struct ScopeRootIdentity<'a> {
     /// recipient (the owner is an implicit, unrevokable grantee of every scope).
     pub owner_enc_pub: &'a X25519Public,
     /// The owner's X25519 encryption-subkey secret, when the re-sealer holds it.
-    /// `Some` binds every ledger row to the tag its own `recipientEncPk` derives
-    /// at `ipns_name` ([`entry_tag_is_bound`]) before anything is sealed.
+    /// `Some` **proves** every ledger row's `recipientEncPk` against the tag it
+    /// derives at `ipns_name`, the strongest of the two owner authorities over
+    /// the field ([`adopt_recipients`]).
     ///
-    /// `None` derives no tag and re-wraps the committed rows as they stand — the
-    /// residual [`ResealError::TagNotBoundToRecipient`] names. A write-grantee
-    /// re-sealer can pass nothing else; an owner-held leg that passes `None`
-    /// anyway (the sweep, and a root plan built outside this module) leaves that
-    /// residual open on itself.
+    /// `None` falls back to the row's own owner signature
+    /// ([`CommittedSet::owner_identity`]), which needs no owner secret. That is
+    /// what closes the residual this field used to name: a write-grantee
+    /// re-sealer now refuses a swapped key too, where before it re-wrapped
+    /// whatever it was handed.
     pub owner_enc_secret: Option<&'a X25519Secret>,
     /// What this re-seal mints the ascent link under; `None` at the vault root,
     /// which carries no ascent link.
@@ -217,6 +218,10 @@ impl ResealSeeds<'_> {
 
 /// The owner-committed grant set plus the write-body content a re-seal carries.
 pub struct CommittedSet<'a> {
+    /// The vault owner's identity public key — the authority every carried
+    /// signature in this set answers to: the commitment's, and each ledger row's
+    /// recipient binding ([`row_is_owner_attested`]).
+    pub owner_identity: &'a EcdsaVerifier,
     /// The owner-signed, epoch-free commitment (reused verbatim on a grantee
     /// rotation; owner-re-signed by the read-revoke trigger before it reaches
     /// here).
@@ -249,12 +254,12 @@ pub enum ResealError {
     /// A grant-ledger entry's recipient encryption key is unusable (malformed or
     /// low-order X25519). A grant can never be wrapped to an unopenable key.
     UnusableRecipientKey,
-    /// A grant-ledger row is not filed under the tag its own `recipientEncPk`
-    /// derives at this scope root's name. Either a write-grantee swapped the key
-    /// under an owner-committed tag — every later honest re-seal would then wrap
-    /// the seed to the swapped key — or the rows belong to a name this root has
-    /// moved off. Only raised where the re-sealer holds the owner encryption
-    /// subkey ([`ScopeRootIdentity::owner_enc_secret`]).
+    /// An owner-attested grant-ledger row is not filed under the tag its own
+    /// `recipientEncPk` derives at this scope root's name — the owner signed a
+    /// binding its own encryption subkey does not reproduce, so the two owner
+    /// authorities over the row disagree. Only raised where the re-sealer holds
+    /// the owner encryption subkey ([`ScopeRootIdentity::owner_enc_secret`]); a
+    /// row neither authority covers is skipped instead ([`adopt_recipients`]).
     TagNotBoundToRecipient,
     /// The freshly sealed ascent link does not reopen as this epoch's override
     /// seed — bytes the gate's stage 3 rejects whole-record
@@ -496,6 +501,56 @@ fn mint_owner_history_link<E: Entropy>(
     sealed.map_err(ResealError::Encode)
 }
 
+/// Adopt every ledger row's `recipientEncPk` once, in ledger order — the keys
+/// the grant-blob loop wraps to, `None` for a row that gets no blob.
+///
+/// Two independent owner authorities cover `recipientEncPk`, and the stronger
+/// one wins where it is available. The tag is owner-committed and equals
+/// `blinded_tag(DH(owner_enc_secret, recipientEncPk), ipns_name)`, so a re-sealer
+/// holding the owner encryption subkey **proves** the key honest by re-deriving
+/// the tag ([`bound_recipient`]) — a verdict no write-grantee can influence,
+/// since the only keys that reproduce a committed tag are the cofactor class
+/// core refuses to adopt. Its `ownerSig` is then redundant, and a corrupted one
+/// costs the row nothing.
+///
+/// [`row_is_owner_attested`] is the substitute authority for the leg that holds
+/// no owner secret and so can derive no tag. There a row the owner did not
+/// attest is writer-authored noise under a committed tag, skipped rather than
+/// refused: every committed writer can already withhold a blob, while refusing
+/// would let the grantee a rotation is cutting veto its own revocation. The tag
+/// stays in the committed set and the ledger — a committed tag with no blob,
+/// the same state a stripped blob leaves, which the section codec admits.
+///
+/// A row the owner attested but whose tag its own subkey does not re-derive is
+/// the two authorities disagreeing, and fails the whole re-seal closed before
+/// anything is sealed.
+fn adopt_recipients(
+    identity: &ScopeRootIdentity<'_>,
+    committed: &CommittedSet<'_>,
+) -> Result<Vec<Option<X25519Public>>, ResealError> {
+    committed
+        .grant_ledger
+        .iter()
+        .map(|entry| {
+            let attested =
+                row_is_owner_attested(committed.owner_identity, entry, identity.ipns_name);
+            match identity.owner_enc_secret {
+                Some(owner_enc_secret) => {
+                    match bound_recipient(owner_enc_secret, entry, identity.ipns_name) {
+                        Some(proven) => Ok(Some(proven)),
+                        None if attested => Err(ResealError::TagNotBoundToRecipient),
+                        None => Ok(None),
+                    }
+                }
+                None if attested => X25519Public::from_bytes(entry.recipient_enc_pk)
+                    .map(Some)
+                    .ok_or(ResealError::UnusableRecipientKey),
+                None => Ok(None),
+            }
+        })
+        .collect()
+}
+
 /// Assemble one scope root's signed [`GrantSection`] at the epoch and seed the
 /// `seeds` source dictates, re-wrapping grant blobs for exactly the committed
 /// set. Pure composition of core seal primitives; the injected `entropy`
@@ -586,14 +641,9 @@ pub fn reseal_scope_root<E: Entropy>(
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
-    if let Some(owner_enc_secret) = identity.owner_enc_secret
-        && !committed
-            .grant_ledger
-            .iter()
-            .all(|entry| entry_tag_is_bound(owner_enc_secret, entry, identity.ipns_name))
-    {
-        return Err(ResealError::TagNotBoundToRecipient);
-    }
+    // Fail-closed BEFORE any seal, and the ledger's only adoption pass: the blob
+    // loop below wraps to these keys rather than re-adopting the same bytes.
+    let recipients = adopt_recipients(identity, committed)?;
 
     let scope_id = identity.scope_id;
     let read_epoch = seeds.read_epoch;
@@ -616,9 +666,10 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- Grant blobs: one per committed grantee, sorted by tag for a stable
     // wire order that leaks no ledger ordering. ---
     let mut grant_blobs: Vec<SignedGrantBlob> = Vec::with_capacity(committed.grant_ledger.len());
-    for entry in committed.grant_ledger {
-        let recipient_pub = X25519Public::from_bytes(entry.recipient_enc_pk)
-            .ok_or(ResealError::UnusableRecipientKey)?;
+    for (entry, recipient_pub) in committed.grant_ledger.iter().zip(&recipients) {
+        let Some(recipient_pub) = recipient_pub else {
+            continue;
+        };
         let mut write_seed = match entry.permission {
             Permission::Write => Some(*seeds.write_scope_seed),
             Permission::Read => None,
@@ -634,7 +685,7 @@ pub fn reseal_scope_root<E: Entropy>(
         write_seed.zeroize();
         let mut ephemeral = *fresh_ephemeral(entropy).map_err(ResealError::Entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
-        let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
+        let sealed = seal_grant_blob(recipient_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
         let sealed = sealed.map_err(ResealError::Encode)?;
         let signature = sign_over(STRUCT_TAG_GRANT_BLOB, Some(entry.tag), &sealed.ciphertext);
@@ -858,7 +909,7 @@ mod tests {
     use cipherbox_core::seal::{
         GrantSetEntry, encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
         open_owner_blob, open_owner_history_link, open_owner_write_blob, sign_grant_set,
-        verify_structure,
+        sign_recipient_binding, verify_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -884,6 +935,7 @@ mod tests {
         owner_enc: X25519Secret,
         pseudonym: Ed25519Signer,
         owner_ecdsa: EcdsaSigner,
+        owner_identity: EcdsaVerifier,
         parent_node_seed: [u8; 32],
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
@@ -893,10 +945,12 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            let owner_ecdsa = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
             Self {
                 owner_enc: X25519Secret::from_scalar([0x11; 32]),
                 pseudonym: Ed25519Signer::from_seed([0x22; 32]),
-                owner_ecdsa: EcdsaSigner::from_scalar(&[0x33; 32]).unwrap(),
+                owner_identity: owner_ecdsa.verifying_key(),
+                owner_ecdsa,
                 parent_node_seed: [0x44; 32],
                 write_scope_seed: [0x55; 32],
                 pointer_read_key: [0x66; 32],
@@ -912,9 +966,36 @@ mod tests {
             [0xb2; 32]
         }
 
-        /// A commitment + matching ledger for a read grantee and a write grantee.
+        /// One ledger row the owner attests at `ipns_name` — the shape a re-seal
+        /// admits, however the tag was arrived at. Signing is what a re-mint does
+        /// too, so a fixture row and a minted one are indistinguishable to a
+        /// re-sealer.
+        fn attested_row(
+            &self,
+            recipient_identity_pk: [u8; 33],
+            recipient_enc_pk: [u8; 32],
+            permission: Permission,
+            tag: [u8; 32],
+            ipns_name: &[u8],
+        ) -> GrantLedgerEntry {
+            let mut row = GrantLedgerEntry::new(
+                recipient_identity_pk,
+                recipient_enc_pk,
+                permission,
+                tag,
+                [0u8; ECDSA_SIG_LEN],
+            );
+            row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, ipns_name, &row)
+                .expect("the owner attests the row it minted")
+                .to_compact();
+            row
+        }
+
+        /// A commitment + matching ledger for a read grantee and a write grantee,
+        /// both attested at `ipns_name`.
         fn committed(
             &self,
+            ipns_name: &[u8],
         ) -> (
             GrantSetCommitment,
             [u8; ECDSA_SIG_LEN],
@@ -925,7 +1006,7 @@ mod tests {
                 GrantSetEntry::new(Self::write_tag(), Permission::Write, [0x03; 32]),
             ];
             let commitment = GrantSetCommitment {
-                ipns_name: b"scope-root-name".to_vec(),
+                ipns_name: ipns_name.to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries,
                 unknown: PreservedFields::new(),
@@ -934,17 +1015,19 @@ mod tests {
                 .unwrap()
                 .to_compact();
             let ledger = vec![
-                GrantLedgerEntry::new(
+                self.attested_row(
                     [0x02; 33],
                     self.read_grantee.public().to_bytes(),
                     Permission::Read,
                     Self::read_tag(),
+                    ipns_name,
                 ),
-                GrantLedgerEntry::new(
+                self.attested_row(
                     [0x03; 33],
                     self.write_grantee.public().to_bytes(),
                     Permission::Write,
                     Self::write_tag(),
+                    ipns_name,
                 ),
             ];
             (commitment, sig, ledger)
@@ -963,6 +1046,7 @@ mod tests {
             let mint = |grantee: &X25519Secret, identity_scalar: [u8; 32], permission| {
                 let identity = EcdsaSigner::from_scalar(&identity_scalar).unwrap();
                 mint_grant_row(
+                    &self.owner_ecdsa,
                     &self.owner_enc,
                     identity.verifying_key().to_sec1(),
                     &grantee.public(),
@@ -1029,11 +1113,13 @@ mod tests {
     }
 
     fn committed_set<'a>(
+        fx: &'a Fixture,
         commitment: &'a GrantSetCommitment,
         sig: &'a [u8; ECDSA_SIG_LEN],
         ledger: &'a [GrantLedgerEntry],
     ) -> CommittedSet<'a> {
         CommittedSet {
+            owner_identity: &fx.owner_identity,
             commitment,
             commitment_sig: sig,
             grant_ledger: ledger,
@@ -1055,7 +1141,7 @@ mod tests {
         // record it is replacing publishes; the ancestor must still descend.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let carried = kdf::ascent_keypair(&fx.parent_node_seed)
             .public()
             .to_bytes();
@@ -1074,7 +1160,7 @@ mod tests {
                 &fx.write_scope_seed,
                 &fx.pointer_read_key,
             ),
-            &committed_set(&commitment, &sig, &ledger),
+            &committed_set(&fx, &commitment, &sig, &ledger),
             &[],
         )
         .expect("the re-seal completes without an ancestor seed");
@@ -1101,7 +1187,7 @@ mod tests {
         // could never serve the descent it exists for.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         // Not the canonical encoding of a prime-order point, so
         // `X25519Public::from_bytes` refuses to address it.
         let unusable = [0xff; 32];
@@ -1120,7 +1206,7 @@ mod tests {
                     &fx.write_scope_seed,
                     &fx.pointer_read_key
                 ),
-                &committed_set(&commitment, &sig, &ledger),
+                &committed_set(&fx, &commitment, &sig, &ledger),
                 &[],
             )
             .unwrap_err(),
@@ -1132,8 +1218,8 @@ mod tests {
     fn reseal_round_trips_and_every_structure_is_pseudonym_signed() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
         let ipns = b"scope-root-name";
+        let (commitment, sig, ledger) = fx.committed(ipns);
         let id = identity(&fx, &owner_pub, ipns, Some(&fx.parent_node_seed));
 
         let override_seed = [0x99; 32];
@@ -1148,7 +1234,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
 
         let mut e = SeededEntropy::new(1);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
@@ -1269,7 +1355,7 @@ mod tests {
     fn an_ascent_link_the_gate_would_reject_is_never_signed() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let parent_node_seed = fx.parent_node_seed;
         let override_seed = [0x99; 32];
         let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_ASCENT_LINK);
@@ -1283,7 +1369,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let minted = reseal_scope_root(&mut SeededEntropy::new(13), &id, &s, &cs, &[])
             .expect("reseal")
             .ascent_link
@@ -1362,7 +1448,7 @@ mod tests {
     fn the_ascent_link_and_the_owner_blob_carry_one_seed() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let override_seed = [0x99; 32];
         let id = identity(
             &fx,
@@ -1377,7 +1463,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let section =
             reseal_scope_root(&mut SeededEntropy::new(17), &id, &s, &cs, &[]).expect("reseal");
 
@@ -1408,11 +1494,11 @@ mod tests {
     fn vault_root_omits_ascent_link() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"root");
         let id = identity(&fx, &owner_pub, b"root", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(2);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
         assert!(
@@ -1428,11 +1514,11 @@ mod tests {
         // and re-signed at this read epoch.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"n");
         let id = identity(&fx, &owner_pub, b"n", Some(&fx.parent_node_seed));
         let seed = [0x0e; 32];
         let s = seeds(&seed, 7, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let carried = vec![SignedSealed {
             sealed: b"prior-epoch-link".to_vec(),
             signature: [0x01; 64],
@@ -1492,7 +1578,7 @@ mod tests {
         carried: &[SignedSealed],
     ) -> Result<GrantSection, ResealError> {
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"n");
         let id = identity(fx, &owner_pub, b"n", None);
         let head = chain_seed(newest);
         let fresh = chain_seed(newest + 1);
@@ -1506,7 +1592,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(fx, &commitment, &sig, &ledger);
         reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, carried)
     }
 
@@ -1604,11 +1690,11 @@ mod tests {
         // only ever produce a section this build's own encoder rejects.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"n");
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let carried = real_chain(MAX_HISTORY_LINKS as u64 + 3);
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
             .expect_err("past the bound");
@@ -1621,7 +1707,7 @@ mod tests {
         // grant is spent on a section `encode_grant_section` would refuse.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (mut commitment, sig, ledger) = fx.committed();
+        let (mut commitment, sig, ledger) = fx.committed(b"n");
         commitment.entries = (0..=MAX_GRANT_BLOBS)
             .map(|i| {
                 let mut tag = [0u8; SECRET_LEN];
@@ -1632,7 +1718,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &[])
             .expect_err("past the bound");
         assert_eq!(err.check(), "too-many-committed-grants");
@@ -1644,23 +1730,24 @@ mod tests {
         // wrap loop walks — trips the guard.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, _) = fx.committed();
+        let (commitment, sig, _) = fx.committed(b"n");
         let ledger: Vec<GrantLedgerEntry> = (0..=MAX_GRANT_BLOBS)
             .map(|i| {
                 let mut tag = [0u8; SECRET_LEN];
                 tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
-                GrantLedgerEntry::new(
+                fx.attested_row(
                     [0x02; 33],
                     fx.read_grantee.public().to_bytes(),
                     Permission::Read,
                     tag,
+                    b"n",
                 )
             })
             .collect();
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let err =
             reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[]).expect_err("past the bound");
         assert_eq!(err.check(), "too-many-committed-grants");
@@ -1673,11 +1760,11 @@ mod tests {
         // nor prunes; appending nothing, it cannot grow the set either.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"n");
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         // Past the retained window, so a reinstated sweep prune would show up.
         let carried = real_chain(MAX_RETAINED_HISTORY_LINKS as u64 + 8);
         let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
@@ -1716,23 +1803,26 @@ mod tests {
             unknown: PreservedFields::new(),
         };
         let ledger = vec![
-            GrantLedgerEntry::new(
+            fx.attested_row(
                 [0x02; 33],
                 fx.read_grantee.public().to_bytes(),
                 Permission::Read,
                 Fixture::read_tag(),
+                scope_name_bytes,
             ),
-            GrantLedgerEntry::new(
+            fx.attested_row(
                 [0x04; 33],
                 revoked.public().to_bytes(),
                 Permission::Read,
                 revoked_tag,
+                scope_name_bytes,
             ),
-            GrantLedgerEntry::new(
+            fx.attested_row(
                 [0x03; 33],
                 fx.write_grantee.public().to_bytes(),
                 Permission::Write,
                 Fixture::write_tag(),
+                scope_name_bytes,
             ),
         ];
 
@@ -1770,6 +1860,7 @@ mod tests {
             &fx.pointer_read_key,
         );
         let cs = CommittedSet {
+            owner_identity: &fx.owner_identity,
             commitment: &cut.commitment,
             commitment_sig: &cut.commitment_sig,
             grant_ledger: &cut.grant_ledger,
@@ -1815,17 +1906,18 @@ mod tests {
         // in release.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, mut ledger) = fx.committed();
-        ledger.push(GrantLedgerEntry::new(
+        let (commitment, sig, mut ledger) = fx.committed(b"n");
+        ledger.push(fx.attested_row(
             [0x09; 33],
             X25519Secret::from_scalar([0x0f; 32]).public().to_bytes(),
             Permission::Write,
             [0xff; 32], // uncommitted tag
+            b"n",
         ));
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(5);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("diverging ledger");
         assert_eq!(err.check(), "ledger-diverges-from-commitment");
@@ -1839,7 +1931,7 @@ mod tests {
         // signer-mismatched (an unopenable root). This test is active in release.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let wrong_signer = Ed25519Signer::from_seed([0x99; 32]);
         let id = ScopeRootIdentity {
             v: V,
@@ -1853,7 +1945,7 @@ mod tests {
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(7);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("signer mismatch");
         assert_eq!(err.check(), "signer-not-committed");
@@ -1868,14 +1960,14 @@ mod tests {
         // cannot mint it. This test is active in release.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let id = ScopeRootIdentity {
             owes_ascent_link: true,
             ..identity(&fx, &owner_pub, b"scope-root-name", None)
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(11);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("no link to bind it");
         assert_eq!(err.check(), "ascent-link-dropped");
@@ -1908,7 +2000,7 @@ mod tests {
         // this test is active in release.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"scope-root-name");
         let id = ScopeRootIdentity {
             owes_ascent_link: false,
             ..identity(
@@ -1920,7 +2012,7 @@ mod tests {
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(11);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("a link it does not owe");
         assert_eq!(err.check(), "ascent-link-not-owed");
@@ -1951,7 +2043,7 @@ mod tests {
         let (commitment, sig, ledger) = fx.minted();
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
 
         let section = reseal_scope_root(
             &mut SeededEntropy::new(21),
@@ -1965,67 +2057,137 @@ mod tests {
     }
 
     #[test]
-    fn a_recipient_key_swapped_under_a_committed_tag_fails_closed_release_active() {
+    fn a_swapped_recipient_key_costs_its_own_row_and_nothing_else() {
         // A committed write-grantee re-authors the write body with a victim's
         // `recipientEncPk` replaced by a key of its own. Tag and permission still
-        // match the owner-signed commitment, so owner authority passes and only
-        // re-deriving the tag catches it. The refusal is a runtime `Err` (not a
-        // debug_assert), so no release build wraps the scope seed to the swapped
-        // key. This test is active in release.
+        // match the owner-signed commitment, so owner authority over the *set*
+        // passes — but the row's own owner signature covers the key, so the swap
+        // detaches the row from the owner entirely.
+        //
+        // The row is skipped, not refused: refusing would let a rogue writer veto
+        // the rotation that cuts it. The victim's committed tag simply carries no
+        // blob, which is the state `classify` already reads as revocation, and
+        // the attacker's key opens nothing.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let attacker = X25519Secret::from_scalar([0x5f; 32]);
         let (commitment, sig, mut ledger) = fx.minted();
+        let victim_tag = ledger[0].tag;
         ledger[0].recipient_enc_pk = attacker.public().to_bytes();
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
 
-        let err = reseal_scope_root(
-            &mut SeededEntropy::new(23),
+        // Both legs agree, which is the point: the write-grantee re-sealer holds
+        // no owner secret and still refuses the swap.
+        for id in [
+            owner_held(&fx, &owner_pub),
+            identity(&fx, &owner_pub, MINTED_NAME, None),
+        ] {
+            let section = reseal_scope_root(&mut SeededEntropy::new(23), &id, &s, &cs, &[])
+                .expect("the rotation the swap was meant to block still publishes");
+            assert!(
+                section.grant_blobs.iter().all(|b| b.tag != victim_tag),
+                "no blob is sealed under a row the owner did not attest"
+            );
+            assert_eq!(
+                section.grant_blobs.len(),
+                ledger.len() - 1,
+                "and every attested row still gets one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corrupted_owner_sig_costs_the_row_nothing_where_the_owner_can_prove_it() {
+        // Corrupting the 64 signature bytes needs no key material, so it is the
+        // cheapest attack a committed writer has on a co-grantee. The owner
+        // re-derives the committed tag from the untouched `recipientEncPk` and
+        // proves the row honest without the signature, so the blob is still
+        // sealed. The residual is the grantee leg, which can derive no tag and
+        // has only the signature to go on.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, mut ledger) = fx.minted();
+        let victim_tag = ledger[0].tag;
+        ledger[0].owner_sig[0] ^= 0xff;
+        let seed = [0x01; 32];
+        let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+
+        let owner_leg = reseal_scope_root(
+            &mut SeededEntropy::new(31),
             &owner_held(&fx, &owner_pub),
             &s,
             &cs,
             &[],
         )
-        .expect_err("a row filed under a tag its own key cannot derive");
-        assert_eq!(err.check(), "tag-not-bound-to-recipient");
-    }
+        .expect("the owner re-seal publishes");
+        assert!(
+            owner_leg.grant_blobs.iter().any(|b| b.tag == victim_tag),
+            "the tag proves the key, so the signature is redundant here"
+        );
 
-    #[test]
-    fn a_reseal_without_the_owner_key_re_wraps_the_committed_set_as_it_stands() {
-        // The residual `ScopeRootIdentity::owner_enc_secret = None` names: a
-        // write-grantee re-sealer derives no tag at all, so it re-wraps the rows
-        // it is handed — the swapped key included. The owner's own re-seal is
-        // what refuses that set.
-        let fx = Fixture::new();
-        let owner_pub = fx.owner_enc.public();
-        let attacker = X25519Secret::from_scalar([0x5f; 32]);
-        let (commitment, sig, mut ledger) = fx.minted();
-        ledger[0].recipient_enc_pk = attacker.public().to_bytes();
-        let victim_tag = ledger[0].tag;
-        let seed = [0x01; 32];
-        let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
-
-        let section = reseal_scope_root(
-            &mut SeededEntropy::new(23),
+        let grantee_leg = reseal_scope_root(
+            &mut SeededEntropy::new(31),
             &identity(&fx, &owner_pub, MINTED_NAME, None),
             &s,
             &cs,
             &[],
         )
-        .expect("a write-grantee re-seal still publishes the committed set");
-        let blob = section
-            .grant_blobs
-            .iter()
-            .find(|b| b.tag == victim_tag)
-            .expect("the victim's committed tag is still filed");
-        let ctx = ctx_for(V, SCOPE, 1, STRUCT_TAG_GRANT_BLOB);
+        .expect("a write-grantee re-seal still publishes the rest of the set");
         assert!(
-            open_grant_blob(&attacker, &blob.enc, &ctx, &blob.ciphertext).is_ok(),
-            "the residual is real: the swapped key opens the victim's blob"
+            grantee_leg.grant_blobs.iter().all(|b| b.tag != victim_tag),
+            "with no owner secret the signature is the only authority there is"
         );
+    }
+
+    #[test]
+    fn an_attested_recipient_key_core_will_not_adopt_fails_closed_release_active() {
+        // A cofactor twin and the key with bit 255 set both re-derive the honest
+        // key's tag, so no tag comparison separates them and only core's adoption
+        // gate does. Reachable only *under* the owner's own signature — a planted
+        // row detaches its attestation and is skipped long before adoption — so
+        // this is the owner attesting a key it can never wrap a grant to. That is
+        // a runtime `Err`, never a debug_assert, and `UndrawnEntropy` proves it
+        // lands before the first seal. Active in release.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let victim = fx.read_grantee.public();
+        let mut high_bit = victim.to_bytes();
+        high_bit[31] |= 0x80;
+
+        let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
+            .into_iter()
+            .chain([high_bit]);
+        for enc_pk in unadoptable {
+            let (commitment, sig, mut ledger) = fx.minted();
+            ledger[0].recipient_enc_pk = enc_pk;
+            ledger[0].owner_sig = sign_recipient_binding(&fx.owner_ecdsa, MINTED_NAME, &ledger[0])
+                .expect("the owner attests the row")
+                .to_compact();
+            assert_eq!(
+                ledger[0].tag, commitment.entries[0].tag,
+                "the tag stays the owner-committed one"
+            );
+            let seed = [0x01; 32];
+            let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+            let cs = committed_set(&fx, &commitment, &sig, &ledger);
+
+            // Owner-held reads the disagreement as a tag it cannot re-derive;
+            // a re-sealer with no owner secret gets as far as the adoption gate.
+            for (id, check) in [
+                (owner_held(&fx, &owner_pub), "tag-not-bound-to-recipient"),
+                (
+                    identity(&fx, &owner_pub, MINTED_NAME, None),
+                    "unusable-recipient-key",
+                ),
+            ] {
+                let err = reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[])
+                    .expect_err("a grant can never be wrapped to a key core will not adopt");
+                assert_eq!(err.check(), check);
+            }
+        }
     }
 
     #[test]
@@ -2046,16 +2208,17 @@ mod tests {
         let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
             .unwrap()
             .to_compact();
-        let ledger = vec![GrantLedgerEntry::new(
+        let ledger = vec![fx.attested_row(
             [0x02; 33],
             [0u8; 32], // low-order X25519 → from_bytes rejects
             Permission::Read,
             Fixture::read_tag(),
+            b"n",
         )];
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(6);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("bad key");
         assert_eq!(err.check(), "unusable-recipient-key");
@@ -2065,7 +2228,7 @@ mod tests {
     fn determinism_same_entropy_same_bytes() {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(b"n");
         let id = identity(&fx, &owner_pub, b"n", Some(&fx.parent_node_seed));
         let seed = [0x01; 32];
         let prev = [0x02; 32];
@@ -2080,7 +2243,7 @@ mod tests {
                 &fx.write_scope_seed,
                 &fx.pointer_read_key,
             );
-            let cs = committed_set(&commitment, &sig, &ledger);
+            let cs = committed_set(&fx, &commitment, &sig, &ledger);
             let mut e = SeededEntropy::new(42);
             encode_grant_section(&reseal_scope_root(&mut e, &id, &s, &cs, &[]).unwrap()).unwrap()
         };
@@ -2148,7 +2311,7 @@ mod tests {
             },
             5,
         );
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(70);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
 
@@ -2171,7 +2334,7 @@ mod tests {
     #[test]
     fn a_write_cut_without_the_owner_key_is_refused_before_any_seal() {
         let fx = Fixture::new();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
         let override_seed = [0x0e; 32];
@@ -2189,7 +2352,7 @@ mod tests {
                 &mut UndrawnEntropy,
                 &id,
                 &s,
-                &committed_set(&commitment, &sig, &ledger),
+                &committed_set(&fx, &commitment, &sig, &ledger),
                 &[]
             )
             .expect_err("a keyless cut seals nothing")
@@ -2203,11 +2366,11 @@ mod tests {
         // Dropped, not refused: the rotation carrying a writer's bytes may be the
         // one revoking that writer.
         let fx = Fixture::new();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, None);
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         let bloated = vec![0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
         let s = ResealSeeds {
             write_history: WriteHistory::Carried(&bloated),
@@ -2235,11 +2398,11 @@ mod tests {
         // An interior scope root, so `UndrawnEntropy` pins the refusal ahead of
         // every seal the section carries, the ascent link included.
         let fx = Fixture::new();
-        let (commitment, sig, ledger) = fx.committed();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
         for prev_epoch in [5, 6] {
             let write_cut = cut_seeds(
                 &override_seed,
@@ -2286,7 +2449,7 @@ mod tests {
             ..identity(&fx, &owner_pub, MINTED_NAME, None)
         };
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&commitment, &sig, &ledger);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
 
         let read_cut = seeds(
             &override_seed,

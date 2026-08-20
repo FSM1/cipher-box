@@ -27,22 +27,23 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, NodeKind,
+    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, GrantLedgerEntry, NodeKind,
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind,
-    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
-    StructureSigInput, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
-    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
+    Permission, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link,
+    decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_section, encode_grant_set_commitment,
+    encode_override_seed_payload, encode_read_body, encode_recipient_binding, encode_write_body,
     open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
     open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
     open_settings_record, seal_content_key, seal_op_record, seal_owner_history_link,
     seal_owner_local, seal_settings_record, structure_sig_preimage, verify_grant_set,
-    verify_structure,
+    verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -157,6 +158,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/grant/write_body_reject.json",
         include_str!("../kat/vectors/grant/write_body_reject.json"),
+    ),
+    (
+        "vectors/grant/recipient_binding_accept.json",
+        include_str!("../kat/vectors/grant/recipient_binding_accept.json"),
     ),
     (
         "vectors/grant/grant_blob_accept.json",
@@ -656,6 +661,7 @@ struct GrantManifest {
     write_history_link_struct_tag: u8,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
+    recipient_binding_accept: FileCount,
     grant_blob_accept: FileCount,
     grant_blob_reject: RejectSection,
     owner_blob_accept: FileCount,
@@ -683,6 +689,22 @@ struct WriteBodyAcceptVector {
     hex: String,
     ledger_count: usize,
     child_scope_count: usize,
+}
+
+/// A recipient-binding accept vector: the frozen preimage the owner signs over
+/// one grant-ledger row and their signature over it. `permission` and
+/// `expiresAt` are absent because they are outside the preimage.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecipientBindingAcceptVector {
+    name: String,
+    owner_identity_pk: String,
+    ipns_name: String,
+    recipient_identity_pk: String,
+    recipient_enc_pk: String,
+    tag: String,
+    preimage: String,
+    signature: String,
 }
 
 #[derive(Deserialize)]
@@ -1215,6 +1237,11 @@ fn write_body_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
     serde_json::from_str(fixture(&m.grant.write_body_reject.file)).expect("write_body_reject shape")
 }
 
+fn recipient_binding_accept_vectors(m: &Manifest) -> Vec<RecipientBindingAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.recipient_binding_accept.file))
+        .expect("recipient_binding_accept shape")
+}
+
 fn grant_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.grant_blob_accept.file)).expect("grant_blob_accept shape")
 }
@@ -1412,6 +1439,7 @@ fn fixture_table_matches_manifest_files() {
         m.payload.mailbox_reject.file.as_str(),
         m.grant.write_body_accept.file.as_str(),
         m.grant.write_body_reject.file.as_str(),
+        m.grant.recipient_binding_accept.file.as_str(),
         m.grant.grant_blob_accept.file.as_str(),
         m.grant.grant_blob_reject.file.as_str(),
         m.grant.owner_blob_accept.file.as_str(),
@@ -3414,6 +3442,79 @@ fn write_body_reject_vectors_fire_the_named_check() {
             .any(|c| c == "invalid-permission"),
         "write-body reject must cover the grant-permission check"
     );
+}
+
+/// The frozen recipient-binding preimage: re-encoding the vector's own fields
+/// must reproduce it byte for byte, and the owner's signature must verify over
+/// it. This is the authority a re-sealer holding no owner secret checks
+/// `recipientEncPk` against before re-wrapping a grant.
+#[test]
+fn recipient_binding_accept_vectors_reencode_and_verify() {
+    let m = manifest();
+    let vectors = recipient_binding_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.recipient_binding_accept.count,
+        "recipient-binding accept count drift"
+    );
+    assert!(
+        vectors.len() >= 2,
+        "recipient-binding accept family must pin more than one row"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate recipient-binding accept {}",
+            v.name
+        );
+        let ipns_name = unhex(&v.name, &v.ipns_name);
+        let entry = GrantLedgerEntry::new(
+            unhex_n::<33>(&v.name, &v.recipient_identity_pk),
+            unhex32(&v.name, &v.recipient_enc_pk),
+            Permission::Read,
+            unhex32(&v.name, &v.tag),
+            unhex_n::<64>(&v.name, &v.signature),
+        );
+        assert_eq!(
+            hex::encode(
+                encode_recipient_binding(&ipns_name, &entry).expect("accept vector re-encodes")
+            ),
+            v.preimage,
+            "recipient-binding accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        let verifier = EcdsaVerifier::from_sec1(&unhex(&v.name, &v.owner_identity_pk))
+            .expect("valid owner identity key");
+        assert!(
+            verify_recipient_binding(&verifier, &ipns_name, &entry).is_ok(),
+            "recipient-binding accept {}: must verify",
+            v.name
+        );
+
+        // `permission` is outside the preimage, which is why the vector carries
+        // none: the row above was rebuilt as `Read` regardless of what the
+        // generator signed.
+        let mut other_permission = entry.clone();
+        other_permission.permission = Permission::Write;
+        assert!(
+            verify_recipient_binding(&verifier, &ipns_name, &other_permission).is_ok(),
+            "recipient-binding accept {}: permission must not be bound",
+            v.name
+        );
+
+        // The scope root is bound: the same row under another name is not
+        // owner-attested there.
+        assert_eq!(
+            verify_recipient_binding(&verifier, b"another-scope-root", &entry)
+                .unwrap_err()
+                .check(),
+            "identity-signature-invalid",
+            "recipient-binding accept {}: ipnsName must be bound",
+            v.name
+        );
+    }
 }
 
 #[test]

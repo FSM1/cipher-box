@@ -99,10 +99,11 @@ pub enum TrustViolation {
     /// signing — the data/Value consistency check the gate depends on.
     IpnsValueMismatch,
     /// An owner/sender secp256k1 **identity** signature did not verify over its
-    /// det-CBOR preimage: the re-point object's owner signature or a mailbox
-    /// item's sender signature (blueprint/core.md "Crypto suite": identity
-    /// signing). *Trust*: the structure decoded and the signature is a valid
-    /// ECDSA encoding, yet the claimed identity did not author it.
+    /// det-CBOR preimage: the re-point object's owner signature, a mailbox
+    /// item's sender signature, or a grant-ledger row's owner signature over its
+    /// recipient binding (blueprint/core.md "Crypto suite": identity signing).
+    /// *Trust*: the structure decoded and the signature is a valid ECDSA
+    /// encoding, yet the claimed identity did not author it.
     IdentitySignatureInvalid,
     /// A detached structure signature did not verify over its det-CBOR preimage
     /// `{scopeId, epoch, structTag, recipientTag?, H(ciphertext)}` (#39 D2/D3).

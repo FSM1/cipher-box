@@ -1663,6 +1663,7 @@ impl ResealedFixture {
             pseudonym_signer: &owner_pseudonym,
         };
         let committed = CommittedSet {
+            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

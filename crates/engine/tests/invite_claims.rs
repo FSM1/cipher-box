@@ -116,6 +116,7 @@ fn link(permission: Permission) -> Link {
 fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
     let invitee = EphemeralInvitee::from_secret(&[0x4e; 32]).expect("valid");
     let minted = mint_invite_grant(
+        &owner_identity(),
         &owner_enc(),
         &invitee,
         &SCOPE,

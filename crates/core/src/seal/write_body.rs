@@ -21,9 +21,11 @@ use core::num::NonZeroU64;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, RedactedBytes, Value, decode, encode};
-use crate::error::{CodecError, Malformed};
+use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
-use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use crate::suite::ecdsa::{
+    EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
+};
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
@@ -49,16 +51,33 @@ pub struct GrantLedgerEntry {
     pub permission: Permission,
     /// The recipient's blinded tag (the grant blob's key).
     pub tag: [u8; SECRET_LEN],
+    /// The owner's compact ECDSA signature over this row's recipient binding
+    /// (`{ipnsName, recipientEncPk, recipientIdentityPk, tag}`, see
+    /// [`encode_recipient_binding`]) at the scope root's `ipnsName`.
+    ///
+    /// Any committed write-grantee authors this ledger, so `recipientEncPk` is
+    /// the key a re-seal wraps a grant to. This signature is the owner
+    /// authority a re-sealer holding no owner secret verifies it against: per
+    /// row, so an honest re-seal skips exactly the poisoned row rather than
+    /// aborting the whole rotation.
+    ///
+    /// It is transferable, and deliberately so — every co-writer must be able to
+    /// verify it, which rules out a designated-verifier construction. A
+    /// co-writer can therefore prove grant membership to a third party
+    /// (CONTEXT.md "Grant ledger"); the ledger is sealed, so the residual is
+    /// bounded to the writer set.
+    pub owner_sig: [u8; ECDSA_SIG_LEN],
     /// The deadline past which this grant is inert, in Unix milliseconds;
     /// `None` for a grant that does not expire. Carried for invite links
     /// (blueprint/engine.md "Invites": expiry is a ledger field, lazily pruned).
     ///
-    /// **Not a capability boundary.** The owner-signed grant-set commitment
-    /// covers `(tag, permission, pseudonymPk)` only, so a write-grantee
-    /// re-authoring this body can alter or drop the deadline undetectably. It is
-    /// a deadline cooperating readers honour and the input to the
-    /// discovered-expiry prune trigger; cutting a grantee off is the owner's
-    /// re-signed commitment plus a rotation.
+    /// **Not a capability boundary.** Neither owner signature covers it: the
+    /// grant-set commitment covers `(tag, permission, pseudonymPk)`, and
+    /// [`owner_sig`](Self::owner_sig) covers the recipient binding, so a
+    /// write-grantee re-authoring this body can alter or drop the deadline
+    /// undetectably. It is a deadline cooperating readers honour and the input
+    /// to the discovered-expiry prune trigger; cutting a grantee off is the
+    /// owner's re-signed commitment plus a rotation.
     ///
     /// `NonZeroU64` so zero is unrepresentable rather than checked, and no encode
     /// path can emit the [`Malformed::InvalidExpiry`] bytes the decoder rejects.
@@ -69,6 +88,7 @@ pub struct GrantLedgerEntry {
 
 const LEDGER_ENTRY_KNOWN: &[&str] = &[
     "expiresAt",
+    "ownerSig",
     "permission",
     "recipientEncPk",
     "recipientIdentityPk",
@@ -82,12 +102,14 @@ impl GrantLedgerEntry {
         recipient_enc_pk: [u8; SECRET_LEN],
         permission: Permission,
         tag: [u8; SECRET_LEN],
+        owner_sig: [u8; ECDSA_SIG_LEN],
     ) -> Self {
         Self {
             recipient_identity_pk,
             recipient_enc_pk,
             permission,
             tag,
+            owner_sig,
             expires_at: None,
             unknown: PreservedFields::new(),
         }
@@ -103,6 +125,7 @@ impl GrantLedgerEntry {
             bytes_fixed::<SECRET_LEN>(req(map, "recipientEncPk")?, "recipientEncPk")?;
         let permission = Permission::from_value(req(map, "permission")?)?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
+        let owner_sig = bytes_fixed::<ECDSA_SIG_LEN>(req(map, "ownerSig")?, "ownerSig")?;
         let expires_at = map
             .get("expiresAt")
             .map(|v| -> Result<NonZeroU64, CodecError> {
@@ -114,6 +137,7 @@ impl GrantLedgerEntry {
             recipient_enc_pk,
             permission,
             tag,
+            owner_sig,
             expires_at,
             unknown: collect_unknown(map, LEDGER_ENTRY_KNOWN),
         })
@@ -124,6 +148,7 @@ impl GrantLedgerEntry {
         if let Some(expires_at) = self.expires_at {
             m.insert("expiresAt", Value::Unsigned(expires_at.get()));
         }
+        m.insert("ownerSig", Value::Bytes(self.owner_sig.to_vec()));
         m.insert(
             "permission",
             Value::Text(self.permission.as_wire().to_string()),
@@ -139,6 +164,67 @@ impl GrantLedgerEntry {
         m.insert("tag", Value::Bytes(self.tag.to_vec()));
         merge_unknown(&mut m, &self.unknown);
         Value::Map(m)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recipient binding: the owner-signed authority over one ledger row's keys.
+// ---------------------------------------------------------------------------
+
+/// Encode one ledger row's recipient binding to its canonical det-CBOR form —
+/// the exact preimage the owner ECDSA-signs into
+/// [`GrantLedgerEntry::owner_sig`] and a re-sealer verifies.
+///
+/// The preimage is `{ipnsName, recipientEncPk, recipientIdentityPk, tag}`,
+/// bound to the scope root's `ipnsName` so a row cannot be replayed into
+/// another root's ledger. It deliberately excludes `permission` (already
+/// owner-signed in the grant-set commitment) and `expiresAt` (writer-mutable by
+/// design, see [`GrantLedgerEntry::expires_at`]), along with preserved unknowns.
+pub fn encode_recipient_binding(
+    ipns_name: &[u8],
+    entry: &GrantLedgerEntry,
+) -> Result<Vec<u8>, CodecError> {
+    let mut m = Map::new();
+    m.insert("ipnsName", Value::Bytes(ipns_name.to_vec()));
+    m.insert(
+        "recipientEncPk",
+        Value::Bytes(entry.recipient_enc_pk.to_vec()),
+    );
+    m.insert(
+        "recipientIdentityPk",
+        Value::Bytes(entry.recipient_identity_pk.to_vec()),
+    );
+    m.insert("tag", Value::Bytes(entry.tag.to_vec()));
+    encode(&Value::Map(m))
+}
+
+/// Owner-sign one ledger row's recipient binding: RFC 6979 ECDSA over the
+/// det-CBOR preimage. Sign the row, then stamp the result into its
+/// [`owner_sig`](GrantLedgerEntry::owner_sig).
+pub fn sign_recipient_binding(
+    signer: &EcdsaSigner,
+    ipns_name: &[u8],
+    entry: &GrantLedgerEntry,
+) -> Result<EcdsaSignature, CodecError> {
+    Ok(signer.sign_detcbor(&encode_recipient_binding(ipns_name, entry)?))
+}
+
+/// Verify a ledger row's owner signature over its recipient binding. Fails
+/// closed with [`TrustViolation::IdentitySignatureInvalid`] when `owner_sig` is
+/// not a canonical compact signature, and when the owner identity key did not
+/// bind these recipient keys to this scope root — the per-row check a re-sealer
+/// runs before re-wrapping a grant to `recipientEncPk`.
+pub fn verify_recipient_binding(
+    verifier: &EcdsaVerifier,
+    ipns_name: &[u8],
+    entry: &GrantLedgerEntry,
+) -> Result<(), CodecError> {
+    let sig = EcdsaSignature::from_compact(&entry.owner_sig)
+        .ok_or(TrustViolation::IdentitySignatureInvalid)?;
+    if verifier.verify_detcbor(&encode_recipient_binding(ipns_name, entry)?, &sig) {
+        Ok(())
+    } else {
+        Err(TrustViolation::IdentitySignatureInvalid.into())
     }
 }
 
@@ -364,11 +450,32 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
 mod tests {
     use super::*;
 
+    const SCOPE_ROOT_IPNS: &[u8] = b"scope-root-ipns";
+
+    fn owner() -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar")
+    }
+
+    /// A row already stamped with its owner signature, the way a grant-create
+    /// hands one to the ledger.
+    fn signed_row(
+        identity: [u8; 33],
+        enc: [u8; 32],
+        permission: Permission,
+        tag: [u8; 32],
+    ) -> GrantLedgerEntry {
+        let mut entry = GrantLedgerEntry::new(identity, enc, permission, tag, [0u8; ECDSA_SIG_LEN]);
+        entry.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &entry)
+            .expect("row binding signs")
+            .to_compact();
+        entry
+    }
+
     fn sample() -> WriteBody {
         WriteBody {
             grant_ledger: vec![
-                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
-                GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
+                signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+                signed_row([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
             ],
             write_history_link: b"sealed-write-history".to_vec(),
             direct_child_scope_index: vec![ChildScopeRef::new(
@@ -608,6 +715,7 @@ mod tests {
     #[test]
     fn invalid_permission_in_ledger_rejects() {
         let mut entry = Map::new();
+        entry.insert("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN]));
         entry.insert("permission", Value::Text("owner".into()));
         entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
         entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
@@ -626,6 +734,7 @@ mod tests {
     #[test]
     fn wrong_identity_pk_length_rejects() {
         let mut entry = Map::new();
+        entry.insert("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN]));
         entry.insert("permission", Value::Text("read".into()));
         entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
         entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 32])); // 32, not 33
@@ -649,11 +758,13 @@ mod tests {
         // any encoder, so decode is what must reject them, the way a hostile
         // peer's bytes arrive.
         let mut a = Map::new();
+        a.insert("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN]));
         a.insert("permission", Value::Text("read".into()));
         a.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
         a.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
         a.insert("tag", Value::Bytes(vec![0x21; 32]));
         let mut b = Map::new();
+        b.insert("ownerSig", Value::Bytes(vec![0x78; ECDSA_SIG_LEN]));
         b.insert("permission", Value::Text("write".into()));
         b.insert("recipientEncPk", Value::Bytes(vec![0x99; 32]));
         b.insert("recipientIdentityPk", Value::Bytes(vec![0x03; 33]));
@@ -706,6 +817,7 @@ mod tests {
     fn body_with_raw_expiry(expiry: Value) -> Vec<u8> {
         let mut entry = Map::new();
         entry.insert("expiresAt", expiry);
+        entry.insert("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN]));
         entry.insert("permission", Value::Text("read".into()));
         entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
         entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
@@ -772,8 +884,8 @@ mod tests {
         // without relying on a `debug_assert`.
         let body = WriteBody {
             grant_ledger: vec![
-                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
-                GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Write, [0x21; 32]),
+                signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+                signed_row([0x03; 33], [0x12; 32], Permission::Write, [0x21; 32]),
             ],
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
@@ -782,6 +894,131 @@ mod tests {
         assert_eq!(
             encode_write_body(&body).unwrap_err().check(),
             "duplicate-grant-tag"
+        );
+    }
+
+    #[test]
+    fn a_signed_recipient_binding_verifies() {
+        let row = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
+        assert!(
+            verify_recipient_binding(&owner().verifying_key(), SCOPE_ROOT_IPNS, &row).is_ok(),
+            "the owner's own binding must verify"
+        );
+    }
+
+    /// The three bound fields and the scope root are exactly what the signature
+    /// authorises: change any one and the row is no longer owner-attested.
+    #[test]
+    fn tampering_with_a_bound_field_breaks_the_recipient_binding() {
+        let verifier = owner().verifying_key();
+        let row = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
+
+        let mut swapped_enc_pk = row.clone();
+        swapped_enc_pk.recipient_enc_pk = [0x99; 32];
+        let mut swapped_identity_pk = row.clone();
+        swapped_identity_pk.recipient_identity_pk = [0x03; 33];
+        let mut swapped_tag = row.clone();
+        swapped_tag.tag = [0x22; 32];
+
+        for (what, tampered) in [
+            ("recipientEncPk", swapped_enc_pk),
+            ("recipientIdentityPk", swapped_identity_pk),
+            ("tag", swapped_tag),
+        ] {
+            assert_eq!(
+                verify_recipient_binding(&verifier, SCOPE_ROOT_IPNS, &tampered)
+                    .unwrap_err()
+                    .check(),
+                "identity-signature-invalid",
+                "a tampered {what} must fail closed"
+            );
+        }
+    }
+
+    /// Replay across scope roots: a genuine row lifted into another root's
+    /// ledger is not owner-attested there.
+    #[test]
+    fn a_recipient_binding_does_not_verify_under_another_scope_root() {
+        let row = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
+        assert_eq!(
+            verify_recipient_binding(&owner().verifying_key(), b"another-scope-root", &row)
+                .unwrap_err()
+                .check(),
+            "identity-signature-invalid"
+        );
+    }
+
+    /// A row whose signature bytes are not a canonical compact signature fails
+    /// the same closed way a mis-signed one does — no second verdict to leak
+    /// which of the two it was.
+    #[test]
+    fn an_unparsable_owner_sig_fails_closed() {
+        let mut row = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
+        row.owner_sig = [0xff; ECDSA_SIG_LEN];
+        assert_eq!(
+            verify_recipient_binding(&owner().verifying_key(), SCOPE_ROOT_IPNS, &row)
+                .unwrap_err()
+                .check(),
+            "identity-signature-invalid"
+        );
+    }
+
+    /// `permission` and `expiresAt` are outside the preimage, so a re-sealer's
+    /// deadline prune never invalidates the binding it must verify.
+    #[test]
+    fn the_recipient_binding_preimage_excludes_permission_and_expiry() {
+        let read = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
+        let mut write = read.clone();
+        write.permission = Permission::Write;
+        write.expires_at = NonZeroU64::new(1_700_000_000_000);
+        assert_eq!(
+            encode_recipient_binding(SCOPE_ROOT_IPNS, &read).unwrap(),
+            encode_recipient_binding(SCOPE_ROOT_IPNS, &write).unwrap()
+        );
+        assert!(
+            verify_recipient_binding(&owner().verifying_key(), SCOPE_ROOT_IPNS, &write).is_ok()
+        );
+    }
+
+    /// Wire bytes for a one-row ledger whose `ownerSig` the caller chooses,
+    /// hand-built the way a hostile peer's arrive.
+    fn body_with_raw_owner_sig(owner_sig: Option<Value>) -> Vec<u8> {
+        let mut entry = Map::new();
+        if let Some(sig) = owner_sig {
+            entry.insert("ownerSig", sig);
+        }
+        entry.insert("permission", Value::Text("read".into()));
+        entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
+        entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
+        entry.insert("tag", Value::Bytes(vec![0x21; 32]));
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(vec![]));
+        m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
+        m.insert("writeHistoryLink", Value::Bytes(vec![]));
+        encode(&Value::Map(m)).unwrap()
+    }
+
+    #[test]
+    fn a_ledger_row_without_an_owner_sig_rejects() {
+        assert_eq!(
+            decode_write_body(&body_with_raw_owner_sig(None))
+                .unwrap_err()
+                .check(),
+            "missing-field"
+        );
+    }
+
+    #[test]
+    fn a_wrong_length_owner_sig_rejects() {
+        assert_eq!(
+            decode_write_body(&body_with_raw_owner_sig(Some(Value::Bytes(vec![
+                0x77;
+                ECDSA_SIG_LEN
+                    - 1
+            ]))))
+            .unwrap_err()
+            .check(),
+            "invalid-field-length"
         );
     }
 }

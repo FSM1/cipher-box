@@ -535,6 +535,7 @@ where
                     pseudonym_signer: &target.pseudonym_signer,
                 },
                 committed: CommittedSet {
+                    owner_identity: root_plan.committed.owner_identity,
                     commitment: &target.commitment,
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
@@ -600,8 +601,9 @@ mod tests {
     use cipherbox_core::seal::{
         AadContext, AscentLink, GrantSetEntry, Permission, PreservedFields, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
+        sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
     use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
@@ -658,10 +660,21 @@ mod tests {
             Vec<GrantLedgerEntry>,
         ) {
             let ipns_name = format!("ipns-{byte:02x}").into_bytes();
-            // Honestly minted, so a plan carrying `owner_enc_secret` passes
-            // `reseal_scope_root`'s recipient-tag binding.
+            // Honestly minted and owner-attested, so a plan carrying
+            // `owner_enc_secret` passes `reseal_scope_root`'s recipient-tag
+            // binding and the row is re-sealed rather than skipped.
             let tag = recipient_blinded_tag(&self.enc, &self.grantee.public(), &ipns_name)
                 .expect("a contributory sharer key");
+            let mut entry = GrantLedgerEntry::new(
+                [0x02; 33],
+                self.grantee.public().to_bytes(),
+                Permission::Read,
+                tag,
+                [0u8; ECDSA_SIG_LEN],
+            );
+            entry.owner_sig = sign_recipient_binding(&self.ecdsa, &ipns_name, &entry)
+                .expect("signs")
+                .to_compact();
             let commitment = GrantSetCommitment {
                 ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
@@ -671,13 +684,7 @@ mod tests {
             let commitment_sig = sign_grant_set(&self.ecdsa, &commitment)
                 .unwrap()
                 .to_compact();
-            let grant_ledger = vec![GrantLedgerEntry::new(
-                [0x02; 33],
-                self.grantee.public().to_bytes(),
-                Permission::Read,
-                tag,
-            )];
-            (commitment, commitment_sig, grant_ledger)
+            (commitment, commitment_sig, vec![entry])
         }
     }
 
@@ -894,6 +901,7 @@ mod tests {
         net: FakeNet,
         bind_owner_enc_secret: bool,
         owner_pub: X25519Public,
+        owner_identity: EcdsaVerifier,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
         grant_ledger: Vec<GrantLedgerEntry>,
@@ -905,11 +913,13 @@ mod tests {
     impl RootFx {
         fn new(net: FakeNet) -> Self {
             let owner_pub = net.owner.enc.public();
+            let owner_identity = net.owner.ecdsa.verifying_key();
             let (commitment, commitment_sig, grant_ledger) = net.owner.committed(0x00);
             Self {
                 net,
                 bind_owner_enc_secret: false,
                 owner_pub,
+                owner_identity,
                 commitment,
                 commitment_sig,
                 grant_ledger,
@@ -939,6 +949,7 @@ mod tests {
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
                 committed: CommittedSet {
+                    owner_identity: &self.owner_identity,
                     commitment: &self.commitment,
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,

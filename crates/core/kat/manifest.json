@@ -303,7 +303,7 @@
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 9,
+      "count": 11,
       "checks": [
         "duplicate-grant-tag",
         "too-many-structures",
@@ -313,6 +313,10 @@
         "invalid-expiry",
         "invalid-field-length"
       ]
+    },
+    "recipientBindingAccept": {
+      "file": "vectors/grant/recipient_binding_accept.json",
+      "count": 2
     },
     "grantBlobAccept": {
       "file": "vectors/grant/grant_blob_accept.json",

@@ -709,6 +709,8 @@ mod tests {
 
     /// Three grants the owner committed at one scope root: a plain read grant, a
     /// read link the owner minted with a deadline, and a write grant.
+    const NO_SIG: [u8; ECDSA_SIG_LEN] = [0u8; ECDSA_SIG_LEN];
+
     struct Fixture {
         owner: EcdsaSigner,
         name: IpnsName,
@@ -732,10 +734,12 @@ mod tests {
                 unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&owner, &commitment).unwrap().to_compact();
+            // A cut plan is a `(tag, permission)` comparison, so these rows need
+            // no recipient key the owner attested — nor a real one.
             let ledger = vec![
-                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, READ_TAG),
-                GrantLedgerEntry::new([0x04; 33], [0x12; 32], Permission::Read, LINK_TAG),
-                GrantLedgerEntry::new([0x03; 33], [0x13; 32], Permission::Write, WRITE_TAG),
+                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, READ_TAG, NO_SIG),
+                GrantLedgerEntry::new([0x04; 33], [0x12; 32], Permission::Read, LINK_TAG, NO_SIG),
+                GrantLedgerEntry::new([0x03; 33], [0x13; 32], Permission::Write, WRITE_TAG, NO_SIG),
             ];
             Self {
                 owner,
@@ -895,6 +899,7 @@ mod tests {
             [0x1f; 32],
             Permission::Write,
             [0x77; 32], // never committed by the owner
+            NO_SIG,
         ));
         let plan = GrantCutPlan {
             grant_ledger: &injected,
