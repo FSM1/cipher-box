@@ -7,24 +7,20 @@
 
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
-use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
     Version as CoreVersion, decode_envelope, open_read_body, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
-use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
@@ -40,24 +36,27 @@ use cipherbox_engine::net::{
     ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
+    BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
     Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
 };
-use cipherbox_engine::sync::pointer::{
-    SessionRole, open_repoint, seal_repoint, vault_pointer_name,
-};
+use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
     owner_scoped_key, owner_tag, record_content_root_cid,
+};
+use cipherbox_engine::testkit::account::{
+    Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
+    owner_identity, registry_batch_refused, seed_account, serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
+    poll_tasks_once, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
@@ -68,39 +67,18 @@ use cipherbox_engine::{
     reseal_scope_root, stage_op,
 };
 
-const SECRET: [u8; 32] = [7u8; 32];
-/// The all-zero bootstrap anchor `start` binds its cold-start scope to.
-const SCOPE: [u8; 16] = [0u8; 16];
-const ROOT: NodeId = NodeId(SCOPE);
-/// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
-const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
 const ROTATED_READ_SCOPE_SEED: [u8; 32] = [0xA5; 32];
 /// The stable per-scope pointer read key the owner-root fixture's grant blobs
 /// carry.
 const POINTER_READ_KEY: [u8; 32] = [0x88; 32];
-const TTL_NANOS: u64 = 2_000_000_000;
 /// The destination set the upload mark opens on.
 const DESTINATIONS_LEN: usize = Destinations::LEN;
-const EOL: &str = "2099-01-01T00:00:00Z";
-/// Shaped as the API issues one; only the provisioning scenario logs in.
-const LOGIN_CHALLENGE: &str =
-    "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-fn owner_identity() -> EcdsaSigner {
-    EcdsaSigner::from_scalar(&SECRET).expect("valid scalar")
-}
 
 // ---------------------------------------------------------------------------
-// The block plane: one content-addressed store behind both the pin API and the
-// gateway, so a block the engine uploads is a block it can later fetch.
+// Upload refusals: the replies this suite scripts the block plane's upload hook
+// with, each a different shape of failure the valve has to tell apart.
 // ---------------------------------------------------------------------------
-
-/// A test hook on the upload path: given a head block about to be stored,
-/// answer with the reply to send instead of storing it, or `None` to let the
-/// upload through. Lets a test fail exactly one record's publish — and
-/// interleave a concurrent writer at that instant.
-type UploadHook = Box<dyn FnMut(&[u8]) -> Option<SeamResult<HttpResponse>> + Send>;
 
 /// The pin store is unreachable: a transport failure carrying no server verdict.
 fn unreachable_upload() -> SeamResult<HttpResponse> {
@@ -115,42 +93,6 @@ fn upload_413(code: Option<&str>) -> SeamResult<HttpResponse> {
         status: 413,
         headers: Vec::new(),
         body: format!("{{\"statusCode\":413,\"message\":\"too large\"{code}}}").into_bytes(),
-    })
-}
-
-/// The registry's own 400 for a batch past its bounds: the `code` the batch
-/// gate stamps, which is what the valve classifies on.
-fn registry_batch_refused() -> Vec<u8> {
-    format!(r#"{{"statusCode":400,"message":"over cap","code":"{REGISTRY_BATCH_REFUSED}"}}"#)
-        .into_bytes()
-}
-
-/// A 400 answered for a registry it never reached, so it stamps no `code` —
-/// [`proxy_413`]'s counterpart on the register path.
-fn proxy_400() -> Vec<u8> {
-    b"<html><body>400 Bad Request</body></html>".to_vec()
-}
-
-/// Ack a registration, refusing one past the registry's bounds fail-closed —
-/// never truncated or partially applied (blueprint/api.md "Batch bounds").
-fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
-    let entries: Vec<serde_json::Value> =
-        serde_json::from_slice(body.expect("a register call carries a body"))
-            .expect("a register body is a JSON array");
-    let over_cap = entries.len() > REGISTRY_BATCH_MAX
-        || entries.iter().any(|entry| {
-            entry["contentCids"]
-                .as_array()
-                .is_some_and(|cids| cids.len() > REGISTRY_BATCH_MAX)
-        });
-    Ok(HttpResponse {
-        status: if over_cap { 400 } else { 200 },
-        headers: Vec::new(),
-        body: if over_cap {
-            registry_batch_refused()
-        } else {
-            Vec::new()
-        },
     })
 }
 
@@ -174,409 +116,10 @@ fn proxy_413() -> SeamResult<HttpResponse> {
     })
 }
 
-/// The member's own IPFS node, as their vault settings name it.
-const MEMBER_NODE: &str = "https://kubo.member.test";
-
-/// The one file part out of a `multipart/form-data` body, framed against the
-/// boundary the request's own `Content-Type` declares. Deliberately strict: the
-/// point of the fake is to catch framing the real Kubo would reject.
-fn multipart_file(request: &HttpRequest) -> Vec<u8> {
-    let content_type = request
-        .headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("Content-Type"))
-        .map(|(_, value)| value.clone())
-        .expect("a multipart body declares its content type");
-    let boundary = content_type
-        .split("boundary=")
-        .nth(1)
-        .expect("the content type names the boundary")
-        .to_owned();
-    let body = request.body.clone().expect("a block/put carries a body");
-    let head = format!("--{boundary}\r\n");
-    let tail = format!("\r\n--{boundary}--\r\n");
-    let body = std::str::from_utf8(&body[..head.len()])
-        .ok()
-        .filter(|opening| *opening == head)
-        .map(|_| &body[head.len()..])
-        .expect("the body opens on the declared boundary");
-    let body = body
-        .strip_suffix(tail.as_bytes())
-        .expect("the body closes on the declared boundary");
-    // Past the part headers: the blank line that ends them is the file's start.
-    let start = body
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("the part headers end")
-        + 4;
-    body[start..].to_vec()
-}
-
-#[derive(Clone, Default)]
-struct Blocks {
-    store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
-    on_upload: Arc<Mutex<Option<UploadHook>>>,
-    /// What `GET /account/quota` reports, as `(usedBytes, limitBytes)`. Unset is
-    /// an account with room, so only a test about the quota scripts one.
-    quota: Arc<Mutex<Option<(u64, u64)>>>,
-    /// The account's server-side BYO flag, which `GET /account/quota` reports as
-    /// `advisory` and `PATCH /account/byo` moves.
-    advisory_quota: Arc<AtomicBool>,
-    /// The member's own node: what it holds, keyed by the address it stored each
-    /// block under, and whether it can be reached at all.
-    member_node: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
-    member_node_down: Arc<AtomicBool>,
-    /// Requests the member's node refuses before answering normally again — the
-    /// transient blip a mirror retry inside the op exists for.
-    member_node_refusals: Arc<AtomicUsize>,
-    /// The 400 body every `POST /registry/register` answers with instead of
-    /// acking.
-    register_refusal: Arc<Mutex<Option<Vec<u8>>>>,
-    /// Whether `GET /account/quota` is reachable at all: the transport failure
-    /// a flaky API leg gives, not a verdict.
-    quota_down: Arc<AtomicBool>,
-    /// The same for `PATCH /account/byo`.
-    byo_down: Arc<AtomicBool>,
-    /// Whether `POST /registry/retire` refuses — the outage a retire ledger's
-    /// never-discard contract exists for.
-    retire_down: Arc<AtomicBool>,
-}
-
-impl Blocks {
-    /// Index a block by its own content address. The content plane addresses
-    /// roots under `dag-cbor` and leaves under `raw`, and the ingress carries no
-    /// codec, so a block is served under either address a reader may ask for.
-    fn put(&self, block: Vec<u8>) -> String {
-        let root_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-        let leaf_cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
-        let mut store = self.store.lock().expect("lock");
-        store.insert(leaf_cid, block.clone());
-        store.insert(root_cid.clone(), block);
-        root_cid
-    }
-
-    /// Store an uploaded block under the address its caller declared, refusing
-    /// one the bytes do not hash to under either content-plane codec — the
-    /// ingress's put-and-compare.
-    fn put_declared(&self, declared: &str, block: Vec<u8>) {
-        let raw = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
-        let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-        assert!(
-            declared == raw || declared == root,
-            "upload declared an address it does not hash to"
-        );
-        self.store
-            .lock()
-            .expect("lock")
-            .insert(declared.to_owned(), block);
-    }
-
-    fn get(&self, cid: &str) -> Option<Vec<u8>> {
-        self.store.lock().expect("lock").get(cid).cloned()
-    }
-
-    /// Install the upload hook, replacing any previous one.
-    fn refuse_upload(&self, hook: UploadHook) {
-        *self.on_upload.lock().expect("lock") = Some(hook);
-    }
-
-    /// Let every upload through again.
-    fn accept_uploads(&self) {
-        *self.on_upload.lock().expect("lock") = None;
-    }
-
-    /// Script what the quota endpoint reports.
-    fn set_quota(&self, used_bytes: u64, limit_bytes: u64) {
-        *self.quota.lock().expect("lock") = Some((used_bytes, limit_bytes));
-    }
-
-    /// Answer every registration with a 400 carrying `body` instead of acking.
-    /// Retirement keeps answering, so a pass can still clear what it orphaned.
-    fn refuse_register(&self, body: Vec<u8>) {
-        *self.register_refusal.lock().expect("lock") = Some(body);
-    }
-
-    /// Whether every retire is refused with a 503 — the self-clearing outage a
-    /// never-discard ledger backs off on.
-    fn refuse_retire(&self, refuse: bool) {
-        self.retire_down.store(refuse, Ordering::SeqCst);
-    }
-
-    /// Let every registration through again.
-    fn accept_registrations(&self) {
-        *self.register_refusal.lock().expect("lock") = None;
-    }
-
-    /// Answer the member's own Kubo node: store the block the `block/put` body
-    /// carries under the address that node computes for it, and answer with that
-    /// address — the same put-and-compare the hosted ingress runs, so a
-    /// mis-framed body or a wrong codec shows up as a disagreeing address rather
-    /// than passing silently.
-    fn member_node_reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
-        if self.member_node_down.load(Ordering::Relaxed) {
-            return Err(SeamError::new("the member's node is offline"));
-        }
-        if self
-            .member_node_refusals
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(1)
-            })
-            .is_ok()
-        {
-            return Err(SeamError::new("the member's node refused this attempt"));
-        }
-        assert!(
-            request.url.contains("mhtype=blake3&mhlen=32"),
-            "a block/put must name the frozen content-plane hash: {}",
-            request.url
-        );
-        let codec = if request.url.contains("cid-codec=raw") {
-            CONTENT_CID_CODEC
-        } else {
-            assert!(request.url.contains("cid-codec=dag-cbor"), "a known codec");
-            DAG_ROOT_CODEC
-        };
-        let block = multipart_file(request);
-        let cid = encode_content_cid_str(&compute_cid(codec, &block));
-        self.member_node
-            .lock()
-            .expect("lock")
-            .insert(cid.clone(), block);
-        Ok(HttpResponse {
-            status: 200,
-            headers: Vec::new(),
-            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n").into_bytes(),
-        })
-    }
-
-    /// Every address the member's own node holds.
-    fn member_node_cids(&self) -> Vec<String> {
-        self.member_node
-            .lock()
-            .expect("lock")
-            .keys()
-            .cloned()
-            .collect()
-    }
-
-    /// Answer one engine HTTP call: a content upload lands its bytes here and
-    /// echoes their address, a registry call acks, and a gateway GET serves the
-    /// block back. Enqueued as many times as the pass needs, so no test depends
-    /// on the exact order the engine happens to make its calls in.
-    fn reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
-        let ok = |body: Vec<u8>| {
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body,
-            })
-        };
-        let url = &request.url;
-        if url.ends_with("/content/upload") {
-            let declared = request
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                .map(|(_, value)| value.clone())
-                .expect("upload declares its CID");
-            let block = request.body.clone().unwrap_or_default();
-            if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
-                && let Some(reply) = hook(&block)
-            {
-                return reply;
-            }
-            let size = block.len();
-            // Mirror the API's fail-closed bind: the block is stored —
-            // and served back — only under the address the caller declared,
-            // and only once those bytes really address to it.
-            self.put_declared(&declared, block);
-            return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
-        }
-        // The recovery cache has seen nothing: the vacancy probe first-run
-        // provisioning runs before it mints anything.
-        if url.contains("/recovery/") {
-            return Ok(HttpResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: br#"{"statusCode":404,"message":"No cached record for this name"}"#.to_vec(),
-            });
-        }
-        // The auth handshake, for the one scenario that runs against a
-        // configured API rather than offline (first-run provisioning).
-        if url.ends_with("/auth/challenge") {
-            return ok(format!(
-                r#"{{"challenge":"{LOGIN_CHALLENGE}","expiresAt":"2099-01-01T00:00:00Z"}}"#
-            )
-            .into_bytes());
-        }
-        if url.ends_with("/auth/login") {
-            return ok(format!(
-                r#"{{"accessToken":"jwt-1","refreshToken":"{}","isNewUser":true}}"#,
-                "a".repeat(64)
-            )
-            .into_bytes());
-        }
-        if url.ends_with("/account/quota") && self.quota_down.load(Ordering::Relaxed) {
-            return Err(SeamError::new("the quota endpoint is unreachable"));
-        }
-        if url.ends_with("/account/byo") && self.byo_down.load(Ordering::Relaxed) {
-            return Err(SeamError::new("the byo endpoint is unreachable"));
-        }
-        if url.ends_with("/account/quota") {
-            let (used, limit) = self
-                .quota
-                .lock()
-                .expect("lock")
-                .unwrap_or((0, u64::MAX / 2));
-            let advisory = self.advisory_quota.load(Ordering::Relaxed);
-            return ok(format!(
-                "{{\"usedBytes\":{used},\"limitBytes\":{limit},\"advisory\":{advisory}}}"
-            )
-            .into_bytes());
-        }
-        if url.starts_with(MEMBER_NODE) {
-            return self.member_node_reply(request);
-        }
-        if url.ends_with("/account/byo") {
-            let enabled = serde_json::from_slice::<serde_json::Value>(
-                request
-                    .body
-                    .as_deref()
-                    .expect("a byo toggle carries a body"),
-            )
-            .expect("a byo body is JSON")["byo"]
-                .as_bool()
-                .expect("the toggle names a boolean");
-            self.advisory_quota.store(enabled, Ordering::Relaxed);
-            return ok(Vec::new());
-        }
-        if url.ends_with("/registry/register") {
-            if let Some(body) = self.register_refusal.lock().expect("lock").clone() {
-                return Ok(HttpResponse {
-                    status: 400,
-                    headers: Vec::new(),
-                    body,
-                });
-            }
-            return register_reply(request.body.as_deref());
-        }
-        if url.ends_with("/registry/retire") {
-            if self.retire_down.load(Ordering::SeqCst) {
-                return Ok(HttpResponse {
-                    status: 503,
-                    headers: Vec::new(),
-                    body: Vec::new(),
-                });
-            }
-            // The registry answers a retire with what it deleted; the count is
-            // the engine's done-signal, so a malformed body must fail the test
-            // rather than ack a zero that reads as done.
-            let body = request
-                .body
-                .as_deref()
-                .expect("a retire call carries a body");
-            let retired = serde_json::from_slice::<Vec<String>>(body)
-                .expect("a retire body is a name array")
-                .len();
-            return ok(format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes());
-        }
-        if url.contains("/registry/") {
-            return ok(Vec::new());
-        }
-        let cid = url
-            .rsplit('/')
-            .next()
-            .and_then(|tail| tail.split('?').next())
-            .unwrap_or_default();
-        match self.get(cid) {
-            Some(block) => ok(block),
-            None => Err(SeamError::new("no such block")),
-        }
-    }
-}
-
-/// Wire `device`'s scripted HTTP to the block plane for `calls` requests.
-fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
-    for _ in 0..calls {
-        let blocks = blocks.clone();
-        device
-            .http
-            .enqueue_derived(move |request| blocks.reply(request));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Account fixture: the owner vault pointer and the initial empty scope root.
-// ---------------------------------------------------------------------------
-
-/// Publish the account's initial state to the shared network: an empty owner
-/// root at sequence 1 and the vault pointer naming it. Returns the root's
-/// write-plane name.
-fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
-    let fixture = owner_root_fixture(OwnerRootSpec {
-        owner_identity: &owner_identity(),
-        owner_enc: &kdf::enc_subkey(&SECRET).public(),
-        scope_id: SCOPE,
-        root_id: ROOT.0,
-        children: Vec::new(),
-        child_scope_index: Vec::new(),
-        parent_node_seed: None,
-        // At the read epoch, so the cold-seeded write floor opens the
-        // owner-write-blob and the owner recovers its scope write seed — the
-        // seed the drain derives every new node's name and signer from.
-        owner_write_blob_epoch: Some(EPOCH),
-        write_history_link: Vec::new(),
-        grants: Vec::new(),
-    });
-    blocks.put(fixture.head_block.clone());
-
-    let root_signer = {
-        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0);
-        kdf::ipns_keypair(write_seed.as_bytes())
-    };
-    let root_record = IpnsRecord::create_v2(
-        &root_signer,
-        format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-
-    let pointer_block = seal_repoint(
-        SessionRole::Owner,
-        &mut SeededEntropy::new(0),
-        kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
-        POINTER_PAYLOAD_VERSION,
-        &owner_identity(),
-        &RepointObject {
-            scope_id: SCOPE,
-            current_root: fixture.name.clone(),
-            write_epoch: EPOCH,
-            min_read_epoch: EPOCH,
-            prev_root: None,
-        },
-    )
-    .expect("seal the re-point");
-    let pointer_record = IpnsRecord::create_v2(
-        &kdf::vault_pointer_index(&SECRET, 0),
-        &pointer_block,
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-    let pointer_name = vault_pointer_name(&SECRET, 0);
-
-    for endpoint in world.record_store.endpoints() {
-        world
-            .record_store
-            .seed_record(&endpoint, fixture.name.as_str(), root_record.clone());
-        world
-            .record_store
-            .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
-    }
-    fixture.name
+/// A 400 answered for a registry it never reached, so it stamps no `code` —
+/// [`proxy_413`]'s counterpart on the register path.
+fn proxy_400() -> Vec<u8> {
+    b"<html><body>400 Bad Request</body></html>".to_vec()
 }
 
 fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -660,47 +203,10 @@ fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
         .sequence
 }
 
-/// A waker that only records that it fired — enough to tell a cooperative
-/// yield (which wakes itself) from a parked sleep (which does not).
-struct WokenFlag(Mutex<bool>);
-
-impl std::task::Wake for WokenFlag {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        *self.0.lock().expect("lock") = true;
-    }
-}
-
-/// Poll every spawned loop until each is parked on a timer rather than on the
-/// drain's block-boundary yield, and report the last round's verdicts.
-fn poll_each(tasks: &mut [BoxedTask]) -> Vec<Poll<()>> {
-    let flag = Arc::new(WokenFlag(Mutex::new(false)));
-    let waker = Waker::from(flag.clone());
-    let mut cx = Context::from_waker(&waker);
-    loop {
-        *flag.0.lock().expect("lock") = false;
-        let polls: Vec<_> = tasks.iter_mut().map(|t| t.as_mut().poll(&mut cx)).collect();
-        if !*flag.0.lock().expect("lock") {
-            return polls;
-        }
-    }
-}
-
-/// Poll every spawned loop exactly once, leaving a yielded drain mid-pass.
-fn poll_once(tasks: &mut [BoxedTask]) {
-    let mut cx = Context::from_waker(Waker::noop());
-    for task in tasks.iter_mut() {
-        let _ = task.as_mut().poll(&mut cx);
-    }
-}
-
 /// Run one resolve-tick interval, which is also one drain pass.
 fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask]) {
     world.scheduler.advance(engine.profile().poll_cadence);
-    poll_each(tasks);
+    poll_tasks_until_parked(tasks);
 }
 
 /// Drive one command to completion with the spawned loops running beside it —
@@ -716,7 +222,7 @@ fn command_while_ticking(
         if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
             return outcome;
         }
-        poll_each(tasks);
+        poll_tasks_until_parked(tasks);
     }
     panic!("the command never settled against the running loops");
 }
@@ -748,7 +254,7 @@ fn boot_with(
     let (mut engine, events) = engine_with(device, entropy);
     block_on(engine.start(secret())).expect("cold start adopts the owner root");
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
 }
 
@@ -945,7 +451,7 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     .op_id();
 
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     // The write reached the record plane: the child is in gate-passing state and
@@ -986,6 +492,80 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     assert_eq!(children.len(), 1, "device B resolves the provisioned write");
     assert_eq!(children[0].name, "photos");
     assert_eq!(children[0].id, view.children[0].id);
+}
+
+/// A mint that did not land must not cost the session its write path. The
+/// forced-refresh command a host already drives retries it: the vault mints, the
+/// resolve-tick loop starts on the root it just published, and the ops queued
+/// while the account had no vault publish in the same session — no restart.
+#[test]
+fn a_refreshed_retry_of_a_failed_mint_publishes_a_write_in_the_same_session() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 64);
+    // The genesis head block has nowhere to land, so the mint does not.
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    let (mut engine, mut events) = engine_on_api(&alice, 42);
+
+    block_on(engine.start(secret())).expect("a mint that did not land is not a failed start");
+    assert!(
+        !engine.is_provisioned(),
+        "the session starts with no vault and a dark write path"
+    );
+    assert!(
+        core::iter::from_fn(|| events.try_next()).any(|event| matches!(
+            event,
+            Event::VaultUnprovisioned {
+                retryable: true,
+                ..
+            }
+        )),
+        "the stall is announced as retryable"
+    );
+
+    // The host keeps working: the op queues against the unprovisioned vault.
+    let op_id = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages against an unprovisioned vault")
+    .op_id();
+
+    blocks.accept_uploads();
+    block_on(engine.command(Command::ManualRefresh)).expect("the retry mints");
+    assert!(engine.is_provisioned(), "the write path opened in-session");
+
+    let root_name = vault_root_name(&world);
+    assert_eq!(
+        sequence_at(&world, &root_name),
+        1,
+        "the late mint publishes its genesis root at sequence 1"
+    );
+
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).unwrap();
+    assert_eq!(view.children.len(), 1, "the queued create published");
+    assert_eq!(view.children[0].name, "photos");
+    assert_eq!(
+        view.children[0].pending,
+        PendingClass::None,
+        "a published op is no longer pending"
+    );
+    assert_eq!(
+        sequence_at(&world, &root_name),
+        2,
+        "the root advanced past the genesis the retry minted"
+    );
+    assert_eq!(
+        block_on(drained_mark(&alice)),
+        op_id.map(|id| id.0),
+        "the op the dark session queued is the one that drained"
+    );
 }
 
 /// The index of every `POST /content/upload` this device made, in request order.
@@ -1037,7 +617,7 @@ fn the_first_tick_adopts_the_genesis_root_before_the_drain_reads_it() {
     let uploads_before = upload_positions(&alice).len();
 
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     // The tick's resolve adopted the genesis record, which is what a `Current`
@@ -1087,7 +667,7 @@ fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
     .expect("a metadata create stages");
 
     let started_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler);
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     assert_eq!(
         block_on(engine.snapshot(ROOT)).unwrap().children[0].pending,
         PendingClass::Metadata,
@@ -1100,7 +680,7 @@ fn a_manual_refresh_publishes_a_queued_op_without_waiting_out_the_cadence() {
         "the forced pass reconciled the owner root"
     );
     // The drain rides the same pass; the refresh returns on its read legs.
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     assert_eq!(
         block_on(engine.snapshot(ROOT)).unwrap().children[0].pending,
@@ -1268,7 +848,7 @@ fn a_folder_create_publishes_and_resolves_back() {
     );
 
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks); // park both loops at their first sleep
+    poll_tasks_until_parked(&mut tasks); // park both loops at their first sleep
     tick(&world, &engine, &mut tasks);
 
     // The op left the queue and the child is in gate-passing state, not the
@@ -1330,7 +910,7 @@ fn a_published_child_sits_on_the_write_name_edge_and_the_read_key_edge() {
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     let child = block_on(engine.view()).unwrap().children(ROOT)[0].id;
@@ -1383,7 +963,7 @@ fn a_restart_that_adopts_nothing_still_drains() {
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
     drop(engine);
 
@@ -1398,7 +978,7 @@ fn a_restart_that_adopts_nothing_still_drains() {
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     let mut names: Vec<String> = block_on(engine.view())
@@ -1442,7 +1022,7 @@ fn an_empty_file_create_publishes_under_the_same_metadata_path() {
     .unwrap();
 
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).unwrap();
@@ -1479,7 +1059,7 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine_a, &mut tasks);
 
     // A second device of the same account, cold: its own floors, cache, and
@@ -3080,7 +2660,7 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
     assert_eq!(op_id, Some(OpId(1)), "the create reclaims the covered id");
 
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     tick(&world, &engine, &mut tasks);
 
     assert!(
@@ -5073,7 +4653,7 @@ fn a_focus_refresh_never_renders_back_an_upload_the_user_cancelled() {
 
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(uploads(&alice) > 0, "the cancel lands mid-transfer");
     block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
@@ -5133,7 +4713,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
     // them leave it parked with part of the version already on the network.
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(
         uploads(&alice) > 0,
@@ -5141,7 +4721,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
     );
 
     block_on(engine.command(Command::CancelUpload { op_id })).expect("the upload is cancellable");
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     assert_no_blocks_staged(&alice, &version);
     assert!(
@@ -5226,14 +4806,14 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
 
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(
         uploads(&alice) > 0,
         "only a partial upload leaves a mark, so the cancel must land mid-transfer"
     );
     block_on(engine.command(Command::CancelUpload { op_id: cancelled })).unwrap();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     let mark = block_on(alice.staging_store.staged_bytes(UPLOAD_MARK_KEY))
         .unwrap()
@@ -6027,7 +5607,7 @@ fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() 
     // there is a retire batch to get wrong.
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(uploads(&alice) > 0);
 
@@ -6036,7 +5616,7 @@ fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() 
         block_on(engine.command(Command::CancelUpload { op_id })).is_err(),
         "the cancel could not remove the op, so it did not happen"
     );
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     assert!(
         retire_targets(&alice).is_empty(),
@@ -6079,7 +5659,7 @@ fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
 
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(
         uploads(&alice) > 0,
@@ -6091,7 +5671,7 @@ fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
     // The drain now stops on the claim with no removal available to it, which
     // is indistinguishable from the op never having left the queue.
     alice.staging_store.fail_remove_op();
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     assert_eq!(
         retire_batches(&alice).len(),
@@ -6237,7 +5817,7 @@ fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
 
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
-        poll_once(&mut tasks);
+        poll_tasks_once(&mut tasks);
     }
     assert!(
         uploads(&alice) > 0,
@@ -6254,7 +5834,7 @@ fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
 
     // The pass that notices the cancel sweeps behind itself, so the residue does
     // not wait a whole cadence.
-    poll_each(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     assert!(
         !block_on(alice.staging_store.staged_keys())
             .unwrap()
@@ -6890,7 +6470,7 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     );
 
     blocks.accept_uploads();
-    blocks.quota_down.store(true, Ordering::Relaxed);
+    blocks.set_quota_down(true);
     let probes = || {
         alice
             .http
@@ -6931,7 +6511,7 @@ fn a_dual_write_publishes_and_reports_the_leg_the_members_node_did_not_take() {
     seed_settings(&world, &alice, &blocks, PinMode::Dual);
 
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.member_node_down.store(true, Ordering::Relaxed);
+    blocks.set_member_node_down(true);
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -7052,7 +6632,7 @@ fn a_mirror_refusal_the_op_retries_past_leaves_nothing_to_report() {
     seed_settings(&world, &alice, &blocks, PinMode::Dual);
 
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.member_node_refusals.store(1, Ordering::Relaxed);
+    blocks.set_member_node_refusals(1);
     write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -7098,7 +6678,7 @@ fn a_mirror_shortfall_is_reported_only_once_the_record_published() {
     seed_settings(&world, &alice, &blocks, PinMode::Dual);
 
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.member_node_down.store(true, Ordering::Relaxed);
+    blocks.set_member_node_down(true);
     blocks.refuse_register(proxy_400());
     let op_id = write_file(
         &mut engine,
@@ -7160,7 +6740,7 @@ fn a_dead_mirror_costs_the_op_a_bounded_number_of_attempts() {
 
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let before = alice.http.requests().len();
-    blocks.member_node_down.store(true, Ordering::Relaxed);
+    blocks.set_member_node_down(true);
     write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -7203,7 +6783,7 @@ fn a_cancel_while_the_mirror_retries_still_retires_the_hosted_blocks() {
         let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
         // A mirror that refuses every attempt is what puts the cancel window
         // between the hosted upload and the end of the block.
-        blocks.member_node_down.store(true, Ordering::Relaxed);
+        blocks.set_member_node_down(true);
         let op_id = write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -7220,13 +6800,13 @@ fn a_cancel_while_the_mirror_retries_still_retires_the_hosted_blocks() {
 
         world.scheduler.advance(engine.profile().poll_cadence);
         for _ in 0..polls {
-            poll_once(&mut tasks);
+            poll_tasks_once(&mut tasks);
         }
         if block_on(engine.command(Command::CancelUpload { op_id })).is_err() {
             // Past publish entry, where a cancel is refused by design.
             continue;
         }
-        poll_each(&mut tasks);
+        poll_tasks_until_parked(&mut tasks);
 
         let retired: Vec<String> = retire_batches(&alice).into_iter().flatten().collect();
         for cid in uploaded_cids(&alice)
@@ -7257,7 +6837,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         seed_settings(&world, &alice, &blocks, PinMode::Dual);
 
         let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-        blocks.member_node_down.store(!mirror_up, Ordering::Relaxed);
+        blocks.set_member_node_down(!mirror_up);
         // The process dies two leaves in, with those two already released.
         alice
             .staging_store
@@ -7281,7 +6861,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         drop(engine);
 
         // The member moves to external-only, and their node is reachable now.
-        blocks.member_node_down.store(false, Ordering::Relaxed);
+        blocks.set_member_node_down(false);
         seed_settings(&world, &alice, &blocks, PinMode::External);
         let (engine, mut events_after, mut tasks) = boot(&world, &blocks, &alice, 43);
         tick(&world, &engine, &mut tasks);
@@ -7348,14 +6928,14 @@ fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     let alice = world.device(b"alice");
     seed_settings(&world, &alice, &blocks, PinMode::External);
     assert!(
-        !blocks.advisory_quota.load(Ordering::Relaxed),
+        !blocks.advisory(),
         "the account starts classified as hosted"
     );
 
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
     write_photo(&mut engine, "photo.bin");
     assert!(
-        blocks.advisory_quota.load(Ordering::Relaxed),
+        blocks.advisory(),
         "an external mode moved the account onto advisory accounting"
     );
     assert_eq!(byo_toggles(&alice), 1, "and only while the two disagreed");
@@ -7385,24 +6965,21 @@ fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
     // assumed one latches nothing (blueprint/engine.md "Settings-load policy").
     seed_settings(&world, &alice, &blocks, PinMode::Hosted);
     // The account carries the flag an external session set; this one is hosted.
-    blocks.advisory_quota.store(true, Ordering::Relaxed);
-    blocks.byo_down.store(true, Ordering::Relaxed);
+    blocks.set_advisory(true);
+    blocks.set_byo_down(true);
 
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
     write_photo(&mut engine, "photo.bin");
     assert_eq!(byo_toggles(&alice), 1, "the session tried to reconcile");
     assert!(
-        blocks.advisory_quota.load(Ordering::Relaxed),
+        blocks.advisory(),
         "and the account still disagrees with the vaulted mode"
     );
 
-    blocks.byo_down.store(false, Ordering::Relaxed);
+    blocks.set_byo_down(false);
     write_photo(&mut engine, "photo2.bin");
     assert_eq!(byo_toggles(&alice), 2, "so the next write tries again");
-    assert!(
-        !blocks.advisory_quota.load(Ordering::Relaxed),
-        "and this one landed"
-    );
+    assert!(!blocks.advisory(), "and this one landed");
 
     write_photo(&mut engine, "photo3.bin");
     assert_eq!(

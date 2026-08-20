@@ -2397,6 +2397,7 @@ impl<T: SeamTypes> Engine<T> {
     /// shared bearer cell, so it is dropped here by name.
     fn clear_failed_start(&mut self) {
         self.session = None;
+        *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
         self.accelerator_bearer.clear();
     }
@@ -3108,6 +3109,7 @@ where {
             }
         };
         self.open_tick_loop(root_name);
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
     }
 
@@ -3124,11 +3126,11 @@ where {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
         };
-        // The loop has no root to poll until this account has a vault, so an
-        // unprovisioned session mints one here rather than leaving the write
-        // path dark for the rest of it. The mint deposits exactly the state a
-        // pass would reconcile, so it answers for this refresh on its own.
-        if !self.is_provisioned() {
+        // An unconsumed spawner is a start that found no root to poll — this
+        // account has no vault yet. Mint one here rather than leaving the write
+        // path dark for the rest of the session; the mint deposits exactly the
+        // state a pass would reconcile, so it answers for this refresh itself.
+        if self.tick_loop_spawner.borrow().is_some() {
             return self.provision_in_session().await;
         }
         let verdict = self
@@ -6222,6 +6224,7 @@ mod tests {
         use crate::testkit::{
             FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_SCOPE_SEED as SCOPE_SEED,
             OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, owner_root_fixture,
+            poll_tasks_once,
         };
 
         const CAP_SECRET: [u8; 32] = [7u8; 32];
@@ -6355,15 +6358,6 @@ mod tests {
             )
         }
 
-        /// Poll every spawned loop task once with a no-op waker. Manual re-polls
-        /// drive the virtual clock's parked sleeps (the loops never yield inside a
-        /// pass over the synchronous fakes), so this is the sound driver for the
-        /// fire-and-forget loops — auto-advance would spin an infinite pass loop.
-        fn poll_each(tasks: &mut [BoxedTask]) -> Vec<Poll<()>> {
-            let mut cx = Context::from_waker(Waker::noop());
-            tasks.iter_mut().map(|t| t.as_mut().poll(&mut cx)).collect()
-        }
-
         #[test]
         fn start_with_empty_seams_is_a_graceful_noop() {
             // The regression guard: empty seams (no vault pointer, no record) leave
@@ -6494,9 +6488,9 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks); // park each loop at its first sleep
+            poll_tasks_once(&mut tasks); // park each loop at its first sleep
             world.scheduler.advance(engine.profile().poll_cadence);
-            poll_each(&mut tasks); // the resolve tick runs one pass
+            poll_tasks_once(&mut tasks); // the resolve tick runs one pass
 
             let held = engine.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
@@ -6530,7 +6524,7 @@ mod tests {
             let (mut engine, events) = engine_on(device);
             block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             (engine, events, tasks)
         }
 
@@ -6540,7 +6534,7 @@ mod tests {
             let (head_block, _, _) = owner_root();
             device.http.enqueue_response(head_response(&head_block));
             world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
-            poll_each(tasks);
+            poll_tasks_once(tasks);
         }
 
         /// Nothing the spawned loops share may outlive the engine: a parked task
@@ -6604,7 +6598,7 @@ mod tests {
                     .http
                     .enqueue_response(head_response(b"forged head block"));
                 world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
-                poll_each(&mut tasks);
+                poll_tasks_once(&mut tasks);
 
                 let abuse: Vec<String> = drain(&mut events)
                     .into_iter()
@@ -6801,12 +6795,12 @@ mod tests {
             );
 
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks); // park each loop at its first sleep
+            poll_tasks_once(&mut tasks); // park each loop at its first sleep
 
             // CI profile: 1 s poll, 3 s stale_after. With no reachable head
             // block, each tick fails to reconcile and last_success stays at 0.
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![Event::StalenessChanged {
@@ -6815,10 +6809,10 @@ mod tests {
                 "the first classified rung is reported"
             );
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(drain(&mut events), vec![], "no re-emit within a rung");
             world.scheduler.advance(Duration::from_secs(1)); // t=3 s ≥ stale_after
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![Event::StalenessChanged {
@@ -6826,7 +6820,7 @@ mod tests {
                 }]
             );
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(drain(&mut events), vec![], "stale reported exactly once");
 
             // The record plane recovers with a newer root: the adopt stamps
@@ -6840,7 +6834,7 @@ mod tests {
             }
             device.http.enqueue_response(head_response(&head_block));
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![
@@ -6880,9 +6874,7 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let mut cx = Context::from_waker(Waker::noop());
-            for task in &mut tasks {
-                let _ = task.as_mut().poll(&mut cx); // park both at their first sleep
-            }
+            poll_tasks_once(&mut tasks); // park both at their first sleep
             // One hourly interval wakes both the 1 s tick and the 1 h re-PUT. Drive
             // the tick first (it holds the root), then the keyless re-PUT.
             world.scheduler.advance(RE_PUT_INTERVAL);
@@ -6904,7 +6896,7 @@ mod tests {
             // Drop clears the alive latch; both loops stop at their next wake.
             drop(engine);
             world.scheduler.advance(RE_PUT_INTERVAL);
-            let after = poll_each(&mut tasks);
+            let after = poll_tasks_once(&mut tasks);
             assert!(
                 after.iter().all(Poll::is_ready),
                 "both loops stop after the engine drops"
@@ -7393,9 +7385,9 @@ mod tests {
                     .http
                     .enqueue_response(head_response(&root_head_block));
                 let mut tasks = world.scheduler.take_spawned_tasks();
-                poll_each(&mut tasks); // park each loop at its first sleep
+                poll_tasks_once(&mut tasks); // park each loop at its first sleep
                 world.scheduler.advance(engine.profile().poll_cadence);
-                poll_each(&mut tasks); // the resolve tick runs one pass
+                poll_tasks_once(&mut tasks); // the resolve tick runs one pass
                 assert_eq!(
                     block_on(floor::sequence_floor(
                         &device.floor_store,

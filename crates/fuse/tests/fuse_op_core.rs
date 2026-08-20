@@ -1328,35 +1328,13 @@ fn the_mount_status_reports_a_quiet_mount_as_quiet() {
 /// The read path over a real published file, which needs the account fixture
 /// the write plane publishes rather than the empty mount above.
 mod published {
-    use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
-
-    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
-    use cipherbox_core::ipns::IpnsRecord;
-    use cipherbox_core::kdf;
-    use cipherbox_core::payload::RepointObject;
-    use cipherbox_core::suite::ecdsa::EcdsaSigner;
-    use cipherbox_engine::content::DAG_ROOT_CODEC;
-    use cipherbox_engine::seams::{
-        BoxedTask, HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult,
-    };
-    use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
-    use cipherbox_engine::testkit::{
-        FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-        OwnerRootSpec, owner_root_fixture, requested_cid,
-    };
+    use cipherbox_engine::seams::{BoxedTask, RecordTransport};
+    use cipherbox_engine::testkit::account::{Blocks, ROOT, SECRET, seed_account, serve_http};
+    use cipherbox_engine::testkit::{FakeDevice, poll_tasks_until_parked};
     use cipherbox_engine::{MAX_OPEN_STREAMS, WriteTarget};
 
     use super::*;
 
-    const SECRET: [u8; 32] = [7u8; 32];
-    /// The all-zero bootstrap anchor a cold start binds its scope to.
-    const SCOPE: [u8; 16] = [0u8; 16];
-    const ROOT: NodeId = NodeId(SCOPE);
-    /// The sole v2 re-point payload version.
-    const POINTER_PAYLOAD_VERSION: u64 = 1;
-    const TTL_NANOS: u64 = 2_000_000_000;
-    const EOL: &str = "2099-01-01T00:00:00Z";
     /// The published file's name under the root.
     const CLIP: &str = "clip.bin";
 
@@ -1370,64 +1348,6 @@ mod published {
         ContentProfile::CI.chunk_size() as u64
     }
 
-    /// One content-addressed store behind the upload endpoint and the gateway,
-    /// so a block the engine uploads is a block it can later fetch.
-    #[derive(Clone, Default)]
-    struct Blocks {
-        store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
-    }
-
-    impl Blocks {
-        /// Index a block under both content-plane codecs: the ingress carries
-        /// none, so a reader may ask for either address.
-        fn put(&self, block: Vec<u8>) {
-            let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-            let leaf = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
-            let mut store = self.store.lock().expect("lock");
-            store.insert(leaf, block.clone());
-            store.insert(root, block);
-        }
-
-        fn reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
-            let ok = |body: Vec<u8>| {
-                Ok(HttpResponse {
-                    status: 200,
-                    headers: Vec::new(),
-                    body,
-                })
-            };
-            let url = &request.url;
-            if url.ends_with("/content/upload") {
-                let declared = request
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
-                    .map(|(_, value)| value.clone())
-                    .expect("an upload declares its CID");
-                let block = request.body.clone().unwrap_or_default();
-                let size = block.len();
-                self.store
-                    .lock()
-                    .expect("lock")
-                    .insert(declared.clone(), block);
-                return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
-            }
-            if url.ends_with("/account/quota") {
-                return ok(
-                    br#"{"usedBytes":0,"limitBytes":1099511627776,"advisory":false}"#.to_vec(),
-                );
-            }
-            if url.contains("/registry/") {
-                return ok(Vec::new());
-            }
-            let cid = requested_cid(url);
-            match self.store.lock().expect("lock").get(&cid).cloned() {
-                Some(block) => ok(block),
-                None => Err(SeamError::new("no such block")),
-            }
-        }
-    }
-
     /// How many blocks this device has fetched from the gateway.
     fn block_fetches(device: &FakeDevice) -> usize {
         device
@@ -1436,80 +1356,6 @@ mod published {
             .iter()
             .filter(|request| request.url.contains("/ipfs/"))
             .count()
-    }
-
-    fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
-        for _ in 0..calls {
-            let blocks = blocks.clone();
-            device
-                .http
-                .enqueue_derived(move |request| blocks.reply(request));
-        }
-    }
-
-    /// Publish the account's initial state: an empty owner root at sequence 1
-    /// and the vault pointer naming it.
-    fn seed_account(world: &FakeWorld, blocks: &Blocks) {
-        let owner_identity = EcdsaSigner::from_scalar(&SECRET).expect("valid scalar");
-        let fixture = owner_root_fixture(OwnerRootSpec {
-            owner_identity: &owner_identity,
-            owner_enc: &kdf::enc_subkey(&SECRET).public(),
-            scope_id: SCOPE,
-            root_id: ROOT.0,
-            children: Vec::new(),
-            child_scope_index: Vec::new(),
-            parent_node_seed: None,
-            owner_write_blob_epoch: Some(EPOCH),
-            write_history_link: Vec::new(),
-            grants: Vec::new(),
-        });
-        blocks.put(fixture.head_block.clone());
-
-        let root_signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
-        let root_record = IpnsRecord::create_v2(
-            &root_signer,
-            format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-            1,
-            TTL_NANOS,
-            EOL,
-        )
-        .marshal();
-
-        let pointer_block = seal_repoint(
-            SessionRole::Owner,
-            &mut SeededEntropy::new(0),
-            kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
-            POINTER_PAYLOAD_VERSION,
-            &owner_identity,
-            &RepointObject {
-                scope_id: SCOPE,
-                current_root: fixture.name.clone(),
-                write_epoch: EPOCH,
-                min_read_epoch: EPOCH,
-                prev_root: None,
-            },
-        )
-        .expect("seal the re-point");
-        let pointer_record = IpnsRecord::create_v2(
-            &kdf::vault_pointer_index(&SECRET, 0),
-            &pointer_block,
-            1,
-            TTL_NANOS,
-            EOL,
-        )
-        .marshal();
-        let pointer_name = vault_pointer_name(&SECRET, 0);
-
-        for endpoint in world.record_store.endpoints() {
-            world
-                .record_store
-                .seed_record(&endpoint, fixture.name.as_str(), root_record.clone());
-            world.record_store.seed_record(
-                &endpoint,
-                pointer_name.as_str(),
-                pointer_record.clone(),
-            );
-        }
     }
 
     fn engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
@@ -1526,36 +1372,6 @@ mod published {
             },
         );
         engine
-    }
-
-    /// Poll every spawned loop until each parks rather than yielding.
-    fn pump(tasks: &mut [BoxedTask]) {
-        let woken = Arc::new(Woken(Mutex::new(false)));
-        let waker = Waker::from(woken.clone());
-        let mut cx = Context::from_waker(&waker);
-        loop {
-            *woken.0.lock().expect("lock") = false;
-            for task in tasks.iter_mut() {
-                let _ = task.as_mut().poll(&mut cx);
-            }
-            if !*woken.0.lock().expect("lock") {
-                return;
-            }
-        }
-    }
-
-    /// A waker that records only that it fired — enough to tell a cooperative
-    /// yield from a parked sleep.
-    struct Woken(Mutex<bool>);
-
-    impl std::task::Wake for Woken {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            *self.0.lock().expect("lock") = true;
-        }
     }
 
     /// A mount over an engine that has published `plaintext` as `clip.bin`.
@@ -1582,7 +1398,7 @@ mod published {
         block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
             .expect("the cold start adopts the owner root");
         let mut tasks = world.scheduler.take_spawned_tasks();
-        pump(&mut tasks);
+        poll_tasks_until_parked(&mut tasks);
 
         let handle = block_on(engine.begin_write(
             WriteTarget::NewFile {
@@ -1597,7 +1413,7 @@ mod published {
         }
         block_on(engine.commit_write(handle)).expect("the write commits");
         world.scheduler.advance(engine.profile().poll_cadence);
-        pump(&mut tasks);
+        poll_tasks_until_parked(&mut tasks);
 
         let adapter = RecordingAdapter::push_capable();
         let mut core = OperationCore::new(engine, adapter.clone(), budget, spill_area());
@@ -1636,7 +1452,7 @@ mod published {
     fn advance_and_pump(mount: &mut Mount) {
         let cadence = mount.core.engine_mut().profile().poll_cadence;
         mount.world.scheduler.advance(cadence);
-        pump(&mut mount.tasks);
+        poll_tasks_until_parked(&mut mount.tasks);
     }
 
     fn opened(mount: &mut Mount) -> HandleId {

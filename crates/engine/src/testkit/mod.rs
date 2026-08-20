@@ -14,6 +14,7 @@
 //! seams inside the merge-blocking browser suite, desktop seams in cargo
 //! tests. One contract, every platform.
 
+pub mod account;
 pub mod conformance;
 mod content;
 mod entropy;
@@ -26,7 +27,7 @@ pub use content::{
     block_store, doomed_version, frame_version, frame_version_with, gateway, requested_cid, serve,
 };
 pub use entropy::{FailingEntropy, SeededEntropy, SilentEntropy};
-pub use executor::block_on;
+pub use executor::{block_on, poll_tasks_once, poll_tasks_until_parked};
 pub use owner_root::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
     OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, owner_root_fixture,

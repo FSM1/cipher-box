@@ -10,10 +10,9 @@
 
 use core::future::poll_fn;
 use core::num::NonZeroU64;
-use core::task::{Context, Poll, Waker};
+use core::task::Poll;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::task::Wake;
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -25,11 +24,14 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler,
-    SeamError, SeamResult, SnapshotCache, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, RecordTransport, Scheduler, SeamError, SeamResult,
+    SnapshotCache, UnixMillis,
 };
+use cipherbox_engine::testkit::account::{Blocks, serve_http};
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
-use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+use cipherbox_engine::testkit::{
+    FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on, poll_tasks_until_parked,
+};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DefaultsReason, Engine, EngineError,
     EventStream, Gateway, GatewayConfig, LoginSecret, NodeId, OrphanHeads, PlacementRefusal,
@@ -43,137 +45,6 @@ const SECRET: [u8; 32] = [7u8; 32];
 const OTHER_SECRET: [u8; 32] = [9u8; 32];
 const TTL_NANOS: u64 = 2_000_000_000;
 const EOL: &str = "2099-01-01T00:00:00Z";
-
-// ---------------------------------------------------------------------------
-// One content-addressed block store behind both the pin API and the gateway.
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Default)]
-struct Blocks {
-    store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
-    /// Answer register-first with a refusal, so the publish stops with its head
-    /// block already uploaded and charged.
-    refuse_register: Arc<Mutex<bool>>,
-    /// Every retire request body, verbatim.
-    retired: Arc<Mutex<Vec<String>>>,
-    /// Every `PATCH /account/byo` body, verbatim, and the flag the account now
-    /// carries — the quota probe answers off it, so a reconciliation that
-    /// landed is not offered again.
-    byo_patches: Arc<Mutex<Vec<String>>>,
-    byo_account: Arc<Mutex<bool>>,
-    /// Answer the head-block upload with an address other than the one the
-    /// bytes hash to.
-    echo_other_address: Arc<Mutex<bool>>,
-}
-
-impl Blocks {
-    fn put(&self, block: Vec<u8>) -> String {
-        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-        self.store.lock().expect("lock").insert(cid.clone(), block);
-        cid
-    }
-
-    fn refuse_register(&self) {
-        *self.refuse_register.lock().expect("lock") = true;
-    }
-
-    fn retired(&self) -> Vec<String> {
-        self.retired.lock().expect("lock").clone()
-    }
-
-    /// Start the account already flagged BYO, so the first hosted write has a
-    /// disagreement to reconcile.
-    fn on_a_byo_account(self) -> Self {
-        *self.byo_account.lock().expect("lock") = true;
-        self
-    }
-
-    fn byo_patches(&self) -> Vec<String> {
-        self.byo_patches.lock().expect("lock").clone()
-    }
-
-    fn echo_other_address(&self) {
-        *self.echo_other_address.lock().expect("lock") = true;
-    }
-
-    /// The one block on the plane, for a fixture that uploaded exactly one.
-    fn only_block(&self) -> String {
-        let store = self.store.lock().expect("lock");
-        assert_eq!(store.len(), 1, "exactly one block was uploaded");
-        store.keys().next().expect("one block").clone()
-    }
-
-    fn reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
-        let ok = |body: Vec<u8>| {
-            Ok(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body,
-            })
-        };
-        let url = &request.url;
-        if url.ends_with("/content/upload") {
-            let block = request.body.clone().unwrap_or_default();
-            let size = block.len();
-            let mut cid = self.put(block.clone());
-            if *self.echo_other_address.lock().expect("lock") {
-                let mut other = block;
-                other.push(0);
-                cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &other));
-            }
-            return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
-        }
-        if url.ends_with("/registry/retire") {
-            self.retired.lock().expect("lock").push(
-                String::from_utf8(request.body.clone().unwrap_or_default())
-                    .unwrap_or_else(|_| String::new()),
-            );
-            return ok(br#"{"retired":1,"unpinned":0}"#.to_vec());
-        }
-        if url.ends_with("/registry/register") && *self.refuse_register.lock().expect("lock") {
-            return Ok(HttpResponse {
-                status: 400,
-                headers: Vec::new(),
-                body: Vec::new(),
-            });
-        }
-        if url.ends_with("/account/quota") {
-            let advisory = *self.byo_account.lock().expect("lock");
-            return ok(format!(
-                "{{\"usedBytes\":0,\"limitBytes\":1000000000,\"advisory\":{advisory}}}"
-            )
-            .into_bytes());
-        }
-        if url.ends_with("/account/byo") {
-            let body = String::from_utf8(request.body.clone().unwrap_or_default())
-                .unwrap_or_else(|_| String::new());
-            *self.byo_account.lock().expect("lock") = body.contains("true");
-            self.byo_patches.lock().expect("lock").push(body);
-            return ok(Vec::new());
-        }
-        if url.contains("/registry/") {
-            return ok(Vec::new());
-        }
-        let cid = url
-            .rsplit('/')
-            .next()
-            .and_then(|tail| tail.split('?').next())
-            .unwrap_or_default();
-        match self.store.lock().expect("lock").get(cid) {
-            Some(block) => ok(block.clone()),
-            None => Err(SeamError::new("no such block")),
-        }
-    }
-}
-
-fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
-    for _ in 0..calls {
-        let blocks = blocks.clone();
-        device
-            .http
-            .enqueue_derived(move |request| blocks.reply(request));
-    }
-}
 
 fn gateway() -> Gateway {
     GatewayConfig {
@@ -420,13 +291,7 @@ fn published_block(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> Vec
     let cid = core::str::from_utf8(&value)
         .expect("utf8")
         .trim_start_matches("/ipfs/");
-    blocks
-        .store
-        .lock()
-        .expect("lock")
-        .get(cid)
-        .cloned()
-        .expect("block on the plane")
+    blocks.get(cid).expect("block on the plane")
 }
 
 /// A transport that acks every PUT and serves nothing back: the confirm
@@ -1764,7 +1629,7 @@ fn a_register_first_refusal_retires_the_settings_head_it_uploaded() {
         device.credential_store.clone(),
         "http://api.test",
     );
-    blocks.refuse_register();
+    blocks.refuse_register(Vec::new());
     serve_http(&device, &blocks, 4);
     let orphans = OrphanHeads::default();
 
@@ -1850,31 +1715,6 @@ fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
     )
 }
 
-/// Poll every spawned loop until each is parked on a timer again.
-fn poll_until_parked(tasks: &mut [BoxedTask]) {
-    struct Woken(Mutex<bool>);
-    impl Wake for Woken {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            *self.0.lock().expect("lock") = true;
-        }
-    }
-    let flag = Arc::new(Woken(Mutex::new(false)));
-    let waker = Waker::from(flag.clone());
-    let mut cx = Context::from_waker(&waker);
-    loop {
-        *flag.0.lock().expect("lock") = false;
-        for task in tasks.iter_mut() {
-            let _ = task.as_mut().poll(&mut cx);
-        }
-        if !*flag.0.lock().expect("lock") {
-            return;
-        }
-    }
-}
-
 /// A cold-started engine whose block plane is wired for a whole scenario, with
 /// its spawned loops parked at their first sleep.
 fn boot(
@@ -1886,7 +1726,7 @@ fn boot(
     let (mut engine, events) = engine_on(device);
     block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
     let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_until_parked(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
     (engine, events, tasks)
 }
 
@@ -1993,7 +1833,7 @@ fn a_saved_settings_record_is_kept_alive_by_the_liveness_loop() {
             .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
     }
     world.scheduler.advance(RE_PUT_INTERVAL);
-    poll_until_parked(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     for endpoint in &endpoints {
         assert_eq!(
@@ -2027,7 +1867,7 @@ fn a_dropped_engine_stops_renewing_its_settings_record() {
             .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
     }
     world.scheduler.advance(RE_PUT_INTERVAL);
-    poll_until_parked(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     assert_eq!(
         world.record_store.record_at(&endpoints[0], name.as_str()),
@@ -2068,7 +1908,7 @@ fn a_renewal_never_re_signs_a_settings_record_a_second_device_superseded() {
         .expect("the second device's record is live");
 
     world.scheduler.advance(RE_PUT_INTERVAL);
-    poll_until_parked(&mut tasks);
+    poll_tasks_until_parked(&mut tasks);
 
     for endpoint in &endpoints {
         assert_eq!(
@@ -2110,9 +1950,9 @@ fn a_saved_placement_binds_the_running_session() {
     );
 }
 
-/// The whole of #1084's residual, one layer out: a fresh device against an
-/// adversary who withholds the settings record holds no durable mark, so it
-/// assumes the hosted default. The account's own BYO flag contradicts it, and
+/// A fresh device against an adversary who withholds the settings record holds
+/// none of the durable marks a published one leaves, so it assumes the hosted
+/// default. The account's own BYO flag contradicts it, and
 /// contradiction is the one direction that server-controlled signal may be read
 /// in — so the write is refused rather than placed on a store the member never
 /// chose, and the account-wide flag a device that authenticated nothing must
