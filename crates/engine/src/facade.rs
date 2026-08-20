@@ -1549,8 +1549,9 @@ impl OwnerScope {
     }
 }
 
-/// A scope root's opaque `ipnsName` bytes as a parsed name. A record plane
-/// address this build cannot parse is an input refusal, never a peer verdict.
+/// A scope root's opaque `ipnsName` bytes as a parsed name. An address this
+/// build cannot parse is a refusal of the bytes that carried it — a garbled
+/// share pointer, or a stored index entry — never a verdict on their author.
 fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
     core::str::from_utf8(ipns_name)
         .ok()
@@ -3953,12 +3954,7 @@ where {
             .await?;
         let pointer = SharePointer::decode(&item.payload)
             .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        let name = core::str::from_utf8(&pointer.scope_root_name)
-            .ok()
-            .and_then(|text| IpnsName::parse(text).ok())
-            .ok_or(EngineError::MalformedInput {
-                check: "share-pointer-names-no-resolvable-scope-root",
-            })?;
+        let name = scope_name(&pointer.scope_root_name)?;
         let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
             .await
             .ok_or(EngineError::ContentUnavailable {
