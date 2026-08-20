@@ -756,7 +756,10 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   the quota response is a display hint that lags the vaulted mode — the mode
   is the source of truth and the account flag is reconciled against it, since
   `users.byo` is two-state where the mode is three and dual has no server
-  representation (`byo=true` is exactly `External`). The pre-flight can never
+  representation (`byo=true` is exactly `External`). Only a placement the
+  member's own record established reconciles it: an assumed one carries its
+  provenance to this gate and latches nothing, and an `advisory` that
+  contradicts the default it assumed refuses the write. The pre-flight can never
   be authoritative — the API upload endpoint stays the enforcement — so an
   unreachable or unconfigured API leaves the write to queue offline like any
   other, while a placement that cannot be authenticated refuses it.

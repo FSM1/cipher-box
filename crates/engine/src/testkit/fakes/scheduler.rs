@@ -232,21 +232,10 @@ mod tests {
 
     #[test]
     fn advance_wakes_registered_sleepers() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::task::Wake;
-
-        struct FlagWaker(AtomicBool);
-        impl Wake for FlagWaker {
-            fn wake(self: Arc<Self>) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
+        use crate::testkit::executor::FlagWaker;
 
         let scheduler = VirtualScheduler::new();
-        let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
+        let flag = FlagWaker::new();
         let waker = Waker::from(Arc::clone(&flag));
         let mut cx = Context::from_waker(&waker);
 
@@ -255,10 +244,7 @@ mod tests {
         assert_eq!(scheduler.pending_sleepers(), 1);
 
         scheduler.advance(Duration::from_millis(10));
-        assert!(
-            flag.0.load(Ordering::SeqCst),
-            "advance must wake the sleeper"
-        );
+        assert!(flag.fired(), "advance must wake the sleeper");
         assert!(sleep.as_mut().poll(&mut cx).is_ready());
         assert_eq!(scheduler.pending_sleepers(), 0);
     }

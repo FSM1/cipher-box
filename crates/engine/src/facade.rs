@@ -64,8 +64,8 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    PlacementDecision, PlacementRefusal, SettingsPublishError, VaultSettings, decide_placement,
-    load_settings, placement_of, publish_settings,
+    PlacementRefusal, PlacementSource, SessionPlacement, SettingsPublishError, VaultSettings,
+    decide_placement, load_settings, placement_of, publish_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -77,7 +77,8 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::provision::{
-    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, provision_vault,
+    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
+    VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use cipherbox_core::hex::lower as hex_lower;
@@ -739,12 +740,12 @@ pub enum Event {
         detail: String,
     },
     /// This account has no vault yet and minting one did not land, so the write
-    /// path stays dark until a later `start` provisions it. Surfaced, never
-    /// silent (blueprint/engine.md "never a silent failure"): reads still paint
-    /// and ops still queue, but nothing will publish.
+    /// path stays dark until a mint lands — a forced refresh retries one.
+    /// Surfaced, never silent (blueprint/engine.md "never a silent failure"):
+    /// reads still paint and ops still queue, but nothing will publish.
     VaultUnprovisioned {
-        /// Whether a fresh `start` could clear this — an availability stall —
-        /// versus a fail-closed refusal to mint, which a retry reaches again.
+        /// Whether a retry could clear this — an availability stall — versus a
+        /// fail-closed refusal to mint, which a retry reaches again.
         retryable: bool,
         /// Key-material-free classification of what stopped the mint.
         detail: String,
@@ -1778,6 +1779,9 @@ struct LiveStreams {
 /// sole v2 version (CONTEXT.md "Vault pointer").
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 
+/// The resolve-tick task, spawned once a root name exists to poll.
+type TickLoopSpawner = Box<dyn FnOnce(IpnsName)>;
+
 /// The engine — the single stateful brain behind the facade.
 ///
 /// Constructed over the whole seam set (missing seam = compile error), an
@@ -1903,11 +1907,16 @@ pub struct Engine<T: SeamTypes> {
     /// resident for up to that wake past the engine (security rules 1/7); every
     /// shared cell below carrying key material is cleared the same way.
     tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
-    /// Where this session's bytes go, decided once at [`start`](Self::start)
-    /// from the vault settings load and shared with the drain. `None` until
-    /// then, and emptied on drop like [`tick_enc_subkey`](Self::tick_enc_subkey)
-    /// — the config it holds carries the member's provider bearer.
-    placement: Rc<RefCell<Option<PlacementDecision>>>,
+    /// Built at [`start`](Self::start), where the seam bounds its task needs
+    /// hold, and waiting for a root name to poll.
+    tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
+    /// Where this session's bytes go, decided at [`start`](Self::start) from the
+    /// vault settings load and re-decided by a settings save, and shared with
+    /// the drain. Carries its own provenance, because an assumed placement must
+    /// never latch account-scoped state. `None` until start, and emptied on drop
+    /// like [`tick_enc_subkey`](Self::tick_enc_subkey) — the config it holds
+    /// carries the member's provider bearer.
+    placement: Rc<RefCell<Option<SessionPlacement>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -1969,6 +1978,7 @@ impl<T: SeamTypes> Engine<T> {
                 manual_refresh: ManualRefresh::default(),
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
+                tick_loop_spawner: RefCell::new(None),
                 placement: Rc::new(RefCell::new(None)),
                 byo_reconciled: Cell::new(false),
                 api: None,
@@ -2085,10 +2095,43 @@ impl<T: SeamTypes> Engine<T> {
             } else {
                 None
             };
-        // Both seeds are stamped from the owner-vouched re-point the cold-seed
-        // installed the floors from, and which the adopt and the owner-write-blob
-        // AAD then bound to — the epochs they belong to, not a later floor read
-        // (see `deposit_seed`).
+        let mut root_name = self.install_cold_start(outcome, root_scope_id);
+        if let Some(provisioned) = provisioned {
+            root_name = Some(self.install_mint(provisioned));
+        }
+        // A successful cold start is a successful reconcile: stamp it so the
+        // ladder starts Fresh rather than Reconciling.
+        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+
+        // A crash between staging a version's blocks and journaling its op
+        // leaves them referenced by nothing, so cold start is the first place
+        // that residue can be reclaimed.
+        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
+
+        self.spawn_liveness_loop(api.clone());
+        *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
+        if let Some(root_name) = root_name {
+            self.open_tick_loop(root_name);
+        }
+        self.api = Some(api);
+        self.started = true;
+        Ok(())
+    }
+
+    /// Bring a cold-start outcome up as this session's data path: deposit both
+    /// scope seeds, install the gate-passing base as the state law's left
+    /// operand, and answer the resolved root name (the vault pointer's
+    /// `currentRoot`) the tick loop polls — `None` on an empty chain.
+    ///
+    /// Both seeds are stamped from the owner-vouched re-point the cold-seed
+    /// installed the floors from, and which the adopt and the owner-write-blob
+    /// AAD then bound to — the epochs they belong to, not a later floor read
+    /// (see `deposit_seed`).
+    fn install_cold_start(
+        &self,
+        mut outcome: ColdStartOutcome,
+        root_scope_id: [u8; 16],
+    ) -> Option<IpnsName> {
         let vouched = outcome.vault_pointer.as_ref().map(|vp| &vp.repoint);
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
@@ -2100,11 +2143,7 @@ impl<T: SeamTypes> Engine<T> {
                 vouched.map(|repoint| repoint.min_read_epoch),
             );
         }
-        // The gate-passing base becomes the state law's left operand (reads render
-        // this ⊕ the pending-op overlay). The resolved root name — the vault
-        // pointer's `currentRoot` — drives the resolve-tick loop; `None` on an
-        // empty chain, where the tick loop stays a dormant no-op.
-        let mut root_name = outcome
+        let root_name = outcome
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
@@ -2119,46 +2158,35 @@ impl<T: SeamTypes> Engine<T> {
                 vouched.map(|repoint| repoint.write_epoch),
             );
         }
-        // A just-provisioned vault has no adopt to surface its seeds — this run
-        // minted them — so they deposit here, stamped at the epochs its own
-        // re-point vouches and the floors it seeded from them.
-        if let Some(provisioned) = provisioned {
-            deposit_seed(
-                &self.scope_read_seeds,
-                root_scope_id,
-                provisioned.read_scope_seed,
-                Some(provisioned.repoint.min_read_epoch),
-            );
-            deposit_write_seed(
-                &self.scope_write_seeds,
-                root_scope_id,
-                provisioned.write_scope_seed,
-                Some(&provisioned.root_name),
-                Some(provisioned.repoint.write_epoch),
-            );
-            root_name = Some(provisioned.root_name);
-        }
         *self.snapshot.borrow_mut() = outcome.base;
-        // A successful cold start is a successful reconcile: stamp it so the
-        // ladder starts Fresh rather than Reconciling.
-        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+        root_name
+    }
 
-        // A crash between staging a version's blocks and journaling its op
-        // leaves them referenced by nothing, so cold start is the first place
-        // that residue can be reclaimed.
-        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
-
-        self.spawn_liveness_loop(api.clone());
-        self.spawn_resolve_tick_loop(root_name, api.clone());
-        self.api = Some(api);
-        self.started = true;
-        Ok(())
+    /// Deposit a fresh mint's seeds and answer the root name it published. A
+    /// just-provisioned vault has no adopt to surface them — this run minted
+    /// them — so they are stamped at the epochs its own re-point vouches and
+    /// the floors it seeded from them.
+    fn install_mint(&self, vault: ProvisionedVault) -> IpnsName {
+        deposit_seed(
+            &self.scope_read_seeds,
+            vault.repoint.scope_id,
+            vault.read_scope_seed,
+            Some(vault.repoint.min_read_epoch),
+        );
+        deposit_write_seed(
+            &self.scope_write_seeds,
+            vault.repoint.scope_id,
+            vault.write_scope_seed,
+            Some(&vault.root_name),
+            Some(vault.repoint.write_epoch),
+        );
+        vault.root_name
     }
 
     /// Whether this session holds the root scope's write seed — the material a
     /// publish needs. `false` means the vault is unprovisioned (or held
     /// keyless): reads paint and ops queue, but nothing will publish until a
-    /// later `start` mints it. The event stream announces the transition
+    /// mint lands, which a forced refresh retries. The event stream announces it
     /// ([`Event::VaultUnprovisioned`]); this answers a host that attached after.
     pub fn is_provisioned(&self) -> bool {
         let root = self.snapshot.borrow().root.0;
@@ -2188,6 +2216,9 @@ impl<T: SeamTypes> Engine<T> {
         self.manual_refresh.close();
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
+        }
+        if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
+            *spawner = None;
         }
         if let Ok(mut placement) = self.placement.try_borrow_mut() {
             *placement = None;
@@ -2361,6 +2392,7 @@ impl<T: SeamTypes> Engine<T> {
     /// shared bearer cell, so it is dropped here by name.
     fn clear_failed_start(&mut self) {
         self.session = None;
+        *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
         self.accelerator_bearer.clear();
     }
@@ -2459,26 +2491,23 @@ where {
     /// only `Rc`/seam-handle clones and the alive latch, so it stops once the
     /// engine drops.
     ///
-    /// `root_name` is the vault pointer's resolved `currentRoot`; `None` (an empty
-    /// chain) spawns nothing — there is no root to poll until a later start
-    /// rediscovers one.
-    fn spawn_resolve_tick_loop(
+    /// The task is built here rather than spawned, so the root name it polls may
+    /// arrive later: an account whose first-run mint did not land has no root at
+    /// `start` and gets one from [`provision_in_session`](Self::provision_in_session),
+    /// which runs off the narrow `command` path where these seam bounds do not
+    /// hold. `None` when there is no session to build one from.
+    fn build_tick_loop_spawner(
         &self,
-        root_name: Option<IpnsName>,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
-    ) where
+    ) -> Option<TickLoopSpawner>
+    where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
         T::StagingStore: Clone + 'static,
     {
-        let (Some(root_name), Some(session)) = (root_name, self.session.as_ref()) else {
-            return;
-        };
-        // Least privilege: the pass needs the enc subkey and the (public) owner
-        // verifier, never the login secret or the pointer seeds beside them.
-        *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        let session = self.session.as_ref()?;
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = self.seams.staging_store.clone();
@@ -2515,220 +2544,243 @@ where {
         let root_id = self.snapshot.borrow().root.0;
 
         let manual = self.manual_refresh.clone();
-        manual.arm();
 
-        self.seams.scheduler.spawn(Box::pin(async move {
-            run_tick_loop(&scheduler, &manual, interval, async |cause| {
-                if !alive.get() {
-                    return TickControl::Stop;
-                }
-                let mode = resolve_mode(cause);
-                // The pass owns a copy for exactly its own duration; the engine
-                // emptied the cell if it is already gone.
-                let enc_subkey = tick_enc_subkey.borrow().clone();
-                let Some(enc_subkey) = enc_subkey else {
-                    return TickControl::Stop;
-                };
-                // Carries the member's BYO bearer, so the pass owns a copy on the
-                // same terms as the enc subkey above.
-                let decision = placement.borrow().clone();
-                let Some(decision) = decision else {
-                    return TickControl::Stop;
-                };
-                // Before the steady-state hold consults them: a floor raised
-                // since the last pass revokes the seeds this pass would
-                // otherwise read and seal under. The floors it reports stamp
-                // whatever this pass's own resolve recovers.
-                let floors_before =
-                    refresh_seed_floors(&floors, &root_id, &scope_read_seeds, &scope_write_seeds)
-                        .await;
-                let adopter = RootAdopter::new(
-                    &gateway,
-                    &http,
-                    &floors,
-                    &enc_subkey,
-                    &owner_identity,
-                    root_id,
-                )
-                .holding(steady_state_hold(
-                    &held,
-                    root_id,
-                    &root_name,
-                    &scope_read_seeds,
-                    &scope_write_seeds,
-                ));
-                // Own-root material: the write-scope seed the owner cannot
-                // re-derive rides the adopt (recovered from the owner-write-blob),
-                // so the caller-side seed is `None` and the gate's authenticated
-                // node id keys the hold. A resolve/gate failure is availability —
-                // it never stops the loop (blueprint/engine.md "Liveness").
-                let material = HeldMaterial {
-                    node_id: root_id,
-                    write_scope_seed: None,
-                };
-                // A gate-passing `Adopted` repaints the shared base cell and emits
-                // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
-                // last-known-good intact (fail-closed for data).
-                sync_status.borrow_mut().reconcile_in_flight = true;
-                let mut held_resolve = resolve_and_hold(
-                    &transport,
-                    &snapshot_cache,
-                    &adopter,
-                    &root_name,
-                    &held,
-                    &material,
-                    mode,
-                )
-                .await;
-                // A gate-passing adopt re-surfaces the scope seeds: refresh the
-                // in-memory per-scope cells the child read pipeline and the
-                // drain derive from.
-                if let Ok(surfaced) = &mut held_resolve {
-                    if let Some(seed) = surfaced.read_scope_seed.take() {
-                        // An adopt names the epoch its own owner blob's seed
-                        // belongs to; an equal-floor `Current` recovery does not,
-                        // and takes the pre-resolve floor (see `deposit_seed`).
-                        let stamp = match &surfaced.resolved.outcome {
-                            ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
-                            _ => floors_before.read,
-                        };
-                        deposit_seed(&scope_read_seeds, root_id, seed, stamp);
+        Some(Box::new(move |root_name: IpnsName| {
+            manual.arm();
+            let spawn_on = scheduler.clone();
+            spawn_on.spawn(Box::pin(async move {
+                run_tick_loop(&scheduler, &manual, interval, async |cause| {
+                    if !alive.get() {
+                        return TickControl::Stop;
                     }
-                    if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
-                        deposit_write_seed(
-                            &scope_write_seeds,
-                            node_id,
-                            seed,
-                            Some(&root_name),
-                            floors_before.write,
-                        );
-                    }
-                }
-                let resolved = held_resolve.map(|surfaced| surfaced.resolved);
-                if let Ok(resolved) = &resolved {
-                    if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
-                        emit_trust_violation(&events, root_name.as_str(), rejection);
-                    }
-                    if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
-                        let _ = events.unbounded_send(Event::SnapshotUpdated);
-                    }
-                }
-                let read_seed = cached_seed(&scope_read_seeds, &root_id);
-                // The focus window's folders below the root — the read leg for a
-                // subtree this device did not author. It runs before the drain,
-                // so the queue rebases onto the deepest state this pass
-                // reconciled, not just the root's.
-                let open = focus_folders(&base.borrow(), &focus.borrow());
-                let mut folder_verdict = RefreshVerdict::Reconciled;
-                if let Some(read_seed) = &read_seed
-                    && !open.is_empty()
-                {
-                    let report = FolderRefresh {
-                        transport: &transport,
-                        snapshot_cache: &snapshot_cache,
-                        http: &http,
-                        floors: &floors,
-                        gateway: &gateway,
-                        base: &base,
-                        events: &events,
-                        scope_id: root_id,
-                        scope_read_seed: read_seed,
+                    let mode = resolve_mode(cause);
+                    // The pass owns a copy for exactly its own duration; the engine
+                    // emptied the cell if it is already gone.
+                    let enc_subkey = tick_enc_subkey.borrow().clone();
+                    let Some(enc_subkey) = enc_subkey else {
+                        return TickControl::Stop;
+                    };
+                    // Carries the member's BYO bearer, so the pass owns a copy on the
+                    // same terms as the enc subkey above.
+                    let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
+                        return TickControl::Stop;
+                    };
+                    // Before the steady-state hold consults them: a floor raised
+                    // since the last pass revokes the seeds this pass would
+                    // otherwise read and seal under. The floors it reports stamp
+                    // whatever this pass's own resolve recovers.
+                    let floors_before = refresh_seed_floors(
+                        &floors,
+                        &root_id,
+                        &scope_read_seeds,
+                        &scope_write_seeds,
+                    )
+                    .await;
+                    let adopter = RootAdopter::new(
+                        &gateway,
+                        &http,
+                        &floors,
+                        &enc_subkey,
+                        &owner_identity,
+                        root_id,
+                    )
+                    .holding(steady_state_hold(
+                        &held,
+                        root_id,
+                        &root_name,
+                        &scope_read_seeds,
+                        &scope_write_seeds,
+                    ));
+                    // Own-root material: the write-scope seed the owner cannot
+                    // re-derive rides the adopt (recovered from the owner-write-blob),
+                    // so the caller-side seed is `None` and the gate's authenticated
+                    // node id keys the hold. A resolve/gate failure is availability —
+                    // it never stops the loop (blueprint/engine.md "Liveness").
+                    let material = HeldMaterial {
+                        node_id: root_id,
+                        write_scope_seed: None,
+                    };
+                    // A gate-passing `Adopted` repaints the shared base cell and emits
+                    // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
+                    // last-known-good intact (fail-closed for data).
+                    sync_status.borrow_mut().reconcile_in_flight = true;
+                    let mut held_resolve = resolve_and_hold(
+                        &transport,
+                        &snapshot_cache,
+                        &adopter,
+                        &root_name,
+                        &held,
+                        &material,
                         mode,
-                    }
-                    .run(&open)
+                    )
                     .await;
-                    stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
-                    if report.changed {
-                        let _ = events.unbounded_send(Event::SnapshotUpdated);
-                    }
-                    folder_verdict = report.verdict;
-                }
-                // `Adopted`/`Current` are the reconciled outcomes: both prove the
-                // record plane answered with gate-passing state, so both stamp
-                // the ladder's `last_success` (#33 D4). A gate rejection is a
-                // trust verdict, never the staleness the other failures are.
-                let root_verdict = match &resolved {
-                    Ok(r) => match &r.outcome {
-                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
-                            RefreshVerdict::Reconciled
+                    // A gate-passing adopt re-surfaces the scope seeds: refresh the
+                    // in-memory per-scope cells the child read pipeline and the
+                    // drain derive from.
+                    if let Ok(surfaced) = &mut held_resolve {
+                        if let Some(seed) = surfaced.read_scope_seed.take() {
+                            // An adopt names the epoch its own owner blob's seed
+                            // belongs to; an equal-floor `Current` recovery does not,
+                            // and takes the pre-resolve floor (see `deposit_seed`).
+                            let stamp = match &surfaced.resolved.outcome {
+                                ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
+                                _ => floors_before.read,
+                            };
+                            deposit_seed(&scope_read_seeds, root_id, seed, stamp);
                         }
-                        ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
-                        ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
-                    },
-                    Err(_) => RefreshVerdict::Unreachable,
-                };
-                // The ladder measures the record plane, which the root leg alone
-                // proves answered: one focused folder that did not is staleness
-                // on that folder, not a plane-wide outage.
-                let reconciled = root_verdict == RefreshVerdict::Reconciled;
-                // Answer the manual requests on every read leg the pass forced,
-                // the focus window included — a refresh that left the folder in
-                // view unresolved has not landed. The drain below reports its own
-                // progress through the op events.
-                manual.settle(root_verdict.worst(folder_verdict));
-                // The drain rides the same tick: it publishes onto exactly the
-                // gate-passing state this pass just reconciled. Both scope seeds
-                // are required — without them there is no name to publish under
-                // and no key to seal with, so the queue simply waits.
-                let write_seed = cached_seed(&scope_write_seeds, &root_id);
-                if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
-                    let report = Drain {
-                        transport: &transport,
-                        api: &api,
-                        floors: &floors,
-                        snapshot_cache: &snapshot_cache,
-                        staging: &staging,
-                        scheduler: &scheduler,
-                        http: &http,
-                        gateway: &gateway,
-                        placement: &decision,
-                        profile: &profile,
-                        content_profile: &content_profile,
-                        entropy: &entropy,
-                        base: &base,
-                        held: &held,
-                        blocked: &blocked,
-                        settings_hold: &settings_hold,
-                        pending_reclaim: &pending_reclaim,
-                        orphan_heads: &orphan_heads,
-                        cancels: &cancels,
-                        events: &events,
+                        if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
+                            deposit_write_seed(
+                                &scope_write_seeds,
+                                node_id,
+                                seed,
+                                Some(&root_name),
+                                floors_before.write,
+                            );
+                        }
                     }
-                    .run(&DrainScope {
-                        root: NodeId(root_id),
-                        root_name: &root_name,
-                        read_scope_seed: &read_seed,
-                        write_scope_seed: &write_seed,
-                        enc_secret: &enc_subkey,
-                        owner_identity: &owner_identity,
-                    })
-                    .await;
-                    surface_drain_report(&events, &dead_letters, &report);
-                }
-                // After the drain, so the pass's own removals are swept in the
-                // same tick rather than a cadence later.
-                collect_orphans(&staging, &live_blocks).await;
-                let mut status = sync_status.borrow_mut();
-                status.reconcile_in_flight = false;
-                if reconciled {
-                    status.last_success = Some(scheduler.now());
-                }
-                let rung = classify(
-                    scheduler.now(),
-                    status.last_success,
-                    status.reconcile_in_flight,
-                    Connectivity::Online,
-                    &profile,
-                );
-                if status.reported != Some(rung) {
-                    status.reported = Some(rung);
-                    let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
-                }
-                drop(status);
-                TickControl::Continue
-            })
-            .await;
-        }));
+                    let resolved = held_resolve.map(|surfaced| surfaced.resolved);
+                    if let Ok(resolved) = &resolved {
+                        if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
+                            emit_trust_violation(&events, root_name.as_str(), rejection);
+                        }
+                        if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
+                            let _ = events.unbounded_send(Event::SnapshotUpdated);
+                        }
+                    }
+                    let read_seed = cached_seed(&scope_read_seeds, &root_id);
+                    // The focus window's folders below the root — the read leg for a
+                    // subtree this device did not author. It runs before the drain,
+                    // so the queue rebases onto the deepest state this pass
+                    // reconciled, not just the root's.
+                    let open = focus_folders(&base.borrow(), &focus.borrow());
+                    let mut folder_verdict = RefreshVerdict::Reconciled;
+                    if let Some(read_seed) = &read_seed
+                        && !open.is_empty()
+                    {
+                        let report = FolderRefresh {
+                            transport: &transport,
+                            snapshot_cache: &snapshot_cache,
+                            http: &http,
+                            floors: &floors,
+                            gateway: &gateway,
+                            base: &base,
+                            events: &events,
+                            scope_id: root_id,
+                            scope_read_seed: read_seed,
+                            mode,
+                        }
+                        .run(&open)
+                        .await;
+                        stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
+                        if report.changed {
+                            let _ = events.unbounded_send(Event::SnapshotUpdated);
+                        }
+                        folder_verdict = report.verdict;
+                    }
+                    // `Adopted`/`Current` are the reconciled outcomes: both prove the
+                    // record plane answered with gate-passing state, so both stamp
+                    // the ladder's `last_success` (#33 D4). A gate rejection is a
+                    // trust verdict, never the staleness the other failures are.
+                    let root_verdict = match &resolved {
+                        Ok(r) => match &r.outcome {
+                            ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. } => {
+                                RefreshVerdict::Reconciled
+                            }
+                            ResolveOutcome::TrustViolation(_) => RefreshVerdict::Rejected,
+                            ResolveOutcome::NoUpdate => RefreshVerdict::Unreachable,
+                        },
+                        Err(_) => RefreshVerdict::Unreachable,
+                    };
+                    // The ladder measures the record plane, which the root leg alone
+                    // proves answered: one focused folder that did not is staleness
+                    // on that folder, not a plane-wide outage.
+                    let reconciled = root_verdict == RefreshVerdict::Reconciled;
+                    // Answer the manual requests on every read leg the pass forced,
+                    // the focus window included — a refresh that left the folder in
+                    // view unresolved has not landed. The drain below reports its own
+                    // progress through the op events.
+                    manual.settle(root_verdict.worst(folder_verdict));
+                    // The drain rides the same tick: it publishes onto exactly the
+                    // gate-passing state this pass just reconciled. Both scope seeds
+                    // are required — without them there is no name to publish under
+                    // and no key to seal with, so the queue simply waits.
+                    let write_seed = cached_seed(&scope_write_seeds, &root_id);
+                    if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
+                        let report = Drain {
+                            transport: &transport,
+                            api: &api,
+                            floors: &floors,
+                            snapshot_cache: &snapshot_cache,
+                            staging: &staging,
+                            scheduler: &scheduler,
+                            http: &http,
+                            gateway: &gateway,
+                            placement: &decision,
+                            profile: &profile,
+                            content_profile: &content_profile,
+                            entropy: &entropy,
+                            base: &base,
+                            held: &held,
+                            blocked: &blocked,
+                            settings_hold: &settings_hold,
+                            pending_reclaim: &pending_reclaim,
+                            orphan_heads: &orphan_heads,
+                            cancels: &cancels,
+                            events: &events,
+                        }
+                        .run(&DrainScope {
+                            root: NodeId(root_id),
+                            root_name: &root_name,
+                            read_scope_seed: &read_seed,
+                            write_scope_seed: &write_seed,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &owner_identity,
+                        })
+                        .await;
+                        surface_drain_report(&events, &dead_letters, &report);
+                    }
+                    // After the drain, so the pass's own removals are swept in the
+                    // same tick rather than a cadence later.
+                    collect_orphans(&staging, &live_blocks).await;
+                    let mut status = sync_status.borrow_mut();
+                    status.reconcile_in_flight = false;
+                    if reconciled {
+                        status.last_success = Some(scheduler.now());
+                    }
+                    let rung = classify(
+                        scheduler.now(),
+                        status.last_success,
+                        status.reconcile_in_flight,
+                        Connectivity::Online,
+                        &profile,
+                    );
+                    if status.reported != Some(rung) {
+                        status.reported = Some(rung);
+                        let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
+                    }
+                    drop(status);
+                    TickControl::Continue
+                })
+                .await;
+            }));
+        }))
+    }
+
+    /// Start polling `root_name`, consuming the spawner
+    /// [`start`](Self::start) built. One session runs one tick loop, so a
+    /// second call spawns nothing.
+    fn open_tick_loop(&self, root_name: IpnsName) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(spawn) = self.tick_loop_spawner.borrow_mut().take() else {
+            return;
+        };
+        // Least privilege, drawn no earlier than the loop that reads it: the
+        // pass needs the enc subkey and the (public) owner verifier, never the
+        // login secret or the pointer seeds beside them.
+        *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        spawn(root_name);
     }
 
     /// Executes one command. The single write entry point: every mutation,
@@ -2996,7 +3048,7 @@ where {
         // The confirm re-resolve read back our own bytes, so this device has
         // adopted what it published: the session's byte destinations follow, or
         // an `External` save keeps feeding the hosted leg until the next start.
-        *self.placement.borrow_mut() = Some(placement_of(settings));
+        *self.placement.borrow_mut() = Some(SessionPlacement::member(placement_of(settings)));
         self.byo_reconciled.set(false);
         Ok(())
     }
@@ -3015,6 +3067,51 @@ where {
         cached_seed(&self.scope_read_seeds, scope_id)
     }
 
+    /// Mint this account's first vault inside a live session, for a `start`
+    /// whose own mint did not land.
+    ///
+    /// Fail-closed: an availability stall is [`EngineError::RefreshFailed`] and
+    /// stays retryable; a refusal — to mint, or to adopt what another device
+    /// published — is a verdict a retry reaches identically.
+    async fn provision_in_session(&self) -> Result<(), EngineError> {
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
+        let root = self.snapshot.borrow().root;
+        let root_name = match self.provision_first_run_vault(&api, root.0).await {
+            Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault),
+            // The account published from another device between this session's
+            // failed mint and this retry — caught by the vacancy probe before
+            // minting, or by the pointer walk after. Its root is the one to
+            // adopt, never a second mint over it, and never a dark session: this
+            // device authenticated nothing wrong, it simply lost the race.
+            Ok(ProvisionOutcome::MovedOn)
+            | Err(ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)) => {
+                let outcome = self
+                    .run_cold_start(root)
+                    .await
+                    .map_err(EngineError::from_cold_start)?;
+                self.install_cold_start(outcome, root.0).ok_or_else(|| {
+                    EngineError::RefreshFailed {
+                        message: "the vault pointer served no root to adopt".to_owned(),
+                    }
+                })?
+            }
+            Err(err) if err.is_retryable() => {
+                return Err(EngineError::RefreshFailed {
+                    message: err.to_string(),
+                });
+            }
+            Err(err) => {
+                return Err(EngineError::TrustViolation {
+                    message: err.to_string(),
+                });
+            }
+        };
+        self.open_tick_loop(root_name);
+        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(())
+    }
+
     /// Force a resolve-and-drain pass now and report what its read legs
     /// reconciled — the nocache forcing path (#33 D4): the pass it brings
     /// forward skips the snapshot cache, so only what the record plane serves
@@ -3028,16 +3125,19 @@ where {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
         };
-        let verdict = self.manual_refresh.request().ok_or_else(|| {
-            // The loop does not spawn without a root name, and an unprovisioned
-            // vault has none — so say that, rather than reporting the missing
-            // loop and leaving the host to guess why its refresh does nothing.
-            failed(if self.is_provisioned() {
-                "no sync loop is running to force a pass"
-            } else {
-                "this account has no vault yet: a later start mints one"
-            })
-        })?;
+        // An unconsumed spawner is a start that found no root to poll. The mint
+        // deposits exactly the state a pass would reconcile, so it answers for
+        // this refresh itself.
+        if self.tick_loop_spawner.borrow().is_some() {
+            return match self.api_base_url.configured() {
+                Some(_) => self.provision_in_session().await,
+                None => Err(failed("this account has no vault yet")),
+            };
+        }
+        let verdict = self
+            .manual_refresh
+            .request()
+            .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
         match verdict.await {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
             Ok(RefreshVerdict::Unreachable) => {
@@ -3180,12 +3280,18 @@ where {
     /// the authoritative gate, so an unreachable one leaves the write to queue
     /// offline like any other.
     async fn hosted_quota_pre_flight(&self, requested: u64) -> Result<(), EngineError> {
-        // Only the predicate leaves the borrow: cloning the placement would copy
-        // the member's provider bearer on every write.
-        let hosted_leg = match self.placement.borrow().as_ref() {
+        // Only the predicate and the provenance leave the borrow: cloning the
+        // placement would copy the member's provider bearer on every write.
+        let (hosted_leg, source) = match self.placement.borrow().as_ref() {
             None => return Err(EngineError::NotStarted),
-            Some(Err(refusal)) => return Err(EngineError::NoPlacement { refusal: *refusal }),
-            Some(Ok(placement)) => placement.has_hosted_leg(),
+            Some(SessionPlacement {
+                decision: Err(refusal),
+                ..
+            }) => return Err(EngineError::NoPlacement { refusal: *refusal }),
+            Some(SessionPlacement {
+                decision: Ok(placement),
+                source,
+            }) => (placement.has_hosted_leg(), *source),
         };
         let Some(api) = self.api.as_ref() else {
             return Ok(());
@@ -3193,18 +3299,32 @@ where {
         let Ok(quota) = api.quota().await else {
             return Ok(());
         };
-        // The account's flag is two-state where the mode is three and dual has
-        // no server representation, so `byo=true` is exactly `External`. The
-        // vaulted mode is the source of truth; the flag is latched only once the
-        // PATCH lands, so two devices still cannot flap it per file while a
-        // transient failure stays retryable — the hosted ingress rejects a BYO
-        // account, so an unreconciled flag fails every hosted upload the session
-        // makes.
-        if !self.byo_reconciled.get()
-            && quota.advisory == hosted_leg
-            && api.set_byo(!hosted_leg).await.is_ok()
-        {
-            self.byo_reconciled.set(true);
+        match source {
+            // A set flag contradicts the default this session assumed, so refuse;
+            // a clear one is a server signal that must not widen an
+            // unauthenticated default, and latches nothing either way.
+            PlacementSource::Assumed(reason) => {
+                if quota.advisory {
+                    return Err(EngineError::NoPlacement {
+                        refusal: PlacementRefusal::SettingsUnavailable(reason),
+                    });
+                }
+            }
+            // The account's flag is two-state where the mode is three and dual
+            // has no server representation, so `byo=true` is exactly `External`.
+            // The vaulted mode is the source of truth; the flag is latched only
+            // once the PATCH lands, so two devices still cannot flap it per file
+            // while a transient failure stays retryable — the hosted ingress
+            // rejects a BYO account, so an unreconciled flag fails every hosted
+            // upload the session makes.
+            PlacementSource::Member => {
+                if !self.byo_reconciled.get()
+                    && quota.advisory == hosted_leg
+                    && api.set_byo(!hosted_leg).await.is_ok()
+                {
+                    self.byo_reconciled.set(true);
+                }
+            }
         }
         pre_flight_quota_check(requested, &quota, hosted_leg).map_err(|refused| {
             EngineError::OverBudget {
@@ -4394,6 +4514,83 @@ mod tests {
                 }]
             ),
             "an unreachable API is a stall the host may retry, announced once: {reported:?}"
+        );
+    }
+
+    /// The late mint spawns the resolve-tick loop for the root it just
+    /// published.
+    #[test]
+    fn a_refresh_retries_a_first_run_mint_that_did_not_land() {
+        let (mut engine, mut events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+        // The vacancy probe answers, then the head-block upload has no route.
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32])))
+            .expect("a mint that did not land is not a failed start");
+        assert!(!engine.is_provisioned(), "the write path starts dark");
+        let _ = device.scheduler.take_spawned_tasks();
+        while events.try_next().is_some() {}
+
+        // The network is back: the same refresh a host drives for anything else
+        // now mints.
+        serve_provisioning(&device);
+        block_on(engine.command(Command::ManualRefresh)).expect("the retry mints");
+
+        assert!(
+            engine.is_provisioned(),
+            "the write path opens in the session that failed to mint",
+        );
+        assert_eq!(
+            device.scheduler.take_spawned_tasks().len(),
+            1,
+            "the late mint spawns the resolve-tick loop its root can now be polled by",
+        );
+    }
+
+    /// Fail-closed but never fail-dark: a retry that does not land reports as
+    /// the retryable stall it is, so the next one still reaches the mint.
+    #[test]
+    fn a_retry_that_does_not_land_stays_retryable() {
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start survives the mint");
+
+        device
+            .http
+            .enqueue_derived(|_| Ok(json_response(404, json!({ "statusCode": 404 }))));
+        let refused = block_on(engine.command(Command::ManualRefresh));
+        assert!(
+            matches!(refused, Err(EngineError::RefreshFailed { .. })),
+            "an unreachable API is a stall, not a verdict: {refused:?}",
+        );
+        assert!(!engine.is_provisioned());
+
+        serve_provisioning(&device);
+        block_on(engine.command(Command::ManualRefresh)).expect("the next retry mints");
+        assert!(
+            engine.is_provisioned(),
+            "the session never went permanently dark"
         );
     }
 
@@ -6025,6 +6222,7 @@ mod tests {
         use crate::testkit::{
             FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_SCOPE_SEED as SCOPE_SEED,
             OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, owner_root_fixture,
+            poll_tasks_once,
         };
 
         const CAP_SECRET: [u8; 32] = [7u8; 32];
@@ -6158,15 +6356,6 @@ mod tests {
             )
         }
 
-        /// Poll every spawned loop task once with a no-op waker. Manual re-polls
-        /// drive the virtual clock's parked sleeps (the loops never yield inside a
-        /// pass over the synchronous fakes), so this is the sound driver for the
-        /// fire-and-forget loops — auto-advance would spin an infinite pass loop.
-        fn poll_each(tasks: &mut [BoxedTask]) -> Vec<Poll<()>> {
-            let mut cx = Context::from_waker(Waker::noop());
-            tasks.iter_mut().map(|t| t.as_mut().poll(&mut cx)).collect()
-        }
-
         #[test]
         fn start_with_empty_seams_is_a_graceful_noop() {
             // The regression guard: empty seams (no vault pointer, no record) leave
@@ -6297,9 +6486,9 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks); // park each loop at its first sleep
+            poll_tasks_once(&mut tasks); // park each loop at its first sleep
             world.scheduler.advance(engine.profile().poll_cadence);
-            poll_each(&mut tasks); // the resolve tick runs one pass
+            poll_tasks_once(&mut tasks); // the resolve tick runs one pass
 
             let held = engine.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
@@ -6333,7 +6522,7 @@ mod tests {
             let (mut engine, events) = engine_on(device);
             block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             (engine, events, tasks)
         }
 
@@ -6343,7 +6532,7 @@ mod tests {
             let (head_block, _, _) = owner_root();
             device.http.enqueue_response(head_response(&head_block));
             world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
-            poll_each(tasks);
+            poll_tasks_once(tasks);
         }
 
         /// Nothing the spawned loops share may outlive the engine: a parked task
@@ -6407,7 +6596,7 @@ mod tests {
                     .http
                     .enqueue_response(head_response(b"forged head block"));
                 world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
-                poll_each(&mut tasks);
+                poll_tasks_once(&mut tasks);
 
                 let abuse: Vec<String> = drain(&mut events)
                     .into_iter()
@@ -6604,12 +6793,12 @@ mod tests {
             );
 
             let mut tasks = world.scheduler.take_spawned_tasks();
-            poll_each(&mut tasks); // park each loop at its first sleep
+            poll_tasks_once(&mut tasks); // park each loop at its first sleep
 
             // CI profile: 1 s poll, 3 s stale_after. With no reachable head
             // block, each tick fails to reconcile and last_success stays at 0.
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![Event::StalenessChanged {
@@ -6618,10 +6807,10 @@ mod tests {
                 "the first classified rung is reported"
             );
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(drain(&mut events), vec![], "no re-emit within a rung");
             world.scheduler.advance(Duration::from_secs(1)); // t=3 s ≥ stale_after
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![Event::StalenessChanged {
@@ -6629,7 +6818,7 @@ mod tests {
                 }]
             );
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(drain(&mut events), vec![], "stale reported exactly once");
 
             // The record plane recovers with a newer root: the adopt stamps
@@ -6643,7 +6832,7 @@ mod tests {
             }
             device.http.enqueue_response(head_response(&head_block));
             world.scheduler.advance(Duration::from_secs(1));
-            poll_each(&mut tasks);
+            poll_tasks_once(&mut tasks);
             assert_eq!(
                 drain(&mut events),
                 vec![
@@ -6683,9 +6872,7 @@ mod tests {
             device.http.enqueue_response(head_response(&head_block));
 
             let mut cx = Context::from_waker(Waker::noop());
-            for task in &mut tasks {
-                let _ = task.as_mut().poll(&mut cx); // park both at their first sleep
-            }
+            poll_tasks_once(&mut tasks); // park both at their first sleep
             // One hourly interval wakes both the 1 s tick and the 1 h re-PUT. Drive
             // the tick first (it holds the root), then the keyless re-PUT.
             world.scheduler.advance(RE_PUT_INTERVAL);
@@ -6707,7 +6894,7 @@ mod tests {
             // Drop clears the alive latch; both loops stop at their next wake.
             drop(engine);
             world.scheduler.advance(RE_PUT_INTERVAL);
-            let after = poll_each(&mut tasks);
+            let after = poll_tasks_once(&mut tasks);
             assert!(
                 after.iter().all(Poll::is_ready),
                 "both loops stop after the engine drops"
@@ -7196,9 +7383,9 @@ mod tests {
                     .http
                     .enqueue_response(head_response(&root_head_block));
                 let mut tasks = world.scheduler.take_spawned_tasks();
-                poll_each(&mut tasks); // park each loop at its first sleep
+                poll_tasks_once(&mut tasks); // park each loop at its first sleep
                 world.scheduler.advance(engine.profile().poll_cadence);
-                poll_each(&mut tasks); // the resolve tick runs one pass
+                poll_tasks_once(&mut tasks); // the resolve tick runs one pass
                 assert_eq!(
                     block_on(floor::sequence_floor(
                         &device.floor_store,

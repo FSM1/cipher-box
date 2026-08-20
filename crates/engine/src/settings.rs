@@ -265,19 +265,58 @@ pub enum PlacementRefusal {
     NoExternalIngress(ByoKind),
 }
 
+/// Where a session's placement decision came from. An assumed default
+/// authorises the session's own writes but must never latch account-scoped
+/// state: a device that authenticated no settings record would otherwise
+/// rewrite the account's own BYO flag (blueprint/engine.md "Settings-load
+/// policy").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementSource {
+    /// The member's own settings record — published, or this device's
+    /// last-known-good copy of it.
+    Member,
+    /// The documented default, standing in for a record no endpoint served,
+    /// carrying the reason the load degraded.
+    Assumed(DefaultsReason),
+}
+
+/// The session's placement decision and where it came from.
+#[derive(Debug, Clone)]
+pub struct SessionPlacement {
+    /// Where this session's bytes go, or why nowhere.
+    pub decision: PlacementDecision,
+    /// What established `decision`.
+    pub source: PlacementSource,
+}
+
+impl SessionPlacement {
+    /// A placement the member's own settings established.
+    pub fn member(decision: PlacementDecision) -> Self {
+        Self {
+            decision,
+            source: PlacementSource::Member,
+        }
+    }
+}
+
 /// The byte destinations a settings load authorises.
 ///
 /// [`DefaultsReason::UnprovenFirstRun`] is the one degraded reason that still
 /// authorises a write; every other one with no last-known-good copy refuses
 /// rather than resolving to [`PinMode::Hosted`] (blueprint/engine.md
 /// "Settings-load policy", which also states the residual that arm carries).
-pub fn decide_placement(load: &SettingsLoad) -> Result<Placement, PlacementRefusal> {
+pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
     match load {
         SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => {
-            placement_of(settings)
+            SessionPlacement::member(placement_of(settings))
         }
-        SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun) => Ok(Placement::Hosted),
-        SettingsLoad::Defaults(reason) => Err(PlacementRefusal::SettingsUnavailable(*reason)),
+        SettingsLoad::Defaults(reason) => SessionPlacement {
+            decision: match reason {
+                DefaultsReason::UnprovenFirstRun => Ok(Placement::Hosted),
+                _ => Err(PlacementRefusal::SettingsUnavailable(*reason)),
+            },
+            source: PlacementSource::Assumed(*reason),
+        },
     }
 }
 
@@ -1136,7 +1175,7 @@ mod tests {
             (PinMode::Dual, Placement::Dual(kubo())),
         ] {
             let load = SettingsLoad::Resolved(placed(mode, Some(kubo())));
-            assert_eq!(decide_placement(&load).unwrap(), expected);
+            assert_eq!(decide_placement(&load).decision.unwrap(), expected);
         }
     }
 
@@ -1153,7 +1192,7 @@ mod tests {
             reason: DefaultsReason::Suppressed,
         };
         assert_eq!(
-            decide_placement(&load).unwrap(),
+            decide_placement(&load).decision.unwrap(),
             Placement::External(byo("https://node.example", ByoKind::Kubo, None))
         );
     }
@@ -1164,7 +1203,9 @@ mod tests {
     #[test]
     fn only_an_unproven_first_run_falls_back_to_the_hosted_default() {
         assert_eq!(
-            decide_placement(&SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun)).unwrap(),
+            decide_placement(&SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun))
+                .decision
+                .unwrap(),
             Placement::Hosted
         );
         for reason in [
@@ -1183,7 +1224,9 @@ mod tests {
             DefaultsReason::FloorUnreadable,
         ] {
             assert_eq!(
-                decide_placement(&SettingsLoad::Defaults(reason)).unwrap_err(),
+                decide_placement(&SettingsLoad::Defaults(reason))
+                    .decision
+                    .unwrap_err(),
                 PlacementRefusal::SettingsUnavailable(reason),
                 "{reason:?} must not widen placement"
             );
@@ -1191,11 +1234,32 @@ mod tests {
     }
 
     #[test]
+    fn an_assumed_default_is_never_reported_as_the_members_own_choice() {
+        assert_eq!(
+            decide_placement(&SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun)).source,
+            PlacementSource::Assumed(DefaultsReason::UnprovenFirstRun),
+        );
+        assert_eq!(
+            decide_placement(&SettingsLoad::Resolved(placed(PinMode::Hosted, None))).source,
+            PlacementSource::Member,
+        );
+        assert_eq!(
+            decide_placement(&SettingsLoad::Stale {
+                settings: placed(PinMode::Hosted, None),
+                reason: DefaultsReason::Suppressed,
+            })
+            .source,
+            PlacementSource::Member,
+            "a last-known-good copy is still the member's own choice",
+        );
+    }
+
+    #[test]
     fn a_mode_naming_an_external_leg_with_no_provider_is_refused() {
         for mode in [PinMode::External, PinMode::Dual] {
             let load = SettingsLoad::Resolved(placed(mode, None));
             assert_eq!(
-                decide_placement(&load).unwrap_err(),
+                decide_placement(&load).decision.unwrap_err(),
                 PlacementRefusal::NoProvider
             );
         }
@@ -1213,11 +1277,14 @@ mod tests {
                     PinMode::External,
                     provider.clone()
                 )))
+                .decision
                 .unwrap_err(),
                 PlacementRefusal::NoExternalIngress(kind)
             );
             assert!(
-                decide_placement(&SettingsLoad::Resolved(placed(PinMode::Dual, provider))).is_ok(),
+                decide_placement(&SettingsLoad::Resolved(placed(PinMode::Dual, provider)))
+                    .decision
+                    .is_ok(),
                 "{kind:?} is a fine second leg"
             );
         }
@@ -1266,7 +1333,7 @@ mod tests {
                 "one mark alone must not read as a first run",
             );
             assert_eq!(
-                decide_placement(&load).unwrap_err(),
+                decide_placement(&load).decision.unwrap_err(),
                 PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
             );
         }

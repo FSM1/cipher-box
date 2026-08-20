@@ -66,8 +66,9 @@ pub struct VaultStatus {
     /// publish, and must never be silent.
     pub dead_letters: usize,
     /// Whether this session holds the material a publish needs. False means
-    /// nothing will publish until a later start mints the vault — read rather
-    /// than retained from its event, so it clears when it stops being true.
+    /// nothing will publish until a refresh or a later start mints the vault —
+    /// read rather than retained from its event, so it clears when it stops
+    /// being true.
     pub provisioned: bool,
     /// Conditions the engine raised that no snapshot carries.
     pub warnings: Vec<VaultWarning>,
