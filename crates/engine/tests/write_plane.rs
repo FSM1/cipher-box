@@ -2060,7 +2060,8 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
 /// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
 /// reported anywhere, so it spends the budget and every op behind it drains —
 /// but only the record was over the ceiling, so ending it keeps the version it
-/// would have named rather than unpinning and erasing it.
+/// would have named rather than unpinning and erasing it, and owes back only the
+/// child name no parent record ever reached.
 #[test]
 fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact() {
     let world = FakeWorld::new();
@@ -2072,15 +2073,17 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
     // A child ref carries its name verbatim, so a name past the 2 MiB IPFS
     // block ceiling is a parent folder record this engine can author and its
     // own ingress can never hold.
+    let name = "n".repeat(2 * 1024 * 1024 + 4096);
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
             parent: ROOT,
-            name: "n".repeat(2 * 1024 * 1024 + 4096),
+            name: name.clone(),
         },
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .expect("the write commits");
+    let doomed = child_id(&engine, ROOT, &name);
 
     let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
@@ -2100,10 +2103,12 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
             .is_empty(),
         "the head no retry could publish leaves the queue"
     );
-    assert!(
-        retire_targets(&alice).is_empty(),
-        "the version the oversized record would have named stays pinned — only \
-         the record was over the ceiling, and unpinning it is loss no retry undoes"
+    assert_eq!(
+        retire_targets(&alice),
+        vec![write_name(doomed).as_str().to_owned()],
+        "the version the oversized record would have named stays pinned — unpinning \
+         it is loss no retry undoes — while the child name the parent never came to \
+         reference is owed back like any abandoned create's"
     );
 }
 

@@ -239,7 +239,9 @@ enum Halt {
     /// Charged like an attempt — no re-author shrinks it, since a fresh nonce
     /// moves the sealed bytes and never their count — but exhausting the budget
     /// **preserves** the staged version instead of releasing it: the version is
-    /// intact and openable, and only the record naming it was too large.
+    /// intact and openable, and only the record naming it was too large. What
+    /// it does owe back is a create's own derived name, since the record that
+    /// would have referenced it is the one that never published.
     HeadOversized,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
@@ -743,12 +745,12 @@ where
                     Halt::UploadAttempt => {
                         self.dead_letter(scope, op_id, op, reason, report).await;
                     }
-                    // Only the record was over the ceiling; the version it
-                    // would have named is whole. Kept on the same terms as a
-                    // superseded edit's, so the bytes stay openable once the
-                    // body they overflow shrinks.
+                    // On the terms `Halt::HeadOversized` carries: the version
+                    // stays staged and openable, and only the name no published
+                    // record reached goes back.
                     Halt::HeadOversized => {
-                        if self.preserve_dead_letter(op_id).await.is_ok()
+                        if self.retire_unreferenced_name(scope, op).await.is_ok()
+                            && self.preserve_dead_letter(op_id).await.is_ok()
                             && self.dequeue_op(op_id).await.is_ok()
                         {
                             report.dead_letters.push((op_id, op.target, reason));
@@ -2618,26 +2620,41 @@ where
         }
     }
 
+    /// Retire only the name half of [`Self::registered_by`], for an abandonment
+    /// that keeps what the op uploaded.
+    async fn retire_unreferenced_name(&self, scope: &DrainScope<'_>, op: &Op) -> Result<(), Halt> {
+        let Some(name) = self.unreferenced_create_name(scope, op) else {
+            return Ok(());
+        };
+        retire(self.api, &[name])
+            .await
+            .map_err(|_| Halt::UploadAttempt)
+    }
+
+    /// The name a create derived, where nothing published references it yet: a
+    /// name some published record already references would leave a reference
+    /// outliving its referent, and the gate-passing base is the evidence — a
+    /// created node reaches it only once a parent record naming it published.
+    fn unreferenced_create_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<String> {
+        let target_published = self.base.borrow().contains(op.target);
+        (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
+            derive_write_name(scope.write_scope_seed, &op.target.0)
+                .as_str()
+                .to_owned()
+        })
+    }
+
     /// The registry rows one op's publish registered, mirroring what the publish
     /// pipeline sends (`PublishRequest::registration`).
     ///
-    /// The child name goes only with an abandoned create whose target never
-    /// became reachable: a name some published record already references would
-    /// leave a reference outliving its referent, and the gate-passing base is
-    /// the evidence — a created node reaches it only once a parent record naming
-    /// it published. The content CIDs go with **any** content-bearing op that
-    /// reaches here: an abandonment only retires while the op's target is
-    /// unreachable, so no record a parent links can name the version.
+    /// The content CIDs go with **any** content-bearing op that reaches here: an
+    /// abandonment only retires while the op's target is unreachable, so no
+    /// record a parent links can name the version.
     ///
     /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
     /// that the leaf CIDs are recoverable from nowhere.
     async fn registered_by(&self, scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
-        let target_published = self.base.borrow().contains(op.target);
-        let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
-            derive_write_name(scope.write_scope_seed, &op.target.0)
-                .as_str()
-                .to_owned()
-        });
+        let name = self.unreferenced_create_name(scope, op);
         let content = match op.content_root_cid() {
             Some(root_cid) => version_cids(
                 root_cid,
@@ -2798,14 +2815,10 @@ fn still_queued(queued: &[(OpId, Op)], held: OpId) -> bool {
 /// so an immediate permanent verdict would abandon a user's ops over a cache
 /// another tick repairs.
 ///
-/// An over-length head is charged too, though it is no trust refusal:
-/// re-authoring cannot shrink it — a fresh nonce moves the sealed bytes and
-/// never their count — so the budget is the only thing that ends the spin. It
-/// takes [`Halt::HeadOversized`] rather than a plain attempt so that ending it
-/// costs the record and not the version, and rather than a permanent verdict
-/// because the attacker-influenced side of a body must never refuse an owner's
-/// publish outright (blueprint/core.md: an over-length carry is truncated,
-/// never refused).
+/// An over-length head is charged on [`Halt::HeadOversized`]'s terms rather
+/// than judged permanent, because the attacker-influenced side of a body must
+/// never refuse an owner's publish outright (blueprint/core.md: an over-length
+/// carry is truncated, never refused).
 ///
 /// [`AuthorError::Seal`] is the one refusal left uncharged: it judges the body
 /// *this* pass built, which a rebase onto other state may not build again.
