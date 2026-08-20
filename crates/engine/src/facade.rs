@@ -78,7 +78,7 @@ use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
-    provision_vault,
+    VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use cipherbox_core::hex::lower as hex_lower;
@@ -740,12 +740,12 @@ pub enum Event {
         detail: String,
     },
     /// This account has no vault yet and minting one did not land, so the write
-    /// path stays dark until a later `start` provisions it. Surfaced, never
-    /// silent (blueprint/engine.md "never a silent failure"): reads still paint
-    /// and ops still queue, but nothing will publish.
+    /// path stays dark until a mint lands — a forced refresh retries one.
+    /// Surfaced, never silent (blueprint/engine.md "never a silent failure"):
+    /// reads still paint and ops still queue, but nothing will publish.
     VaultUnprovisioned {
-        /// Whether a fresh `start` could clear this — an availability stall —
-        /// versus a fail-closed refusal to mint, which a retry reaches again.
+        /// Whether a retry could clear this — an availability stall — versus a
+        /// fail-closed refusal to mint, which a retry reaches again.
         retryable: bool,
         /// Key-material-free classification of what stopped the mint.
         detail: String,
@@ -1779,8 +1779,7 @@ struct LiveStreams {
 /// sole v2 version (CONTEXT.md "Vault pointer").
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 
-/// The resolve-tick task, built where its seam bounds hold and spawned once a
-/// root name exists to poll ([`Engine::build_tick_loop_spawner`]).
+/// The resolve-tick task, spawned once a root name exists to poll.
 type TickLoopSpawner = Box<dyn FnOnce(IpnsName)>;
 
 /// The engine — the single stateful brain behind the facade.
@@ -1908,9 +1907,8 @@ pub struct Engine<T: SeamTypes> {
     /// resident for up to that wake past the engine (security rules 1/7); every
     /// shared cell below carrying key material is cleared the same way.
     tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
-    /// The resolve-tick task, built at [`start`](Self::start) and waiting for a
-    /// root name to poll. Holds a copy of the enc subkey, so it is dropped with
-    /// the rest of the shared key material on shut down (security rule 7).
+    /// Built at [`start`](Self::start), where the seam bounds its task needs
+    /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
     /// Where this session's bytes go, decided at [`start`](Self::start) from the
     /// vault settings load and re-decided by a settings save, and shared with
@@ -2099,7 +2097,7 @@ impl<T: SeamTypes> Engine<T> {
             };
         let mut root_name = self.install_cold_start(outcome, root_scope_id);
         if let Some(provisioned) = provisioned {
-            root_name = Some(self.install_mint(provisioned, root_scope_id));
+            root_name = Some(self.install_mint(provisioned));
         }
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
@@ -2111,9 +2109,6 @@ impl<T: SeamTypes> Engine<T> {
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
-        // Built here, where the seam bounds the spawned task needs already hold,
-        // and consumed by whichever root arrives first: this start's, or a later
-        // in-session mint's ([`provision_in_session`](Self::provision_in_session)).
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         if let Some(root_name) = root_name {
             self.open_tick_loop(root_name);
@@ -2171,16 +2166,16 @@ impl<T: SeamTypes> Engine<T> {
     /// just-provisioned vault has no adopt to surface them — this run minted
     /// them — so they are stamped at the epochs its own re-point vouches and
     /// the floors it seeded from them.
-    fn install_mint(&self, vault: ProvisionedVault, root_scope_id: [u8; 16]) -> IpnsName {
+    fn install_mint(&self, vault: ProvisionedVault) -> IpnsName {
         deposit_seed(
             &self.scope_read_seeds,
-            root_scope_id,
+            vault.repoint.scope_id,
             vault.read_scope_seed,
             Some(vault.repoint.min_read_epoch),
         );
         deposit_write_seed(
             &self.scope_write_seeds,
-            root_scope_id,
+            vault.repoint.scope_id,
             vault.write_scope_seed,
             Some(&vault.root_name),
             Some(vault.repoint.write_epoch),
@@ -2191,7 +2186,7 @@ impl<T: SeamTypes> Engine<T> {
     /// Whether this session holds the root scope's write seed — the material a
     /// publish needs. `false` means the vault is unprovisioned (or held
     /// keyless): reads paint and ops queue, but nothing will publish until a
-    /// later `start` mints it. The event stream announces the transition
+    /// mint lands, which a forced refresh retries. The event stream announces it
     /// ([`Event::VaultUnprovisioned`]); this answers a host that attached after.
     pub fn is_provisioned(&self) -> bool {
         let root = self.snapshot.borrow().root.0;
@@ -2513,9 +2508,6 @@ where {
         T::StagingStore: Clone + 'static,
     {
         let session = self.session.as_ref()?;
-        // Least privilege: the pass needs the enc subkey and the (public) owner
-        // verifier, never the login secret or the pointer seeds beside them.
-        let enc_subkey = session.enc_subkey().clone();
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = self.seams.staging_store.clone();
@@ -2554,10 +2546,9 @@ where {
         let manual = self.manual_refresh.clone();
 
         Some(Box::new(move |root_name: IpnsName| {
-            *tick_enc_subkey.borrow_mut() = Some(enc_subkey);
             manual.arm();
-            let spawner = scheduler.clone();
-            spawner.spawn(Box::pin(async move {
+            let spawn_on = scheduler.clone();
+            spawn_on.spawn(Box::pin(async move {
                 run_tick_loop(&scheduler, &manual, interval, async |cause| {
                     if !alive.get() {
                         return TickControl::Stop;
@@ -2571,8 +2562,7 @@ where {
                     };
                     // Carries the member's BYO bearer, so the pass owns a copy on the
                     // same terms as the enc subkey above.
-                    let decision = placement.borrow().clone();
-                    let Some(decision) = decision else {
+                    let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
                         return TickControl::Stop;
                     };
                     // Before the steady-state hold consults them: a floor raised
@@ -2725,7 +2715,7 @@ where {
                             scheduler: &scheduler,
                             http: &http,
                             gateway: &gateway,
-                            placement: &decision.decision,
+                            placement: &decision,
                             profile: &profile,
                             content_profile: &content_profile,
                             entropy: &entropy,
@@ -2780,10 +2770,17 @@ where {
     /// [`start`](Self::start) built. One session runs one tick loop, so a
     /// second call spawns nothing.
     fn open_tick_loop(&self, root_name: IpnsName) {
-        let spawn = self.tick_loop_spawner.borrow_mut().take();
-        if let Some(spawn) = spawn {
-            spawn(root_name);
-        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(spawn) = self.tick_loop_spawner.borrow_mut().take() else {
+            return;
+        };
+        // Least privilege, drawn no earlier than the loop that reads it: the
+        // pass needs the enc subkey and the (public) owner verifier, never the
+        // login secret or the pointer seeds beside them.
+        *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        spawn(root_name);
     }
 
     /// Executes one command. The single write entry point: every mutation,
@@ -3071,22 +3068,23 @@ where {
     }
 
     /// Mint this account's first vault inside a live session, for a `start`
-    /// whose own mint did not land. The write path opens here — the seeds
-    /// deposit and the resolve-tick loop starts polling — rather than staying
-    /// dark until the next `start`.
+    /// whose own mint did not land.
     ///
-    /// Fail-closed on the same terms as the pass that follows it: an
-    /// availability stall is [`EngineError::RefreshFailed`] and stays
-    /// retryable, a refusal to mint is [`EngineError::TrustViolation`] and a
-    /// retry reaches it again.
+    /// Fail-closed: an availability stall is [`EngineError::RefreshFailed`] and
+    /// stays retryable; a refusal — to mint, or to adopt what another device
+    /// published — is a verdict a retry reaches identically.
     async fn provision_in_session(&self) -> Result<(), EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.snapshot.borrow().root;
         let root_name = match self.provision_first_run_vault(&api, root.0).await {
-            Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault, root.0),
-            // The account published from another device while this session ran:
-            // its root is the one to adopt, never a second mint over it.
-            Ok(ProvisionOutcome::MovedOn) => {
+            Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault),
+            // The account published from another device between this session's
+            // failed mint and this retry — caught by the vacancy probe before
+            // minting, or by the pointer walk after. Its root is the one to
+            // adopt, never a second mint over it, and never a dark session: this
+            // device authenticated nothing wrong, it simply lost the race.
+            Ok(ProvisionOutcome::MovedOn)
+            | Err(ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)) => {
                 let outcome = self
                     .run_cold_start(root)
                     .await
@@ -3109,6 +3107,7 @@ where {
             }
         };
         self.open_tick_loop(root_name);
+        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
     }
@@ -3126,12 +3125,14 @@ where {
         let failed = |message: &str| EngineError::RefreshFailed {
             message: message.to_owned(),
         };
-        // An unconsumed spawner is a start that found no root to poll — this
-        // account has no vault yet. Mint one here rather than leaving the write
-        // path dark for the rest of the session; the mint deposits exactly the
-        // state a pass would reconcile, so it answers for this refresh itself.
+        // An unconsumed spawner is a start that found no root to poll. The mint
+        // deposits exactly the state a pass would reconcile, so it answers for
+        // this refresh itself.
         if self.tick_loop_spawner.borrow().is_some() {
-            return self.provision_in_session().await;
+            return match self.api_base_url.configured() {
+                Some(_) => self.provision_in_session().await,
+                None => Err(failed("this account has no vault yet")),
+            };
         }
         let verdict = self
             .manual_refresh
@@ -3299,17 +3300,16 @@ where {
             return Ok(());
         };
         match source {
-            // An assumed placement reads the account flag in the restricting
-            // direction only, and latches nothing: set, the flag contradicts the
-            // hosted default this session assumed, so the write is refused; clear,
-            // it is a server-controlled signal that proves nothing and must not
-            // widen an unauthenticated default.
-            PlacementSource::Assumed(reason) if quota.advisory => {
-                return Err(EngineError::NoPlacement {
-                    refusal: PlacementRefusal::SettingsUnavailable(reason),
-                });
+            // A set flag contradicts the default this session assumed, so refuse;
+            // a clear one is a server signal that must not widen an
+            // unauthenticated default, and latches nothing either way.
+            PlacementSource::Assumed(reason) => {
+                if quota.advisory {
+                    return Err(EngineError::NoPlacement {
+                        refusal: PlacementRefusal::SettingsUnavailable(reason),
+                    });
+                }
             }
-            PlacementSource::Assumed(_) => {}
             // The account's flag is two-state where the mode is three and dual
             // has no server representation, so `byo=true` is exactly `External`.
             // The vaulted mode is the source of truth; the flag is latched only
@@ -4517,10 +4517,8 @@ mod tests {
         );
     }
 
-    /// One bad moment of network must not cost a whole session's write
-    /// capability. The forced-refresh command a host already drives is the
-    /// in-session retry: it mints, deposits the seeds, and starts the loop that
-    /// polls the root it just published — no restart.
+    /// The late mint spawns the resolve-tick loop for the root it just
+    /// published.
     #[test]
     fn a_refresh_retries_a_first_run_mint_that_did_not_land() {
         let (mut engine, mut events, device) =

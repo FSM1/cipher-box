@@ -280,9 +280,8 @@ pub enum PlacementSource {
     Assumed(DefaultsReason),
 }
 
-/// The session's placement decision and where it came from, as the command
-/// path and the drain both read it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The session's placement decision and where it came from.
+#[derive(Debug, Clone)]
 pub struct SessionPlacement {
     /// Where this session's bytes go, or why nowhere.
     pub decision: PlacementDecision,
@@ -291,8 +290,7 @@ pub struct SessionPlacement {
 }
 
 impl SessionPlacement {
-    /// A placement the member's own settings established — the only provenance
-    /// that may latch account-scoped state.
+    /// A placement the member's own settings established.
     pub fn member(decision: PlacementDecision) -> Self {
         Self {
             decision,
@@ -1235,9 +1233,6 @@ mod tests {
         }
     }
 
-    /// Provenance is what gates account-scoped writes: the assumed first-run
-    /// default authorises this session's bytes but must never be mistaken for
-    /// the member's own choice.
     #[test]
     fn an_assumed_default_is_never_reported_as_the_members_own_choice() {
         assert_eq!(

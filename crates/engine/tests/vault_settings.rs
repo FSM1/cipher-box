@@ -1980,6 +1980,22 @@ fn an_assumed_first_run_never_clears_the_accounts_byo_flag() {
     );
 }
 
+/// The other direction of the same rule: a clear flag proves nothing, so it
+/// authorises this session's own bytes and still latches no account state.
+#[test]
+fn an_assumed_first_run_latches_nothing_when_the_flag_already_agrees() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    open_and_drop_a_write(&mut engine).expect("the assumed default authorises the write");
+    assert!(
+        blocks.byo_patches().is_empty(),
+        "agreement is not authentication: an assumed placement latches nothing",
+    );
+}
+
 /// Open a write and abandon it: the quota pre-flight the open runs is what
 /// reads the session's placement.
 fn open_and_drop_a_write(engine: &mut Engine<FakeSeamTypes>) -> Result<(), EngineError> {

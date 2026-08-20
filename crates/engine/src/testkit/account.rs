@@ -20,7 +20,7 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
 use super::{
     FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
-    SeededEntropy, owner_root_fixture,
+    SeededEntropy, owner_root_fixture, requested_cid,
 };
 use crate::NodeId;
 use crate::api::REGISTRY_BATCH_REFUSED;
@@ -38,6 +38,11 @@ pub const SCOPE: [u8; 16] = [0u8; 16];
 pub const ROOT: NodeId = NodeId(SCOPE);
 /// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
 pub const POINTER_PAYLOAD_VERSION: u64 = 1;
+/// The entropy seed the vault pointer's re-point seal draws its nonce from.
+/// Named so that a fixture growing a second sealed body draws from a distinct
+/// one: a single (key, nonce) pair must never cover two plaintexts
+/// (blueprint/core.md "Crypto suite").
+const POINTER_SEAL_ENTROPY_SEED: u64 = 0;
 /// The TTL every seeded record carries.
 pub const TTL_NANOS: u64 = 2_000_000_000;
 /// The EOL every seeded record carries — far enough out that no suite's virtual
@@ -476,12 +481,7 @@ impl Blocks {
         if url.contains("/registry/") {
             return ok(Vec::new());
         }
-        let cid = url
-            .rsplit('/')
-            .next()
-            .and_then(|tail| tail.split('?').next())
-            .unwrap_or_default();
-        match self.get(cid) {
+        match self.get(&requested_cid(url)) {
             Some(block) => ok(block),
             None => Err(SeamError::new("no such block")),
         }
@@ -534,7 +534,7 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
 
     let pointer_block = seal_repoint(
         SessionRole::Owner,
-        &mut SeededEntropy::new(0),
+        &mut SeededEntropy::new(POINTER_SEAL_ENTROPY_SEED),
         kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
         POINTER_PAYLOAD_VERSION,
         &owner_identity(),

@@ -568,6 +568,68 @@ fn a_refreshed_retry_of_a_failed_mint_publishes_a_write_in_the_same_session() {
     );
 }
 
+/// The retry runs the same vacancy probe the first mint did, so an account
+/// another device published in between is **adopted**, never minted over: a
+/// second genesis would sign a re-point rolling that vault's floors back to the
+/// genesis epoch.
+#[test]
+fn a_retry_adopts_the_vault_another_device_published_rather_than_minting_a_second() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 64);
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    let (mut engine, _events) = engine_on_api(&alice, 42);
+    block_on(engine.start(secret())).expect("a mint that did not land is not a failed start");
+    assert!(!engine.is_provisioned());
+
+    let op_id = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages against an unprovisioned vault")
+    .op_id();
+
+    // A second device of the same account mints while this session sits dark.
+    blocks.accept_uploads();
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 64);
+    let (mut engine_b, _events_b) = engine_on_api(&bob, 43);
+    block_on(engine_b.start(secret())).expect("the second device provisions the vault");
+    let root_name = vault_root_name(&world);
+    let published = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root_name.as_str())
+        .expect("the second device published the genesis root");
+
+    block_on(engine.command(Command::ManualRefresh)).expect("the retry settles on that vault");
+    assert!(
+        engine.is_provisioned(),
+        "the write path opened on the live vault"
+    );
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], root_name.as_str()),
+        Some(published),
+        "the retry published no second genesis over the live root",
+    );
+
+    // And the op the dark session queued drains onto the vault it adopted.
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+    let view = block_on(engine.snapshot(ROOT)).unwrap();
+    assert_eq!(view.children.len(), 1);
+    assert_eq!(view.children[0].name, "photos");
+    assert_eq!(
+        block_on(drained_mark(&alice)),
+        op_id.map(|id| id.0),
+        "the queued op drained onto the adopted vault",
+    );
+}
+
 /// The index of every `POST /content/upload` this device made, in request order.
 fn upload_positions(device: &FakeDevice) -> Vec<usize> {
     device
