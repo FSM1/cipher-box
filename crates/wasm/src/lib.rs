@@ -625,6 +625,35 @@ impl BlockedOp {
     }
 }
 
+/// The queue head held over the member's own provider settings, keeping its
+/// place and its staging reservation until those settings change.
+#[wasm_bindgen]
+pub struct SettingsHold {
+    inner: facade::SettingsHold,
+}
+
+#[wasm_bindgen]
+impl SettingsHold {
+    /// The held op id (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = opId)]
+    pub fn op_id(&self) -> u64 {
+        self.inner.op_id.0
+    }
+
+    /// The 16 raw bytes of the node the held op targets.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Vec<u8> {
+        self.inner.node.0.to_vec()
+    }
+
+    /// The stable check name of the rule that refused the config. Never the
+    /// endpoint or the bearer those settings carry.
+    #[wasm_bindgen(getter)]
+    pub fn check(&self) -> String {
+        self.inner.refusal.check().to_owned()
+    }
+}
+
 /// A key-free snapshot of one folder for a host UI paint: children, breadcrumb
 /// trail, retained dead letters, and the staleness rung.
 #[wasm_bindgen]
@@ -689,6 +718,12 @@ impl SnapshotView {
     #[wasm_bindgen(getter)]
     pub fn blocked(&self) -> Option<BlockedOp> {
         self.inner.blocked.map(|inner| BlockedOp { inner })
+    }
+
+    /// The drain's settings-refused hold, or `undefined`.
+    #[wasm_bindgen(getter, js_name = settingsHold)]
+    pub fn settings_hold(&self) -> Option<SettingsHold> {
+        self.inner.settings_hold.map(|inner| SettingsHold { inner })
     }
 
     /// Durable queue entries this session holds but cannot read — another
@@ -1248,6 +1283,11 @@ mod tests {
                 node: facade::NodeId([5u8; 16]),
                 needed_bytes: 4096,
             }),
+            settings_hold: Some(facade::SettingsHold {
+                op_id: OpId(13),
+                node: facade::NodeId([6u8; 16]),
+                refusal: cipherbox_engine::ProviderError::InsecureTransport,
+            }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
         });
@@ -1270,6 +1310,10 @@ mod tests {
         assert_eq!(blocked.op_id(), 12);
         assert_eq!(blocked.node(), vec![5u8; 16]);
         assert_eq!(blocked.needed_bytes(), 4096);
+        let held = view.settings_hold().expect("the view carries the hold");
+        assert_eq!(held.op_id(), 13);
+        assert_eq!(held.node(), vec![6u8; 16]);
+        assert_eq!(held.check(), "byo-endpoint-insecure");
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 

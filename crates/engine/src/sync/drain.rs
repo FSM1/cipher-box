@@ -42,9 +42,9 @@ use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UP
 use crate::content::{
     ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
     SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
-    read_block, version_cids,
+    read_block, validate_byo_config, version_cids,
 };
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, fresh_nonce};
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
@@ -235,8 +235,20 @@ enum Halt {
     /// exhausting the budget may retire what the op uploaded — the op's target
     /// is still unreachable, so no record a parent links names it.
     UploadAttempt,
+    /// The authored head is over the block ceiling its own ingress enforces.
+    /// Charged like an attempt — no re-author shrinks it, since a fresh nonce
+    /// moves the sealed bytes and never their count — but exhausting the budget
+    /// **preserves** the staged version instead of releasing it: the version is
+    /// intact and openable, and only the record naming it was too large. What
+    /// it does owe back is a create's own derived name, since the record that
+    /// would have referenced it is the one that never published.
+    HeadOversized,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
+    /// The member's own provider settings were refused before any request was
+    /// built. Not a failure of the op — it holds the head and its staging
+    /// reservation until those settings change ([`SettingsHold`]).
+    HeldBySettings(ProviderError),
     /// Over the account quota. Not a failure of the op — it holds the head and
     /// its staging reservation until a quota probe reports room.
     Blocked {
@@ -346,6 +358,24 @@ pub struct BlockedOp {
     pub needed_bytes: u64,
 }
 
+/// The queue head is held over rather than failed: [`validate_byo_config`]
+/// refused the member's own provider settings before any request was built, so
+/// every retry reaches the same verdict and charging one would spend the
+/// version's budget and then release its staged blocks. It keeps its place and
+/// its staging reservation until the settings name a placement that clears the
+/// refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsHold {
+    /// The held op.
+    pub op_id: OpId,
+    /// The node the op targets, so a host can point at it.
+    pub node: NodeId,
+    /// Which rule refused the config. Render it through
+    /// [`ProviderError::check`], which names the rule and never the endpoint or
+    /// the bearer the settings carry.
+    pub refusal: ProviderError,
+}
+
 /// The owner-scope material one drain pass publishes under. Every field is
 /// borrowed from the live session; the drain zeroizes none of it.
 pub(crate) struct DrainScope<'a> {
@@ -391,6 +421,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// The settings-refused hold, shared with the facade's read surface. It
+    /// clears only here, once `placement` no longer carries the refusal that
+    /// took it.
+    pub(crate) settings_hold: &'a RefCell<Option<SettingsHold>>,
     /// Pinned bytes the retire ledger still owes, shared with the facade's read
     /// surface. Rewritten at the end of every pass from the ledger itself.
     pub(crate) pending_reclaim: &'a Cell<u64>,
@@ -600,6 +634,7 @@ where
         let queued = mine;
         if queued.is_empty() {
             self.clear_block();
+            self.clear_settings_hold();
             return report;
         }
         let Ok(mut attempts) = self.load_attempts(&all_ids).await else {
@@ -619,6 +654,9 @@ where
         attempts: &mut Attempts,
     ) -> Result<(), Halt> {
         if !self.quota_admits_the_held_head(queued).await {
+            return Ok(());
+        }
+        if !self.settings_admit_the_held_head(queued) {
             return Ok(());
         }
 
@@ -698,19 +736,35 @@ where
                     self.retire_cancelled(op_id).await;
                 }
             }
-            Halt::Attempt | Halt::UploadAttempt => {
+            Halt::Attempt | Halt::UploadAttempt | Halt::HeadOversized => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
                 let reason = DeadLetterReason::AttemptsExhausted;
-                if halt == Halt::UploadAttempt {
-                    self.dead_letter(scope, op_id, op, reason, report).await;
-                } else if self.dequeue_op(op_id).await.is_ok() {
+                match halt {
+                    Halt::UploadAttempt => {
+                        self.dead_letter(scope, op_id, op, reason, report).await;
+                    }
+                    // On the terms `Halt::HeadOversized` carries: the version
+                    // stays staged and openable, and only the name no published
+                    // record reached goes back.
+                    Halt::HeadOversized => {
+                        if self.retire_unreferenced_name(scope, op).await.is_ok()
+                            && self.preserve_dead_letter(op_id).await.is_ok()
+                            && self.dequeue_op(op_id).await.is_ok()
+                        {
+                            report.dead_letters.push((op_id, op.target, reason));
+                        }
+                    }
                     // An acked PUT may be resolvable at the name, so nothing is
                     // retired: unpinning content a live record still names is
                     // loss, where leaving the rows charged is only a leak.
-                    self.release_staged_blocks(op).await;
-                    report.dead_letters.push((op_id, op.target, reason));
+                    _ => {
+                        if self.dequeue_op(op_id).await.is_ok() {
+                            self.release_staged_blocks(op).await;
+                            report.dead_letters.push((op_id, op.target, reason));
+                        }
+                    }
                 }
             }
             // A conditional-edit loser keeps its staged version and retires
@@ -727,11 +781,23 @@ where
             Halt::Permanent(reason) => {
                 self.dead_letter(scope, op_id, op, reason, report).await;
             }
+            // One pass raises one halt, and each hold's own gate is what lets
+            // go of it — so taking one drops the other rather than leaving two
+            // cells claiming the same head for different reasons.
             Halt::Blocked { needed_bytes } => {
+                self.clear_settings_hold();
                 *self.blocked.borrow_mut() = Some(BlockedOp {
                     op_id,
                     node: op.target,
                     needed_bytes,
+                });
+            }
+            Halt::HeldBySettings(refusal) => {
+                self.clear_block();
+                *self.settings_hold.borrow_mut() = Some(SettingsHold {
+                    op_id,
+                    node: op.target,
+                    refusal,
                 });
             }
         }
@@ -744,7 +810,7 @@ where
         let Some(blocked) = *self.blocked.borrow() else {
             return true;
         };
-        if !queued.iter().any(|(op_id, _)| *op_id == blocked.op_id) {
+        if !still_queued(queued, blocked.op_id) {
             self.clear_block();
             return true;
         }
@@ -770,6 +836,26 @@ where
 
     fn clear_block(&self) {
         *self.blocked.borrow_mut() = None;
+    }
+
+    /// Whether a settings-held head may be tried again this tick: only once the
+    /// placement this pass runs under stops reaching the verdict that took the
+    /// hold.
+    fn settings_admit_the_held_head(&self, queued: &[(OpId, Op)]) -> bool {
+        let Some(hold) = *self.settings_hold.borrow() else {
+            return true;
+        };
+        if still_queued(queued, hold.op_id)
+            && placement_refusal(self.placement) == Some(hold.refusal)
+        {
+            return false;
+        }
+        self.clear_settings_hold();
+        true
+    }
+
+    fn clear_settings_hold(&self) {
+        *self.settings_hold.borrow_mut() = None;
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -2295,7 +2381,8 @@ where
         completes: Option<OpId>,
     ) -> Result<Published, PublishHalt> {
         let read_key = self.node_read_key(scope, &node.0);
-        let nonce = self.nonce().map_err(PublishHalt::before_the_put)?;
+        let nonce = fresh_nonce(&mut *self.entropy.borrow_mut())
+            .map_err(|_| PublishHalt::before_the_put(Halt::UploadAttempt))?;
         let authoring = EnvelopeAuthoring {
             node_id: node.0,
             scope_id: scope.root.0,
@@ -2533,26 +2620,41 @@ where
         }
     }
 
+    /// Retire only the name half of [`Self::registered_by`], for an abandonment
+    /// that keeps what the op uploaded.
+    async fn retire_unreferenced_name(&self, scope: &DrainScope<'_>, op: &Op) -> Result<(), Halt> {
+        let Some(name) = self.unreferenced_create_name(scope, op) else {
+            return Ok(());
+        };
+        retire(self.api, &[name])
+            .await
+            .map_err(|_| Halt::UploadAttempt)
+    }
+
+    /// The name a create derived, where nothing published references it yet: a
+    /// name some published record already references would leave a reference
+    /// outliving its referent, and the gate-passing base is the evidence — a
+    /// created node reaches it only once a parent record naming it published.
+    fn unreferenced_create_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<String> {
+        let target_published = self.base.borrow().contains(op.target);
+        (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
+            derive_write_name(scope.write_scope_seed, &op.target.0)
+                .as_str()
+                .to_owned()
+        })
+    }
+
     /// The registry rows one op's publish registered, mirroring what the publish
     /// pipeline sends (`PublishRequest::registration`).
     ///
-    /// The child name goes only with an abandoned create whose target never
-    /// became reachable: a name some published record already references would
-    /// leave a reference outliving its referent, and the gate-passing base is
-    /// the evidence — a created node reaches it only once a parent record naming
-    /// it published. The content CIDs go with **any** content-bearing op that
-    /// reaches here: an abandonment only retires while the op's target is
-    /// unreachable, so no record a parent links can name the version.
+    /// The content CIDs go with **any** content-bearing op that reaches here: an
+    /// abandonment only retires while the op's target is unreachable, so no
+    /// record a parent links can name the version.
     ///
     /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
     /// that the leaf CIDs are recoverable from nowhere.
     async fn registered_by(&self, scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
-        let target_published = self.base.borrow().contains(op.target);
-        let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
-            derive_write_name(scope.write_scope_seed, &op.target.0)
-                .as_str()
-                .to_owned()
-        });
+        let name = self.unreferenced_create_name(scope, op);
         let content = match op.content_root_cid() {
             Some(root_cid) => version_cids(
                 root_cid,
@@ -2675,17 +2777,6 @@ where
         let node_seed = kdf::node_seed(scope.read_scope_seed, node_id);
         Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes())
     }
-
-    /// A fresh injected seal nonce. Fails closed: a reused nonce under one key
-    /// is a confidentiality break, never a degraded mode.
-    fn nonce(&self) -> Result<[u8; 24], Halt> {
-        let mut nonce = [0u8; 24];
-        self.entropy
-            .borrow_mut()
-            .fill(&mut nonce)
-            .map_err(|_| Halt::UploadAttempt)?;
-        Ok(nonce)
-    }
 }
 
 /// The `contentCid` of a file body's head version — the conditional-edit
@@ -2709,18 +2800,38 @@ fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
 }
 
-/// Classify an authoring refusal for the valve, off
-/// [`AuthorError::is_trust_refusal`].
+/// Whether the op a hold names is still in this identity's queue — the shared
+/// half of both hold gates, since a hold on an op that left is stale.
+fn still_queued(queued: &[(OpId, Op)], held: OpId) -> bool {
+    queued.iter().any(|(op_id, _)| *op_id == held)
+}
+
+/// Classify an authoring refusal for the valve. Exhaustive by construction: an
+/// unclassified refusal retries free and forever, so a new variant must be
+/// judged here rather than inheriting that arm.
 ///
-/// Charged, not dead-lettered on sight: the scope root a trust refusal is
+/// A trust refusal is charged, not dead-lettered on sight: the scope root it is
 /// authored from comes from the snapshot cache, which a later resolve replaces,
 /// so an immediate permanent verdict would abandon a user's ops over a cache
-/// another tick repairs. The budget bounds the spin either way.
+/// another tick repairs.
+///
+/// An over-length head is charged on [`Halt::HeadOversized`]'s terms rather
+/// than judged permanent, because the attacker-influenced side of a body must
+/// never refuse an owner's publish outright (blueprint/core.md: an over-length
+/// carry is truncated, never refused).
+///
+/// [`AuthorError::Seal`] is the one refusal left uncharged: it judges the body
+/// *this* pass built, which a rebase onto other state may not build again.
 fn classify_author(error: AuthorError) -> Halt {
-    if error.is_trust_refusal() {
-        Halt::UploadAttempt
-    } else {
-        Halt::Unclassified
+    match error {
+        AuthorError::GrantSectionOnChild
+        | AuthorError::MissingGrantSection
+        | AuthorError::InvalidGrantSection
+        | AuthorError::CommitmentNameMismatch
+        | AuthorError::CommitmentSignatureInvalid
+        | AuthorError::SectionSignatureInvalid => Halt::UploadAttempt,
+        AuthorError::HeadTooLarge { .. } => Halt::HeadOversized,
+        AuthorError::Seal(_) => Halt::Unclassified,
     }
 }
 
@@ -2919,10 +3030,28 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 /// transport failure carries no verdict about these bytes, and charging the
 /// attempt budget for one would spend the version's five tries on a condition
 /// that repairs itself. Everything the provider *answered* is charged.
+///
+/// A policy verdict is neither: it is deterministic, so it holds the op rather
+/// than charging it ([`SettingsHold`]).
 fn classify_placement(error: ProviderError) -> Halt {
     match error {
         ProviderError::Unreachable => Halt::Unclassified,
+        ProviderError::InvalidEndpoint
+        | ProviderError::InsecureTransport
+        | ProviderError::BlockedAddress
+        | ProviderError::InvalidCredential => Halt::HeldBySettings(error),
         _ => Halt::UploadAttempt,
+    }
+}
+
+/// The verdict this session's placement reaches on the member's own config
+/// before any request is built, which is what a [`Halt::HeldBySettings`] hold
+/// waits on changing. Only the external-only leg can hold an op on it: a dual
+/// write's mirror is best-effort and never fails the op.
+fn placement_refusal(placement: &PlacementDecision) -> Option<ProviderError> {
+    match placement {
+        Ok(Placement::External(config)) => validate_byo_config(config).err(),
+        _ => None,
     }
 }
 
@@ -2933,18 +3062,20 @@ fn blocks(count: usize) -> u32 {
 }
 
 /// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
-/// where the halt is not a failed attempt: an over-quota hold keeps the op and
-/// its reservation, and the host reads it from `SnapshotView::blocked`.
+/// where the halt is not a failed attempt: either hold keeps the op and its
+/// reservation, and the host reads them from `SnapshotView::blocked` and
+/// `SnapshotView::settings_hold`.
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
         // A cancel reports `UploadCancelled` from the facade that ordered it.
-        Halt::Blocked { .. } | Halt::Cancelled => None,
+        Halt::Blocked { .. } | Halt::HeldBySettings(_) | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         // Both charge the attempt budget; which one it is decides only what
         // exhausting that budget retires, not what the host is told.
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
+        Halt::HeadOversized => Some("the record this change publishes is over the size limit"),
         Halt::Permanent(DeadLetterReason::PayloadRefused) => {
             Some("the network refused the payload")
         }
@@ -3190,9 +3321,46 @@ mod tests {
             ProviderError::NoVerdict,
             ProviderError::Rejected { status: 500 },
             ProviderError::AddressMismatch,
-            ProviderError::InvalidCredential,
         ] {
             assert_eq!(classify_placement(answered), Halt::UploadAttempt);
+        }
+    }
+
+    #[test]
+    fn a_config_refused_before_the_request_holds_the_op_rather_than_spending_its_budget() {
+        for settings in [
+            ProviderError::InvalidEndpoint,
+            ProviderError::InsecureTransport,
+            ProviderError::BlockedAddress,
+            ProviderError::InvalidCredential,
+        ] {
+            assert_eq!(
+                classify_placement(settings),
+                Halt::HeldBySettings(settings),
+                "{}",
+                settings.check(),
+            );
+        }
+    }
+
+    /// The hold's exit is the config, not a timer: it stands exactly while the
+    /// placement this session runs under still reaches the same verdict.
+    #[test]
+    fn a_settings_hold_lets_go_only_once_the_placement_stops_refusing() {
+        let refused = byo("file:///etc/passwd");
+        assert_eq!(
+            placement_refusal(&Ok(Placement::External(refused.clone()))),
+            Some(ProviderError::InvalidEndpoint),
+        );
+        for admitted in [
+            Ok(Placement::External(byo("https://node.example"))),
+            Ok(Placement::Hosted),
+            // A dual write's mirror is best-effort, so no verdict on it holds
+            // the op that the hosted leg is already carrying.
+            Ok(Placement::Dual(refused)),
+            Err(crate::settings::PlacementRefusal::NoProvider),
+        ] {
+            assert_eq!(placement_refusal(&admitted), None);
         }
     }
 
@@ -3405,10 +3573,12 @@ mod tests {
     }
 
     /// A trust refusal is charged so the queue stops at the budget instead of
-    /// spinning free; a refusal of the body *this pass* built is not, or the
-    /// reclassification would turn a rebasable failure into a permanent halt.
+    /// spinning free, and so is an over-length head, which no re-author can
+    /// shrink — but the two spend that budget differently, so the size refusal
+    /// keeps its own verdict. A refusal of the body *this pass* built is
+    /// charged neither way: a rebase onto other state may never build it again.
     #[test]
-    fn only_a_produce_side_trust_refusal_is_charged_against_the_attempt_budget() {
+    fn only_a_refusal_a_rebase_cannot_shed_is_charged_against_the_attempt_budget() {
         for (error, expected) in [
             (AuthorError::GrantSectionOnChild, Halt::UploadAttempt),
             (AuthorError::MissingGrantSection, Halt::UploadAttempt),
@@ -3422,7 +3592,7 @@ mod tests {
             ),
             (
                 AuthorError::HeadTooLarge { size: 2, limit: 1 },
-                Halt::Unclassified,
+                Halt::HeadOversized,
             ),
         ] {
             let check = error.check();
