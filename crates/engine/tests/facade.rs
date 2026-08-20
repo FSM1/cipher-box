@@ -66,13 +66,6 @@ fn unimplemented_commands() -> Vec<(Command, &'static str)> {
             "downgrade",
         ),
         (
-            Command::CreateInviteLink {
-                node,
-                permission: Permission::Write,
-            },
-            "createInviteLink",
-        ),
-        (
             Command::AcceptShare {
                 sealed_share_pointer: b"sealed-pointer".to_vec(),
             },
@@ -186,6 +179,46 @@ fn unimplemented_commands_return_their_typed_error() {
             "`{expected_name}` must reject as typed-unimplemented until its slice lands"
         );
     }
+}
+
+/// The invite mint is wired, so it refuses with its own verdict rather than
+/// falling through the catch-all — and it refuses a node that names no scope
+/// root before it reaches any key material.
+#[test]
+fn minting_an_invite_link_refuses_a_node_that_names_no_scope_root() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::CreateInviteLink {
+            node: NodeId([1; 16]),
+            permission: Permission::Read,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "invite-target-is-not-a-scope-root"
+        }),
+    );
+}
+
+/// The vault root passes the target check, so an offline engine stops at the
+/// scope material it has not resolved — availability, never the catch-all.
+#[test]
+fn minting_an_invite_link_on_an_unresolved_vault_root_reports_availability() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let root = block_on(engine.view()).expect("view").root();
+
+    assert!(matches!(
+        block_on(engine.command(Command::CreateInviteLink {
+            node: root,
+            permission: Permission::Read,
+        })),
+        Err(EngineError::ContentUnavailable { .. }),
+    ));
 }
 
 /// A contact code the peer signed itself: the bundle a real import receives

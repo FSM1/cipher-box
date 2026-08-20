@@ -496,7 +496,7 @@ impl OwnerAuthority<'_> {
     /// Fail closed unless this caller's identity key signed the committed set it
     /// is about to change. Every commitment change is owner-only, and
     /// `mint_invite_grant` gets that from its arguments where these two do not.
-    fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
+    pub(super) fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
         verify_grant_set(
             &self.identity_signer.verifying_key(),
             scope.commitment,
@@ -784,7 +784,7 @@ pub fn revoke_invite_link(
 /// rejects the first two at decode and before signing; the third is the adoption
 /// gate's owner-authority check). Release-active, so no build can emit a set its
 /// own readers refuse.
-fn check_publishable(
+pub(super) fn check_publishable(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
 ) -> Result<(), InviteError> {
