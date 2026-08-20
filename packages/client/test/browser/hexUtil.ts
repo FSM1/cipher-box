@@ -14,3 +14,6 @@ export function unhex(text: string): Uint8Array {
 
 /** The account the browser suite's engines namespace their durable stores under. */
 export const TEST_ACCOUNT_ID = 'browsersuite';
+
+/** A second account on the same profile, for the cross-account isolation checks. */
+export const OTHER_ACCOUNT_ID = 'browsersuiteother';

@@ -12,7 +12,7 @@
  * never import it into the UI realm.
  */
 
-import { makeBrowserSeams } from './browserSeams.js';
+import { makeBrowserSeams, reclaimOtherAccountStores, type BrowserSeams } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
@@ -42,6 +42,18 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
   void bootstrap(event.data);
 }
 
+/**
+ * Opens this account's seams and sweeps the stores of every account the profile
+ * no longer holds. The sweep runs alongside the cold start: the origin quota was
+ * already measured, so the bytes it frees are the *next* start's headroom.
+ */
+function openAccount(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
+  // Detached, so its own best-effort contract is the only thing holding a sweep
+  // fault off the cold start: make that structural rather than internal.
+  void reclaimOtherAccountStores(config, accountId).catch(() => undefined);
+  return makeBrowserSeams(config, accountId);
+}
+
 async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
   try {
     // The quota estimate is independent of the WASM fetch and compile, so it
@@ -49,7 +61,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const headroom = measureStorageHeadroomBytes();
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
-    const host = new EngineHost(wasm, (accountId) => makeBrowserSeams(config, accountId), {
+    const host = new EngineHost(wasm, (accountId) => openAccount(config, accountId), {
       apiBaseUrl: config.apiBaseUrl,
       acceleratorBaseUrl: config.acceleratorBaseUrl,
       publicGateways: config.publicGateways,

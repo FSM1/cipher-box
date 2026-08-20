@@ -1,3 +1,4 @@
+import { EngineHeldElsewhereError } from '@cipherbox/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../stores/auth.store';
@@ -339,5 +340,62 @@ describe('useAuth', () => {
     const rendered = JSON.stringify({ auth: result.current.auth, store: authStore.getState() });
     expect(rendered).not.toContain(SECRET_HEX);
     expect(rendered).not.toContain([...SECRET_BYTES].join(','));
+  });
+});
+
+describe('useAuth against an engine another account holds', () => {
+  beforeEach(() => authStore.signedOut());
+
+  it('renders the refusal as a signed-in-elsewhere state naming the holder', async () => {
+    const engine = fakeEngineClient({
+      start: () => Promise.reject(new EngineHeldElsewhereError('other-account')),
+    });
+    const coreKit = fakeCoreKitSession();
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(async () => {
+      await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow();
+    });
+
+    expect(result.current.auth.heldElsewhere).toEqual({ heldBy: 'other-account' });
+    // A one-line banner cannot say what to do about it, so none is rendered.
+    expect(result.current.auth.error).toBeNull();
+    expect(authStore.getState().isAuthenticated).toBe(false);
+    // The credential the engine refused does not outlive the refusal.
+    expect(coreKit.calls.logouts).toBe(1);
+  });
+
+  it('reports a tab hosting the engine that has started none as holding no account', async () => {
+    const engine = fakeEngineClient({
+      start: () => Promise.reject(new EngineHeldElsewhereError(null)),
+    });
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(async () => {
+      await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow();
+    });
+
+    expect(result.current.auth.heldElsewhere).toEqual({ heldBy: null });
+  });
+
+  it('clears the state when the next attempt begins', async () => {
+    let refuse = true;
+    const engine = fakeEngineClient({
+      start: () =>
+        refuse ? Promise.reject(new EngineHeldElsewhereError(null)) : Promise.resolve(),
+    });
+    const { result } = mount(engine, fakeCoreKitSession());
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(async () => {
+      await expect(result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN)).rejects.toThrow();
+    });
+
+    refuse = false;
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+
+    expect(result.current.auth.heldElsewhere).toBeNull();
+    expect(authStore.getState()).toMatchObject({ isAuthenticated: true });
   });
 });

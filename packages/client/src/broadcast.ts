@@ -4,7 +4,8 @@
  * nothing else. Every exchange that names or measures vault content, in either
  * direction, rides the follower's private port: command arguments and upload
  * chunks up, snapshot projections, file plaintext and the engine event stream
- * down. The channel exists to rendezvous that port.
+ * down. The account each side holds rides it too, so the origin-wide channel
+ * never names one. The channel exists to rendezvous that port.
  *
  * Security shape, structural not by discipline:
  * - The login **secret never crosses** — the keyless follower transport takes no
@@ -67,8 +68,13 @@ export type WireWrite =
  * boundary.
  */
 export type PortRequest =
-  /** Names the sender, binding the port to a client the leader can reclaim it for. */
-  | { type: 'cb:portHello'; clientId: string }
+  /**
+   * Names the sender and the account it is starting for, binding the port to a
+   * client the leader can reclaim it for. `accountId` is `null` before this tab
+   * has a session; the leader adopts the port only when it names the account its
+   * own engine holds, so one origin's single engine is never shared across two.
+   */
+  | { type: 'cb:portHello'; clientId: string; accountId: string | null }
   /** This tab's currently open folder (for the leader's focus-window union). */
   | { type: 'cb:portFocus'; node: Uint8Array | null }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
@@ -92,6 +98,13 @@ export type PortRequest =
 export type PortResponse =
   /** The leader adopted this port, naming the leadership that answers on it. */
   | { type: 'cb:portReady'; token: string }
+  /**
+   * The leader will not serve this port: the greeting named an account other
+   * than the one its engine holds. `accountId` names that account, or is `null`
+   * when the hosting tab has started no engine — the follower needs it to say
+   * where the origin's engine went rather than only that it cannot have it.
+   */
+  | { type: 'cb:portRefused'; token: string; accountId: string | null }
   /** The leader is dropping this port. A closed `MessagePort` fires no event on
    * the far side, so without this a read would wait on a wire that is gone. */
   | { type: 'cb:portClosed' }

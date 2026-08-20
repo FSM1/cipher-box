@@ -57,6 +57,14 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('the engine worker reclaims the durable stores of accounts it does not hold', async ({
+    page,
+  }) => {
+    const outcome = await runSeam(page, 'storeReclaim');
+    expect(outcome.error ?? '', 'store reclaim behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('http seam moves bytes and surfaces non-2xx as a response', async ({ page }) => {
     const outcome = await runSeam(page, 'http');
     expect(outcome.error ?? '', 'http behavioral failure').toBe('');

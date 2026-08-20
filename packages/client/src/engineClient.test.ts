@@ -62,6 +62,10 @@ function origin() {
   return { tab, workers, liveWorkers };
 }
 
+/** The origin's engine holds one account, so every tab in a test starts on it. */
+const startTab = (client: EngineClient, secret: number[] = [1]): Promise<void> =>
+  client.facade.start(Uint8Array.from(secret).buffer, TEST_ACCOUNT_ID);
+
 describe('EngineClient leadership + transport swap', () => {
   it('elects the first tab leader and spawns exactly one worker', async () => {
     const { tab, liveWorkers } = origin();
@@ -81,7 +85,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab();
     await tick();
-    await leader.facade.start(new Uint8Array([1, 2, 3]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader, [1, 2, 3]);
+    await startTab(follower, [4]);
 
     await follower.facade.delete(new Uint8Array(16));
     // The command reached the leader's worker (a `command` request was posted).
@@ -120,7 +125,8 @@ describe('EngineClient leadership + transport swap', () => {
     const follower = tab({ secretSource });
     await tick();
     // The follower is an active session (logged in via the leader).
-    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [9]);
     expect(follower.currentRole()).toBe('follower');
 
     // Kill the leader → the follower is promoted.
@@ -147,7 +153,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [9]);
 
     const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
 
@@ -177,7 +184,7 @@ describe('EngineClient leadership + transport swap', () => {
     const { tab, workers } = origin();
     const leader = tab();
     await tick();
-    await leader.facade.start(new Uint8Array([1]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
 
     const handle = await leader.beginWrite({ node: new Uint8Array(16) }, 4);
     const chunk = Uint8Array.of(9, 9, 9, 9).buffer;
@@ -212,7 +219,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [9]);
 
     const stale = await follower.beginWrite({ node: new Uint8Array(16).fill(1) }, 4);
 
@@ -256,7 +264,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [2]);
 
     const received: EventDescriptor[] = [];
     follower.facade.subscribe((event) => received.push(event));
@@ -283,10 +292,11 @@ describe('EngineClient leadership + transport swap', () => {
     const follower = tab();
     await tick();
     expect(follower.currentRole()).toBe('follower');
+    await startTab(leader);
 
     // The follower holds no keys: the EngineClient (the secret's terminal owner)
     // scrubs the buffer it decided not to use, and the BroadcastTransport — a
-    // callee — never receives it (its `start` takes no secret argument).
+    // callee — never receives its bytes.
     const secret = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
     await follower.facade.start(secret, TEST_ACCOUNT_ID);
     expect([...new Uint8Array(secret)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
@@ -318,7 +328,8 @@ describe('EngineClient leadership + transport swap', () => {
       onError: (error) => errors.push(error),
     });
     await tick();
-    await follower.facade.start(new Uint8Array([9]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [9]);
 
     await leader.dispose();
     await tick();
@@ -344,7 +355,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [2]);
 
     // Promote the follower, but stall it on the pending re-derived secret.
     await leader.dispose();
@@ -405,7 +417,8 @@ describe('EngineClient leadership + transport swap', () => {
     const leader = tab();
     const follower = tab({ secretSource });
     await tick();
-    await follower.facade.start(new Uint8Array([2]).buffer, TEST_ACCOUNT_ID);
+    await startTab(leader);
+    await startTab(follower, [2]);
 
     // Issue a follower command, then kill the leader before it can respond. The
     // command rejects retryably (the leader stepped down / the transport closed)

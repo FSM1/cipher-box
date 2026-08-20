@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { EngineHeldElsewhereError } from '@cipherbox/client';
 import { createLoginFlow, RecoveryRequiredError, type LoginProgress } from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
 import { authStore, useAuthState } from '../stores/auth.store';
@@ -14,6 +15,11 @@ import type { RecoveryEnrollment } from './coreKit';
 import { useCoreKit } from './CoreKitProvider';
 import { useIdentity } from './IdentityProvider';
 import type { WebCollected } from './webCollector';
+
+/** The origin's engine belongs to another account; `heldBy` names it. */
+export interface HeldElsewhere {
+  heldBy: string | null;
+}
 
 export interface Auth {
   isAuthenticated: boolean;
@@ -28,6 +34,8 @@ export interface Auth {
   isBusy: boolean;
   /** The last failure, already stripped of anything secret-shaped. */
   error: string | null;
+  /** Set when this tab was refused rather than served another account's vault. */
+  heldElsewhere: HeldElsewhere | null;
   /** Exchanges a Google ID token collected on this host. */
   loginWithGoogle(idToken: string): Promise<void>;
   /** Asks CipherBox to deliver a verification code. */
@@ -60,6 +68,7 @@ export function useAuth(): Auth {
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
   const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
@@ -69,8 +78,17 @@ export function useAuth(): Auth {
       begin: () => {
         setIsBusy(true);
         setError(null);
+        setHeldElsewhere(null);
       },
-      failed: (failure) => setError(errorMessage(failure)),
+      // A refusal by account is a state the front door renders in full, not a
+      // one-line failure: its message alone cannot say what to do about it.
+      failed: (failure) => {
+        if (failure instanceof EngineHeldElsewhereError) {
+          setHeldElsewhere({ heldBy: failure.heldBy });
+          return;
+        }
+        setError(errorMessage(failure));
+      },
       end: () => setIsBusy(false),
     }),
     []
@@ -166,6 +184,7 @@ export function useAuth(): Auth {
     isSignedOut,
     isBusy,
     error: error ?? coreKitError,
+    heldElsewhere,
     loginWithGoogle,
     sendEmailCode: flow.sendEmailCode,
     loginWithEmailCode,

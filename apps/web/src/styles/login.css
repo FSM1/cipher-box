@@ -378,6 +378,14 @@
   text-align: center;
 }
 
+.login-error p {
+  margin: 0;
+}
+
+.login-error p + p {
+  margin-top: var(--spacing-xs);
+}
+
 .login-footer {
   position: absolute;
   bottom: 0;

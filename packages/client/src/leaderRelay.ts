@@ -50,6 +50,8 @@ interface PortEntry {
   readonly port: MessagePortLike;
   readonly listener: (event: MessageEvent) => void;
   clientId: string | null;
+  /** The account this port greeted under; only that engine may answer on it. */
+  accountId: string | null;
   /** Reclaims a port that never named itself, so an unnamed one cannot pile up. */
   readonly naming: ReturnType<typeof setTimeout>;
 }
@@ -160,6 +162,8 @@ export class LeaderRelay {
   // port so a re-brokering tab keeps the watch it already proved alive under.
   private readonly presence = new Map<string, AbortController>();
   private readonly namingTimeoutMs: number;
+  // The account this leadership's engine holds; `null` until it cold-starts.
+  private account: string | null = null;
   private readonly unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
@@ -185,6 +189,23 @@ export class LeaderRelay {
     this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
     // Announce leadership so followers (existing or newly-elected-away) reconnect.
     this.post({ type: 'cb:leader', token: this.token });
+  }
+
+  /**
+   * Names the account this leadership's engine cold-started for. The origin
+   * hosts a single engine, so it hosts a single account (blueprint/web-client.md
+   * "Engine hosting and tab leadership"): this relay serves only followers that
+   * greet under the same one, and a follower adopted under the account it held
+   * before is reclaimed here — the same abandonment a departure drives, since a
+   * write it still owns would otherwise hold its staging reservation for the
+   * rest of the session against an engine that will never serve it again.
+   */
+  serves(accountId: string | null): void {
+    if (this.account === accountId) return;
+    this.account = accountId;
+    for (const entry of [...this.ports]) {
+      if (entry.clientId !== null && entry.accountId !== accountId) this.reclaim(entry.clientId);
+    }
   }
 
   /** Folds the leader tab's own open folder into the focus-window union. */
@@ -295,6 +316,7 @@ export class LeaderRelay {
     const entry: PortEntry = {
       port,
       clientId: null,
+      accountId: null,
       listener: (event) => this.onPortMessage(entry, event.data),
       naming: setTimeout(() => this.detachPort(entry), this.namingTimeoutMs),
     };
@@ -318,13 +340,27 @@ export class LeaderRelay {
   private serve(entry: PortEntry, message: PortRequest | { type?: unknown }): boolean {
     if (this.closed) return false;
     if (message.type === 'cb:portHello') {
-      const { clientId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
+      const { clientId, accountId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
       if (entry.clientId !== null || typeof clientId !== 'string') return false;
+      if (accountId !== null && typeof accountId !== 'string') return false;
+      // Serving a greeting that names another account would put that tab's UI on
+      // this engine's vault — a cross-account read inside one browser profile.
+      // Refused, and told which account holds the engine, so the tab can say so.
+      if (accountId !== this.account) {
+        this.postPort(entry.port, {
+          type: 'cb:portRefused',
+          token: this.token,
+          accountId: this.account,
+        });
+        this.detachPort(entry);
+        return true;
+      }
       // A re-brokering follower supersedes the port it held before; whatever it
       // had in flight there is retired with that entry.
       this.detachPortOf(clientId);
       clearTimeout(entry.naming);
       entry.clientId = clientId;
+      entry.accountId = accountId;
       this.watchPresence(clientId);
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
       return true;

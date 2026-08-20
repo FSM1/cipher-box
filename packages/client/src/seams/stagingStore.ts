@@ -16,7 +16,9 @@ import { fromHex, toHex } from './bytes.js';
 import { memoizedDatabase, requestResult, transactionDone } from './idb.js';
 import type { StagingStoreSeam } from './types.js';
 
-const OPS_STORE = 'ops';
+/** The op-queue object store, and the version its database is opened at. */
+export const STAGING_OPS_STORE = 'ops';
+export const STAGING_DB_VERSION = 1;
 
 /**
  * Names an in-flight staged write. Staged records are named in hex, so no key
@@ -25,6 +27,9 @@ const OPS_STORE = 'ops';
  * be handed to orphan GC as a key.
  */
 const TEMP_PREFIX = '.cbtmp.';
+
+/** The staged bytes sit in an OPFS directory named beside the op queue's database. */
+export const STAGED_DIR_SUFFIX = '-staged';
 
 /**
  * A staged-byte read or write that did not move every requested byte. OPFS sync
@@ -55,11 +60,11 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private stagedDirectory: Promise<FileSystemDirectoryHandle> | undefined;
 
   constructor(name = 'cipherbox-staging') {
-    this.dirName = `${name}-staged`;
-    this.open = memoizedDatabase(name, 1, (db) => {
+    this.dirName = `${name}${STAGED_DIR_SUFFIX}`;
+    this.open = memoizedDatabase(name, STAGING_DB_VERSION, (db) => {
       // Out-of-line auto-incrementing keys are the OpId source: strictly
       // increasing, never reused, durable across reopen.
-      db.createObjectStore(OPS_STORE, { autoIncrement: true });
+      db.createObjectStore(STAGING_OPS_STORE, { autoIncrement: true });
     });
   }
 
@@ -101,16 +106,16 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // that a concurrent task's `Memory.grow()` can detach across the await.
     const staged = op.slice();
     const db = await this.open();
-    const tx = db.transaction(OPS_STORE, 'readwrite');
-    const key = await requestResult<IDBValidKey>(tx.objectStore(OPS_STORE).add(staged));
+    const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+    const key = await requestResult<IDBValidKey>(tx.objectStore(STAGING_OPS_STORE).add(staged));
     await transactionDone(tx);
     return Number(key);
   }
 
   async queuedOps(): Promise<Array<[number, Uint8Array]>> {
     const db = await this.open();
-    const tx = db.transaction(OPS_STORE, 'readonly');
-    const store = tx.objectStore(OPS_STORE);
+    const tx = db.transaction(STAGING_OPS_STORE, 'readonly');
+    const store = tx.objectStore(STAGING_OPS_STORE);
     // getAllKeys and getAll both return in ascending-key (FIFO) order.
     const keys = await requestResult<IDBValidKey[]>(store.getAllKeys());
     const values = await requestResult<Uint8Array[]>(store.getAll());
@@ -120,8 +125,8 @@ export class OpfsStagingStore implements StagingStoreSeam {
 
   async removeOp(opId: number): Promise<void> {
     const db = await this.open();
-    const tx = db.transaction(OPS_STORE, 'readwrite');
-    tx.objectStore(OPS_STORE).delete(opId);
+    const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+    tx.objectStore(STAGING_OPS_STORE).delete(opId);
     await transactionDone(tx);
   }
 

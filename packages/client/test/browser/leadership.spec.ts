@@ -8,7 +8,7 @@ import type {
   SnapshotResult,
 } from './leadership.js';
 import { presenceLockName } from '../../src/broadcast.js';
-import { hex } from './hexUtil.js';
+import { hex, OTHER_ACCOUNT_ID, TEST_ACCOUNT_ID } from './hexUtil.js';
 import { fixtureSlice, LEADER_SEED } from './mediaFixture.js';
 
 /**
@@ -34,7 +34,7 @@ interface LeadershipHarness {
   cbEvents(): ObservedEvent[];
   cbReadStream(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
-  cbStart(): Promise<string>;
+  cbStart(accountId?: string): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
   cbUpload(name: string, bytesHex: string): Promise<string>;
   cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
@@ -71,7 +71,7 @@ function harness(page: Page): {
   events(): Promise<ObservedEvent[]>;
   readStream(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
-  start(): Promise<string>;
+  start(accountId?: string): Promise<string>;
   createFile(name: string): Promise<string>;
   upload(name: string, bytesHex: string): Promise<string>;
   createNode(name: string, kind: 'file' | 'folder'): Promise<string>;
@@ -107,7 +107,11 @@ function harness(page: Page): {
         { offset, length }
       ),
     role: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbRole()),
-    start: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbStart()),
+    start: (accountId?: string) =>
+      page.evaluate(
+        (id) => (window as unknown as LeadershipHarness).cbStart(id),
+        accountId
+      ) as Promise<string>,
     createFile: (name) =>
       page.evaluate((n) => (window as unknown as LeadershipHarness).cbCreateFile(n), name),
     upload: (name, bytesHex) =>
@@ -497,5 +501,61 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(await follower.journalCount()).toBe(acceptedCount + 1);
 
     await follower.dispose();
+  });
+
+  test('a second account in a second tab is refused, not served the first account vault', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+
+    await a.create(lockName, channelName, 'engine');
+    await b.create(lockName, channelName, 'engine');
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+
+    expect(await leader.start(TEST_ACCOUNT_ID)).toBe('ok');
+    expect(await leader.createNode('first-account-only', 'folder')).toBe('ok');
+
+    // The second tab signs in as another account. One origin hosts one engine,
+    // so there is none here for it — and it is told which account holds it.
+    const refusal = await follower.start(OTHER_ACCOUNT_ID);
+    expect(refusal).toContain('held by another account');
+
+    // Nothing the refused tab asks for reaches the engine holding the first
+    // account: its snapshot fails rather than rendering that vault's children.
+    const view = await follower.snapshot('00'.repeat(16));
+    expect(view.error).toContain('held by another account');
+    expect(view.children).toBeUndefined();
+    expect(await follower.createFile('from-the-wrong-account.txt')).not.toBe('ok');
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a follower is refused while the tab hosting the engine has started none', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+
+    await a.create(lockName, channelName);
+    await b.create(lockName, channelName);
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+
+    // The leader never signed in, so it holds no keys to serve anyone with. A
+    // start that resolved here would report a session the origin cannot back.
+    expect(await follower.start(TEST_ACCOUNT_ID)).toContain('held by no account');
+
+    // ...and the same tab starts cleanly once the host tab holds that account.
+    expect(await leader.start(TEST_ACCOUNT_ID)).toBe('ok');
+    expect(await follower.start(TEST_ACCOUNT_ID)).toBe('ok');
+    expect(await follower.createFile('after-the-host-signed-in.txt')).toBe('ok');
+
+    await a.dispose();
+    await b.dispose();
   });
 });

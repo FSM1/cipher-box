@@ -135,9 +135,10 @@ export class EngineClient implements EngineTransport {
   private innerUnsub!: () => void;
   private readonly listeners = new Set<EngineEventListener>();
 
-  // The vault is active (user logged in). A follower promoted while active must
-  // re-derive keys; a never-active tab elected first just awaits `start`.
-  private started = false;
+  // The account this tab's engine holds; `null` until a start resolves, which is
+  // also how an active vault is told from a tab that was elected before login: a
+  // follower promoted while active must re-derive keys.
+  private accountId: string | null = null;
   private ownFocus: Uint8Array | null = null;
 
   constructor(private readonly config: EngineClientConfig) {
@@ -181,7 +182,8 @@ export class EngineClient implements EngineTransport {
     if (this.role !== 'leader') new Uint8Array(secret).fill(0);
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
     return this.current.start(secret, accountId).then(() => {
-      this.started = true;
+      this.accountId = accountId;
+      this.relay?.serves(accountId);
     });
   }
 
@@ -310,6 +312,9 @@ export class EngineClient implements EngineTransport {
       this.courier,
       this.config.locks,
       {
+        // A tab that is already signed in keeps its account across a rebuilt
+        // transport: a promotion that aborts must not leave it greeting for none.
+        accountId: this.accountId ?? undefined,
         onLeadershipChange: () => this.retireHandles(),
       }
     );
@@ -337,7 +342,7 @@ export class EngineClient implements EngineTransport {
    */
   private async promote(): Promise<void> {
     if (this.role === 'closed') return;
-    const wasActiveFollower = this.started;
+    const wasActiveFollower = this.accountId !== null;
 
     // Drop the follower transport now: a command in flight rejects so the UI
     // retries it against the new leader, and a command issued during the
@@ -358,6 +363,7 @@ export class EngineClient implements EngineTransport {
         const { secret, accountId } = await this.provideFailoverSecret();
         try {
           await local.start(secret, accountId);
+          this.accountId = accountId;
         } finally {
           // This frame owns the re-derived buffer until a transfer detaches it
           // (`SecretSource`); a start that failed before the post did not.
@@ -376,6 +382,7 @@ export class EngineClient implements EngineTransport {
       this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
       this.relay = new LeaderRelay(this.channel, local, this.courier, this.config.locks);
+      this.relay.serves(this.accountId);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
     } catch (error) {
       this.abortPromotion(local, error);
