@@ -36,7 +36,6 @@
 //! [`run_sweep`] re-runs while either is non-empty for a reason a retry could
 //! clear; a caller needing the subtree proven converged refuses on both.
 
-use core::future::Future;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,7 +44,7 @@ use cipherbox_core::seal::{ChildScopeRef, PreservedFields, ReadBody};
 use super::eager_set::ResolveFailure;
 use super::rotate::RotationPublishError;
 use crate::grants::child_index::{canonicalize, repair_observed};
-use crate::seams::{BoxedTask, Scheduler};
+use crate::seams::Scheduler;
 use cipherbox_core::hex::lower as hex_lower;
 
 #[cfg(test)]
@@ -672,12 +671,16 @@ fn conflict(node_id: [u8; 16]) -> SweepError {
 
 /// [`run_sweep`]'s outcome accumulated across its passes.
 ///
-/// Durable work is a **union**: a node re-sealed — or an index repaired and
-/// flagged — in an early pass stays reported even though the final pass finds it
-/// already at the epoch, so a sibling forcing a re-run cannot erase the host's
-/// only notice of an index self-heal (#38 D6). The residual buckets are the
-/// **final** pass's alone: each is re-derived from published records every pass,
-/// so an earlier pass's lost race or unreachable node has already been answered.
+/// Across the passes of a completed run, durable work is a **union**: a node
+/// re-sealed — or an index repaired and flagged — in an early pass stays reported
+/// even though the final pass finds it already at the epoch, so a sibling forcing
+/// a re-run cannot erase the host's only notice of an index self-heal (#38 D6).
+///
+/// The residual buckets are the **final** pass's alone: each is re-derived from
+/// published records every pass, so an earlier pass's answer no longer holds. The
+/// union yields to them — a node the final pass could not read is reported only
+/// there, keeping [`SweepOutcome`]'s one-node-one-bucket guarantee true of the
+/// aggregate as well as of each pass.
 #[derive(Default)]
 struct Cumulative {
     converged: BTreeSet<[u8; 16]>,
@@ -695,10 +698,17 @@ impl Cumulative {
 
     fn finish(self) -> SweepOutcome {
         let Self {
-            converged,
+            mut converged,
             flagged_indexes,
             last,
         } = self;
+        let residual: BTreeSet<[u8; 16]> = last
+            .dropped_lost_race
+            .iter()
+            .copied()
+            .chain(last.unreachable_nodes())
+            .collect();
+        converged.retain(|node| !residual.contains(node));
         SweepOutcome {
             // A node an early pass re-sealed reads as already-at-epoch later;
             // counting it in both buckets would claim it never needed work.
@@ -767,115 +777,41 @@ where
     }
 }
 
-/// Passes one scheduled sweep spends before it reports whatever is left. The
-/// lazy wave is idempotent and re-runs every cadence, so a scope a hot writer
-/// keeps contested is surfaced rather than retried without bound.
-pub const SWEEP_JOB_MAX_PASSES: u32 = 3;
-
-/// What one round of [`run_sweep_job`] sweeps.
-///
-/// Re-asked every round rather than captured once, so a scope adopted (or
-/// revoked) mid-session joins or leaves the wave without restarting the job.
-pub enum SweepRound {
-    /// Sweep these scope roots, in order.
-    Scopes(Vec<ChildScopeRef>),
-    /// End the job — session end or logout.
-    Stop,
-}
-
-/// Where a scheduled sweep's result reaches the host.
-///
-/// The job runs with no caller to inspect its return value, so the index
-/// self-heal ([`SweepOutcome::flagged_indexes`]) and the residuals
-/// ([`SweepOutcome::dropped_lost_race`], [`SweepOutcome::unreachable`]) are only
-/// observable through this seam — never swallowed behind an `Ok` nobody reads.
-pub trait SweepReporter {
-    /// Report one scope's completed sweep.
-    fn report(&self, scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>);
-}
-
 /// Drive the lazy wave as the blueprint's idle-cadence [`Scheduler`] job: idle
-/// one `cadence`, sweep every scope the round names, report each result, repeat
-/// until a round answers [`SweepRound::Stop`] (blueprint/engine.md "sweep").
+/// one `cadence`, sweep every scope `round` names, hand each result to `report`,
+/// and repeat until a round answers `None` — session end (blueprint/engine.md
+/// "sweep"). Determinism law: the only time source is `scheduler.sleep`.
 ///
 /// The idle comes **first**, so a freshly spawned job never sweeps in the same
-/// wake as the cut or the poll tick that spawned it, and `cadence` is the
-/// profile's [`sweep_cadence`], which is coarser than `poll_cadence` — the job
-/// yields the record transport to interactive work rather than contending for
-/// it. Determinism law: the only time source is `scheduler.sleep`.
+/// wake as the cut or the poll tick that spawned it.
 ///
-/// A scope that fails is reported and the round moves on: one unreachable scope
-/// must not stall the wave over every other.
-///
-/// [`sweep_cadence`]: crate::profile::SyncTimingProfile::sweep_cadence
-pub async fn run_sweep_job<S, R, P, Rep, Round, Fut>(
+/// Each scope gets **one** pass per round. The round is itself the retry: the
+/// wave is idempotent and comes back every `cadence`, so spending in-round
+/// passes on a contested scope would only stall every other scope behind it.
+/// `report` is how the index self-heal and the residual buckets reach a host
+/// that has no return value to read.
+pub async fn run_sweep_job<S, R, P>(
     scheduler: &S,
     resolver: &R,
     publisher: &P,
-    reporter: &Rep,
     cadence: Duration,
-    mut round: Round,
+    mut round: impl AsyncFnMut() -> Option<Vec<ChildScopeRef>>,
+    report: impl Fn(&ChildScopeRef, &Result<SweepOutcome, SweepError>),
 ) where
     S: Scheduler,
     R: SweepResolver,
     P: SweepPublisher,
-    Rep: SweepReporter,
-    Round: FnMut() -> Fut,
-    Fut: Future<Output = SweepRound>,
 {
     loop {
         scheduler.sleep(cadence).await;
-        let SweepRound::Scopes(scopes) = round().await else {
+        let Some(scopes) = round().await else {
             return;
         };
         for scope in &scopes {
-            let result = run_sweep(
-                scheduler,
-                resolver,
-                publisher,
-                scope,
-                cadence,
-                SWEEP_JOB_MAX_PASSES,
-            )
-            .await;
-            reporter.report(scope, &result);
+            let result = run_sweep(scheduler, resolver, publisher, scope, cadence, 1).await;
+            report(scope, &result);
         }
     }
-}
-
-/// The one-shot lazy-wave sweep task a completed cut enqueues — the
-/// `make_sweep_task` [`rotate_scope`](super::rotate::rotate_scope) spawns and
-/// the factory the grantee rotation arm holds
-/// ([`GranteeRotationNet`](crate::net::GranteeRotationNet)).
-///
-/// Takes its seams **by value**: a [`BoxedTask`] outlives the rotation call that
-/// built it, so nothing it touches may be borrowed from that call's frame.
-pub fn sweep_task<S, R, P, Rep>(
-    scheduler: S,
-    resolver: R,
-    publisher: P,
-    reporter: Rep,
-    scope: ChildScopeRef,
-    cadence: Duration,
-) -> BoxedTask
-where
-    S: Scheduler + 'static,
-    R: SweepResolver + 'static,
-    P: SweepPublisher + 'static,
-    Rep: SweepReporter + 'static,
-{
-    Box::pin(async move {
-        let result = run_sweep(
-            &scheduler,
-            &resolver,
-            &publisher,
-            &scope,
-            cadence,
-            SWEEP_JOB_MAX_PASSES,
-        )
-        .await;
-        reporter.report(&scope, &result);
-    })
 }
 
 #[cfg(test)]
@@ -883,6 +819,7 @@ mod tests {
     use super::sim::{FakeNet, id, name, node_ref, scope_ref};
     use super::*;
     use crate::profile::SyncTimingProfile;
+    use crate::seams::BoxedTask;
     use crate::seams::UnixMillis;
     use crate::testkit::fakes::VirtualScheduler;
     use crate::testkit::{block_on, poll_tasks_until_parked};
@@ -1508,60 +1445,68 @@ mod tests {
         );
     }
 
+    /// `SweepOutcome` promises every node it reached in exactly one bucket. The
+    /// union must therefore yield to the final pass: a node an early pass
+    /// re-sealed but the final one cannot read is unreachable *now*, and
+    /// reporting it as converged too would contradict the residual a caller
+    /// proving convergence refuses on.
+    #[test]
+    fn a_node_converged_early_then_unreachable_late_is_reported_unreachable_only() {
+        let net = FakeNet::new(5, &[0x01, 0x02])
+            .node(0x01, 1, &[])
+            .node(0x02, 1, &[])
+            .node_fault_after(0x01, 1, SweepResolveFailure::Unavailable)
+            .lost_race_next(0x02, 1);
+
+        let outcome = drive(&net, 3, 2).expect("the residual is surfaced, not an error");
+
+        assert_eq!(
+            outcome.unreachable,
+            vec![(id(0x01), SweepResolveFailure::Unavailable)]
+        );
+        assert!(
+            !outcome.converged.contains(&id(0x01)),
+            "the final pass's verdict is the one that holds"
+        );
+        assert_eq!(outcome.converged, vec![id(0x02)]);
+    }
+
     // --- The idle-cadence Scheduler job (blueprint/engine.md "sweep") ---
 
-    /// One scope's reported sweep, as a host receives it.
-    type Reported = ([u8; 16], Result<SweepOutcome, SweepError>);
+    /// The scopes and results a host would observe from the job, which has no
+    /// caller to read a return value.
+    type Reported = Rc<RefCell<Vec<([u8; 16], Result<SweepOutcome, SweepError>)>>>;
 
-    /// Records what a host would observe from the job, which has no caller to
-    /// read its return value.
-    #[derive(Clone, Default)]
-    struct Recorder {
-        seen: Rc<RefCell<Vec<Reported>>>,
-    }
-
-    impl Recorder {
-        fn outcomes(&self) -> Vec<SweepOutcome> {
-            self.seen
-                .borrow()
-                .iter()
-                .map(|(_, result)| result.clone().expect("swept"))
-                .collect()
+    /// A round source that names `net`'s one scope `rounds` times, then stops.
+    fn rounds(count: usize) -> impl AsyncFnMut() -> Option<Vec<ChildScopeRef>> {
+        let remaining = Cell::new(count);
+        move || {
+            let left = remaining.get();
+            remaining.set(left.saturating_sub(1));
+            async move { (left > 0).then(|| vec![scope_ref(0x00)]) }
         }
     }
 
-    impl SweepReporter for Recorder {
-        fn report(&self, scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>) {
-            self.seen
-                .borrow_mut()
-                .push((scope.scope_id, result.clone()));
-        }
-    }
-
-    /// Run the job for `rounds` rounds over `net`'s one scope on an
+    /// Run the job over `net`'s one scope for `count` rounds on an
     /// auto-advancing clock, then stop it.
-    fn job(net: &FakeNet, rounds: usize, cadence: Duration) -> (Recorder, VirtualScheduler) {
+    fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualScheduler) {
         let scheduler = VirtualScheduler::new().with_auto_advance();
-        let recorder = Recorder::default();
-        let remaining = Cell::new(rounds);
-        let remaining = &remaining;
+        let seen: Reported = Reported::default();
         block_on(run_sweep_job(
             &scheduler,
             net,
             net,
-            &recorder,
             cadence,
-            move || async move {
-                match remaining.get() {
-                    0 => SweepRound::Stop,
-                    n => {
-                        remaining.set(n - 1);
-                        SweepRound::Scopes(vec![scope_ref(0x00)])
-                    }
-                }
+            rounds(count),
+            |scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>| {
+                seen.borrow_mut().push((scope.scope_id, result.clone()));
             },
         ));
-        (recorder, scheduler)
+        (seen, scheduler)
+    }
+
+    fn swept(seen: &Reported, round: usize) -> SweepOutcome {
+        seen.borrow()[round].1.clone().expect("swept")
     }
 
     #[test]
@@ -1570,25 +1515,27 @@ mod tests {
             .node(0x01, 1, &[0x02])
             .node(0x02, 1, &[]);
 
-        let (recorder, _) = job(&net, 1, Duration::from_secs(30));
+        let (seen, _) = job(&net, 1, Duration::from_secs(30));
 
         assert_eq!(net.epoch(0x01), 5);
         assert_eq!(net.epoch(0x02), 5, "the wave reached the deeper level");
         assert_eq!(
-            recorder.outcomes().first().map(|o| o.converged.clone()),
-            Some(vec![id(0x01), id(0x02)])
+            seen.borrow()[0].0,
+            id(0x00),
+            "the result is filed under the scope it swept"
         );
+        assert_eq!(swept(&seen, 0).converged, vec![id(0x01), id(0x02)]);
     }
 
     #[test]
     fn a_second_round_over_a_converged_scope_republishes_nothing() {
         let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]);
-        let (recorder, _) = job(&net, 2, Duration::from_secs(30));
+        let (seen, _) = job(&net, 2, Duration::from_secs(30));
 
-        let outcomes = recorder.outcomes();
-        assert_eq!(outcomes[0].converged, vec![id(0x01)]);
-        assert!(outcomes[1].converged.is_empty(), "nothing left to converge");
-        assert_eq!(outcomes[1].already_converged, vec![id(0x01)]);
+        assert_eq!(swept(&seen, 0).converged, vec![id(0x01)]);
+        let second = swept(&seen, 1);
+        assert!(second.converged.is_empty(), "nothing left to converge");
+        assert_eq!(second.already_converged, vec![id(0x01)]);
         assert_eq!(net.publishes(0x01), 1, "no republish, no sequence bump");
     }
 
@@ -1607,12 +1554,31 @@ mod tests {
         }
     }
 
+    /// One contested scope must not stall the wave over every other, so the
+    /// round spends a single pass per scope and lets the next round retry.
+    #[test]
+    fn a_contested_scope_costs_one_pass_and_is_retried_by_the_next_round() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .lost_race_next(0x01, 1);
+
+        let (seen, scheduler) = job(&net, 2, Duration::from_secs(30));
+
+        assert_eq!(swept(&seen, 0).dropped_lost_race, vec![id(0x01)]);
+        assert_eq!(swept(&seen, 1).converged, vec![id(0x01)]);
+        assert_eq!(
+            scheduler.now(),
+            UnixMillis(90_000),
+            "three idles, and no extra in-round retry sleep"
+        );
+    }
+
     #[test]
     fn the_job_reports_a_failure_to_the_host_and_keeps_running() {
         let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]).forged(0x00);
-        let (recorder, _) = job(&net, 2, Duration::from_secs(30));
+        let (seen, _) = job(&net, 2, Duration::from_secs(30));
 
-        let seen = recorder.seen.borrow();
+        let seen = seen.borrow();
         assert_eq!(seen.len(), 2, "a failed round does not end the job");
         assert!(
             seen.iter().all(|(_, result)| matches!(
@@ -1627,13 +1593,13 @@ mod tests {
     }
 
     #[test]
-    fn the_job_ends_when_the_round_says_stop() {
+    fn the_job_ends_when_a_round_names_no_scopes() {
         let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]);
-        let (recorder, _) = job(&net, 0, Duration::from_secs(30));
-        assert!(recorder.seen.borrow().is_empty());
+        let (seen, _) = job(&net, 0, Duration::from_secs(30));
+        assert!(seen.borrow().is_empty());
     }
 
-    /// The job idles before it sweeps and idles at the profile's coarser
+    /// The job idles before it sweeps, at the profile's coarser
     /// `sweep_cadence`, so a whole focus-window poll cadence can elapse with the
     /// job still parked — background hygiene never pre-empts interactive work.
     #[test]
@@ -1641,30 +1607,18 @@ mod tests {
         let profile = SyncTimingProfile::CI;
         let scheduler = VirtualScheduler::new();
         let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]);
-        let recorder = Recorder::default();
 
         let mut tasks: Vec<BoxedTask> = vec![Box::pin({
             let scheduler = scheduler.clone();
             let net = net.clone();
-            let recorder = recorder.clone();
             async move {
-                let rounds = Cell::new(1usize);
-                let rounds = &rounds;
                 run_sweep_job(
                     &scheduler,
                     &net,
                     &net,
-                    &recorder,
                     profile.sweep_cadence,
-                    move || async move {
-                        match rounds.get() {
-                            0 => SweepRound::Stop,
-                            n => {
-                                rounds.set(n - 1);
-                                SweepRound::Scopes(vec![scope_ref(0x00)])
-                            }
-                        }
-                    },
+                    rounds(1),
+                    |_: &ChildScopeRef, _: &Result<SweepOutcome, SweepError>| {},
                 )
                 .await;
             }
@@ -1691,33 +1645,6 @@ mod tests {
             net.publishes(0x01),
             1,
             "the sweep fires at the sweep cadence"
-        );
-        assert_eq!(recorder.seen.borrow().len(), 1);
-    }
-
-    /// The task a completed cut enqueues owns its seams, so it outlives the
-    /// rotation call that built it — and it reports, rather than swallowing, what
-    /// the wave left behind.
-    #[test]
-    fn the_enqueued_cut_task_sweeps_and_reports() {
-        let scheduler = VirtualScheduler::new().with_auto_advance();
-        let net = FakeNet::new(5, &[0x01]).node(0x01, 1, &[]);
-        let recorder = Recorder::default();
-
-        let mut tasks = vec![sweep_task(
-            scheduler,
-            net.clone(),
-            net.clone(),
-            recorder.clone(),
-            scope_ref(0x00),
-            Duration::from_secs(30),
-        )];
-        poll_tasks_until_parked(&mut tasks);
-
-        assert_eq!(net.epoch(0x01), 5);
-        assert_eq!(
-            recorder.outcomes().first().map(|o| o.converged.clone()),
-            Some(vec![id(0x01)])
         );
     }
 }

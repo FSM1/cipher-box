@@ -101,7 +101,7 @@ fn race_1_delete_vs_concurrent_edit_edit_wins() {
     let local = base.clone();
 
     let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
-    assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
+    assert_eq!(res, OpResolution::dropped(DropReason::TargetAdvanced));
     assert!(
         base.contains(id(1)),
         "the concurrent edit wins; the node survives"
@@ -226,7 +226,7 @@ fn race_4_move_race_loser_undoes_its_dest_add() {
         &Op::relink(id(3), id(0), id(1), 1, AT, ScopeCrossing::Intra),
         SCOPE_ROOTS,
     );
-    assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+    assert_eq!(res, OpResolution::dropped(DropReason::MoveRaceLost));
     assert_eq!(
         base.parent_of(id(3)),
         Some(id(2)),
@@ -890,6 +890,25 @@ fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
 
     assert_eq!(triggers, vec![id(5)], "the exit is a fact, not a no-op");
     assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
+    assert!(cut.is_complete());
+}
+
+/// The enclosing-root fallback in the full-depth walk exists so an applied exit
+/// always cuts *something*. A drop is not evidence this op performed the exit,
+/// so a source folder a co-writer has since deleted must not escalate into a cut
+/// of the vault root — a whole-vault wave on demand.
+#[test]
+fn an_already_satisfied_drop_whose_source_is_gone_rotates_nothing() {
+    let rotator = RecordingRotator::refusing(&[]);
+    // id(13) is in no snapshot: the walk finds no listed scope root above it.
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(6))],
+        &[exiting_move(id(7), id(13), "m.txt")],
+        &rotator,
+    );
+
+    assert!(triggers.is_empty(), "no vault-root cut from a dropped op");
+    assert!(rotator.seen.borrow().is_empty());
     assert!(cut.is_complete());
 }
 

@@ -61,7 +61,15 @@ pub enum OpResolution {
         scope_exit_trigger: Option<crate::facade::NodeId>,
     },
     /// The op was dropped as a no-op or a lost race.
-    Dropped(DropReason),
+    Dropped {
+        /// Why the op dropped.
+        reason: DropReason,
+        /// The granted source scope root this op's target had **already** left
+        /// by rebase time. Carried only where the drop is itself evidence the
+        /// exit happened — an already-satisfied relocation — because the seed is
+        /// owed a cut whether or not this op had to publish the move.
+        scope_exit_trigger: Option<crate::facade::NodeId>,
+    },
     /// The op is terminally unrebasable; the caller preserves its staged bytes.
     DeadLetter(DeadLetterReason),
 }
@@ -260,11 +268,6 @@ pub fn replay(
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
-        // Resolved against the base as this op meets it, since `rebase_one`
-        // advances `working`. Needed here as well as inside it: an
-        // already-satisfied relocation drops without applying, and still owes
-        // the rotation.
-        let exited = scope_exit_trigger(&working, op, scope_roots);
         match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
@@ -279,13 +282,11 @@ pub fn replay(
                     suffixed,
                 });
             }
-            OpResolution::Dropped(reason) => {
-                // The relocation is already reflected in gate-passing state, so
-                // the exit is a fact this op simply did not have to publish; a
-                // lost race exited nothing, and dropping its trigger is right.
-                if reason == DropReason::AlreadySatisfied {
-                    queue_trigger(&mut scope_exit_triggers, exited);
-                }
+            OpResolution::Dropped {
+                reason,
+                scope_exit_trigger,
+            } => {
+                queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
                 dropped.push((*op_id, reason));
             }
             OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
@@ -302,6 +303,15 @@ pub fn replay(
 }
 
 impl OpResolution {
+    /// A drop that owes no scope-exit rotation — every reason but an
+    /// already-satisfied relocation, which alone proves the target left.
+    pub fn dropped(reason: DropReason) -> Self {
+        OpResolution::Dropped {
+            reason,
+            scope_exit_trigger: None,
+        }
+    }
+
     /// An applied op that carries no resolved name and no auto-suffix (delete,
     /// relink, content edit); `scope_exit_trigger` is the resolved source scope
     /// root, if any.
@@ -322,7 +332,7 @@ pub fn rebase_one(
     op: &Op,
     scope_roots: &[crate::facade::NodeId],
 ) -> OpResolution {
-    let scope_exit_trigger = scope_exit_trigger(working, op, scope_roots);
+    let exit = ScopeExit::of(working, op, scope_roots);
     match &op.kind {
         OpKind::Create { parent, name, node } => {
             rebase_create(working, op, *parent, name, node.kind())
@@ -333,7 +343,7 @@ pub fn rebase_one(
             from_parent,
             new_parent,
             ..
-        } => rebase_relink(working, op, *from_parent, *new_parent, scope_exit_trigger),
+        } => rebase_relink(working, op, *from_parent, *new_parent, exit),
         OpKind::Move {
             from_parent,
             new_parent,
@@ -347,7 +357,7 @@ pub fn rebase_one(
             *new_parent,
             new_name,
             *replacing,
-            scope_exit_trigger,
+            exit,
         ),
         OpKind::UpdateContent {
             base_version_cid, ..
@@ -362,7 +372,7 @@ pub fn rebase_one(
 /// versions retire with the node.
 fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpResolution {
     let Some(node) = working.node_mut(op.target) else {
-        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+        return OpResolution::dropped(DropReason::AlreadySatisfied);
     };
     node.content_version = node
         .content_version
@@ -383,15 +393,32 @@ fn queue_trigger(
     }
 }
 
-/// The granted source scope root `op` exits, resolved full-depth against `base`
-/// — `None` for every op that crosses no granted boundary.
-fn scope_exit_trigger(
-    base: &Snapshot,
-    op: &Op,
-    scope_roots: &[crate::facade::NodeId],
-) -> Option<crate::facade::NodeId> {
-    op.scope_exit_source()
-        .map(|from_parent| source_scope_root(base, from_parent, scope_roots))
+/// The scope root a relocation owes a scope-exit rotation, resolved against the
+/// base before the rebase mutates it. Both readings are `None` for an op that
+/// crosses no granted boundary.
+#[derive(Debug, Clone, Copy, Default)]
+struct ScopeExit {
+    /// What an **applied** exit cuts: the full-depth walk, falling back to the
+    /// snapshot root, because an exit this op performed must rotate something
+    /// ([`source_scope_root`]).
+    applied: Option<crate::facade::NodeId>,
+    /// What a **dropped** exit cuts: the walk's own answer alone. A drop is no
+    /// evidence this op performed the exit, so a source folder a concurrent
+    /// writer deleted must not escalate the fallback into a whole-vault cut.
+    dropped: Option<crate::facade::NodeId>,
+}
+
+impl ScopeExit {
+    fn of(base: &Snapshot, op: &Op, scope_roots: &[crate::facade::NodeId]) -> Self {
+        let Some(from_parent) = op.scope_exit_source() else {
+            return Self::default();
+        };
+        let found = granted_source_root(base, from_parent, scope_roots);
+        Self {
+            applied: Some(found.unwrap_or(base.root)),
+            dropped: found,
+        }
+    }
 }
 
 /// The granted scope root a move exited, walking `from_parent` and then its
@@ -399,18 +426,16 @@ fn scope_exit_trigger(
 /// names the same root as a move out of depth 1 (blueprint/engine.md "Rotation
 /// primitives: Triggers"; the one-level check is the v1 coverage hole).
 ///
-/// A chain that reaches no listed root falls back to the snapshot root: a
-/// scope exit that rotates nothing leaves a revokee holding a live seed, and
-/// over-rotating an enclosing root only costs a wave.
-fn source_scope_root(
+/// `None` when the chain reaches no listed root; [`ScopeExit`] decides what that
+/// absence means on each path.
+fn granted_source_root(
     working: &Snapshot,
     from_parent: crate::facade::NodeId,
     scope_roots: &[crate::facade::NodeId],
-) -> crate::facade::NodeId {
+) -> Option<crate::facade::NodeId> {
     core::iter::once(from_parent)
         .chain(working.ancestors(from_parent))
         .find(|node| scope_roots.contains(node))
-        .unwrap_or(working.root)
 }
 
 /// Add vs add: always visible; the rebasing loser auto-suffixes.
@@ -423,7 +448,7 @@ fn rebase_create(
 ) -> OpResolution {
     if working.contains(op.target) {
         // Our own create already landed remotely (confirmed by a prior resolve).
-        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+        return OpResolution::dropped(DropReason::AlreadySatisfied);
     }
     if !working.contains(parent) {
         return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
@@ -446,10 +471,10 @@ fn rebase_create(
 /// Conditional delete: drop if the target advanced past the op's snapshot.
 fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpResolution {
     match working.record_sequence(op.target) {
-        None => OpResolution::Dropped(DropReason::AlreadySatisfied),
+        None => OpResolution::dropped(DropReason::AlreadySatisfied),
         Some(current) if current > target_sequence => {
             // The target advanced by a concurrent edit — edit wins, delete drops.
-            OpResolution::Dropped(DropReason::TargetAdvanced)
+            OpResolution::dropped(DropReason::TargetAdvanced)
         }
         Some(_) => {
             working.remove_node(op.target);
@@ -493,7 +518,7 @@ fn rebase_relink(
     op: &Op,
     from_parent: crate::facade::NodeId,
     new_parent: crate::facade::NodeId,
-    scope_exit_trigger: Option<crate::facade::NodeId>,
+    exit: ScopeExit,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
@@ -502,21 +527,22 @@ fn rebase_relink(
     match working.parent_of(op.target) {
         // Already at the destination — our move (or an identical concurrent one)
         // already landed.
-        Some(current) if current == new_parent => {
-            OpResolution::Dropped(DropReason::AlreadySatisfied)
-        }
+        Some(current) if current == new_parent => OpResolution::Dropped {
+            reason: DropReason::AlreadySatisfied,
+            scope_exit_trigger: exit.dropped,
+        },
         // Still under the source we moved from: the normal dest-first + remove.
         Some(current) if current == from_parent => {
             working.link_next(new_parent, op.target);
             working.unlink(from_parent, op.target);
-            OpResolution::applied(scope_exit_trigger)
+            OpResolution::applied(exit.applied)
         }
         // A concurrent move relocated the child elsewhere: we are the race loser.
-        Some(_) => OpResolution::Dropped(DropReason::MoveRaceLost),
+        Some(_) => OpResolution::dropped(DropReason::MoveRaceLost),
         // No current parent (was at root / unlinked): dest-first still links it.
         None => {
             working.link_next(new_parent, op.target);
-            OpResolution::applied(scope_exit_trigger)
+            OpResolution::applied(exit.applied)
         }
     }
 }
@@ -555,7 +581,7 @@ fn rebase_move(
     new_parent: crate::facade::NodeId,
     new_name: &str,
     replacing: Option<Replaced>,
-    scope_exit_trigger: Option<crate::facade::NodeId>,
+    exit: ScopeExit,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
@@ -565,7 +591,7 @@ fn rebase_move(
     // against: we are the race loser, and removing it from there would clobber
     // the winner.
     if current_parent.is_some_and(|current| current != from_parent && current != new_parent) {
-        return OpResolution::Dropped(DropReason::MoveRaceLost);
+        return OpResolution::dropped(DropReason::MoveRaceLost);
     }
 
     // The destination node this move may free — and it may free it only while
@@ -596,7 +622,10 @@ fn rebase_move(
             .node(op.target)
             .is_some_and(|n| n.name() == new_name)
     {
-        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+        return OpResolution::Dropped {
+            reason: DropReason::AlreadySatisfied,
+            scope_exit_trigger: exit.dropped,
+        };
     }
 
     // Resolved before any mutation: an exhausted probe dead-letters, and a
@@ -623,7 +652,7 @@ fn rebase_move(
     OpResolution::Applied {
         effective_name: Some(Zeroizing::new(effective)),
         suffixed,
-        scope_exit_trigger,
+        scope_exit_trigger: exit.applied,
     }
 }
 
@@ -888,7 +917,7 @@ mod tests {
         // The delete snapshotted the target at sequence 3.
         let local = base.clone();
         let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
-        assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
+        assert_eq!(res, OpResolution::dropped(DropReason::TargetAdvanced));
         assert!(base.contains(id(1)), "edit wins — the node survives");
     }
 
@@ -1245,7 +1274,7 @@ mod tests {
             &Op::relink(id(3), id(0), id(1), 1, AT, ScopeCrossing::Intra),
             SCOPE_ROOTS,
         );
-        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+        assert_eq!(res, OpResolution::dropped(DropReason::MoveRaceLost));
         assert_eq!(
             base.parent_of(id(3)),
             Some(id(2)),
@@ -1384,7 +1413,7 @@ mod tests {
             ),
             NESTED_ROOTS,
         );
-        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+        assert_eq!(res, OpResolution::dropped(DropReason::MoveRaceLost));
     }
 
     /// The `(base, local)` pair for a move over `dir`/`f` plus an occupied
@@ -1636,7 +1665,7 @@ mod tests {
             ),
             SCOPE_ROOTS,
         );
-        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+        assert_eq!(res, OpResolution::dropped(DropReason::MoveRaceLost));
         assert_eq!(
             base, before,
             "a dropped move must not have vacated the destination"
@@ -1696,7 +1725,7 @@ mod tests {
             ),
             SCOPE_ROOTS,
         );
-        assert_eq!(res, OpResolution::Dropped(DropReason::AlreadySatisfied));
+        assert_eq!(res, OpResolution::dropped(DropReason::AlreadySatisfied));
     }
 
     #[test]

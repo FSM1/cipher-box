@@ -66,13 +66,13 @@ pub use rotate_write::{
     WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub use sweep::{
-    LaggingNode, NodeRef, SWEEP_JOB_MAX_PASSES, SweepError, SweepOutcome, SweepPublisher,
-    SweepReporter, SweepResolveFailure, SweepResolver, SweepRound, SweptChild, SweptNode,
-    SweptScope, converge_subtree, run_sweep, run_sweep_job, sweep_pass, sweep_task,
+    LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
+    SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, run_sweep_job,
+    sweep_pass,
 };
 pub use trigger::{
-    CutRotationReport, CutRotator, GrantCutPlan, GrantedScopeRoots, RevokeError,
-    RevokedCommittedSet, RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport,
-    ScopeExitRotator, WriteRevokeKind, consume_scope_exit_triggers, prune_expired_grants,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut,
+    CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
+    RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport, ScopeExitRotator,
+    WriteRevokeKind, consume_scope_exit_triggers, prune_expired_grants, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut,
 };

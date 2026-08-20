@@ -16,9 +16,10 @@ use core::fmt;
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
+    AadContext, ChildScopeRef, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
 };
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
@@ -28,6 +29,7 @@ use zeroize::Zeroizing;
 use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
+use crate::net::GrantedScopeRoot;
 use crate::seams::{FloorStore, Mailbox, SeamError};
 
 use super::contact::Contact;
@@ -207,6 +209,62 @@ impl ReceivedSharesList {
             }
             Reconciled::Unchanged => {}
         }
+    }
+
+    /// The scope roots this device can address by scope id — the caller-held
+    /// pairing the grantee rotation arm borrows
+    /// ([`GranteeRotationNet`](crate::net::GranteeRotationNet)), derived from the
+    /// bookmark rather than cached beside it.
+    ///
+    /// Two exclusions, both fail-closed. A stored name that is not a well-formed
+    /// IPNS name resolves nothing, so it names no rotation destination. And a
+    /// scope id carried by more than one bookmark is **ambiguous**: `scopeId` is
+    /// authored by the sharer and bound to nothing outside its own record, so two
+    /// sharers can present the same one. Since this list is keyed by name, both
+    /// entries are legitimately held — but neither may answer for the id, or a
+    /// rotation would be aimed at whichever sorted first while the revokee on the
+    /// other scope keeps a live seed.
+    pub fn granted_scope_roots(&self) -> Vec<GrantedScopeRoot> {
+        self.paired(|_| true)
+    }
+
+    /// Those same scope roots, restricted to the ones this device can **write**
+    /// — the granted half of a sweep round
+    /// ([`run_sweep_job`](crate::rotation::run_sweep_job)). The lazy wave
+    /// re-seals and republishes, so it is "runnable by any write-capable client"
+    /// (blueprint/engine.md "sweep"); sweeping a read-only share could only fail
+    /// to publish, once per cadence, forever.
+    pub fn writable_scope_refs(&self) -> Vec<ChildScopeRef> {
+        self.paired(|share| share.permission == Permission::Write)
+            .into_iter()
+            .map(|granted| {
+                ChildScopeRef::new(
+                    granted.scope_id,
+                    granted.ipns_name.as_str().as_bytes().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    fn paired(&self, keep: impl Fn(&ReceivedShare) -> bool) -> Vec<GrantedScopeRoot> {
+        let mut named: Vec<([u8; 16], IpnsName)> = self
+            .entries
+            .iter()
+            .filter(|share| keep(share))
+            .filter_map(|share| {
+                let text = core::str::from_utf8(&share.scope_root_name).ok()?;
+                Some((share.scope_id, IpnsName::parse(text).ok()?))
+            })
+            .collect();
+        named.sort_by_key(|(scope_id, _)| *scope_id);
+        named
+            .chunk_by(|(a, _), (b, _)| a == b)
+            .filter(|run| run.len() == 1)
+            .map(|run| GrantedScopeRoot {
+                scope_id: run[0].0,
+                ipns_name: run[0].1.clone(),
+            })
+            .collect()
     }
 
     /// The bookmarked shares.
@@ -1038,6 +1096,82 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([key_byte; 32]),
         }
+    }
+
+    fn share_at(scope_id: [u8; 16], name: &IpnsName, permission: Permission) -> ReceivedShare {
+        ReceivedShare {
+            scope_root_name: name.as_str().as_bytes().to_vec(),
+            scope_id,
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "s".into(),
+            permission,
+            pointer_read_key: SecretBytes::new([0x8A; 32]),
+        }
+    }
+
+    fn a_name(seed: u8) -> IpnsName {
+        IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([seed; 32]).verifying_key(),
+        )
+    }
+
+    #[test]
+    fn a_bookmark_pairs_its_scope_id_with_the_name_its_root_lives_at() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+
+        let granted = list.granted_scope_roots();
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].scope_id, [0x5c; 16]);
+        assert_eq!(granted[0].ipns_name, a_name(0x31));
+        assert_eq!(list.writable_scope_refs().len(), 1);
+    }
+
+    /// `scopeId` is authored by the sharer and bound to nothing outside its own
+    /// record, so two sharers can present the same one. This list is keyed by
+    /// name, so both bookmarks are legitimately held — but answering for the id
+    /// with either would aim a rotation at one sharer's root while the revokee on
+    /// the other keeps a live seed.
+    #[test]
+    fn a_scope_id_two_bookmarks_claim_answers_for_neither() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
+        list.reconcile(share_at([0x77; 16], &a_name(0x33), Permission::Write));
+
+        let granted = list.granted_scope_roots();
+        assert_eq!(
+            granted.iter().map(|g| g.scope_id).collect::<Vec<_>>(),
+            vec![[0x77; 16]],
+            "the ambiguous id is refused, the unambiguous one still answers"
+        );
+    }
+
+    /// Nothing resolves at a name that is not a well-formed IPNS name, so it
+    /// names no rotation destination.
+    #[test]
+    fn a_bookmark_whose_stored_name_is_unusable_pairs_with_nothing() {
+        let mut list = ReceivedSharesList::new();
+        let mut junk = share_at([0x5c; 16], &a_name(0x31), Permission::Write);
+        junk.scope_root_name = b"not-an-ipns-name".to_vec();
+        list.reconcile(junk);
+
+        assert!(list.granted_scope_roots().is_empty());
+    }
+
+    /// The wave re-seals and republishes, so a read-only share could only fail to
+    /// publish — once per cadence, forever (blueprint/engine.md "sweep").
+    #[test]
+    fn a_read_only_share_joins_no_sweep_round() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Read));
+
+        assert!(list.writable_scope_refs().is_empty());
+        assert_eq!(
+            list.granted_scope_roots().len(),
+            1,
+            "it is still a scope this device holds a grant for"
+        );
     }
 
     #[test]
