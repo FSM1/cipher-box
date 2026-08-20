@@ -54,6 +54,7 @@ use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
+use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -65,9 +66,9 @@ use crate::net::{
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CascadeResealResolver, CascadeTarget, CommittedSet, GrantCutPlan, ResealError,
-    ResealSeeds, ResolveFailure, RevokeError, RotateError, RotateOnCutError, RotateScopePlan,
-    ScopeRootIdentity, WriteHistory, WriteRevokeKind, derive_write_name, revoke_read_grant,
+    AscentAuthority, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds,
+    ResolveFailure, Retryable, RevokeError, RotateError, RotateScopePlan, ScopeRootIdentity,
+    WriteHistory, WriteRevokeKind, bounded, derive_write_name, revoke_read_grant,
     revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
@@ -1137,36 +1138,30 @@ impl EngineError {
         }
     }
 
-    /// Map a read-plane rotation failure. The split is retryability: an
+    /// Map a rotation failure on the axis its own classifier already answers: an
     /// availability stall or a C2 label conflict the re-point wave repairs is
     /// [`Seam`](EngineError::Seam); a gate-rejected record, a re-seal this build
-    /// refuses to sign, a refused publish and an exhausted epoch are all
-    /// fail-closed verdicts on the owner's own state, never retried (rule 6).
-    fn from_rotate(err: RotateError) -> Self {
-        match err {
-            RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
-            RotateError::Floor(e) => EngineError::from_seam(e),
-            retryable if retryable.is_retryable() => EngineError::Seam {
-                message: retryable.to_string(),
+    /// refuses to sign, a refused publish and an exhausted epoch are fail-closed
+    /// verdicts on the owner's own state, never retried (rule 6). A terminal
+    /// failure on a cut means it is not a revocation yet, so the caller reports
+    /// it rather than treating the re-signed set as done.
+    fn from_rotation<E: Retryable + fmt::Display>(err: E) -> Self {
+        match err.is_retryable() {
+            true => EngineError::Seam {
+                message: err.to_string(),
             },
-            terminal => EngineError::TrustViolation {
-                message: terminal.to_string(),
+            false => EngineError::TrustViolation {
+                message: err.to_string(),
             },
         }
     }
 
-    /// Map a committed-set cut's plane rotation on the same split
-    /// [`from_rotate`](EngineError::from_rotate) makes. A terminal failure means
-    /// the cut is not a revocation yet — the caller reports it rather than
-    /// treating the re-signed set as done.
-    fn from_rotate_on_cut(err: RotateOnCutError) -> Self {
-        if err.is_retryable() {
-            return EngineError::Seam {
-                message: err.to_string(),
-            };
-        }
-        EngineError::TrustViolation {
-            message: err.to_string(),
+    /// [`from_rotation`](EngineError::from_rotation), with the one arm a read
+    /// rotation raises that is neither: a failed entropy draw.
+    fn from_rotate(err: RotateError) -> Self {
+        match err {
+            RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
+            other => EngineError::from_rotation(other),
         }
     }
 
@@ -1192,9 +1187,7 @@ impl EngineError {
     fn from_create_grant(err: CreateGrantError) -> Self {
         match err {
             CreateGrantError::Entropy(e) => EngineError::from_entropy(e),
-            CreateGrantError::Mailbox(e) => EngineError::Seam {
-                message: e.message().to_owned(),
-            },
+            CreateGrantError::Mailbox(e) => EngineError::from_seam(e),
             CreateGrantError::Converge(e) if e.is_retryable() => EngineError::Seam {
                 message: e.to_string(),
             },
@@ -1239,6 +1232,38 @@ impl EngineError {
             AcceptError::Persist(e) => EngineError::from_received_share_store(e),
             trust => EngineError::TrustViolation {
                 message: trust.to_string(),
+            },
+        }
+    }
+
+    /// Map a contact-book failure. The book is this vault's own state, so a
+    /// stored book that will not open is a fail-closed verdict; everything a
+    /// host can act on — a code it must re-scan, a book it must prune, a seam it
+    /// may retry — keeps its own class.
+    fn from_contact_store(err: ContactStoreError) -> Self {
+        match err {
+            ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
+                EngineError::MalformedInput { check: e.check() }
+            }
+            ContactStoreError::RecipientNotImported => EngineError::MalformedInput {
+                check: "recipient-not-imported",
+            },
+            ContactStoreError::Full => EngineError::MalformedInput {
+                check: "contact-book-full",
+            },
+            ContactStoreError::Encode(_) => EngineError::MalformedInput {
+                check: "contact-book-unstorable",
+            },
+            ContactStoreError::Seam(e) => EngineError::from_seam(e),
+            ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
+            // A seal refusal is deterministic in the book it was handed, so it
+            // joins `Encode` as an input the host must change — never `Seam`,
+            // whose retry would never converge.
+            ContactStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
+            // A rejected binding, and a stored book this build cannot read: both
+            // are fail-closed trust verdicts, not outages a host should retry.
+            other => EngineError::TrustViolation {
+                message: other.to_string(),
             },
         }
     }
@@ -1481,32 +1506,6 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
     Ok(())
 }
 
-/// Whether a rotation failure's own classifier calls it retryable — the input to
-/// the caller-side bound every rotation arm runs under
-/// ([`Engine::bounded_rotation`]).
-trait RetryableRotation {
-    fn is_retryable(&self) -> bool;
-}
-
-impl RetryableRotation for RotateError {
-    fn is_retryable(&self) -> bool {
-        RotateError::is_retryable(self)
-    }
-}
-
-impl RetryableRotation for RotateOnCutError {
-    fn is_retryable(&self) -> bool {
-        RotateOnCutError::is_retryable(self)
-    }
-}
-
-/// The entries of `index` whose scope roots sit inside `node`'s subtree — the
-/// descendant scopes a grant at `node` reparents into the fresh scope.
-///
-/// Fail-closed on an entry the rendered view cannot place: leaving a live scope
-/// root indexed under a scope that no longer contains it is a descendant the
-/// eager cascade never reaches, which is a silent revocation hole rather than a
-/// stale bookmark.
 /// The owner rotation arm over one engine's seam family.
 type OwnerNet<'a, T> = OwnerRotationNet<
     'a,
@@ -1518,6 +1517,15 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     Box<dyn Entropy>,
 >;
 
+/// A scope root's opaque `ipnsName` bytes as a parsed name, on the resolve
+/// path's own definition of parseable. An address this build cannot read is a
+/// refusal of the bytes that carried it, never a verdict on their author.
+fn parsed_scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
+    scope_name(ipns_name).map_err(|_| EngineError::MalformedInput {
+        check: "scope-root-name-is-unparseable",
+    })
+}
+
 /// A scope root this session acts on as its owner, and the ancestor node seed a
 /// gated read of an interior one needs. `None` at the vault root, which carries
 /// no ascent link to prove.
@@ -1527,40 +1535,22 @@ struct OwnerScope {
 }
 
 impl OwnerScope {
-    /// `ancestry` carrying this scope's own ancestor seed when it is anchored
-    /// below the vault root — the seed its ascent link is gated against.
-    fn anchored(&self, ancestry: RotationAncestry) -> RotationAncestry {
-        match &self.parent_node_seed {
-            Some(seed) => ancestry.under_parent_node_seed(self.scope.scope_id, seed),
-            None => ancestry,
-        }
-    }
-
-    /// This scope root's current re-seal material, read through the adoption
-    /// gate under the binding its anchor demands.
-    async fn gated<T: SeamTypes>(
-        &self,
-        net: &OwnerNet<'_, T>,
-    ) -> Result<CascadeTarget, ResolveFailure> {
-        match self.parent_node_seed {
-            Some(_) => net.resolve(&self.scope).await,
-            None => net.resolve_vault_root(&self.scope).await,
-        }
+    /// The ancestry a gated read of this scope root runs under: seeded with its
+    /// own ancestor seed when it is anchored below the vault root, which is also
+    /// what tells [`OwnerRotationNet::resolve_anchored`] which binding to prove.
+    fn ancestry(&self) -> RotationAncestry {
+        RotationAncestry::default()
+            .under_parent_node_seed(self.scope.scope_id, self.parent_node_seed.as_deref())
     }
 }
 
-/// A scope root's opaque `ipnsName` bytes as a parsed name. An address this
-/// build cannot parse is a refusal of the bytes that carried it — a garbled
-/// share pointer, or a stored index entry — never a verdict on their author.
-fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
-    core::str::from_utf8(ipns_name)
-        .ok()
-        .and_then(|text| IpnsName::parse(text).ok())
-        .ok_or(EngineError::MalformedInput {
-            check: "scope-root-name-is-unparseable",
-        })
-}
-
+/// The entries of `index` whose scope roots sit inside `node`'s subtree — the
+/// descendant scopes a grant at `node` reparents into the fresh scope.
+///
+/// Fail-closed on an entry the rendered view cannot place: leaving a live scope
+/// root indexed under a scope that no longer contains it is a descendant the
+/// eager cascade never reaches, which is a silent revocation hole rather than a
+/// stale bookmark.
 fn subtree_child_scopes(
     rendered: &Snapshot,
     node: NodeId,
@@ -1574,7 +1564,7 @@ fn subtree_child_scopes(
                 check: "grant-cannot-place-a-child-scope",
             });
         }
-        if scope_root == node || rendered.ancestors(scope_root).contains(&node) {
+        if scope_root == node || rendered.is_descendant_of(scope_root, node) {
             inside.push(child.clone());
         }
     }
@@ -2059,16 +2049,6 @@ type SweepTaskFactory = Rc<dyn Fn([u8; 16]) -> BoxedTask>;
 /// is an open edge (blueprint/engine.md "Open edges"), so the task rides
 /// [`SyncTimingProfile::poll_cadence`] until it lands in the profile.
 const SWEEP_MAX_PASSES: u32 = 3;
-
-/// How many times a rotation arm re-drives a verdict its own classifier calls
-/// retryable before it reports a terminal failure.
-///
-/// A `ConflictingChildLabel` converges once the write-rotation re-point wave
-/// repairs both parent indexes, but a permanent or adversarial disagreement
-/// never self-heals — an unbounded caller would livelock on it, so the bound is
-/// the caller-contract half of that retryable verdict
-/// ([`ResolveFailure::ConflictingChildLabel`]).
-const MAX_ROTATION_ATTEMPTS: u32 = 3;
 
 /// The engine — the single stateful brain behind the facade.
 ///
@@ -2744,11 +2724,9 @@ where {
     /// once its cut is durable (blueprint/engine.md "Rotation primitives:
     /// sweep").
     ///
-    /// Built here rather than at the rotation, for the reason
-    /// [`build_tick_loop_spawner`](Self::build_tick_loop_spawner) is: a spawned
-    /// task is `'static`, and the command path this is consumed from holds
-    /// narrower seam bounds. `None` when there is no session to derive the
-    /// owner's two rotation seeds from.
+    /// Built here for the reason
+    /// [`build_tick_loop_spawner`](Self::build_tick_loop_spawner) is. `None`
+    /// when there is no session to derive the owner's two rotation seeds from.
     fn build_sweep_task_factory(
         &self,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
@@ -3287,31 +3265,7 @@ where {
                 .record(&contact_code)
                 .await
                 .map(CommandOutcome::ContactImported)
-                .map_err(|err| match err {
-                    ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
-                        EngineError::MalformedInput { check: e.check() }
-                    }
-                    ContactStoreError::Full => EngineError::MalformedInput {
-                        check: "contact-book-full",
-                    },
-                    ContactStoreError::Encode(_) => EngineError::MalformedInput {
-                        check: "contact-book-unstorable",
-                    },
-                    ContactStoreError::Seam(e) => EngineError::Seam {
-                        message: e.message().to_owned(),
-                    },
-                    ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
-                    // A seal refusal is deterministic in the book it was handed,
-                    // so it joins `Encode` as an input the host must change —
-                    // never `Seam`, whose retry would never converge.
-                    ContactStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
-                    // A rejected binding, and a stored book this build
-                    // cannot read: both are fail-closed trust verdicts, not
-                    // outages a host should retry.
-                    other => EngineError::TrustViolation {
-                        message: other.to_string(),
-                    },
-                })
+                .map_err(EngineError::from_contact_store)
             }
             Command::CreateInviteLink { node, permission } => self
                 .create_invite_link(node, permission)
@@ -3332,12 +3286,10 @@ where {
                 .revoke_grant(node, &recipient_identity_public_key)
                 .await
                 .map(|()| CommandOutcome::Done),
-            // A downgrade cuts the write plane only, so nothing publishes the
-            // demoted commitment before the wave re-mints the grant set from the
-            // record it re-reads — and the wave refuses a set that is not the one
-            // it was authorized over. The pre-wave re-seal that would publish it
-            // is not implemented, so the arm refuses rather than driving a
-            // rotation that can only end in a permanent publish rejection.
+            // A downgrade cuts the write plane only, and the wave re-mints the
+            // grant set from a record still carrying the pre-cut commitment. The
+            // pre-wave re-seal that would publish the demoted set is not
+            // implemented.
             Command::Downgrade { .. } => Err(EngineError::UnsupportedTarget {
                 check: "downgrade-needs-a-pre-wave-reseal",
             }),
@@ -3382,7 +3334,12 @@ where {
     ) -> Result<MintedInviteLink, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let scope = self.root_scope(node, "invite-target-is-not-a-scope-root")?;
+        if node.0 != self.snapshot.borrow().root.0 {
+            return Err(EngineError::UnsupportedTarget {
+                check: "invite-target-is-not-a-scope-root",
+            });
+        }
+        let scope = self.vault_root_scope()?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let net = self.owner_rotation_net(
@@ -3423,24 +3380,17 @@ where {
     }
 
     /// The vault root's scope reference: its scope id and the `ipnsName` the
-    /// session's write scope seed derives.
-    ///
-    /// The engine holds no node-to-scope mapping, so a node below the root names
-    /// no scope root an invite can be anchored at — a grant there mints the scope
-    /// first. `check` names the rule for the command that asked.
-    fn root_scope(&self, node: NodeId, check: &'static str) -> Result<ChildScopeRef, EngineError> {
-        if node.0 != self.snapshot.borrow().root.0 {
-            return Err(EngineError::UnsupportedTarget { check });
-        }
-        self.vault_root_scope()
-    }
-
-    /// The vault root's own scope reference.
+    /// session's write scope seed derives it at.
     fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
         let scope_id = self.snapshot.borrow().root.0;
+        let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
+            EngineError::ContentUnavailable {
+                message: "no write scope seed is held for the vault root".to_owned(),
+            },
+        )?;
         Ok(ChildScopeRef::new(
             scope_id,
-            self.root_scope_name(&scope_id)?
+            derive_write_name(&write_scope_seed, &scope_id)
                 .as_str()
                 .as_bytes()
                 .to_vec(),
@@ -3492,16 +3442,6 @@ where {
         })
     }
 
-    /// The `ipnsName` a scope root in this session's write plane lives at.
-    fn root_scope_name(&self, scope_id: &[u8; 16]) -> Result<IpnsName, EngineError> {
-        let write_scope_seed = cached_seed(&self.scope_write_seeds, scope_id).ok_or(
-            EngineError::ContentUnavailable {
-                message: "no write scope seed is held for the vault root".to_owned(),
-            },
-        )?;
-        Ok(derive_write_name(&write_scope_seed, scope_id))
-    }
-
     /// The owner rotation arm over this session's seams.
     #[allow(clippy::type_complexity)]
     fn owner_rotation_net<'a>(
@@ -3529,9 +3469,8 @@ where {
         }
     }
 
-    /// The sweep-task factory [`start`](Self::start) built. Absent once the
-    /// engine has torn its session material down, which is the same condition
-    /// every other command reports as [`EngineError::NotStarted`].
+    /// The sweep-task factory [`start`](Self::start) built, absent once the
+    /// engine has torn its session material down.
     fn sweep_factory(&self) -> Result<SweepTaskFactory, EngineError> {
         self.sweep_tasks
             .borrow()
@@ -3564,52 +3503,29 @@ where {
             &identity_pk,
         )
         .await
-        .map_err(|err| match err {
-            ContactStoreError::RecipientNotImported => EngineError::MalformedInput {
-                check: "recipient-not-imported",
-            },
-            ContactStoreError::Seam(e) => EngineError::Seam {
-                message: e.message().to_owned(),
-            },
-            ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
-            other => EngineError::TrustViolation {
-                message: other.to_string(),
-            },
-        })
+        .map_err(EngineError::from_contact_store)
     }
 
-    /// Re-drive `attempt` while its own classifier calls the failure retryable,
-    /// bounded at [`MAX_ROTATION_ATTEMPTS`].
-    ///
-    /// A permanent or adversarial `ConflictingChildLabel` is retryable and never
-    /// self-heals, so an unbounded caller would livelock on it; the bound turns
-    /// it into a terminal failure the host is told about. Attempts are spaced on
-    /// the injected scheduler, never a clock this layer reads.
-    async fn bounded_rotation<V, E, A>(&self, mut attempt: A) -> Result<V, E>
+    /// Re-drive `attempt` under the rotation caller contract's bound
+    /// ([`bounded`]), spaced on this session's poll cadence.
+    async fn bounded_rotation<V, E, A>(&self, attempt: A) -> Result<V, E>
     where
         A: AsyncFnMut() -> Result<V, E>,
-        E: RetryableRotation,
+        E: Retryable,
     {
-        let mut attempts = 1u32;
-        loop {
-            match attempt().await {
-                Err(e) if e.is_retryable() && attempts < MAX_ROTATION_ATTEMPTS => {
-                    attempts += 1;
-                    self.seams.scheduler.sleep(self.profile.poll_cadence).await;
-                }
-                settled => return settled,
-            }
-        }
+        bounded(
+            &self.seams.scheduler,
+            self.profile.poll_cadence,
+            MAX_ROTATION_ATTEMPTS,
+            attempt,
+        )
+        .await
     }
 
     /// Manual hygiene rotate-now over the vault root's scope
     /// (blueprint/engine.md "Triggers": manual rotations re-seal the
     /// **unchanged** committed set, so this is the flat root cut, not the
     /// revocation cascade).
-    ///
-    /// A scope already at the epoch this session last adopted still rotates: a
-    /// hygiene rotation's whole point is a fresh seed, so there is no
-    /// already-current state for it to no-op on.
     async fn rotate_now(&self, node: NodeId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -3626,14 +3542,9 @@ where {
             .await?;
 
         self.bounded_rotation(async || {
-            let net = self.owner_rotation_net(
-                api,
-                owner_keys(),
-                target.anchored(RotationAncestry::default()),
-                None,
-            );
-            let current = target
-                .gated::<T>(&net)
+            let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+            let current = net
+                .resolve_anchored(&target.scope)
                 .await
                 .map_err(RotateError::Resolve)?;
             rotate_scope(
@@ -3707,15 +3618,10 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), "revoke-target-is-not-a-scope-root")
             .await?;
-        let scope_root_name = scope_name(&target.scope.ipns_name)?;
-        let net = self.owner_rotation_net(
-            api,
-            owner_keys(),
-            target.anchored(RotationAncestry::default()),
-            None,
-        );
-        let current = target
-            .gated::<T>(&net)
+        let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
+        let current = self
+            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .resolve_anchored(&target.scope)
             .await
             .map_err(EngineError::from_resolve_failure)?;
 
@@ -3756,22 +3662,20 @@ where {
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             entropy: &self.entropy,
-            enc_secret: session.enc_subkey(),
-            owner_identity: &owner_identity,
+            keys: owner_keys(),
             owner_signer: session.identity(),
-            scope_keys: &scope_keys,
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.snapshot.borrow().root.0,
-            sweep: &|scope_id| sweep(scope_id),
+            sweep: &*sweep,
         };
         self.bounded_rotation(async || rotate_on_cut(&rotator, node, &cut).await)
             .await
             .map(|_| ())
-            .map_err(EngineError::from_rotate_on_cut)
+            .map_err(EngineError::from_rotation)
     }
 
     /// Grant a node inside the vault root's scope to an imported contact:
@@ -3851,10 +3755,6 @@ where {
             });
         }
 
-        // The descendant scope roots the granted node takes with it. Fail-closed
-        // on one the rendered view cannot place: leaving it indexed under a scope
-        // that no longer contains it is a descendant the eager cascade never
-        // reaches — a silent revocation hole.
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
 
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
@@ -3954,7 +3854,7 @@ where {
             .await?;
         let pointer = SharePointer::decode(&item.payload)
             .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        let name = scope_name(&pointer.scope_root_name)?;
+        let name = parsed_scope_name(&pointer.scope_root_name)?;
         let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
             .await
             .ok_or(EngineError::ContentUnavailable {
@@ -5206,7 +5106,6 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
-    use core::task::{Context, Poll, Waker};
     use serde_json::{Value, json};
 
     use cipherbox_core::ipns::IpnsRecord;
@@ -6327,110 +6226,6 @@ mod tests {
                 check: "share-pointer-is-not-on-this-inbox"
             }),
         );
-    }
-
-    // --- the bounded-retry caller contract on a retryable rotation verdict ---
-
-    /// Drives `rotation` to completion against `world`'s virtual clock, which
-    /// is what wakes the spacing between attempts.
-    fn settle_rotation<V, E>(
-        world: &FakeWorld,
-        rotation: impl Future<Output = Result<V, E>>,
-    ) -> Result<V, E> {
-        let mut rotation = core::pin::pin!(rotation);
-        let mut cx = Context::from_waker(Waker::noop());
-        for _ in 0..(MAX_ROTATION_ATTEMPTS + 2) {
-            if let Poll::Ready(settled) = rotation.as_mut().poll(&mut cx) {
-                return settled;
-            }
-            world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
-        }
-        panic!("the rotation never settled inside its own retry bound");
-    }
-
-    fn retrying_engine(world: &FakeWorld) -> Engine<FakeSeamTypes> {
-        let device = world.device(b"alice-pk");
-        let (mut engine, _events) = Engine::new(
-            device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
-            SyncTimingProfile::CI,
-            ContentProfile::CI,
-            StoragePolicy::CI,
-            ApiBaseUrl::offline(),
-            GatewayConfig::disabled(),
-        );
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("cold start");
-        engine
-    }
-
-    /// A cross-parent label disagreement is classified retryable because the
-    /// re-point wave repairs it — but a permanent one never self-heals, so an
-    /// unbounded caller would spin on it forever. The bound is what turns it
-    /// into a terminal failure the host is told about.
-    #[test]
-    fn a_permanent_label_conflict_stops_at_the_retry_bound() {
-        let world = FakeWorld::new();
-        let engine = retrying_engine(&world);
-        let attempts = Cell::new(0u32);
-        let conflict = RotateError::Resolve(ResolveFailure::ConflictingChildLabel);
-
-        let settled = settle_rotation(
-            &world,
-            engine.bounded_rotation(async || {
-                attempts.set(attempts.get() + 1);
-                Err::<(), RotateError>(conflict.clone())
-            }),
-        );
-
-        assert_eq!(settled, Err(conflict), "the caller surfaces the verdict");
-        assert_eq!(
-            attempts.get(),
-            MAX_ROTATION_ATTEMPTS,
-            "the bound is what ends the livelock, not the verdict itself"
-        );
-    }
-
-    /// A gate rejection is a trust verdict no retry can clear, so it is
-    /// surfaced on the first attempt rather than spent against the bound.
-    #[test]
-    fn a_rejected_record_is_never_retried() {
-        let world = FakeWorld::new();
-        let engine = retrying_engine(&world);
-        let attempts = Cell::new(0u32);
-
-        let settled = settle_rotation(
-            &world,
-            engine.bounded_rotation(async || {
-                attempts.set(attempts.get() + 1);
-                Err::<(), RotateError>(RotateError::Resolve(ResolveFailure::Rejected))
-            }),
-        );
-
-        assert!(settled.is_err());
-        assert_eq!(attempts.get(), 1, "a trust verdict is not an outage");
-    }
-
-    /// A stall that clears inside the bound converges rather than failing: the
-    /// bound caps a livelock, it does not cap recovery.
-    #[test]
-    fn a_transient_stall_converges_inside_the_retry_bound() {
-        let world = FakeWorld::new();
-        let engine = retrying_engine(&world);
-        let attempts = Cell::new(0u32);
-
-        let settled = settle_rotation(
-            &world,
-            engine.bounded_rotation(async || {
-                attempts.set(attempts.get() + 1);
-                match attempts.get() {
-                    1 => Err(RotateError::Resolve(ResolveFailure::Unavailable)),
-                    _ => Ok(()),
-                }
-            }),
-        );
-
-        assert_eq!(settled, Ok(()));
-        assert_eq!(attempts.get(), 2);
     }
 
     #[test]

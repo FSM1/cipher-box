@@ -11,9 +11,8 @@ use core::cell::RefCell;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ChildScopeRef;
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::secret::SECRET_LEN;
-use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::api::ApiClient;
 use crate::content::Gateway;
@@ -21,15 +20,14 @@ use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::net::rotation::{
-    GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, OwnerScopeKeys,
-    RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
+    GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, RotationAncestry,
+    SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
-    CommittedSet, CutRotator, ResolveFailure, RevokedCommittedSet, RotateScopePlan,
-    RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError, WriteRotationOutcome,
-    cascade_rotate_scope, rotate_scope_write,
+    AscentAuthority, CascadeError, CascadeOutcome, CommittedSet, CutRotator, ResolveFailure,
+    RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity,
+    WriteRotateError, WriteRotationOutcome, cascade_rotate_scope, rotate_scope_write,
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -39,34 +37,21 @@ use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport
 /// authorized against, and a cut naming any other scope is refused before a
 /// resolve ([`Self::scope`]).
 pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
-    /// The record-plane transport: fan-out GET for the read, CAS PUT for the
-    /// publish.
+    // The seam bundle both planes run on; see the identically-named fields of
+    // [`OwnerRotationNet`].
     pub transport: &'a T,
-    /// The API client: register-first, the head-block upload, and retirement.
     pub api: &'a ApiClient<H, C>,
-    /// Content read sources for the head block.
     pub gateway: &'a Gateway,
-    /// The HTTP seam the content fetch rides.
     pub http: &'a H,
-    /// The durable floors the adoption gate reads and advances.
     pub floors: &'a F,
-    /// The scheduler the publish pipeline's background re-PUT and the cut's
-    /// lazy-wave sweep ride.
     pub scheduler: &'a Sch,
-    /// The publish pipeline's timing policy.
     pub profile: &'a SyncTimingProfile,
-    /// Injected entropy — the per-seal nonce source (determinism law).
     pub entropy: &'a RefCell<E>,
-    /// Opens each scope root's owner blob, and the owner-blob recipient every
-    /// re-seal wraps to.
-    pub enc_secret: &'a X25519Secret,
-    /// The owner-trust anchor the adoption gate checks each gated read against.
-    pub owner_identity: &'a EcdsaVerifier,
+    /// The owner material both planes re-seal under.
+    pub keys: OwnerRotationKeys<'a>,
     /// The owner identity signer: the write wave's owner-only gate verifies it
     /// against the authorized commitment, and it signs the re-point object.
     pub owner_signer: &'a EcdsaSigner,
-    /// The two per-scope derivations a re-seal needs, and no wider capability.
-    pub scope_keys: &'a dyn OwnerScopeKeys,
     /// Derives the scope pointer's name and its record signer (owner-only).
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
     /// The pointer-payload envelope version.
@@ -109,17 +94,10 @@ where
         ))
     }
 
-    /// `ancestry` carrying this cut's own ancestor seed when it is anchored
-    /// below the vault root.
-    fn anchored(&self, ancestry: RotationAncestry) -> RotationAncestry {
-        match self.parent_node_seed {
-            Some(seed) => ancestry.under_parent_node_seed(self.scope_id, seed),
-            None => ancestry,
-        }
-    }
-
-    /// A rotation net over this cut's seams, carrying `ancestry`.
-    fn rotation_net(&self, ancestry: RotationAncestry) -> OwnerRotationNet<'_, T, H, C, F, Sch, E> {
+    /// A rotation net over this cut's seams, anchored at this cut's own scope —
+    /// which is what decides the binding a gated root read must prove
+    /// ([`OwnerRotationNet::resolve_anchored`]).
+    fn rotation_net(&self) -> OwnerRotationNet<'_, T, H, C, F, Sch, E> {
         OwnerRotationNet {
             transport: self.transport,
             api: self.api,
@@ -130,26 +108,16 @@ where
             profile: self.profile,
             entropy: self.entropy,
             keys: OwnerRotationKeys {
-                enc_secret: self.enc_secret,
-                identity: self.owner_identity,
-                scope_keys: self.scope_keys,
+                enc_secret: self.keys.enc_secret,
+                identity: self.keys.identity,
+                scope_keys: self.keys.scope_keys,
             },
-            ancestry,
+            ancestry: RotationAncestry::default()
+                .under_parent_node_seed(self.scope_id, self.parent_node_seed),
             owner_pointer_seed: Some(self.owner_pointer_seed),
             payload_version: self.payload_version,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
-        }
-    }
-
-    /// The scope root's current re-seal material, read through the adoption
-    /// gate under the caller's own label and the binding its anchor demands: an
-    /// interior root must prove its ascent link, the vault root has none.
-    async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
-        let net = self.rotation_net(self.anchored(RotationAncestry::default()));
-        match self.parent_node_seed {
-            Some(_) => net.resolve(scope).await,
-            None => net.resolve_vault_root(scope).await,
         }
     }
 }
@@ -171,16 +139,13 @@ where
             reason,
         };
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
-        let current = self.resolve(&scope).await.map_err(resolve_failed)?;
-
-        // The descendants' published ascent links were sealed under the root's
-        // pre-cut seed, so the walk gates each level under that seed, not the
-        // fresh one the cascade is about to mint.
-        let net = self.rotation_net(self.anchored(RotationAncestry::rooted_at(
-            scope_root.0,
-            &current.override_seed,
-            &current.direct_child_scope_index,
-        )));
+        // The gated read records the root's pre-cut seed and child index in this
+        // net's own ancestry, which is what the walk gates each descendant under
+        // — their published ascent links were sealed under that seed, not the
+        // fresh one the cascade is about to mint. It also parks the republish
+        // base the root's own publish then takes.
+        let net = self.rotation_net();
+        let current = net.resolve_anchored(&scope).await.map_err(resolve_failed)?;
         cascade_rotate_scope(
             &mut SharedEntropy(self.entropy),
             self.floors,
@@ -193,7 +158,7 @@ where
                     scope_id: scope_root.0,
                     ipns_name: self.scope_root_name.as_str().as_bytes(),
                     owner_enc_pub: &current.owner_enc_pub,
-                    owner_enc_secret: Some(self.enc_secret),
+                    owner_enc_secret: Some(self.keys.enc_secret),
                     ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
                     owes_ascent_link: current.carried_ascent_link,
                     pseudonym_signer: &current.pseudonym_signer,
@@ -232,7 +197,11 @@ where
         let scope = self.scope(scope_root).map_err(resolve_failed)?;
         // Re-read after the read arm: a full revoke re-keyed the scope, and the
         // wave derives every per-node read key from the seed that cut published.
-        let current = self.resolve(&scope).await.map_err(resolve_failed)?;
+        let current = self
+            .rotation_net()
+            .resolve_anchored(&scope)
+            .await
+            .map_err(resolve_failed)?;
         // The durable floor is the owner-vouched `minReadEpoch` the re-point
         // carries; a scope that has never been rotated has none, and its record's
         // own epoch is the floor a reader would derive.
@@ -254,8 +223,8 @@ where
             read_scope_seed: &current.override_seed,
             parent_node_seed: self.parent_node_seed,
             owner: self.owner_signer,
-            owner_enc_secret: self.enc_secret,
-            scope_keys: self.scope_keys,
+            owner_enc_secret: self.keys.enc_secret,
+            scope_keys: self.keys.scope_keys,
             authorized_commitment: &cut.commitment,
             owner_pointer_seed: self.owner_pointer_seed,
             payload_version: self.payload_version,

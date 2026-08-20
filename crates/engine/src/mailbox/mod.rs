@@ -25,7 +25,7 @@ use cipherbox_core::payload::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::seams::{Mailbox, SeamError, SeamResult};
+use crate::seams::{Mailbox, MailboxItem, SeamError, SeamResult};
 
 /// The transport's sealed-payload bound (API `PostMessageDto`).
 const MAX_SEALED_BYTES: usize = 8192;
@@ -108,30 +108,36 @@ pub async fn poll_verified<M: Mailbox>(
     my_enc_secret: &X25519Secret,
     v: u64,
 ) -> SeamResult<Vec<VerifiedMailboxItem>> {
-    let pending = mailbox.poll().await?;
-    let mut verified = Vec::new();
-    for item in pending {
-        // A failed open/verify is a fail-closed drop, never an error that stalls
-        // the poll: one hostile blob must not deny delivery of the honest ones.
-        if let Ok(opened) = open_mailbox_payload(my_enc_secret, v, &item.sealed_payload) {
-            verified.push(VerifiedMailboxItem {
-                item_id: item.item_id,
-                sender_identity: opened.sender_identity,
-                payload: opened.payload,
-            });
-        }
-    }
-    Ok(verified)
+    Ok(mailbox
+        .poll()
+        .await?
+        .into_iter()
+        .filter_map(|item| verified(my_enc_secret, v, item))
+        .collect())
+}
+
+/// Open and sender-verify one polled item, or drop it.
+///
+/// A failed open/verify is a fail-closed drop, never an error that stalls the
+/// poll: one hostile blob must not deny delivery of the honest ones.
+fn verified(
+    my_enc_secret: &X25519Secret,
+    v: u64,
+    item: MailboxItem,
+) -> Option<VerifiedMailboxItem> {
+    let opened = open_mailbox_payload(my_enc_secret, v, &item.sealed_payload).ok()?;
+    Some(VerifiedMailboxItem {
+        item_id: item.item_id,
+        sender_identity: opened.sender_identity,
+        payload: opened.payload,
+    })
 }
 
 /// The sender-authenticated inbox item carrying exactly `sealed`, if the inbox
 /// still holds it.
 ///
-/// The accept flow acks by transport id and the engine acks only after the fact
-/// is durable, so a pointer the inbox no longer holds cannot be accepted: it
-/// would leave nothing to ack and an at-least-once redelivery with no matching
-/// item. Same drop-before-resolve rule as [`poll_verified`] — an item that does
-/// not open or verify is never a match.
+/// The accept flow acks by transport id, so a pointer the inbox no longer holds
+/// cannot be accepted. Same drop-before-resolve rule as [`poll_verified`].
 pub async fn locate_verified<M: Mailbox>(
     mailbox: &M,
     my_enc_secret: &X25519Secret,
@@ -143,15 +149,7 @@ pub async fn locate_verified<M: Mailbox>(
         .await?
         .into_iter()
         .filter(|item| item.sealed_payload == sealed)
-        .find_map(|item| {
-            open_mailbox_payload(my_enc_secret, v, &item.sealed_payload)
-                .ok()
-                .map(|opened| VerifiedMailboxItem {
-                    item_id: item.item_id,
-                    sender_identity: opened.sender_identity,
-                    payload: opened.payload,
-                })
-        }))
+        .find_map(|item| verified(my_enc_secret, v, item)))
 }
 
 #[cfg(test)]

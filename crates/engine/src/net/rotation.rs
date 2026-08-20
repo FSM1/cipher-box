@@ -238,14 +238,19 @@ impl RotationAncestry {
     /// Supply the **rotating root's own** ancestor node seed. Required whenever
     /// the rotation is anchored at an interior scope root — a revoke or
     /// scope-exit on a shared folder — whose record carries an ascent link the
-    /// gate verifies against a reader-derived keypair. A vault root carries no
-    /// ascent link and needs none.
+    /// gate verifies against a reader-derived keypair. `None` is the vault root,
+    /// which carries no ascent link and needs none.
+    ///
+    /// The seed is also what [`OwnerRotationNet::resolve_anchored`] reads to pick
+    /// the binding a gated root read runs under, so the two cannot disagree.
     pub fn under_parent_node_seed(
         self,
         scope_id: [u8; 16],
-        parent_node_seed: &[u8; SECRET_LEN],
+        parent_node_seed: Option<&[u8; SECRET_LEN]>,
     ) -> Self {
-        self.inner.borrow_mut().root = Some((scope_id, Zeroizing::new(*parent_node_seed)));
+        if let Some(seed) = parent_node_seed {
+            self.inner.borrow_mut().root = Some((scope_id, Zeroizing::new(*seed)));
+        }
         self
     }
 
@@ -334,7 +339,7 @@ struct GatedWritePlane {
 /// Parse a `ChildScopeRef`'s opaque `ipnsName` bytes. A name that is not a
 /// canonical IPNS name has no verifying key to gate against, so it is a
 /// fail-closed rejection rather than an availability stall.
-fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, ResolveFailure> {
+pub(crate) fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, ResolveFailure> {
     core::str::from_utf8(ipns_name)
         .ok()
         .and_then(|text| IpnsName::parse(text).ok())
@@ -660,6 +665,21 @@ where
         scope: &ChildScopeRef,
     ) -> Result<CascadeTarget, ResolveFailure> {
         self.resolve_at(scope, RootAnchor::VaultRoot).await
+    }
+
+    /// The same gated read under the binding this net's own ancestry implies: a
+    /// root it holds an ancestor seed for is an interior one, which must prove
+    /// its ascent link; a root it holds none for is the vault root, which carries
+    /// none. Reading the anchor off the seed is what keeps the label and the
+    /// ascent authority from drifting apart ([`Self::root_adopter`]).
+    pub(crate) async fn resolve_anchored(
+        &self,
+        scope: &ChildScopeRef,
+    ) -> Result<CascadeTarget, ResolveFailure> {
+        match self.ancestry.parent_node_seed(&scope.scope_id) {
+            Some(_) => self.resolve_at(scope, RootAnchor::Descendant).await,
+            None => self.resolve_at(scope, RootAnchor::VaultRoot).await,
+        }
     }
 
     async fn resolve_at(
@@ -3544,7 +3564,7 @@ mod tests {
             harness
                 .net_rooted(
                     RotationAncestry::default()
-                        .under_parent_node_seed(CHILD_SCOPE, &parent_node_seed),
+                        .under_parent_node_seed(CHILD_SCOPE, Some(&parent_node_seed)),
                 )
                 .publish_scope_root(&cut),
         )
@@ -5112,7 +5132,7 @@ mod tests {
                 let parent_node_seed = grantee_parent_node_seed();
                 let net = harness.net_rooted(
                     RotationAncestry::default()
-                        .under_parent_node_seed(GRANTEE_SCOPE, &parent_node_seed),
+                        .under_parent_node_seed(GRANTEE_SCOPE, Some(&parent_node_seed)),
                 );
                 let mut entropy = SeededEntropy::new(31);
                 block_on(rotate_scope(
@@ -7671,7 +7691,7 @@ mod tests {
         assert!(honest.parent_node_seed(&child).is_some());
         assert!(
             planted
-                .under_parent_node_seed(SCOPE, &SWEPT_SEED)
+                .under_parent_node_seed(SCOPE, Some(&SWEPT_SEED))
                 .parent_node_seed(&SCOPE)
                 .is_some()
         );

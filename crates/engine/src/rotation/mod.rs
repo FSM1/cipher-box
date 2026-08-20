@@ -34,12 +34,13 @@
 //! [`ChildIndexResolver`], [`CascadeResealResolver`], [`ScopeRootPublisher`],
 //! [`ScopeExitRotator`], [`SweepResolver`], [`SweepPublisher`],
 //! [`WriteSubtreeResolver`] and [`WriteWavePublisher`] have production
-//! implementations over the real transport in [`crate::net::rotation`].
-//! [`CutRotator`] has no production implementation yet; tests fake it.
+//! implementations over the real transport in [`crate::net::rotation`], and
+//! [`CutRotator`] in [`crate::net::cut`].
 
 pub mod cascade;
 pub mod eager_set;
 pub mod reseal;
+pub mod retry;
 pub mod rotate;
 pub mod rotate_write;
 pub mod sweep;
@@ -56,6 +57,7 @@ pub use reseal::{
     AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
     WriteHistory, reseal_scope_root, seed_at_epoch,
 };
+pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
     ScopeRootPublisher, rotate_scope,

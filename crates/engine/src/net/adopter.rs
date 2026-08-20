@@ -193,6 +193,8 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
 }
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// [`assemble_candidate`] over this adopter's own gateway, HTTP seam, and
+    /// held local head.
     async fn assemble_candidate(
         &self,
         name: &IpnsName,
