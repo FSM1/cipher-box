@@ -29,7 +29,9 @@
 use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::check_bearer;
-use cipherbox_engine::{Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy};
+use cipherbox_engine::{
+    AcceptOutcome, Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy,
+};
 use core::num::NonZeroU64;
 use wasm_bindgen::prelude::*;
 use zeroize::{Zeroize, Zeroizing};
@@ -149,6 +151,15 @@ impl From<Permission> for facade::Permission {
         match permission {
             Permission::Read => facade::Permission::Read,
             Permission::Write => facade::Permission::Write,
+        }
+    }
+}
+
+impl From<facade::Permission> for Permission {
+    fn from(permission: facade::Permission) -> Self {
+        match permission {
+            facade::Permission::Read => Permission::Read,
+            facade::Permission::Write => Permission::Write,
         }
     }
 }
@@ -429,6 +440,7 @@ impl CommandOutcome {
             facade::CommandOutcome::Queued { .. } => "queued",
             facade::CommandOutcome::ContactImported(_) => "contactImported",
             facade::CommandOutcome::InviteLinkMinted(_) => "inviteLinkMinted",
+            facade::CommandOutcome::ShareAccepted(_) => "shareAccepted",
         }
         .to_owned()
     }
@@ -487,6 +499,35 @@ impl CommandOutcome {
     pub fn is_bearer_write(&self) -> Option<bool> {
         self.link().map(|link| link.capability.is_bearer_write())
     }
+
+    /// `shareAccepted`: the accepted scope's raw 16-byte id, the same
+    /// `NodeId.bytes` shape a command names it by; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = scopeId)]
+    pub fn scope_id(&self) -> Option<Vec<u8>> {
+        self.share().map(|share| share.scope_id.to_vec())
+    }
+
+    /// `shareAccepted`: the record sequence the accept adopted, which the
+    /// strict-sequence floor now holds; otherwise `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn sequence(&self) -> Option<u64> {
+        self.share().map(|share| share.sequence)
+    }
+
+    /// `shareAccepted`: the **owner-committed** permission, never the share
+    /// pointer's claim; otherwise `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Option<Permission> {
+        self.share()
+            .map(|share| facade::Permission::from(share.permission).into())
+    }
+
+    /// `shareAccepted`: whether this accept added a new bookmark rather than
+    /// refreshing one the vault already held; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = newlyAdded)]
+    pub fn newly_added(&self) -> Option<bool> {
+        self.share().map(|share| share.newly_added)
+    }
 }
 
 impl CommandOutcome {
@@ -505,6 +546,13 @@ impl CommandOutcome {
     fn contact(&self) -> Option<&Contact> {
         match &self.inner {
             facade::CommandOutcome::ContactImported(contact) => Some(contact),
+            _ => None,
+        }
+    }
+
+    fn share(&self) -> Option<&AcceptOutcome> {
+        match &self.inner {
+            facade::CommandOutcome::ShareAccepted(share) => Some(share),
             _ => None,
         }
     }

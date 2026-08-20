@@ -547,6 +547,17 @@ pub enum RotateOnCutError {
     Write(WriteRotateError),
 }
 
+impl core::fmt::Display for RotateOnCutError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
+            RotateOnCutError::Write(e) => write!(f, "write-plane wave failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for RotateOnCutError {}
+
 impl RotateOnCutError {
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {

@@ -1,8 +1,9 @@
 //! The owner's production [`OwnerScopeKeys`] arm over the session identity
 //! (blueprint/engine.md "Rotation primitives").
 
+use cipherbox_core::kdf;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 use crate::net::rotation::OwnerScopeKeys;
@@ -31,6 +32,41 @@ impl OwnerScopeKeys for OwnerSessionKeys<'_> {
 
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*self.session.pointer_read_key(scope_id).as_bytes())
+    }
+}
+
+/// The same two derivations over **owned** seeds, for the spawned sweep task,
+/// which is polled after every borrow of the session has ended.
+///
+/// Two seeds and no wider capability: the login secret and the identity signer
+/// stay behind. It also carries the `ownerPointerSeed` itself, which the sweep's
+/// pointer consult needs to derive a superseded root's scope-pointer name.
+pub(crate) struct OwnerSeedKeys {
+    pseudonym_seed: SecretBytes,
+    pointer_seed: SecretBytes,
+}
+
+impl OwnerSeedKeys {
+    pub(crate) fn of(session: &SessionIdentity) -> Self {
+        Self {
+            pseudonym_seed: session.owner_pseudonym_seed(),
+            pointer_seed: session.owner_pointer_seed(),
+        }
+    }
+
+    /// The scope-pointer derivation input the sweep's consult needs.
+    pub(crate) fn pointer_seed(&self) -> &[u8; SECRET_LEN] {
+        self.pointer_seed.as_bytes()
+    }
+}
+
+impl OwnerScopeKeys for OwnerSeedKeys {
+    fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+        kdf::pseudonym_sign(self.pseudonym_seed.as_bytes(), scope_id)
+    }
+
+    fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
+        Zeroizing::new(*kdf::pointer_read_key(self.pointer_seed.as_bytes(), scope_id).as_bytes())
     }
 }
 

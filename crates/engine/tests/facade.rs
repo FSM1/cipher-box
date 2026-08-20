@@ -37,10 +37,18 @@ fn secret() -> LoginSecret {
     LoginSecret::new(SECRET.to_vec())
 }
 
-/// Commands whose pipeline slice has not landed: the still-unimplemented
-/// surface. The metadata intent ops (delete/rename/relink and create) are wired
-/// and covered by the inline facade tests.
+/// Commands whose pipeline slice has not landed. The grant, share and rotation
+/// arms are wired and refuse with their own typed verdicts, so only the session
+/// slice is left on the catch-all.
 fn unimplemented_commands() -> Vec<(Command, &'static str)> {
+    vec![(Command::Logout, "logout")]
+}
+
+/// The wired grant, share and rotation arms, each named with the rule that
+/// refuses them on an unprovisioned session — a typed verdict of their own, not
+/// the catch-all. Asserting them here is what keeps the catch-all's remaining
+/// coverage explicit.
+fn wired_owner_commands() -> Vec<(Command, EngineError)> {
     let node = NodeId([1; 16]);
     vec![
         (
@@ -49,30 +57,42 @@ fn unimplemented_commands() -> Vec<(Command, &'static str)> {
                 recipient_identity_public_key: b"bob-pk".to_vec(),
                 permission: Permission::Read,
             },
-            "grant",
+            EngineError::MalformedInput {
+                check: "recipient-identity-key-length",
+            },
         ),
         (
             Command::Revoke {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
             },
-            "revoke",
+            EngineError::UnsupportedTarget {
+                check: "revoke-target-is-not-a-scope-root",
+            },
         ),
         (
             Command::Downgrade {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
             },
-            "downgrade",
+            EngineError::UnsupportedTarget {
+                check: "downgrade-needs-a-pre-wave-reseal",
+            },
         ),
         (
             Command::AcceptShare {
                 sealed_share_pointer: b"sealed-pointer".to_vec(),
             },
-            "acceptShare",
+            EngineError::MalformedInput {
+                check: "share-pointer-is-not-on-this-inbox",
+            },
         ),
-        (Command::RotateNow { node }, "rotateNow"),
-        (Command::Logout, "logout"),
+        (
+            Command::RotateNow { node },
+            EngineError::UnsupportedTarget {
+                check: "rotate-target-is-not-a-scope-root",
+            },
+        ),
     ]
 }
 
@@ -177,6 +197,25 @@ fn unimplemented_commands_return_their_typed_error() {
                 command: expected_name
             }),
             "`{expected_name}` must reject as typed-unimplemented until its slice lands"
+        );
+    }
+}
+
+/// Every grant, share and rotation arm is wired: each refuses with the rule its
+/// own slice names, and none falls through to the typed-unimplemented catch-all.
+#[test]
+fn the_owner_action_arms_refuse_with_their_own_verdicts() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    for (command, expected) in wired_owner_commands() {
+        let name = command.name();
+        assert_eq!(
+            block_on(engine.command(command)),
+            Err(expected),
+            "`{name}` must refuse with its own slice's verdict, never `Unimplemented`",
         );
     }
 }

@@ -124,6 +124,36 @@ pub async fn poll_verified<M: Mailbox>(
     Ok(verified)
 }
 
+/// The sender-authenticated inbox item carrying exactly `sealed`, if the inbox
+/// still holds it.
+///
+/// The accept flow acks by transport id and the engine acks only after the fact
+/// is durable, so a pointer the inbox no longer holds cannot be accepted: it
+/// would leave nothing to ack and an at-least-once redelivery with no matching
+/// item. Same drop-before-resolve rule as [`poll_verified`] — an item that does
+/// not open or verify is never a match.
+pub async fn locate_verified<M: Mailbox>(
+    mailbox: &M,
+    my_enc_secret: &X25519Secret,
+    v: u64,
+    sealed: &[u8],
+) -> SeamResult<Option<VerifiedMailboxItem>> {
+    Ok(mailbox
+        .poll()
+        .await?
+        .into_iter()
+        .filter(|item| item.sealed_payload == sealed)
+        .find_map(|item| {
+            open_mailbox_payload(my_enc_secret, v, &item.sealed_payload)
+                .ok()
+                .map(|opened| VerifiedMailboxItem {
+                    item_id: item.item_id,
+                    sender_identity: opened.sender_identity,
+                    payload: opened.payload,
+                })
+        }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

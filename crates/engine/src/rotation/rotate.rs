@@ -209,6 +209,25 @@ impl RotateError {
             RotateError::EpochExhausted => "epoch-exhausted",
         }
     }
+
+    /// Whether re-running the rotation could clear this failure — an
+    /// availability stall, or a C2 label conflict the re-point wave repairs —
+    /// versus a trust violation no retry can fix. Mirrors
+    /// [`CascadeError::is_retryable`](super::cascade::CascadeError::is_retryable);
+    /// a caller MUST still bound its retries, because a permanent label
+    /// disagreement is retryable and never self-heals.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            RotateError::Resolve(reason) => matches!(
+                reason,
+                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
+            ),
+            RotateError::Reseal(error) => matches!(error, ResealError::Entropy(_)),
+            RotateError::Publish(error) => error.is_retryable(),
+            RotateError::Floor(_) => true,
+            RotateError::EpochExhausted => false,
+        }
+    }
 }
 
 /// The result of a completed read-plane root cut.

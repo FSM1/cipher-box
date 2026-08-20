@@ -140,6 +140,22 @@ impl SessionIdentity {
         kdf::pointer_read_key(self.owner_pointer_seed.as_bytes(), scope_id)
     }
 
+    /// The owner pointer seed itself — the write wave seals its re-point object
+    /// under a key derived from it, and the sweep's pointer consult derives the
+    /// name it reads. Broader than [`Self::pointer_read_key`] (it also derives
+    /// the pointer **signing** key), so in-crate and used only where both halves
+    /// are needed.
+    pub(crate) fn owner_pointer_seed(&self) -> SecretBytes {
+        SecretBytes::new(*self.owner_pointer_seed.as_bytes())
+    }
+
+    /// The owner pseudonym seed (`owner-pseudonym-seed` edge) — the input to
+    /// every per-scope `pseudonym-sign`. Copied out only for a spawned task that
+    /// outlives a borrow of this session ([`crate::owner_keys::OwnerSeedKeys`]).
+    pub(crate) fn owner_pseudonym_seed(&self) -> SecretBytes {
+        SecretBytes::new(*self.owner_pseudonym_seed.as_bytes())
+    }
+
     /// The genesis scope read (override) seed (`genesis-read-scope-seed` edge).
     /// Derived, not drawn, so two mint attempts by one account reproduce one
     /// vault (ADR 0007 D1); every later read seed is drawn at its rotation.

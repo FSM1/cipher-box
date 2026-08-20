@@ -25,6 +25,7 @@ mod pointer_fetch;
 pub const REGISTRY_BATCH_MAX: usize = 1000;
 
 pub mod author;
+pub(crate) mod cut;
 pub mod eol;
 pub mod liveness;
 pub(crate) mod provision;
@@ -37,7 +38,7 @@ pub mod revival;
 pub mod rotation;
 
 pub use adopter::{LocalHead, RootAdopter};
-pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
+pub(crate) use adopter::{assemble_candidate, assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
 pub use fanout::MAX_RECORD_BYTES;

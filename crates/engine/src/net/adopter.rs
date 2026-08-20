@@ -193,40 +193,52 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
 }
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
-    /// Steps 1-5: turn a fetched record into a content-plane [`Candidate`].
-    /// Verifies the record only to read its signed head anchor (the gate
-    /// re-verifies from scratch); fetches the head block fail-closed on a CID
-    /// mismatch; decodes the envelope and its grant section.
     async fn assemble_candidate(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Candidate, GateError> {
-        // Steps 1-4 are the shared head-envelope assembly; the sequence is
-        // discarded — the gate re-verifies the record from scratch.
         let local = self.local_head.borrow().clone();
-        let (_sequence, envelope) =
-            assemble_head_envelope(self.gateway, self.http, name, record_bytes, local.as_ref())
-                .await?;
-
-        // Step 5 — decode the grant section.
-        let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
-            assembly_reject(
-                Malformed::MissingField {
-                    field: "grantSection",
-                }
-                .into(),
-            )
-        })?;
-        let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
-
-        Ok(Candidate {
-            name: name.clone(),
-            record_bytes: record_bytes.to_vec(),
-            grant_section,
-            envelope,
-        })
+        assemble_candidate(self.gateway, self.http, name, record_bytes, local.as_ref()).await
     }
+}
+
+/// Steps 1-5: turn a fetched record into a content-plane [`Candidate`].
+/// Verifies the record only to read its signed head anchor (the gate re-verifies
+/// from scratch); fetches the head block fail-closed on a CID mismatch; decodes
+/// the envelope and its grant section.
+///
+/// Free-standing because the accept flow assembles a candidate for a **sharer's**
+/// scope root, which no reader context of this device's own anchors.
+pub(crate) async fn assemble_candidate<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    local: Option<&LocalHead>,
+) -> Result<Candidate, GateError> {
+    // Steps 1-4 are the shared head-envelope assembly; the sequence is
+    // discarded — the gate re-verifies the record from scratch.
+    let (_sequence, envelope) =
+        assemble_head_envelope(gateway, http, name, record_bytes, local).await?;
+
+    // Step 5 — decode the grant section.
+    let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
+        assembly_reject(
+            Malformed::MissingField {
+                field: "grantSection",
+            }
+            .into(),
+        )
+    })?;
+    let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
+
+    Ok(Candidate {
+        name: name.clone(),
+        record_bytes: record_bytes.to_vec(),
+        grant_section,
+        envelope,
+    })
 }
 
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
