@@ -1,8 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RequireAuth } from '../auth/RequireAuth';
-import { authStore } from '../stores/auth.store';
 import { authWrapper, fakeCoreKitSession, fakeEngineClient } from '../test/authFakes';
 import { FilesPage } from './FilesPage';
 
@@ -33,7 +32,6 @@ function renderDeepLink(coreKit: ReturnType<typeof fakeCoreKitSession>) {
 const frontDoor = () => screen.queryByText('FRONT DOOR');
 
 describe('the vault route with no session', () => {
-  beforeEach(() => authStore.signedOut());
   afterEach(() => vi.useRealTimers());
 
   it('returns an unauthenticated deep link to the front door', async () => {

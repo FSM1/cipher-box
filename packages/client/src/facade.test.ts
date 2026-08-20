@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EngineFacade } from './facade.js';
-import { emptySnapshot, FAKE_SIWE_NONCE, TEST_ACCOUNT_ID } from './testkit.js';
+import { byoSettings, emptySnapshot, FAKE_SIWE_NONCE, TEST_ACCOUNT_ID } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -14,7 +14,7 @@ import type {
 
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
-  commands: Array<{ command: CommandDescriptor; transfer: Transferable[] }> = [];
+  commands: CommandDescriptor[] = [];
   snapshots: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
@@ -36,8 +36,8 @@ class FakeTransport implements EngineTransport {
   /** What the next `command` resolves with; the engine answers `done` by default. */
   outcome: CommandOutcomeDescriptor = { kind: 'done' };
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
-    this.commands.push({ command, transfer });
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    this.commands.push(command);
     return Promise.resolve(this.outcome);
   }
 
@@ -114,7 +114,7 @@ describe('EngineFacade', () => {
   it('sends logout then tears the transport down', async () => {
     const transport = new FakeTransport();
     await new EngineFacade(transport).logout();
-    expect(transport.commands.map((entry) => entry.command.kind)).toEqual(['logout']);
+    expect(transport.commands.map((entry) => entry.kind)).toEqual(['logout']);
     expect(transport.closed).toBe(true);
   });
 
@@ -125,47 +125,42 @@ describe('EngineFacade', () => {
     expect(transport.closed).toBe(true);
   });
 
-  it('sends a create carrying no content and nothing to transfer', async () => {
+  it('sends a create carrying no content', async () => {
     const transport = new FakeTransport();
     await new EngineFacade(transport).create(new Uint8Array(16), 'docs', 'folder');
 
-    const { command, transfer } = transport.commands[0];
-    expect(command).toEqual({
+    expect(transport.commands[0]).toEqual({
       kind: 'create',
       parent: new Uint8Array(16),
       name: 'docs',
       nodeKind: 'folder',
     });
-    expect(transfer).toEqual([]);
   });
 
-  it('moves the BYO bearer out of this realm rather than cloning it to the worker', async () => {
+  it('sends the placement, provider and retention choice as one command', async () => {
     const transport = new FakeTransport();
-    const accessToken = new TextEncoder().encode('bearer-token').buffer as ArrayBuffer;
+    const settings = byoSettings(new TextEncoder().encode('bearer-token').buffer as ArrayBuffer);
 
-    await new EngineFacade(transport).saveVaultSettings({
-      pinMode: 'external',
-      byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken },
-      keepLatestVersions: null,
-    });
+    await new EngineFacade(transport).saveVaultSettings(settings);
 
-    // Listed for transfer, so the send detaches the sender: this realm keeps no
-    // copy of the credential for anything to find later.
-    const { command, transfer } = transport.commands[0];
-    expect(transfer).toEqual([accessToken]);
-    expect(command.kind).toBe('saveVaultSettings');
+    expect(transport.commands[0]).toEqual({ kind: 'saveVaultSettings', settings });
   });
 
-  it('transfers nothing for a provider that needs no bearer', async () => {
+  it('refuses a bearer the worker would hard-reject, after every hop had copied it', async () => {
     const transport = new FakeTransport();
+    const view = new TextEncoder().encode('s3cret');
 
-    await new EngineFacade(transport).saveVaultSettings({
-      pinMode: 'hosted',
-      byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: null },
-      keepLatestVersions: 3,
-    });
+    // A view is not transferable, so it would be cloned to the worker and
+    // refused there — leaving a live credential in every realm on the way.
+    await expect(
+      new EngineFacade(transport).saveVaultSettings({
+        ...byoSettings(null),
+        byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: view as never },
+      })
+    ).rejects.toThrow('accessToken must be a transferable buffer');
 
-    expect(transport.commands[0].transfer).toEqual([]);
+    expect(transport.commands).toEqual([]);
+    expect([...view]).toEqual(new Array(view.length).fill(0));
   });
 
   it('streams a new file through begin/push/commit and returns the op id', async () => {
@@ -210,7 +205,7 @@ describe('EngineFacade', () => {
     const recipient = new Uint8Array([7, 7]);
     await new EngineFacade(transport).grant(node, recipient, 'write');
 
-    expect(transport.commands[0].command).toMatchObject({
+    expect(transport.commands[0]).toMatchObject({
       kind: 'grant',
       permission: 'write',
       recipientIdentityPublicKey: recipient,

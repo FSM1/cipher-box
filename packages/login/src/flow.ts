@@ -53,6 +53,8 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
   /**
    * Hands the engine its secret for a Core Kit session that outlived the page.
    * A no-op unless one is live, and it never rejects: nothing asked for it.
+   * Every caller awaits the one attempt, so a host gating a route on "still
+   * deciding" learns it has settled whichever consumer asked.
    */
   resume(): Promise<void>;
 }
@@ -62,10 +64,13 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
  * module-scoped: every consumer drives the same transitions, and a second one
  * must not start a second login. The restore latch keys on the session *and* the
  * facade, because a host replaces either independently: a facade that never
- * received the secret must still get it, however old the session is.
+ * received the secret must still get it, however old the session is. It holds
+ * the handoff itself, not a flag, so every caller awaits the one attempt and
+ * they all learn together when it has settled.
  */
 let inFlight = false;
-let restoredFor: { session: CoreKitSession; facade: LoginFacade | null } | null = null;
+let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promise<void> } | null =
+  null;
 
 export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>(
   host: LoginHost<C>
@@ -187,7 +192,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           session?.logout() ?? Promise.resolve(),
         ]);
         secrets?.use(null);
-        restoredFor = null;
+        restore = null;
         account.signedOut();
         afterLogout?.();
         const failed = outcomes.find((outcome) => outcome.status === 'rejected');
@@ -196,13 +201,13 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     resume() {
-      const restored =
-        restoredFor !== null && restoredFor.session === session && restoredFor.facade === facade;
-      if (!session || restored || !session.isLoggedIn()) return Promise.resolve();
-      restoredFor = { session, facade };
-      return exclusively(handOff).catch(() => {
-        restoredFor = null;
-      });
+      if (!session || !session.isLoggedIn()) return Promise.resolve();
+      if (restore !== null && restore.session === session && restore.facade === facade) {
+        return restore.done;
+      }
+      const done = exclusively(handOff).catch(() => undefined);
+      restore = { session, facade, done };
+      return done;
     },
   };
 }

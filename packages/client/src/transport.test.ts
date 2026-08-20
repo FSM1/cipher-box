@@ -48,7 +48,7 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const pending = transport.command({ kind: 'manualRefresh' }, []);
+    const pending = transport.command({ kind: 'manualRefresh' });
     await tick();
 
     expect(worker.posted).toHaveLength(1);
@@ -65,11 +65,9 @@ describe('LocalTransport', () => {
     worker.emit({ type: 'ready' });
 
     const resolved: string[] = [];
-    const first = transport
-      .command({ kind: 'manualRefresh' }, [])
-      .then(() => resolved.push('first'));
+    const first = transport.command({ kind: 'manualRefresh' }).then(() => resolved.push('first'));
     const second = transport
-      .command({ kind: 'delete', node: new Uint8Array(16) }, [])
+      .command({ kind: 'delete', node: new Uint8Array(16) })
       .then(() => resolved.push('second'));
     await tick();
 
@@ -88,8 +86,8 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const failing = transport.command({ kind: 'manualRefresh' }, []);
-    const ok = transport.command({ kind: 'manualRefresh' }, []);
+    const failing = transport.command({ kind: 'manualRefresh' });
+    const ok = transport.command({ kind: 'manualRefresh' });
     await tick();
     const [idA, idB] = worker.posted.map((entry) => entry.message.id);
 
@@ -159,7 +157,7 @@ describe('LocalTransport', () => {
     const snapshotResult = emptySnapshot();
     const downloadResult = new Uint8Array([4, 5, 6]).buffer;
 
-    const command = transport.command({ kind: 'manualRefresh' }, []);
+    const command = transport.command({ kind: 'manualRefresh' });
     const snapshot = transport.snapshot(new Uint8Array(16));
     const download = transport.download(new Uint8Array(16));
     await tick();
@@ -289,7 +287,7 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const inFlight = transport.command({ kind: 'manualRefresh' }, []);
+    const inFlight = transport.command({ kind: 'manualRefresh' });
     await tick();
     worker.emit({ type: 'fatal', error: 'engine construction failed' });
 
@@ -298,7 +296,7 @@ describe('LocalTransport', () => {
 
     // A request issued after fatal rejects promptly rather than posting to the
     // dead worker and waiting forever for a response.
-    const postFatal = transport.command({ kind: 'manualRefresh' }, []);
+    const postFatal = transport.command({ kind: 'manualRefresh' });
     await expect(postFatal).rejects.toThrow('engine construction failed');
   });
 
@@ -327,12 +325,12 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const failing = transport.command({ kind: 'manualRefresh' }, []);
+    const failing = transport.command({ kind: 'manualRefresh' });
 
     await expect(failing).rejects.toThrow('detached ArrayBuffer');
     // A later post succeeds and correlates, proving no id/pending was stranded.
     worker.postMessage = FakeWorker.prototype.postMessage;
-    const ok = transport.command({ kind: 'manualRefresh' }, []);
+    const ok = transport.command({ kind: 'manualRefresh' });
     await tick();
     const posted = worker.posted.at(-1);
     expect(posted).toBeDefined();
@@ -345,7 +343,7 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const pending = transport.command({ kind: 'manualRefresh' }, []);
+    const pending = transport.command({ kind: 'manualRefresh' });
     await tick();
     worker.emitError('worker crashed');
 
@@ -357,7 +355,7 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const pending = transport.command({ kind: 'manualRefresh' }, []);
+    const pending = transport.command({ kind: 'manualRefresh' });
     await tick();
     transport.close();
 

@@ -41,7 +41,8 @@ export class LeaderElection {
   private state: ElectionRole = 'follower';
   private releaseHeld: (() => void) | null = null;
   private readonly controller = new AbortController();
-  private readonly settled: Promise<unknown>;
+  // Replaced by `requeue`, which releases one request and makes another.
+  private settled: Promise<unknown>;
 
   constructor(
     private readonly locks: LockManagerLike,
@@ -76,6 +77,22 @@ export class LeaderElection {
         if (this.controller.signal.aborted) return;
         this.onError?.(error instanceof Error ? error : new Error(String(error)));
       });
+  }
+
+  /**
+   * Steps down and asks for the lock again. The new request is made before the
+   * old one is released, so it lands behind every tab already waiting rather
+   * than ahead of the one this step aside is for. A no-op unless this tab holds
+   * the lock.
+   */
+  requeue(): void {
+    const release = this.releaseHeld;
+    if (this.state !== 'leader' || !release) return;
+    this.releaseHeld = null;
+    this.state = 'follower';
+    const released = this.settled;
+    this.settled = this.elect().finally(() => released);
+    release();
   }
 
   /**

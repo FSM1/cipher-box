@@ -32,6 +32,7 @@ import {
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
+import { wipeTransfer } from './buffers.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
@@ -70,10 +71,6 @@ export interface LeaderRelayOptions {
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
 
-function wipeBuffer(value: unknown): void {
-  if (value instanceof ArrayBuffer && value.byteLength > 0) new Uint8Array(value).fill(0);
-}
-
 /**
  * Wipes the upload chunk a write payload carries. A chunk arrives transferred,
  * so the relay is its terminal owner until a further transfer detaches it — and
@@ -81,18 +78,19 @@ function wipeBuffer(value: unknown): void {
  * (AGENTS.md 7). Takes the payload unvalidated: an off-shape one carries none.
  */
 function wipeChunk(payload: unknown): void {
-  wipeBuffer((payload as { chunk?: unknown } | null | undefined)?.chunk);
+  const chunk = (payload as { chunk?: unknown } | null | undefined)?.chunk;
+  wipeTransfer(chunk === undefined ? undefined : [chunk as Transferable]);
 }
 
 /**
  * Wipes every buffer a port message carries, on the routes that answer it with
- * neither a relay nor a refusal — the upload chunk of a write step, and the BYO
- * bearer of a settings command. Same terminal-owner rule as [`wipeChunk`].
+ * neither a relay nor a refusal — a write step's upload chunk, and a settings
+ * command's BYO bearer.
  */
-function wipeCarried(message: unknown): void {
+function wipeDropped(message: unknown): void {
   const envelope = message as { write?: unknown; command?: unknown } | null | undefined;
   wipeChunk(envelope?.write);
-  for (const buffer of commandTransfer(envelope?.command)) wipeBuffer(buffer);
+  wipeTransfer(commandTransfer(envelope?.command));
 }
 
 /**
@@ -351,7 +349,7 @@ export class LeaderRelay {
   private onPortMessage(entry: PortEntry, data: unknown): void {
     if (typeof data !== 'object' || data === null) return;
     const message = data as PortRequest | { type?: unknown };
-    if (!this.serve(entry, message)) wipeCarried(message);
+    if (!this.serve(entry, message)) wipeDropped(message);
   }
 
   /**
@@ -421,9 +419,7 @@ export class LeaderRelay {
       case 'cb:portCommand': {
         const { command } = message as Extract<PortRequest, { type: 'cb:portCommand' }>;
         if (!hasKind(command)) return this.refuse(entry, requestId, message);
-        void this.answerPort(entry, requestId, () =>
-          this.transport.command(command, commandTransfer(command))
-        );
+        void this.answerPort(entry, requestId, () => this.transport.command(command));
         return true;
       }
       case 'cb:portWrite': {
@@ -438,7 +434,7 @@ export class LeaderRelay {
 
   /** Refuses a request this relay will not serve, wiping anything it carried. */
   private refuse(entry: PortEntry, requestId: number, message: unknown): true {
-    wipeCarried(message);
+    wipeDropped(message);
     void this.answerPort(entry, requestId, () => Promise.reject(malformed()));
     return true;
   }
@@ -670,7 +666,7 @@ export class LeaderRelay {
     }
     this.refreshInFlight = true;
     void this.transport
-      .command({ kind: 'manualRefresh' }, [])
+      .command({ kind: 'manualRefresh' })
       .catch(() => undefined)
       .finally(() => {
         this.refreshInFlight = false;

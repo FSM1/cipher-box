@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
+import { byoSettings, fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
 import type { WriteTarget } from './protocol.js';
@@ -144,6 +144,23 @@ describe('EngineHost', () => {
     const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
 
     await expect(host.snapshot(null)).rejects.toMatchObject({ code: 'notStarted' });
+  });
+
+  it('scrubs a BYO bearer on a command it refuses before the codec is reached', async () => {
+    const { wasm } = recordingWasm();
+    const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
+    const bearer = new TextEncoder().encode('s3cret');
+
+    // The bearer arrived transferred, so this realm holds the only copy — and
+    // the codec that would scrub it never runs on a pre-start refusal.
+    await expect(
+      host.command({
+        kind: 'saveVaultSettings',
+        settings: byoSettings(bearer.buffer as ArrayBuffer),
+      })
+    ).rejects.toMatchObject({ code: 'notStarted' });
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
   });
 
   it('refuses a second account rather than reopening the first account stores', async () => {

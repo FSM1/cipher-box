@@ -5,12 +5,11 @@ import { UserMenu } from './UserMenu';
 import { authStore } from '../../stores/auth.store';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from '../../test/authFakes';
 
-/**
- * A tab with a live session: the Core Kit session outlived the page, so the
- * flow hands the engine its secret and the engine reports the session back —
- * the same route a reloaded tab takes.
- */
-function renderMenu({ enrolled = false, email = 'user@example.test' as string | null } = {}) {
+/** A tab whose Core Kit session outlived the page, as a reload leaves one. */
+function renderMenu({
+  enrolled = false,
+  email = 'user@example.test',
+}: { enrolled?: boolean; email?: string | null } = {}) {
   const Providers = pageWrapper(
     fakeEngineClient().client,
     fakeCoreKitSession({ loggedIn: true, enrolled, email: () => email }).session

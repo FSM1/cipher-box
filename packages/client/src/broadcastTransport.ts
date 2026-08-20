@@ -43,6 +43,7 @@ import { CorrelatedTransport, EngineRequestError } from './correlatedTransport.j
 import { asError } from './errorMessage.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
+import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -83,6 +84,13 @@ export interface BroadcastTransportOptions {
    * whatever the owner holds against the old engine has to be retired here.
    */
   onLeadershipChange?: () => void;
+  /**
+   * Fires when a leadership adopts this transport's port under `accountId`.
+   * Adoption is the proof the origin's engine holds that account, and it
+   * happens on every leadership change, not only on the `start` that asked —
+   * so the owner learns its session is live however it was reached.
+   */
+  onAdopted?: (accountId: string) => void;
 }
 
 export class BroadcastTransport extends CorrelatedTransport {
@@ -111,6 +119,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private settleBrokerage: (() => void) | null = null;
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
+  private readonly onAdopted: (accountId: string) => void;
 
   // The account this tab is signed in as; `null` until `start` (or the session a
   // replaced transport was already serving). Rides every port greeting, where
@@ -136,6 +145,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     super();
     this.portTimeoutMs = options.portTimeoutMs ?? DEFAULT_PORT_TIMEOUT_MS;
     this.onLeadershipChange = options.onLeadershipChange ?? ((): void => undefined);
+    this.onAdopted = options.onAdopted ?? ((): void => undefined);
     this.accountId = options.accountId ?? null;
     this.presenceHeld = this.holdPresence(locks);
     this.armLeaderReady();
@@ -186,13 +196,13 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.ensurePort().then(() => undefined);
   }
 
-  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
     // Command arguments name files and contacts, so they take the private port
     // rather than the origin-wide channel. A credential the descriptor carries
     // is moved rather than cloned, so it leaves this tab's heap outright.
     return this.overPort<CommandOutcomeDescriptor>(
       (requestId) => ({ type: 'cb:portCommand', requestId, command }),
-      transfer
+      commandTransfer(command)
     );
   }
 
@@ -302,6 +312,7 @@ export class BroadcastTransport extends CorrelatedTransport {
       throw error;
     }
     this.releasePort = release;
+    if (accountId !== null) this.onAdopted(accountId);
     return port;
   }
 
@@ -426,6 +437,18 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   private write<T>(write: WireWrite, transfer?: Transferable[]): Promise<T> {
     return this.overPort<T>((requestId) => ({ type: 'cb:portWrite', requestId, write }), transfer);
+  }
+
+  /**
+   * Stops greeting under the account a `start` named. Nothing on this tab holds
+   * it any more, and a greeting that names one is what asks an engine-less
+   * leader to give the lock up — so a tab that kept greeting would churn
+   * leadership on behalf of a session that no longer exists.
+   */
+  forgetAccount(): void {
+    if (this.accountId === null) return;
+    this.accountId = null;
+    this.dropPort(retryError());
   }
 
   /**

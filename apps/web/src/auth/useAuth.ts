@@ -73,14 +73,18 @@ export function useAuth(): Auth {
   const isAuthenticated = useEngineAccount() !== null;
 
   const [isBusy, setIsBusy] = useState(false);
+  // Whether the handoff a restored Core Kit session owes the engine has settled.
+  // Every consumer awaits the same attempt (`flow.resume`), so they agree.
+  const [resumed, setResumed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
-  // A Core Kit session that outlived the page still owes the engine its secret;
-  // until that handoff settles the tab has not decided, and a guard that read
-  // it as signed out would throw the member out of their own vault.
-  const resuming = isReady && !isAuthenticated && (session?.isLoggedIn() ?? false);
+  // A Core Kit session that outlived the page still owes the engine its secret,
+  // so the tab has not decided yet; a guard reading that as signed out would
+  // throw the member out of their own vault. It ends whether or not the handoff
+  // worked — a failed one leaves no vault to guard.
+  const resuming = isReady && !resumed && (session?.isLoggedIn() ?? false);
   const isSignedOut = !isAuthenticated && !resuming && (isReady || status === 'unavailable');
 
   const progress = useMemo<LoginProgress>(
@@ -185,7 +189,13 @@ export function useAuth(): Auth {
   // secret; without this the tab renders logged-out over a live login.
   useEffect(() => {
     if (!isReady || isAuthenticated) return;
-    void flow.resume();
+    let live = true;
+    void flow.resume().finally(() => {
+      if (live) setResumed(true);
+    });
+    return () => {
+      live = false;
+    };
   }, [flow, isAuthenticated, isReady]);
 
   return {

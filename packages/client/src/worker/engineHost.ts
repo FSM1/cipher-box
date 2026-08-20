@@ -4,6 +4,8 @@
  * never leaves it.
  */
 
+import { wipeTransfer } from '../buffers.js';
+import { commandTransfer } from './protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -175,11 +177,18 @@ export class EngineHost implements EngineHostLike {
   }
 
   async command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
-    const outcome = await this.handle.command(buildCommand(this.wasm, command));
+    // A buffer the descriptor carries arrived transferred, so this realm holds
+    // the only copy — including on the routes that refuse before the codec is
+    // reached, which is where the codec's own scrub cannot run.
     try {
-      return readOutcome(outcome);
+      const outcome = await this.handle.command(buildCommand(this.wasm, command));
+      try {
+        return readOutcome(outcome);
+      } finally {
+        outcome.free();
+      }
     } finally {
-      outcome.free();
+      wipeTransfer(commandTransfer(command));
     }
   }
 

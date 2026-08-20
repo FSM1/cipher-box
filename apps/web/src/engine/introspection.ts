@@ -64,8 +64,6 @@ export function installIntrospection(client: EngineClient): EngineClient {
 
   window.__CIPHERBOX_ENGINE__ = {
     signIn(loginSecretHex, accountId) {
-      // The started engine *is* the session the UI renders, so nothing here
-      // records one beside it.
       return handOffLoginSecret(client.facade, {
         _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
         accountId: () => accountId,

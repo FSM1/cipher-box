@@ -17,6 +17,8 @@
  * command: it streams chunk by chunk through a write handle.
  */
 
+import { isBuffer } from '../buffers.js';
+
 /** Grant permission level (mirrors the facade `Permission`). */
 export type Permission = 'read' | 'write';
 
@@ -178,16 +180,15 @@ export type CommandDescriptor =
  * the terminal owner that scrubs it (AGENTS.md 7); a clone would leave an
  * unwiped copy at every hop.
  *
- * Takes the descriptor unvalidated: a relay reads one off an untrusted port.
+ * Reads the bearer by shape rather than by `kind`, so a descriptor this build
+ * cannot serve still loses its credential on the route that drops it, and takes
+ * it unvalidated: a relay reads one off an untrusted port.
  */
 export function commandTransfer(command: unknown): Transferable[] {
-  const envelope = command as
-    | { kind?: unknown; settings?: { byo?: { accessToken?: unknown } | null } | null }
-    | null
-    | undefined;
-  if (envelope?.kind !== 'saveVaultSettings') return [];
-  const token = envelope.settings?.byo?.accessToken;
-  return token instanceof ArrayBuffer ? [token] : [];
+  const token = (
+    command as { settings?: { byo?: { accessToken?: unknown } | null } | null } | null | undefined
+  )?.settings?.byo?.accessToken;
+  return isBuffer(token) ? [token] : [];
 }
 
 /**

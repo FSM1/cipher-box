@@ -1,15 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { App } from './App';
-import { authStore } from './stores/auth.store';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from './test/authFakes';
 
-/**
- * `signedIn` renders a tab whose Core Kit session outlived the page: the flow
- * hands the engine its secret and the engine reports the session, which is the
- * only thing the route guard reads.
- */
+/** `signedIn` renders a tab whose Core Kit session outlived the page. */
 function renderAt(path: string, signedIn = false) {
   const Providers = pageWrapper(
     fakeEngineClient().client,
@@ -23,8 +18,6 @@ function renderAt(path: string, signedIn = false) {
     </Providers>
   );
 }
-
-afterEach(() => authStore.signedOut());
 
 describe('App routes', () => {
   it('renders the login page at the root', () => {

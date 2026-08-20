@@ -11,6 +11,7 @@
  * wire the send needs — a follower's read gate yields its private port.
  */
 
+import { wipeTransfer } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -107,36 +108,6 @@ export function unknownHandle(kind: HandleKind): EngineRequestError {
 }
 
 /**
- * An `ArrayBuffer`'s length, or `null` for anything that is not one. Branding
- * by the `byteLength` getter rather than `instanceof`, which answers false for
- * a buffer minted in another realm — a worker's, a frame's — leaving a secret
- * that reached this list from there unscrubbed.
- */
-const byteLengthOf = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get;
-
-function bufferLength(item: Transferable): number | null {
-  try {
-    return (byteLengthOf?.call(item) as number | undefined) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Scrubs the buffers a send would have transferred. A request that rejects
- * before its send leaves this frame their terminal owner — nothing detaches
- * them and no callee can reach them — so the plaintext is cleared here
- * (AGENTS.md 7). A transferred buffer reads as empty, so a send that did run
- * leaves this a no-op.
- */
-function wipeTransfer(transfer: Transferable[] | undefined): void {
-  for (const item of transfer ?? []) {
-    const length = bufferLength(item);
-    if (length !== null && length > 0) new Uint8Array(item as ArrayBuffer).fill(0);
-  }
-}
-
-/**
  * Delivers one event to every listener, isolating a throwing subscriber so it
  * cannot drop the event for the rest.
  */
@@ -160,10 +131,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   protected terminalError: Error | null = null;
 
   abstract start(secret: ArrayBuffer, accountId: string): Promise<void>;
-  abstract command(
-    command: CommandDescriptor,
-    transfer: Transferable[]
-  ): Promise<CommandOutcomeDescriptor>;
+  abstract command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor>;
   abstract beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
   abstract pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   abstract commitWrite(handle: WriteHandle): Promise<bigint>;

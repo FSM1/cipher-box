@@ -1,18 +1,12 @@
-import { useAuth } from '../auth/useAuth';
+import { useEngineAccount } from '../engine/useEngineSession';
 import { FileBrowser } from '../components/file-browser/FileBrowser';
 import { AppShell } from '../components/layout/AppShell';
 
-/**
- * The vault browser. `RequireAuth` has already ruled out a tab with no session;
- * what is left is one still deciding, which renders progress rather than an
- * empty vault.
- */
+/** The vault browser, behind `RequireAuth`. */
 export function FilesPage() {
-  const { isAuthenticated } = useAuth();
-
   return (
     <AppShell>
-      {isAuthenticated ? (
+      {useEngineAccount() !== null ? (
         <FileBrowser />
       ) : (
         <p className="file-browser-loading" data-testid="files-signing-in">
