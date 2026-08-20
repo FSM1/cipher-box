@@ -50,6 +50,7 @@ use crate::grants::{
     create_read_grant, mint_invite_link, recipient_blinded_tag, resolve_recipient,
 };
 use crate::mailbox::locate_verified;
+use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
@@ -3393,10 +3394,15 @@ where {
     /// no scope root an invite can be anchored at — a grant there mints the scope
     /// first. `check` names the rule for the command that asked.
     fn root_scope(&self, node: NodeId, check: &'static str) -> Result<ChildScopeRef, EngineError> {
-        let scope_id = self.snapshot.borrow().root.0;
-        if node.0 != scope_id {
+        if node.0 != self.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget { check });
         }
+        self.vault_root_scope()
+    }
+
+    /// The vault root's own scope reference.
+    fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
+        let scope_id = self.snapshot.borrow().root.0;
         Ok(ChildScopeRef::new(
             scope_id,
             self.root_scope_name(&scope_id)?
@@ -3424,14 +3430,14 @@ where {
         let root = self.snapshot.borrow().root;
         if node == root {
             return Ok(OwnerScope {
-                scope: self.root_scope(node, check)?,
+                scope: self.vault_root_scope()?,
                 parent_node_seed: None,
             });
         }
         if !self.snapshot.borrow().contains(node) {
             return Err(EngineError::UnsupportedTarget { check });
         }
-        let parent = self.root_scope(root, check)?;
+        let parent = self.vault_root_scope()?;
         let current = self
             .owner_rotation_net(api, keys, RotationAncestry::default(), None)
             .resolve_vault_root(&parent)
@@ -3775,19 +3781,20 @@ where {
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        let parent = self.root_scope(
-            NodeId(self.snapshot.borrow().root.0),
-            "grant-parent-is-not-a-scope-root",
-        )?;
-        if node.0 == parent.scope_id {
+        // The vault root is granted through an invite link over its existing
+        // committed set; minting a scope at it would replace the session's own.
+        if node.0 == self.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget {
                 check: "grant-target-is-the-vault-root",
             });
         }
+        let parent = self.vault_root_scope()?;
         let rendered = self.render().await?;
-        if !rendered.contains(node) {
-            return Err(EngineError::UnknownNode);
-        }
+        let display_name = rendered
+            .node(node)
+            .ok_or(EngineError::UnknownNode)?
+            .name()
+            .to_owned();
 
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
@@ -3852,10 +3859,7 @@ where {
             &GrantRecipient {
                 identity_pk: contact.identity_pk(),
                 enc_pub: &contact.enc_subkey(),
-                display_name: rendered
-                    .node(node)
-                    .map(|meta| meta.name().to_owned())
-                    .unwrap_or_default(),
+                display_name,
             },
             &OwnerGrantKeys {
                 enc_secret: session.enc_subkey(),
@@ -3909,10 +3913,13 @@ where {
         sealed_share_pointer: &[u8],
     ) -> Result<AcceptOutcome, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        // The version the sender sealed under is the envelope version its scope
+        // root was minted at, which is the one this build authors; a payload from
+        // any other is an item that does not open, and is dropped.
         let item = locate_verified(
             &self.seams.mailbox,
             session.enc_subkey(),
-            POINTER_PAYLOAD_VERSION,
+            ENVELOPE_V,
             sealed_share_pointer,
         )
         .await
