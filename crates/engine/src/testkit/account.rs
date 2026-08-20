@@ -121,7 +121,6 @@ fn multipart_file(request: &HttpRequest) -> Vec<u8> {
     let body = body
         .strip_suffix(tail.as_bytes())
         .expect("the body closes on the declared boundary");
-    // Past the part headers: the blank line that ends them is the file's start.
     let start = body
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
