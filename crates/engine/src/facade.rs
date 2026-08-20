@@ -64,10 +64,10 @@ use crate::net::{
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    CommittedSet, GrantCutPlan, ResealError, ResealSeeds, ResolveFailure, RevokeError, RotateError,
-    RotateOnCutError, RotateScopePlan, ScopeRootIdentity, WriteHistory, WriteRevokeKind,
-    derive_write_name, revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope,
-    run_sweep,
+    AscentAuthority, CascadeResealResolver, CommittedSet, GrantCutPlan, ResealError, ResealSeeds,
+    ResolveFailure, RevokeError, RotateError, RotateOnCutError, RotateScopePlan, ScopeRootIdentity,
+    WriteHistory, WriteRevokeKind, derive_write_name, revoke_read_grant, revoke_write_grant,
+    rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet,
@@ -1506,6 +1506,25 @@ impl RetryableRotation for RotateOnCutError {
 /// root indexed under a scope that no longer contains it is a descendant the
 /// eager cascade never reaches, which is a silent revocation hole rather than a
 /// stale bookmark.
+/// A scope root this session acts on as its owner, and the ancestor node seed a
+/// gated read of an interior one needs. `None` at the vault root, which carries
+/// no ascent link to prove.
+struct OwnerScope {
+    scope: ChildScopeRef,
+    parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+/// A scope root's opaque `ipnsName` bytes as a parsed name. A record plane
+/// address this build cannot parse is an input refusal, never a peer verdict.
+fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
+    core::str::from_utf8(ipns_name)
+        .ok()
+        .and_then(|text| IpnsName::parse(text).ok())
+        .ok_or(EngineError::MalformedInput {
+            check: "scope-root-name-is-unparseable",
+        })
+}
+
 fn subtree_child_scopes(
     rendered: &Snapshot,
     node: NodeId,
@@ -3371,8 +3390,8 @@ where {
     /// session's write scope seed derives.
     ///
     /// The engine holds no node-to-scope mapping, so a node below the root names
-    /// no scope root an owner action can be anchored at — a grant there mints
-    /// the scope first. `check` names the rule for the command that asked.
+    /// no scope root an invite can be anchored at — a grant there mints the scope
+    /// first. `check` names the rule for the command that asked.
     fn root_scope(&self, node: NodeId, check: &'static str) -> Result<ChildScopeRef, EngineError> {
         let scope_id = self.snapshot.borrow().root.0;
         if node.0 != scope_id {
@@ -3385,6 +3404,51 @@ where {
                 .as_bytes()
                 .to_vec(),
         ))
+    }
+
+    /// The scope root `node` names, and the ancestor node seed a gated read of an
+    /// interior one needs.
+    ///
+    /// The authority for what is a scope root is the vault root's owner-signed
+    /// direct-child-scope index, so an interior root's `ipnsName` is taken from
+    /// that index rather than re-derived: a scope a write rotation has moved is
+    /// then read at the name its parent vouches for. A node the base snapshot
+    /// does not hold is refused before any resolve.
+    async fn owner_scope(
+        &self,
+        node: NodeId,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        check: &'static str,
+    ) -> Result<OwnerScope, EngineError> {
+        let root = self.snapshot.borrow().root;
+        if node == root {
+            return Ok(OwnerScope {
+                scope: self.root_scope(node, check)?,
+                parent_node_seed: None,
+            });
+        }
+        if !self.snapshot.borrow().contains(node) {
+            return Err(EngineError::UnsupportedTarget { check });
+        }
+        let parent = self.root_scope(root, check)?;
+        let current = self
+            .owner_rotation_net(api, keys, RotationAncestry::default(), None)
+            .resolve_vault_root(&parent)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        let scope = current
+            .direct_child_scope_index
+            .iter()
+            .find(|child| child.scope_id == node.0)
+            .cloned()
+            .ok_or(EngineError::UnsupportedTarget { check })?;
+        Ok(OwnerScope {
+            parent_node_seed: Some(Zeroizing::new(
+                *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
+            )),
+            scope,
+        })
     }
 
     /// The `ipnsName` a scope root in this session's write plane lives at.
@@ -3517,25 +3581,33 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let sweep = self.sweep_factory()?;
-        let scope = self.root_scope(node, "rotate-target-is-not-a-scope-root")?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let OwnerScope {
+            scope,
+            parent_node_seed,
+        } = self
+            .owner_scope(node, api, owner_keys(), "rotate-target-is-not-a-scope-root")
+            .await?;
 
         self.bounded_rotation(async || {
-            let net = self.owner_rotation_net(
-                api,
-                OwnerRotationKeys {
-                    enc_secret: session.enc_subkey(),
-                    identity: &owner_identity,
-                    scope_keys: &scope_keys,
-                },
-                RotationAncestry::default(),
-                None,
-            );
-            let current = net
-                .resolve_vault_root(&scope)
-                .await
-                .map_err(RotateError::Resolve)?;
+            let ancestry = match &parent_node_seed {
+                Some(seed) => {
+                    RotationAncestry::default().under_parent_node_seed(scope.scope_id, seed)
+                }
+                None => RotationAncestry::default(),
+            };
+            let net = self.owner_rotation_net(api, owner_keys(), ancestry, None);
+            let current = match &parent_node_seed {
+                Some(_) => net.resolve(&scope).await,
+                None => net.resolve_vault_root(&scope).await,
+            }
+            .map_err(RotateError::Resolve)?;
             rotate_scope(
                 &mut SharedEntropy(&self.entropy),
                 &self.seams.floor_store,
@@ -3548,7 +3620,7 @@ where {
                         ipns_name: &scope.ipns_name,
                         owner_enc_pub: &current.owner_enc_pub,
                         owner_enc_secret: Some(session.enc_subkey()),
-                        ascent: None,
+                        ascent: parent_node_seed.as_deref().map(AscentAuthority::ParentSeed),
                         owes_ascent_link: current.carried_ascent_link,
                         pseudonym_signer: &current.pseudonym_signer,
                     },
@@ -3590,29 +3662,35 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let sweep = self.sweep_factory()?;
-        let scope = self.root_scope(node, "revoke-target-is-not-a-scope-root")?;
-        let scope_root_name = self.root_scope_name(&scope.scope_id)?;
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
         let owner_pointer_seed = session.owner_pointer_seed();
+        let OwnerScope {
+            scope,
+            parent_node_seed,
+        } = self
+            .owner_scope(node, api, owner_keys(), "revoke-target-is-not-a-scope-root")
+            .await?;
+        let scope_root_name = scope_name(&scope.ipns_name)?;
 
-        let current = self
-            .owner_rotation_net(
-                api,
-                OwnerRotationKeys {
-                    enc_secret: session.enc_subkey(),
-                    identity: &owner_identity,
-                    scope_keys: &scope_keys,
-                },
-                RotationAncestry::default(),
-                None,
-            )
-            .resolve_vault_root(&scope)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
+        let ancestry = match &parent_node_seed {
+            Some(seed) => RotationAncestry::default().under_parent_node_seed(scope.scope_id, seed),
+            None => RotationAncestry::default(),
+        };
+        let net = self.owner_rotation_net(api, owner_keys(), ancestry, None);
+        let current = match &parent_node_seed {
+            Some(_) => net.resolve(&scope).await,
+            None => net.resolve_vault_root(&scope).await,
+        }
+        .map_err(EngineError::from_resolve_failure)?;
 
         // The owner's half of the same pairwise ECDH the recipient self-locates
         // under, so the tag is derived here and never taken from a caller.
@@ -3659,6 +3737,8 @@ where {
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
             scope_id: scope.scope_id,
+            parent_node_seed: parent_node_seed.as_deref(),
+            session_root_scope_id: self.snapshot.borrow().root.0,
             sweep: &|scope_id| sweep(scope_id),
         };
         self.bounded_rotation(async || rotate_on_cut(&rotator, node, &cut).await)
@@ -3728,6 +3808,20 @@ where {
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
+
+        // A second grant on the same folder would mint another scope at epoch 1,
+        // replacing the seed every existing grantee of it holds — a silent
+        // revocation dressed as a share. Adding a recipient to a scope that
+        // already exists is a row on its committed set, not a fresh mint.
+        if current
+            .direct_child_scope_index
+            .iter()
+            .any(|child| child.scope_id == node.0)
+        {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-target-already-names-a-scope",
+            });
+        }
 
         // The descendant scope roots the granted node takes with it. Fail-closed
         // on one the rendered view cannot place: leaving it indexed under a scope
@@ -5089,6 +5183,7 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use core::task::{Context, Poll, Waker};
     use serde_json::{Value, json};
 
     use cipherbox_core::ipns::IpnsRecord;
@@ -6135,20 +6230,13 @@ mod tests {
     /// A wired arm refuses with its own typed verdict, never by falling through
     /// the catch-all, and refuses before it reaches any key material.
     #[test]
-    fn the_rotation_and_grant_arms_refuse_a_node_that_names_no_scope_root() {
+    fn a_rotation_arm_refuses_a_node_that_names_no_scope_root() {
         let (mut engine, _events) = started();
         let node = NodeId([1; 16]);
         for (command, check) in [
             (
                 Command::RotateNow { node },
                 "rotate-target-is-not-a-scope-root",
-            ),
-            (
-                Command::Revoke {
-                    node,
-                    recipient_identity_public_key: vec![2u8; 33],
-                },
-                "revoke-target-is-not-a-scope-root",
             ),
             (
                 Command::Downgrade {
@@ -6165,6 +6253,23 @@ mod tests {
                 "`{name}` must refuse with its own typed verdict",
             );
         }
+    }
+
+    /// A revoke names a recipient before it names a scope: the contact book is
+    /// local, so a recipient this vault never imported is refused without a
+    /// resolve — and without deriving a blinded tag against an unverified key.
+    #[test]
+    fn a_revoke_refuses_an_unimported_recipient_before_it_resolves_anything() {
+        let (mut engine, _events) = started();
+        assert_eq!(
+            block_on(engine.command(Command::Revoke {
+                node: NodeId([1; 16]),
+                recipient_identity_public_key: vec![2u8; 33],
+            })),
+            Err(EngineError::MalformedInput {
+                check: "recipient-not-imported"
+            }),
+        );
     }
 
     /// A read grant mints a fresh scope at the granted folder; a write grant
@@ -6199,6 +6304,110 @@ mod tests {
                 check: "share-pointer-is-not-on-this-inbox"
             }),
         );
+    }
+
+    // --- the bounded-retry caller contract on a retryable rotation verdict ---
+
+    /// Drives `rotation` to completion against `world`'s virtual clock, which
+    /// is what wakes the spacing between attempts.
+    fn settle_rotation<V, E>(
+        world: &FakeWorld,
+        rotation: impl Future<Output = Result<V, E>>,
+    ) -> Result<V, E> {
+        let mut rotation = core::pin::pin!(rotation);
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..(MAX_ROTATION_ATTEMPTS + 2) {
+            if let Poll::Ready(settled) = rotation.as_mut().poll(&mut cx) {
+                return settled;
+            }
+            world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+        }
+        panic!("the rotation never settled inside its own retry bound");
+    }
+
+    fn retrying_engine(world: &FakeWorld) -> Engine<FakeSeamTypes> {
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("cold start");
+        engine
+    }
+
+    /// A cross-parent label disagreement is classified retryable because the
+    /// re-point wave repairs it — but a permanent one never self-heals, so an
+    /// unbounded caller would spin on it forever. The bound is what turns it
+    /// into a terminal failure the host is told about.
+    #[test]
+    fn a_permanent_label_conflict_stops_at_the_retry_bound() {
+        let world = FakeWorld::new();
+        let engine = retrying_engine(&world);
+        let attempts = Cell::new(0u32);
+        let conflict = RotateError::Resolve(ResolveFailure::ConflictingChildLabel);
+
+        let settled = settle_rotation(
+            &world,
+            engine.bounded_rotation(async || {
+                attempts.set(attempts.get() + 1);
+                Err::<(), RotateError>(conflict.clone())
+            }),
+        );
+
+        assert_eq!(settled, Err(conflict), "the caller surfaces the verdict");
+        assert_eq!(
+            attempts.get(),
+            MAX_ROTATION_ATTEMPTS,
+            "the bound is what ends the livelock, not the verdict itself"
+        );
+    }
+
+    /// A gate rejection is a trust verdict no retry can clear, so it is
+    /// surfaced on the first attempt rather than spent against the bound.
+    #[test]
+    fn a_rejected_record_is_never_retried() {
+        let world = FakeWorld::new();
+        let engine = retrying_engine(&world);
+        let attempts = Cell::new(0u32);
+
+        let settled = settle_rotation(
+            &world,
+            engine.bounded_rotation(async || {
+                attempts.set(attempts.get() + 1);
+                Err::<(), RotateError>(RotateError::Resolve(ResolveFailure::Rejected))
+            }),
+        );
+
+        assert!(settled.is_err());
+        assert_eq!(attempts.get(), 1, "a trust verdict is not an outage");
+    }
+
+    /// A stall that clears inside the bound converges rather than failing: the
+    /// bound caps a livelock, it does not cap recovery.
+    #[test]
+    fn a_transient_stall_converges_inside_the_retry_bound() {
+        let world = FakeWorld::new();
+        let engine = retrying_engine(&world);
+        let attempts = Cell::new(0u32);
+
+        let settled = settle_rotation(
+            &world,
+            engine.bounded_rotation(async || {
+                attempts.set(attempts.get() + 1);
+                match attempts.get() {
+                    1 => Err(RotateError::Resolve(ResolveFailure::Unavailable)),
+                    _ => Ok(()),
+                }
+            }),
+        );
+
+        assert_eq!(settled, Ok(()));
+        assert_eq!(attempts.get(), 2);
     }
 
     #[test]

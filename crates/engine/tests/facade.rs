@@ -66,8 +66,8 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
             },
-            EngineError::UnsupportedTarget {
-                check: "revoke-target-is-not-a-scope-root",
+            EngineError::MalformedInput {
+                check: "recipient-identity-key-length",
             },
         ),
         (

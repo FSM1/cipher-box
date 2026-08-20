@@ -26,10 +26,10 @@ use crate::net::rotation::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    CascadeError, CascadeOutcome, CascadeTarget, CommittedSet, CutRotator, ResolveFailure,
-    RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity,
-    WritePublishError, WriteRotateError, WriteRotationOutcome, cascade_rotate_scope,
-    rotate_scope_write,
+    AscentAuthority, CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget,
+    CommittedSet, CutRotator, ResolveFailure, RevokedCommittedSet, RotateScopePlan,
+    RotateScopeWritePlan, ScopeRootIdentity, WritePublishError, WriteRotateError,
+    WriteRotationOutcome, cascade_rotate_scope, rotate_scope_write,
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -73,10 +73,18 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub payload_version: u64,
     /// The scope root's `ipnsName` as the cut was authorized against it.
     pub scope_root_name: &'a IpnsName,
-    /// The scope root under cut. This build cuts at the vault root only, so it
-    /// is also the session's vault-anchor scope the write wave's
-    /// repoint-regression check scopes its read-epoch stage to.
+    /// The scope root under cut.
     pub scope_id: [u8; 16],
+    /// The rotating root's own ancestor node seed, `None` at the vault root.
+    ///
+    /// An interior scope root carries an ascent link the gate verifies against a
+    /// reader-derived keypair, so every gated read and every re-seal of one needs
+    /// this seed; a vault root carries no link and is owed none.
+    pub parent_node_seed: Option<&'a [u8; SECRET_LEN]>,
+    /// The session's vault-anchor scope, which the write wave's
+    /// repoint-regression check scopes its read-epoch stage to. Distinct from
+    /// [`scope_id`](Self::scope_id) whenever the cut is anchored below the root.
+    pub session_root_scope_id: [u8; 16],
     /// Builds the lazy-wave sweep task the read cascade enqueues once its cut is
     /// durable.
     pub sweep: &'a dyn Fn([u8; 16]) -> BoxedTask,
@@ -99,6 +107,15 @@ where
             scope_root.0,
             self.scope_root_name.as_str().as_bytes().to_vec(),
         ))
+    }
+
+    /// `ancestry` carrying this cut's own ancestor seed when it is anchored
+    /// below the vault root.
+    fn anchored(&self, ancestry: RotationAncestry) -> RotationAncestry {
+        match self.parent_node_seed {
+            Some(seed) => ancestry.under_parent_node_seed(self.scope_id, seed),
+            None => ancestry,
+        }
     }
 
     /// A rotation net over this cut's seams, carrying `ancestry`.
@@ -126,11 +143,14 @@ where
     }
 
     /// The scope root's current re-seal material, read through the adoption
-    /// gate under the caller's own label.
+    /// gate under the caller's own label and the binding its anchor demands: an
+    /// interior root must prove its ascent link, the vault root has none.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
-        self.rotation_net(RotationAncestry::default())
-            .resolve_vault_root(scope)
-            .await
+        let net = self.rotation_net(self.anchored(RotationAncestry::default()));
+        match self.parent_node_seed {
+            Some(_) => net.resolve(scope).await,
+            None => net.resolve_vault_root(scope).await,
+        }
     }
 }
 
@@ -156,11 +176,11 @@ where
         // The descendants' published ascent links were sealed under the root's
         // pre-cut seed, so the walk gates each level under that seed, not the
         // fresh one the cascade is about to mint.
-        let net = self.rotation_net(RotationAncestry::rooted_at(
+        let net = self.rotation_net(self.anchored(RotationAncestry::rooted_at(
             scope_root.0,
             &current.override_seed,
             &current.direct_child_scope_index,
-        ));
+        )));
         cascade_rotate_scope(
             &mut SharedEntropy(self.entropy),
             self.floors,
@@ -174,7 +194,7 @@ where
                     ipns_name: self.scope_root_name.as_str().as_bytes(),
                     owner_enc_pub: &current.owner_enc_pub,
                     owner_enc_secret: Some(self.enc_secret),
-                    ascent: None,
+                    ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
                     owes_ascent_link: current.carried_ascent_link,
                     pseudonym_signer: &current.pseudonym_signer,
                 },
@@ -233,8 +253,7 @@ where
             entropy: self.entropy,
             scope_id: scope_root.0,
             read_scope_seed: &current.override_seed,
-            // The vault root carries no ascent link, so no ancestor seed is owed.
-            parent_node_seed: None,
+            parent_node_seed: self.parent_node_seed,
             owner: self.owner_signer,
             owner_enc_secret: self.enc_secret,
             scope_keys: self.scope_keys,
@@ -242,7 +261,7 @@ where
             owner_pointer_seed: self.owner_pointer_seed,
             payload_version: self.payload_version,
             current_root_name: self.scope_root_name,
-            session_root_scope_id: self.scope_id,
+            session_root_scope_id: self.session_root_scope_id,
             gated_root: GatedWaveRoot::default(),
             subtree: WaveSubtree::default(),
         };
