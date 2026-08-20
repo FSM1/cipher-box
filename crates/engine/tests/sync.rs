@@ -10,6 +10,7 @@
 //! through the engine's public sync surface.
 
 use core::cell::RefCell;
+use core::num::NonZeroU64;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +27,7 @@ use cipherbox_engine::rotation::{
     RotateError, RotationOutcome, RotationPublishError, ScopeExitReport, ScopeExitRotator,
     consume_scope_exit_triggers,
 };
-use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
+use cipherbox_engine::seams::{OpId, SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{open_repoint, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -101,7 +102,7 @@ fn race_1_delete_vs_concurrent_edit_edit_wins() {
     let local = base.clone();
 
     let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
-    assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
+    assert_eq!(res, OpResolution::dropped(DropReason::TargetAdvanced));
     assert!(
         base.contains(id(1)),
         "the concurrent edit wins; the node survives"
@@ -226,7 +227,7 @@ fn race_4_move_race_loser_undoes_its_dest_add() {
         &Op::relink(id(3), id(0), id(1), 1, AT, ScopeCrossing::Intra),
         SCOPE_ROOTS,
     );
-    assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+    assert_eq!(res, OpResolution::dropped(DropReason::MoveRaceLost));
     assert_eq!(
         base.parent_of(id(3)),
         Some(id(2)),
@@ -836,6 +837,89 @@ fn an_intra_scope_move_rotates_nothing() {
     );
 
     assert!(triggers.is_empty(), "the non-trigger list holds");
+    assert!(rotator.seen.borrow().is_empty());
+    assert!(cut.is_complete());
+}
+
+/// Structurally, only a relocation carries a scope crossing: every other op kind
+/// answers `None` to `scope_exit_source`. Named here so the non-trigger list is
+/// asserted rather than merely true.
+#[test]
+fn create_delete_rename_and_content_edits_rotate_nothing() {
+    let base = granted_scope_tree();
+    let cases: [(&str, Op); 5] = [
+        (
+            "create",
+            Op::create(
+                id(7),
+                id(12),
+                "new.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
+        ),
+        ("delete", Op::delete(id(12), 1, AT, 1)),
+        ("rename", Op::rename(id(12), "renamed", 1, AT)),
+        (
+            "update-content",
+            Op::update_content(id(12), staged(b"edit"), None, 1, AT),
+        ),
+        (
+            "prune",
+            Op::prune(id(12), NonZeroU64::new(1).expect("nonzero"), 1, AT),
+        ),
+    ];
+
+    for (label, op) in cases {
+        // The structural claim, asserted at its source: every arm of rebase_one
+        // but the two relocation ones hardcodes a `None` trigger, so the replay
+        // assertion below cannot fail on its own.
+        assert!(
+            op.scope_exit_source().is_none(),
+            "{label} carries no scope crossing"
+        );
+        let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
+        assert!(
+            report.scope_exit_triggers.is_empty(),
+            "{label} queues no scope-exit trigger"
+        );
+    }
+}
+
+/// An op whose relocation is already reflected in gate-passing state published
+/// nothing — but the node **has** left the granted source, so the rotation is
+/// still owed. Dropping it there would leave a revokee holding a live seed.
+#[test]
+fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
+    let rotator = RecordingRotator::refusing(&[]);
+    // Seeded at the destination: the move is already satisfied on replay.
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(6))],
+        &[exiting_move(id(7), id(12), "m.txt")],
+        &rotator,
+    );
+
+    assert_eq!(triggers, vec![id(5)], "the exit is a fact, not a no-op");
+    assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
+    assert!(cut.is_complete());
+}
+
+/// The enclosing-root fallback in the full-depth walk exists so an applied exit
+/// always cuts *something*. A drop is not evidence this op performed the exit,
+/// so a source folder a co-writer has since deleted must not escalate into a cut
+/// of the vault root — a whole-vault wave on demand.
+#[test]
+fn an_already_satisfied_drop_whose_source_is_gone_rotates_nothing() {
+    let rotator = RecordingRotator::refusing(&[]);
+    // id(13) is in no snapshot: the walk finds no listed scope root above it.
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(6))],
+        &[exiting_move(id(7), id(13), "m.txt")],
+        &rotator,
+    );
+
+    assert!(triggers.is_empty(), "no vault-root cut from a dropped op");
     assert!(rotator.seen.borrow().is_empty());
     assert!(cut.is_complete());
 }

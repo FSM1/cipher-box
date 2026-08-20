@@ -103,6 +103,17 @@ pub(crate) struct NetState {
     pub(crate) forged: Vec<Vec<u8>>,
     /// Per-node resolve faults.
     pub(crate) node_faults: HashMap<[u8; 16], SweepResolveFailure>,
+    /// Per-node resolve faults that engage only once the node has already been
+    /// resolved `after` times — a node an early pass reached and a later one
+    /// cannot.
+    pub(crate) delayed_node_faults: HashMap<[u8; 16], (SweepResolveFailure, u32)>,
+    /// Nodes a concurrent mint turns into a descendant scope root once they have
+    /// already been resolved `after` times — interior to an early pass, a
+    /// boundary to a later one.
+    pub(crate) delayed_scope_roots: HashMap<[u8; 16], u32>,
+    /// Resolves served per node, the counter `delayed_node_faults` and
+    /// `delayed_scope_roots` arm against.
+    pub(crate) resolves: HashMap<[u8; 16], u32>,
     /// The scope pointer's `currentRootName`, if the scope was re-pointed.
     pub(crate) pointer: Option<Vec<u8>>,
     /// The published index, once a repair lands.
@@ -177,6 +188,30 @@ impl FakeNet {
 
     pub(crate) fn node_fault(self, byte: u8, reason: SweepResolveFailure) -> Self {
         self.state.borrow_mut().node_faults.insert(id(byte), reason);
+        self
+    }
+
+    /// Serve `byte` normally for `after` resolves, then refuse it.
+    pub(crate) fn node_fault_after(
+        self,
+        byte: u8,
+        after: u32,
+        reason: SweepResolveFailure,
+    ) -> Self {
+        self.state
+            .borrow_mut()
+            .delayed_node_faults
+            .insert(id(byte), (reason, after));
+        self
+    }
+
+    /// Serve `byte` as an interior node for `after` resolves, then as a
+    /// descendant scope root.
+    pub(crate) fn becomes_scope_root_after(self, byte: u8, after: u32) -> Self {
+        self.state
+            .borrow_mut()
+            .delayed_scope_roots
+            .insert(id(byte), after);
         self
     }
 
@@ -287,8 +322,17 @@ impl SweepResolver for FakeNet {
         _scope: &ChildScopeRef,
         child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        let state = self.state.borrow();
+        let mut state = self.state.borrow_mut();
+        let served = state.resolves.entry(child.node_id).or_default();
+        *served += 1;
+        let served = *served;
+        let state = &*state;
         if let Some(reason) = state.node_faults.get(&child.node_id) {
+            return Err(*reason);
+        }
+        if let Some((reason, after)) = state.delayed_node_faults.get(&child.node_id)
+            && served > *after
+        {
             return Err(*reason);
         }
         if state.forged.contains(&child.ipns_name) {
@@ -301,7 +345,11 @@ impl SweepResolver for FakeNet {
             .nodes
             .get(&child.node_id)
             .ok_or(SweepResolveFailure::Unavailable)?;
-        if node.is_scope_root {
+        let minted = state
+            .delayed_scope_roots
+            .get(&child.node_id)
+            .is_some_and(|after| served > *after);
+        if node.is_scope_root || minted {
             return Ok(SweptChild::ScopeRoot(ChildScopeRef::new(
                 child.node_id,
                 child.ipns_name.clone(),

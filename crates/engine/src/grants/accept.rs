@@ -16,9 +16,10 @@ use core::fmt;
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
+    AadContext, ChildScopeRef, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
 };
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
@@ -28,6 +29,7 @@ use zeroize::Zeroizing;
 use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
+use crate::net::GrantedScopeRoot;
 use crate::seams::{FloorStore, Mailbox, SeamError};
 
 use super::contact::Contact;
@@ -94,6 +96,11 @@ impl SharePointer {
 pub struct ReceivedShare {
     /// The scope root's opaque `ipnsName`.
     pub scope_root_name: Vec<u8>,
+    /// The accepted scope's id, as the gate-adopted record's envelope bound it
+    /// ([`AcceptOutcome::scope_id`]). Persisted because a grantee cannot derive
+    /// it from the name, and the grantee rotation arm addresses a scope by id
+    /// ([`GrantedScopeRoots`](crate::rotation::GrantedScopeRoots)).
+    pub scope_id: [u8; 16],
     /// The sharer's identity key.
     pub sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     /// The host display label.
@@ -117,7 +124,8 @@ impl ReceivedShare {
     /// display fields means the freshly-verified metadata is authority and the
     /// stored entry must self-heal to it.
     fn same_bookmark(&self, other: &ReceivedShare) -> bool {
-        self.sharer_identity_pk == other.sharer_identity_pk
+        self.scope_id == other.scope_id
+            && self.sharer_identity_pk == other.sharer_identity_pk
             && self.display_name == other.display_name
             && self.permission == other.permission
             && self.pointer_read_key == other.pointer_read_key
@@ -128,6 +136,7 @@ impl fmt::Debug for ReceivedShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReceivedShare")
             .field("scope_root_name", &self.scope_root_name)
+            .field("scope_id", &self.scope_id)
             .field("display_name", &self.display_name)
             .field("permission", &self.permission)
             .field("pointer_read_key", &"<redacted>")
@@ -202,6 +211,62 @@ impl ReceivedSharesList {
         }
     }
 
+    /// The scope roots this device can address by scope id — the caller-held
+    /// pairing the grantee rotation arm borrows
+    /// ([`GranteeRotationNet`](crate::net::GranteeRotationNet)), derived from the
+    /// bookmark rather than cached beside it.
+    ///
+    /// Two exclusions, both fail-closed. A stored name that is not a well-formed
+    /// IPNS name resolves nothing, so it names no rotation destination. And a
+    /// scope id carried by more than one bookmark is **ambiguous**: `scopeId` is
+    /// authored by the sharer and bound to nothing outside its own record, so two
+    /// sharers can present the same one. Since this list is keyed by name, both
+    /// entries are legitimately held — but neither may answer for the id, or a
+    /// rotation would be aimed at whichever sorted first while the revokee on the
+    /// other scope keeps a live seed.
+    pub fn granted_scope_roots(&self) -> Vec<GrantedScopeRoot> {
+        self.paired(|_| true)
+    }
+
+    /// Those same scope roots, restricted to the ones this device can **write**
+    /// — the granted half of a sweep round
+    /// ([`run_sweep_job`](crate::rotation::run_sweep_job)). The lazy wave
+    /// re-seals and republishes, so it is "runnable by any write-capable client"
+    /// (blueprint/engine.md "sweep"); sweeping a read-only share could only fail
+    /// to publish, once per cadence, forever.
+    pub fn writable_scope_refs(&self) -> Vec<ChildScopeRef> {
+        self.paired(|share| share.permission == Permission::Write)
+            .into_iter()
+            .map(|granted| {
+                ChildScopeRef::new(
+                    granted.scope_id,
+                    granted.ipns_name.as_str().as_bytes().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    /// Ambiguity is decided over **every** bookmark, before `keep` or name
+    /// validity narrows the field: a claimant this call would discard still
+    /// claims the id, and dropping it first would let the survivor answer for an
+    /// id two sharers hold.
+    fn paired(&self, keep: impl Fn(&ReceivedShare) -> bool) -> Vec<GrantedScopeRoot> {
+        let mut claimed: Vec<&ReceivedShare> = self.entries.iter().collect();
+        claimed.sort_by_key(|share| share.scope_id);
+        claimed
+            .chunk_by(|a, b| a.scope_id == b.scope_id)
+            .filter(|run| run.len() == 1)
+            .filter(|run| keep(run[0]))
+            .filter_map(|run| {
+                let text = core::str::from_utf8(&run[0].scope_root_name).ok()?;
+                Some(GrantedScopeRoot {
+                    scope_id: run[0].scope_id,
+                    ipns_name: IpnsName::parse(text).ok()?,
+                })
+            })
+            .collect()
+    }
+
     /// The bookmarked shares.
     pub fn iter(&self) -> impl Iterator<Item = &ReceivedShare> {
         self.entries.iter()
@@ -225,7 +290,7 @@ impl ReceivedSharesList {
 /// The body is a frozen at-rest format. A renamed field or a changed width
 /// orphans every stored list, and the mailbox items that delivered those shares
 /// are acked — hence this constant and the byte vector pinning the encoding.
-pub(crate) const STORED_LIST_V: u64 = 1;
+pub(crate) const STORED_LIST_V: u64 = 2;
 
 /// The frozen bound on bookmarked shares, and on the two attacker-supplied
 /// fields a bookmark carries verbatim from the mailbox pointer.
@@ -314,6 +379,7 @@ pub(crate) fn encode_stored_list(
                 "pointerReadKey",
                 Value::Bytes(share.pointer_read_key().to_vec()),
             );
+            m.insert("scopeId", Value::Bytes(share.scope_id.to_vec()));
             m.insert("scopeRootName", Value::Bytes(share.scope_root_name.clone()));
             m.insert(
                 "sharerIdentityPk",
@@ -365,6 +431,7 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
                 "displayName",
                 "permission",
                 "pointerReadKey",
+                "scopeId",
                 "scopeRootName",
                 "sharerIdentityPk",
             ],
@@ -392,6 +459,7 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
                 req(share, "pointerReadKey")?,
                 "pointerReadKey",
             )?),
+            scope_id: fixed::<16>(req(share, "scopeId")?, "scopeId")?,
             scope_root_name,
         });
     }
@@ -844,6 +912,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
 
     let reconciled = received.reconcile(ReceivedShare {
         scope_root_name: pointer.scope_root_name.clone(),
+        scope_id: candidate.envelope.scope,
         sharer_identity_pk: pointer.sharer_identity_pk,
         display_name: pointer.display_name.clone(),
         permission,
@@ -935,6 +1004,7 @@ mod tests {
         let mut list = ReceivedSharesList::new();
         let share = ReceivedShare {
             scope_root_name: b"n".to_vec(),
+            scope_id: [0x5c; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "s".into(),
             permission: Permission::Read,
@@ -953,6 +1023,7 @@ mod tests {
         let mut list = ReceivedSharesList::new();
         let base = ReceivedShare {
             scope_root_name: b"n".to_vec(),
+            scope_id: [0x5c; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "s".into(),
             permission: Permission::Read,
@@ -982,6 +1053,7 @@ mod tests {
         let mut list = ReceivedSharesList::new();
         let base = ReceivedShare {
             scope_root_name: b"n".to_vec(),
+            scope_id: [0x5c; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "s".into(),
             permission: Permission::Read,
@@ -1018,11 +1090,107 @@ mod tests {
     fn share(scope_root_name: &[u8], key_byte: u8) -> ReceivedShare {
         ReceivedShare {
             scope_root_name: scope_root_name.to_vec(),
+            scope_id: [key_byte; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "s".into(),
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([key_byte; 32]),
         }
+    }
+
+    fn share_at(scope_id: [u8; 16], name: &IpnsName, permission: Permission) -> ReceivedShare {
+        ReceivedShare {
+            scope_root_name: name.as_str().as_bytes().to_vec(),
+            scope_id,
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "s".into(),
+            permission,
+            pointer_read_key: SecretBytes::new([0x8A; 32]),
+        }
+    }
+
+    fn a_name(seed: u8) -> IpnsName {
+        IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([seed; 32]).verifying_key(),
+        )
+    }
+
+    #[test]
+    fn a_bookmark_pairs_its_scope_id_with_the_name_its_root_lives_at() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+
+        let granted = list.granted_scope_roots();
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].scope_id, [0x5c; 16]);
+        assert_eq!(granted[0].ipns_name, a_name(0x31));
+        assert_eq!(list.writable_scope_refs().len(), 1);
+    }
+
+    #[test]
+    fn a_scope_id_two_bookmarks_claim_answers_for_neither() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
+        list.reconcile(share_at([0x77; 16], &a_name(0x33), Permission::Write));
+
+        let granted = list.granted_scope_roots();
+        assert_eq!(
+            granted.iter().map(|g| g.scope_id).collect::<Vec<_>>(),
+            vec![[0x77; 16]],
+            "the ambiguous id is refused, the unambiguous one still answers"
+        );
+    }
+
+    #[test]
+    fn a_read_only_claimant_still_makes_the_id_ambiguous_for_the_sweep_round() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Read));
+
+        assert!(
+            list.writable_scope_refs().is_empty(),
+            "the write half must not answer for an id the read half also claims"
+        );
+        assert!(list.granted_scope_roots().is_empty());
+    }
+
+    #[test]
+    fn a_claimant_with_an_unusable_name_still_makes_the_id_ambiguous() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+        let mut junk = share_at([0x5c; 16], &a_name(0x32), Permission::Write);
+        junk.scope_root_name = b"not-an-ipns-name".to_vec();
+        list.reconcile(junk);
+
+        assert!(
+            list.granted_scope_roots().is_empty(),
+            "an unresolvable name is still a claim on the id"
+        );
+        assert!(list.writable_scope_refs().is_empty());
+    }
+
+    #[test]
+    fn a_bookmark_whose_stored_name_is_unusable_pairs_with_nothing() {
+        let mut list = ReceivedSharesList::new();
+        let mut junk = share_at([0x5c; 16], &a_name(0x31), Permission::Write);
+        junk.scope_root_name = b"not-an-ipns-name".to_vec();
+        list.reconcile(junk);
+
+        assert!(list.granted_scope_roots().is_empty());
+    }
+
+    #[test]
+    fn a_read_only_share_joins_no_sweep_round() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Read));
+
+        assert!(list.writable_scope_refs().is_empty());
+        assert_eq!(
+            list.granted_scope_roots().len(),
+            1,
+            "it is still a scope this device holds a grant for"
+        );
     }
 
     #[test]
@@ -1041,6 +1209,10 @@ mod tests {
         );
         let first = decoded.iter().next().unwrap();
         assert_eq!(first.scope_root_name, b"aaa", "entries ride in scope order");
+        assert_eq!(
+            first.scope_id, [0x8A; 16],
+            "the scope id survives the at-rest round trip"
+        );
         assert!(ct_eq(first.pointer_read_key(), &[0x8A; 32]));
     }
 
@@ -1090,12 +1262,13 @@ mod tests {
     /// key, or a changed width orphans every stored list, and the mailbox items
     /// that delivered those shares are acked — so a byte vector pins it rather
     /// than a self-referential round trip.
-    const STORED_LIST_V1: &str = concat!(
-        "a26176016673686172657381a56a7065726d697373696f6e64726561646b646973706c",
-        "61794e616d6561736d73636f7065526f6f744e616d654c6b353173636f7065726f6f74",
-        "6e706f696e746572526561644b657958208a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a",
-        "8a8a8a8a8a8a8a8a8a8a8a8a8a8a707368617265724964656e74697479506b58210202",
-        "02020202020202020202020202020202020202020202020202020202020202",
+    const STORED_LIST_V2: &str = concat!(
+        "a26176026673686172657381a66773636f70654964508a8a8a8a8a8a8a8a8a8a8a8a8a",
+        "8a8a8a6a7065726d697373696f6e64726561646b646973706c61794e616d6561736d73",
+        "636f7065526f6f744e616d654c6b353173636f7065726f6f746e706f696e7465725265",
+        "61644b657958208a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a",
+        "8a8a8a8a707368617265724964656e74697479506b5821020202020202020202020202",
+        "020202020202020202020202020202020202020202",
     );
 
     #[test]
@@ -1105,12 +1278,12 @@ mod tests {
         let bytes = encode_stored_list(&list).expect("encodes");
         assert_eq!(
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-            STORED_LIST_V1,
+            STORED_LIST_V2,
             "the durable at-rest encoding changed",
         );
 
-        let raw: Vec<u8> = (0..STORED_LIST_V1.len() / 2)
-            .map(|i| u8::from_str_radix(&STORED_LIST_V1[i * 2..i * 2 + 2], 16).expect("hex"))
+        let raw: Vec<u8> = (0..STORED_LIST_V2.len() / 2)
+            .map(|i| u8::from_str_radix(&STORED_LIST_V2[i * 2..i * 2 + 2], 16).expect("hex"))
             .collect();
         let decoded = decode_stored_list(&raw).expect("the frozen bytes still decode");
         assert_eq!(decoded.len(), 1);
@@ -1219,6 +1392,7 @@ mod tests {
     fn received_share_debug_redacts_the_pointer_read_key() {
         let share = ReceivedShare {
             scope_root_name: b"n".to_vec(),
+            scope_id: [0x5c; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "s".into(),
             permission: Permission::Read,

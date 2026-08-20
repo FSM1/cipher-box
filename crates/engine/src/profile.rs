@@ -36,6 +36,14 @@ pub struct SyncTimingProfile {
     /// Scope-pointer consult interval — polled, not fallback (#38 D4);
     /// bounds the read-only-survivor residual.
     pub pointer_consult_interval: Duration,
+    /// Idle cadence of the lazy-wave sweep job
+    /// ([`run_sweep_job`](crate::rotation::run_sweep_job)). Deliberately far
+    /// coarser than [`poll_cadence`]: the sweep is background hygiene that
+    /// ordinary writes advance for free, and it shares the record transport
+    /// with the focus-window tick.
+    ///
+    /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
+    pub sweep_cadence: Duration,
     /// Ceiling on the vault settings load. A settings record that will not
     /// resolve must never block cold start, so once this elapses the load
     /// yields the device's last-known-good settings, or the documented defaults
@@ -46,16 +54,17 @@ pub struct SyncTimingProfile {
 impl SyncTimingProfile {
     /// Shipped policy: TTL 1 minute, 30 s poll (#33 D3).
     ///
-    /// `escalation_window` and `pointer_consult_interval` are placeholders
-    /// pending the measurement process fixed in blueprint/testing.md ("The
-    /// profile is where measured constants land"); each lands as a
-    /// profile-constant change with its measurement linked.
+    /// `escalation_window`, `pointer_consult_interval` and `sweep_cadence`
+    /// are placeholders pending the measurement process fixed in
+    /// blueprint/testing.md ("The profile is where measured constants land");
+    /// each lands as a profile-constant change with its measurement linked.
     pub const PRODUCTION: Self = Self {
         record_ttl: Duration::from_secs(60),
         poll_cadence: Duration::from_secs(30),
         stale_after: Duration::from_secs(90),
         escalation_window: Duration::from_secs(600),
         pointer_consult_interval: Duration::from_secs(30),
+        sweep_cadence: Duration::from_secs(900),
         settings_load_budget: Duration::from_secs(10),
     };
 
@@ -67,6 +76,7 @@ impl SyncTimingProfile {
         stale_after: Duration::from_secs(3),
         escalation_window: Duration::from_secs(5),
         pointer_consult_interval: Duration::from_secs(1),
+        sweep_cadence: Duration::from_secs(2),
         settings_load_budget: Duration::from_secs(1),
     };
 }
@@ -109,6 +119,16 @@ mod tests {
     }
 
     #[test]
+    fn the_sweep_idles_coarser_than_the_focus_window_tick() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.sweep_cadence > profile.poll_cadence,
+                "background hygiene must not contend with interactive polling"
+            );
+        }
+    }
+
+    #[test]
     fn every_duration_is_nonzero_in_both_profiles() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             assert!(
@@ -119,6 +139,7 @@ mod tests {
             assert!(!profile.stale_after.is_zero());
             assert!(!profile.escalation_window.is_zero());
             assert!(!profile.pointer_consult_interval.is_zero());
+            assert!(!profile.sweep_cadence.is_zero());
             assert!(
                 !profile.settings_load_budget.is_zero(),
                 "a zero budget would time out every settings load"

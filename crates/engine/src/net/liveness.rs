@@ -33,9 +33,8 @@ use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler
 /// The ~hourly cadence of the keyless re-PUT job (blueprint: "an ~hourly
 /// Scheduler job keyless-re-PUTs every record the session holds").
 ///
-/// Designed-for cadence, not yet a frozen profile constant — like the sweep
-/// cadence (blueprint/engine.md "Open edges"), it joins the sync timing profile
-/// once measured.
+/// Designed-for cadence, not yet a frozen profile constant; it joins
+/// [`SyncTimingProfile`] once measured, as the sweep cadence already has.
 pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// One held record to keep alive across both re-PUT layers.

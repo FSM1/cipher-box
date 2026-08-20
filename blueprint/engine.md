@@ -818,7 +818,6 @@ already happened below the facade — hosts render, they never decide.
   serving the tombstone before retire. FSM1/cipher-box-next#38 fixed the channel architecture but
   not the window; proposed as a sync-timing-profile constant, to settle with
   the testing-strategy blueprint's e2e work.
-- **Sweep cadence** — the idle-cadence value joins the sync timing profile.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
   WebSocket hints or desktop PubSub), whose handler forces a pass through
   `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1);
