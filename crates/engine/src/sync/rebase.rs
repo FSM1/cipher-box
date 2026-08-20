@@ -102,10 +102,20 @@ pub enum DeadLetterReason {
     /// The network refused the op's own bytes or its registration for a reason
     /// no retry changes — an over-cap payload, not a full account.
     PayloadRefused,
-    /// The op's drain attempt budget ran out. A budget spent before the record
-    /// PUT retires what the op uploaded; once a PUT is acked the publish may
-    /// have landed, so that half retires nothing.
+    /// The op's drain attempt budget ran out. A dead letter keeps its staged
+    /// content, so the version stays preserved and openable and only an
+    /// unreferenced create's own derived name is handed back; a budget spent
+    /// past an acked PUT hands back nothing, since a record may be live at that
+    /// name.
     AttemptsExhausted,
+    /// Every attempt authored a record over the block ceiling reads enforce, so
+    /// no retry and no rebase shrinks it — the node's own listing is larger than
+    /// one record can carry, and splitting it is the remedy. Distinct from
+    /// [`Self::AttemptsExhausted`] because a transport outage and a record that
+    /// will never fit call for different member actions. The staged version is
+    /// preserved: it is intact and openable, and only the record naming it was
+    /// too large.
+    RecordTooLarge,
     /// A concurrent publish gave the target a version this edit was not formed
     /// against. Publishing anyway would move the head off bytes this device
     /// never saw and no read path can reach again, so the edit refuses and

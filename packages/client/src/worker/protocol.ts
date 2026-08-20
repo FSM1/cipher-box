@@ -61,7 +61,8 @@ export type DeadLetterReason =
   | 'payloadRefused'
   | 'attemptsExhausted'
   | 'contentUnrecoverable'
-  | 'baseSuperseded';
+  | 'baseSuperseded'
+  | 'recordTooLarge';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

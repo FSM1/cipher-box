@@ -5182,7 +5182,9 @@ mod tests {
         let hold = SettingsHold {
             op_id: OpId(1),
             node: root,
-            refusal: crate::content::ProviderError::InsecureTransport,
+            refusal: crate::settings::SettingsRefusal::Byo(
+                crate::content::ProviderError::InsecureTransport,
+            ),
         };
         *engine.settings_hold.borrow_mut() = Some(hold);
 

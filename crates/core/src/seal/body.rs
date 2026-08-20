@@ -473,6 +473,19 @@ impl PreservedFields {
     pub(crate) fn insert(&mut self, key: String, value: Value) {
         self.0.insert(key, value);
     }
+
+    /// Drop `key`, reporting whether the set carried it. The set is the terminal
+    /// owner of the clones it holds, so the lifted value is wiped here rather
+    /// than handed back.
+    pub(crate) fn remove(&mut self, key: &str) -> bool {
+        match self.0.remove(key) {
+            Some(mut value) => {
+                value.zeroize_bytes();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl FromIterator<(String, Value)> for PreservedFields {

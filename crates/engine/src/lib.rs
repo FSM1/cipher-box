@@ -95,8 +95,8 @@ pub use rotation::{
 pub use seams::{OwedRetire, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
     DefaultsReason, Placement, PlacementDecision, PlacementRefusal, PlacementSource,
-    SessionPlacement, SettingsLoad, SettingsPublishError, VaultSettings, decide_placement,
-    load_settings, placement_of, publish_settings, settings_name,
+    SessionPlacement, SettingsLoad, SettingsPublishError, SettingsRefusal, VaultSettings,
+    decide_placement, load_settings, placement_of, publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

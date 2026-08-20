@@ -15,7 +15,8 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
-    Version as CoreVersion, decode_envelope, open_read_body, sign_grant_set,
+    Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section, open_read_body,
+    seal_settings_record, set_grant_section, sign_grant_set,
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -1703,7 +1704,9 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
 /// reported anywhere, so it spends the budget and every op behind it drains —
 /// but only the record was over the ceiling, so ending it keeps the version it
 /// would have named rather than unpinning and erasing it, and owes back only the
-/// child name no parent record ever reached.
+/// child name no parent record ever reached. It ends under its own reason: the
+/// remedy is to split the listing, which a transport outage's "try again" never
+/// reaches.
 #[test]
 fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact() {
     let world = FakeWorld::new();
@@ -1736,7 +1739,7 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
         dead_letters,
         vec![DeadLetter {
             op_id,
-            reason: DeadLetterReason::AttemptsExhausted
+            reason: DeadLetterReason::RecordTooLarge
         }]
     );
     assert!(
@@ -1751,6 +1754,89 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
         "the version the oversized record would have named stays pinned — unpinning \
          it is loss no retry undoes — while the child name the parent never came to \
          reference is owed back like any abandoned create's"
+    );
+}
+
+/// Cache a scope root whose carried grant section is committed to a different
+/// `ipnsName` — the account's own root bytes, re-sectioned and re-signed, so
+/// only the commitment's name is wrong. The drain reads its anchor from the
+/// cache under a floor check rather than the whole gate, which is how a section
+/// the gate would have refused reaches the authoring path at all.
+fn cache_a_root_committed_to_another_name(device: &FakeDevice, blocks: &Blocks) {
+    let fixture = owner_root_fixture(OwnerRootSpec {
+        owner_identity: &owner_identity(),
+        owner_enc: &kdf::enc_subkey(&SECRET).public(),
+        scope_id: SCOPE,
+        root_id: ROOT.0,
+        children: Vec::new(),
+        child_scope_index: Vec::new(),
+        parent_node_seed: None,
+        owner_write_blob_epoch: Some(EPOCH),
+        write_history_link: Vec::new(),
+        grants: Vec::new(),
+    });
+    let mut section = fixture.grant_section;
+    section.commitment.ipns_name = write_name(NodeId([0x5C; 16])).as_str().as_bytes().to_vec();
+    section.commitment_sig = sign_grant_set(&owner_identity(), &section.commitment)
+        .expect("the owner signs its own commitment")
+        .to_compact();
+    let mut envelope = fixture.envelope;
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = blocks.put(encode_envelope(&envelope).expect("the envelope encodes"));
+
+    let name = write_name(ROOT);
+    let record = IpnsRecord::create_v2(
+        &write_signer(ROOT),
+        format!("/ipfs/{cid}").as_bytes(),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    block_on(device.snapshot_cache.put(name.as_str().as_bytes(), &record))
+        .expect("the cache takes the record");
+}
+
+/// A produce-side trust refusal is reported the way an arriving record's
+/// rejection is — named, on the event stream, on the pass it happens. Left to
+/// the dead letter a spent budget raises, it would surface under a reason a
+/// network outage also reaches, which is exactly the trust-vs-availability
+/// conflation the read side refuses (AGENTS.md rule 6).
+#[test]
+fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    cache_a_root_committed_to_another_name(&alice, &blocks);
+    create(&mut engine, "photos");
+    let _ = events_so_far(&mut events);
+    tick(&world, &engine, &mut tasks);
+
+    let abuse: Vec<String> = events_so_far(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(abuse.len(), 1, "one refusal, one report: {abuse:?}");
+    assert!(
+        abuse[0].contains("commitment-name-mismatch"),
+        "the report names the check, not just that something failed: {}",
+        abuse[0]
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "and it arrives while the op is still being retried, not once its budget is spent"
     );
 }
 
@@ -4496,17 +4582,18 @@ fn an_abandoned_version_retires_every_block_it_uploaded_and_keeps_the_files_name
     );
 }
 
-/// Exhausting the budget on refusals raised **before** any record PUT is an
-/// abandonment too: nothing can link the version, so it retires what its uploads
-/// charged, exactly as a permanent refusal does. The acked-PUT arm is the
-/// opposite case and retires nothing.
+/// A dead letter keeps its staged content by definition (CONTEXT.md), and a
+/// spent budget is a dead letter: the version stays whole where a permanent
+/// refusal erases it. An `updateContent`'s file already has a live name, so
+/// nothing at all is owed back.
 #[test]
-fn a_version_whose_upload_budget_runs_out_retires_every_block_it_uploaded() {
+fn a_version_whose_upload_budget_runs_out_keeps_the_bytes_it_already_charged() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let (engine, mut tasks, version) = stage_a_second_version(&world, &blocks, &alice);
+    let (engine, mut tasks, _) = stage_a_second_version(&world, &blocks, &alice);
+    let (root_cid, _) = staged_version(&alice);
 
     // An unattributable 413 is charged, never abandoned on one response, so the
     // set stalls with rows already charged until the budget runs out.
@@ -4520,10 +4607,65 @@ fn a_version_whose_upload_budget_runs_out_retires_every_block_it_uploaded() {
             .collect::<Vec<_>>(),
         vec![DeadLetterReason::AttemptsExhausted]
     );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "the blocks the halted set already charged are the version's own, and it keeps them"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "the manifest every retry re-derives its plan from stays staged"
+    );
+}
+
+/// Preserving the version is only real if it outlives the op record, which a
+/// cold start drops and a GC pass then sweeps behind. A create is the arm that
+/// still owes something back: the name it derived, which no published record
+/// ever came to reference.
+#[test]
+fn a_spent_budget_keeps_its_version_across_the_cold_start_that_drops_its_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let (root_cid, _) = staged_version(&alice);
+
+    refuse_uploads_from(&blocks, MID_SET_UPLOAD, proxy_413);
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
     assert_eq!(
         retire_targets(&alice),
-        version,
-        "an exhausted budget retires the same block set a permanent refusal does"
+        vec![write_name(photo).as_str().to_owned()],
+        "the name is owed back; not one block the halted set charged is"
+    );
+    drop(engine);
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "the preserved dead letter keeps its version across the cold start and its GC pass"
     );
 }
 
@@ -7090,6 +7232,160 @@ fn a_withheld_settings_record_refuses_the_write_instead_of_widening_it() {
     assert!(
         uploaded_cids(&alice).is_empty(),
         "and no byte went anywhere"
+    );
+}
+
+/// Queue a content write on `alice`, then leave the engine: the op outlives the
+/// session, so the next cold start drains it under whatever placement its own
+/// settings load decides. Returns the op, its target, and the version's staged
+/// manifest CID.
+fn queue_a_write_and_leave(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (OpId, NodeId, Vec<u8>) {
+    let (mut engine, _events, _tasks) = boot(world, blocks, alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let (root_cid, _) = staged_version(alice);
+    (op_id, photo, root_cid)
+}
+
+/// Serve a settings record naming `external` with no provider — a placement
+/// this build's own publisher refuses to mint (AGENTS.md rule 8), hand-sealed
+/// past that guard because the reader still has to decide what to do with one
+/// that arrives.
+fn seed_settings_naming_no_provider(world: &FakeWorld, blocks: &Blocks) {
+    use cipherbox_core::codec::{Map, Value, encode};
+
+    let mut m = Map::new();
+    m.insert("byo", Value::Null);
+    m.insert("keepLatest", Value::Null);
+    m.insert("pinMode", Value::Text("external".to_owned()));
+    m.insert("revision", Value::Unsigned(1));
+    let body = encode(&Value::Map(m)).expect("the body encodes");
+    let block =
+        seal_settings_record(&kdf::enc_subkey(&SECRET), &[0x5A; 32], &body).expect("the seal");
+    let cid = blocks.put(block);
+    let record = IpnsRecord::create_v2(
+        &kdf::settings_ipns_keypair(&SECRET),
+        format!("/ipfs/{cid}").as_bytes(),
+        1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, settings_name(&SECRET).as_str(), record.clone());
+    }
+}
+
+/// Ticks enough to spend the attempt budget several times over, so a head still
+/// queued at the end is one no pass ever charged.
+const PASSES_PAST_THE_BUDGET: usize = 12;
+
+/// A placement refusal every re-read reaches again is the member's own settings
+/// talking: charging it would spend the version's budget on a verdict no retry
+/// moves, so the head keeps its place and its staging reservation until the
+/// settings change, and the session says which rule it is waiting on.
+#[test]
+fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (op_id, photo, root_cid) = queue_a_write_and_leave(&world, &blocks, &alice);
+
+    seed_settings_naming_no_provider(&world, &blocks);
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    for _ in 0..PASSES_PAST_THE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a held head is not a failing one"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "it keeps its place in the queue"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "and its staged version with it"
+    );
+    let hold = view.settings_hold.expect("the pass names what it waits on");
+    assert_eq!(hold.op_id, op_id);
+    assert_eq!(hold.node, photo);
+    assert_eq!(
+        hold.refusal.check(),
+        "byo-provider-missing",
+        "the rule that refused, never the settings it read"
+    );
+}
+
+/// The other half of the same fork: a settings load that degraded has no member
+/// action as its exit — a later tick may resolve the record — so the pass
+/// retries the head uncharged and takes no hold, which a host would render as
+/// "edit your settings" over a condition editing them does not clear.
+#[test]
+fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (_, _, root_cid) = queue_a_write_and_leave(&world, &blocks, &alice);
+
+    // A durable floor for the settings name with no record to meet it: the
+    // record is being withheld, not absent.
+    block_on(
+        alice
+            .floor_store
+            .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 3),
+    )
+    .expect("the floor raises");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    for _ in 0..PASSES_PAST_THE_BUDGET {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.dead_letters.is_empty(),
+        "an outage this pass could not resolve never spends the budget"
+    );
+    assert_eq!(
+        view.settings_hold, None,
+        "no settings change is what this head is waiting for"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "the head stays queued for a pass that can place it"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&root_cid),
+        "with its staged version intact"
     );
 }
 

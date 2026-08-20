@@ -261,7 +261,9 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         settings_hold: Some(facade::SettingsHold {
             op_id: OpId(13),
             node: facade::NodeId([7u8; 16]),
-            refusal: cipherbox_engine::ProviderError::BlockedAddress,
+            refusal: cipherbox_engine::SettingsRefusal::Byo(
+                cipherbox_engine::ProviderError::BlockedAddress,
+            ),
         }),
         retained_records: 0,
         staleness: facade::Staleness::Fresh,

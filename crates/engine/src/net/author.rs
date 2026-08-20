@@ -24,8 +24,8 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
-    decode_grant_section, encode_envelope, encode_grant_section, grant_section_bytes,
-    has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
+    cut_carried_unknown, decode_grant_section, encode_envelope, encode_grant_section,
+    grant_section_bytes, has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -259,8 +259,25 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
     Ok(envelope)
 }
 
-fn encode(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
-    let block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
+/// Encode the authored envelope, cutting carried unknown fields rather than
+/// refusing a record they pushed past [`MAX_RESOLVED_RECORD_BYTES`]
+/// (blueprint/core.md: a carried set is **truncated, never refused**).
+///
+/// The carried set comes off a resolved record, which may itself run to the
+/// ceiling, so anyone who can publish at a node — a committed write-grantee, a
+/// compromised sibling device — could otherwise stop every later publish there,
+/// the owner's revoking rotation included. What remains refusable is the body
+/// this pass built, which no cut shrinks.
+fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
+    let mut block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
+    // One cut covers the whole overflow, so this converges in at most a second
+    // pass however many fields the carried set holds.
+    while block.len() > MAX_RESOLVED_RECORD_BYTES {
+        if cut_carried_unknown(&mut envelope, block.len() - MAX_RESOLVED_RECORD_BYTES) == 0 {
+            break;
+        }
+        block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
+    }
     if block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(AuthorError::HeadTooLarge {
             size: block.len(),
@@ -732,6 +749,97 @@ mod tests {
             ),
             "an over-cap head must fail closed on the produce side"
         );
+    }
+
+    /// blueprint/core.md: an attacker-influenced carried set is truncated,
+    /// never refused. The set comes off a resolved record, so anyone who can
+    /// publish at this node could otherwise stop every later publish there —
+    /// including the rotation that revokes them.
+    #[test]
+    fn a_carried_set_that_would_overflow_the_read_cap_is_cut_rather_than_refused() {
+        let carried: PreservedFields = [
+            (
+                "bloat".to_owned(),
+                Value::Bytes(vec![0xab; MAX_RESOLVED_RECORD_BYTES]),
+            ),
+            ("keepMe".to_owned(), Value::Bytes(vec![0xcd; 32])),
+        ]
+        .into_iter()
+        .collect();
+        let head = author_child_envelope(authoring(&folder(), carried))
+            .expect("a carried set is cut, never refused");
+        assert!(head.block.len() <= MAX_RESOLVED_RECORD_BYTES);
+        assert_eq!(
+            head.envelope
+                .unknown
+                .entries()
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["keepMe"],
+            "the cut takes the field that overflowed, not the whole set"
+        );
+        assert_eq!(
+            decode_envelope(&head.block).unwrap(),
+            head.envelope,
+            "the block is the cut envelope, not the one that overflowed"
+        );
+    }
+
+    /// The cut runs after the scope-root checks and must not undo them: the
+    /// grant section rides the same carried set, and losing it authors a root
+    /// every adoption rejects.
+    #[test]
+    fn a_cut_scope_root_keeps_the_grant_section_that_marks_it() {
+        let fixture = owner_root();
+        let mut carried = carried_section(&fixture.grant_section);
+        carried = carried
+            .entries()
+            .iter()
+            .cloned()
+            .chain([(
+                "bloat".to_owned(),
+                Value::Bytes(vec![0xab; MAX_RESOLVED_RECORD_BYTES]),
+            )])
+            .collect();
+        let head =
+            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name, &owner())
+                .expect("a carried set is cut, never refused");
+        assert!(head.block.len() <= MAX_RESOLVED_RECORD_BYTES);
+        assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
+    }
+
+    /// The body is this pass's own work, not a carried set, so no cut shrinks
+    /// it and the produce-side refusal stands (security rule 8).
+    #[test]
+    fn a_body_over_the_read_cap_is_still_refused_after_every_cut() {
+        let children = (0..40_000u32)
+            .map(|i| ChildRef {
+                id: {
+                    let mut id = [0u8; 16];
+                    id[..4].copy_from_slice(&i.to_be_bytes());
+                    id
+                },
+                name: "x".repeat(96),
+                ipns_name: i.to_be_bytes().to_vec(),
+                kind: NodeKind::File,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            })
+            .collect();
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children,
+            unknown: PreservedFields::new(),
+        };
+        let carried: PreservedFields = [("bloat".to_owned(), Value::Bytes(vec![0xab; 4096]))]
+            .into_iter()
+            .collect();
+        assert!(matches!(
+            author_child_envelope(authoring(&body, carried)).unwrap_err(),
+            AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+        ));
     }
 
     #[test]

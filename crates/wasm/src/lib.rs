@@ -343,6 +343,9 @@ pub enum DeadLetterReason {
     /// Another writer published a version this edit was not formed against; the
     /// edit's own version stays staged rather than superseding it.
     BaseSuperseded,
+    /// Every attempt authored a record over the block ceiling, so the node's
+    /// listing has to be split rather than retried.
+    RecordTooLarge,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -361,6 +364,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
                 DeadLetterReason::ContentUnrecoverable
             }
             facade::DeadLetterReason::BaseSuperseded => DeadLetterReason::BaseSuperseded,
+            facade::DeadLetterReason::RecordTooLarge => DeadLetterReason::RecordTooLarge,
         }
     }
 }
@@ -653,8 +657,8 @@ impl BlockedOp {
     }
 }
 
-/// The queue head held over the member's own provider settings, keeping its
-/// place and its staging reservation until those settings change.
+/// The queue head held over the member's own settings, keeping its place and
+/// its staging reservation until those settings change.
 #[wasm_bindgen]
 pub struct SettingsHold {
     inner: facade::SettingsHold,
@@ -674,8 +678,8 @@ impl SettingsHold {
         self.inner.node.0.to_vec()
     }
 
-    /// The stable check name of the rule that refused the config. Never the
-    /// endpoint or the bearer those settings carry.
+    /// The stable check name of the rule that refused. Never the endpoint or
+    /// the bearer those settings carry.
     #[wasm_bindgen(getter)]
     pub fn check(&self) -> String {
         self.inner.refusal.check().to_owned()
@@ -1314,7 +1318,9 @@ mod tests {
             settings_hold: Some(facade::SettingsHold {
                 op_id: OpId(13),
                 node: facade::NodeId([6u8; 16]),
-                refusal: cipherbox_engine::ProviderError::InsecureTransport,
+                refusal: cipherbox_engine::SettingsRefusal::Byo(
+                    cipherbox_engine::ProviderError::InsecureTransport,
+                ),
             }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
