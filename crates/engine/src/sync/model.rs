@@ -15,17 +15,24 @@
 
 use std::collections::BTreeMap;
 
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
 use crate::facade::{NodeId, NodeKind};
 
 /// One node's metadata in the working tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct NodeMeta {
     /// Location-independent node id.
+    #[zeroize(skip)]
     pub id: NodeId,
     /// The display name, stored **as entered** (uniqueness folds via
     /// [`collation_key`]; the stored name is never mutated for comparison).
-    pub name: String,
+    ///
+    /// Private so [`Self::rename`] is the only way to replace it: a field
+    /// assignment would drop the superseded `String` intact.
+    name: String,
     /// File or folder.
+    #[zeroize(skip)]
     pub kind: NodeKind,
     /// The node's own IPNS record sequence — the conditional-delete snapshot
     /// (a delete op drops on rebase if this advanced past the op's snapshot).
@@ -39,6 +46,7 @@ pub struct NodeMeta {
     /// conditional-edit anchor an `updateContent` is formed against. `None`
     /// while unprojected **and** for a file with no published version, which
     /// the count tells apart.
+    #[zeroize(skip)]
     pub head_content_cid: Option<Vec<u8>>,
     /// Plaintext content size in bytes; `None` until the content plane
     /// projects it.
@@ -48,6 +56,7 @@ pub struct NodeMeta {
     pub mtime: Option<u64>,
     /// The node's opaque `ipnsName` bytes as carried by its parent's
     /// `ChildRef`; `None` for nodes not yet in gate-passing state.
+    #[zeroize(skip)]
     pub ipns_name: Option<Vec<u8>>,
 }
 
@@ -66,6 +75,17 @@ impl NodeMeta {
             mtime: None,
             ipns_name: None,
         }
+    }
+
+    /// The display name, as entered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Replace the display name, wiping the one it supersedes.
+    pub fn rename(&mut self, name: impl Into<String>) {
+        self.name.zeroize();
+        self.name = name.into();
     }
 }
 
@@ -289,18 +309,38 @@ impl Snapshot {
 /// core owns (its `name_cmp` is the wire-order sibling); this engine-side key
 /// folds case with the platform-stable Unicode default mapping and is applied
 /// identically at create and at merge.
-pub fn collation_key(name: &str) -> String {
-    name.to_lowercase()
+///
+/// Zeroizing because the fold is a verbatim copy of the name for any name that
+/// is already lowercase, and it is built per sibling on every lookup.
+pub fn collation_key(name: &str) -> Zeroizing<String> {
+    Zeroizing::new(name.to_lowercase())
 }
 
 /// The auto-suffix for an add/add collision loser: ` (n)` inserted before the
 /// extension (`report.txt` → `report (2).txt`; `folder` → `folder (2)`;
 /// `.bashrc` → `.bashrc (2)`).
-pub fn suffix_name(name: &str, n: u32) -> String {
+/// Zeroizing for the same reason as [`collation_key`]: the candidate embeds
+/// the name verbatim, and a saturated folder builds thousands of them.
+///
+/// Built into a buffer sized for the whole candidate up front. `format!` grows
+/// its own, and the reallocation frees an intermediate holding the name — which
+/// zeroizing the returned value cannot reach.
+pub fn suffix_name(name: &str, n: u32) -> Zeroizing<String> {
+    let suffix = format!(" ({n})");
+    let mut out = Zeroizing::new(String::with_capacity(name.len() + suffix.len()));
     match split_extension(name) {
-        Some((stem, ext)) => format!("{stem} ({n}).{ext}"),
-        None => format!("{name} ({n})"),
+        Some((stem, ext)) => {
+            out.push_str(stem);
+            out.push_str(&suffix);
+            out.push('.');
+            out.push_str(ext);
+        }
+        None => {
+            out.push_str(name);
+            out.push_str(&suffix);
+        }
     }
+    out
 }
 
 /// Split a trailing extension: `("report", "txt")` for `report.txt`. `None`
@@ -332,10 +372,10 @@ mod tests {
 
     #[test]
     fn suffix_preserves_extension() {
-        assert_eq!(suffix_name("report.txt", 2), "report (2).txt");
-        assert_eq!(suffix_name("folder", 2), "folder (2)");
-        assert_eq!(suffix_name(".bashrc", 2), ".bashrc (2)");
-        assert_eq!(suffix_name("a.b.c", 3), "a.b (3).c");
+        assert_eq!(*suffix_name("report.txt", 2), *"report (2).txt");
+        assert_eq!(*suffix_name("folder", 2), *"folder (2)");
+        assert_eq!(*suffix_name(".bashrc", 2), *".bashrc (2)");
+        assert_eq!(*suffix_name("a.b.c", 3), *"a.b (3).c");
     }
 
     #[test]

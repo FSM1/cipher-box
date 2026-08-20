@@ -148,7 +148,10 @@ describe('buildCommand', () => {
   });
 
   describe('saveVaultSettings', () => {
-    /** Records what the settings builders were constructed with. */
+    /** A fresh bearer, since the codec scrubs the view it is handed. */
+    const token = (): Uint8Array => new TextEncoder().encode('s3cret');
+
+    /** Records builder args, copying byte views before the codec scrubs them. */
     const spyWasm = (): { wasm: EngineWasm; byo: unknown[][]; settings: unknown[][] } => {
       const byo: unknown[][] = [];
       const settings: unknown[][] = [];
@@ -156,7 +159,7 @@ describe('buildCommand', () => {
         ...fakeWasmEnums,
         ByoIpfsConfig: class {
           constructor(...args: unknown[]) {
-            byo.push(args);
+            byo.push(args.map((arg) => (arg instanceof Uint8Array ? new Uint8Array(arg) : arg)));
           }
         },
         VaultSettings: class {
@@ -176,12 +179,12 @@ describe('buildCommand', () => {
         kind: 'saveVaultSettings',
         settings: {
           pinMode: 'dual',
-          byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: 's3cret' },
+          byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: token() },
           keepLatestVersions: 3,
         },
       });
 
-      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, 's3cret']]);
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, token()]]);
       expect(settings).toHaveLength(1);
       expect(settings[0][0]).toBe(fakeWasmEnums.PinMode.Dual);
       expect(settings[0][2]).toBe(3);
@@ -215,6 +218,85 @@ describe('buildCommand', () => {
       expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined]]);
     });
 
+    it('scrubs the worker copy of the bearer once the builder holds it', () => {
+      const { wasm } = spyWasm();
+      const bearer = token();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: {
+          pinMode: 'dual',
+          byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: bearer },
+          keepLatestVersions: null,
+        },
+      });
+
+      expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+    });
+
+    it('scrubs the bearer even when the builder refuses', () => {
+      const { wasm } = spyWasm();
+      const bearer = token();
+      (wasm as { ByoIpfsConfig: unknown }).ByoIpfsConfig = class {
+        constructor() {
+          throw new Error('accessToken must be a sendable bearer');
+        }
+      };
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: {
+            pinMode: 'dual',
+            byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: bearer },
+            keepLatestVersions: null,
+          },
+        })
+      ).toThrow('accessToken must be a sendable bearer');
+      expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+    });
+
+    it('scrubs the bearer when a refusal lands before the provider is built', () => {
+      const { wasm, byo } = spyWasm();
+      const bearer = token();
+
+      // `pinMode` and the retention cap are checked first, so these refusals
+      // never reach the builder that would otherwise spend the bearer.
+      for (const settings of [
+        { pinMode: 'nowhere', keepLatestVersions: null },
+        { pinMode: 'hosted', keepLatestVersions: 0 },
+      ]) {
+        bearer.set(token());
+        expect(() =>
+          buildCommand(wasm, {
+            kind: 'saveVaultSettings',
+            settings: {
+              ...settings,
+              byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: bearer },
+            },
+          } as unknown as CommandDescriptor)
+        ).toThrow();
+        expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+      }
+      expect(byo).toEqual([]);
+    });
+
+    it('refuses a bearer sent as a string, which no owner could scrub', () => {
+      const { wasm, byo } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: {
+            pinMode: 'dual',
+            byo: { endpoint: 'https://kubo.example', kind: 'pinata', accessToken: 's3cret' },
+            keepLatestVersions: null,
+          },
+        } as unknown as CommandDescriptor)
+      ).toThrow('invalid request field settings.byo.accessToken: string');
+      expect(byo).toEqual([]);
+    });
+
     it('refuses a retention cap past the u32 the builder takes', () => {
       const { wasm } = spyWasm();
 
@@ -238,7 +320,7 @@ describe('buildCommand', () => {
           kind: 'saveVaultSettings',
           settings: {
             pinMode: 'hosted',
-            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: 's3cret' },
+            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: token() },
             keepLatestVersions: 0,
           },
         })
@@ -254,7 +336,7 @@ describe('buildCommand', () => {
           kind: 'saveVaultSettings',
           settings: {
             pinMode: 'nowhere',
-            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: 's3cret' },
+            byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: token() },
             keepLatestVersions: null,
           },
         } as unknown as CommandDescriptor)

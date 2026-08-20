@@ -1282,7 +1282,7 @@ impl EngineView {
         self.rendered
             .children(parent)
             .into_iter()
-            .find(|child| collation_key(&child.name) == key)
+            .find(|child| collation_key(child.name()) == key)
             .map(node_attrs)
     }
 
@@ -1330,7 +1330,7 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
 fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
     NodeAttrs {
         id: meta.id,
-        name: meta.name.clone(),
+        name: meta.name().to_owned(),
         kind: meta.kind,
         size: meta.size,
         mtime: meta.mtime,
@@ -3625,7 +3625,7 @@ where {
             .into_iter()
             .map(|child| SnapshotChild {
                 id: child.id,
-                name: child.name.clone(),
+                name: child.name().to_owned(),
                 kind: child.kind,
                 size: child.size,
                 mtime: child.mtime,
@@ -3641,13 +3641,13 @@ where {
                 id,
                 name: rendered
                     .node(id)
-                    .map(|meta| meta.name.clone())
+                    .map(|meta| meta.name().to_owned())
                     .unwrap_or_default(),
             })
             .collect();
         let folder_name = rendered
             .node(folder)
-            .map(|meta| meta.name.clone())
+            .map(|meta| meta.name().to_owned())
             .unwrap_or_default();
         Ok(SnapshotView {
             root: rendered.root,

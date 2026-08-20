@@ -15,6 +15,7 @@
 use core::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::facade::{NodeId, NodeKind, PendingClass};
 use crate::seams::UnixMillis;
@@ -22,10 +23,11 @@ use crate::sync::model::NodeMeta;
 
 /// One intent op: the target node, the base sequence it was formed against,
 /// when it was authored, and the mutation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct Op {
     /// The node this op acts on. For [`OpKind::Create`] it is the id minted
     /// for the new node.
+    #[zeroize(skip)]
     pub target: NodeId,
     /// The record sequence of the base state this op was formed against — the
     /// rebase anchor (#33 D5).
@@ -121,16 +123,22 @@ pub enum ScopeCrossing {
 }
 
 /// The intent-op mutations (#33 D6).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Wipes on drop, but only over the names: a content address rides the op
+/// record's own clear header and a sealed content key is already ciphertext,
+/// so wiping either would cost a pass over every render's copy to hide nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub enum OpKind {
     /// Create a node under a parent.
     Create {
         /// The parent folder.
+        #[zeroize(skip)]
         parent: NodeId,
         /// The name as entered.
         name: String,
         /// What is being created, carrying exactly the content its kind can
         /// hold.
+        #[zeroize(skip)]
         node: NewNode,
     },
     /// Delete a node. `target_sequence` snapshots the target's own record
@@ -149,10 +157,13 @@ pub enum OpKind {
         /// The source parent the move was formed against — the presence
         /// condition for the source-remove and the move-race detector
         /// (a concurrent move away from it makes this op the race loser).
+        #[zeroize(skip)]
         from_parent: NodeId,
         /// The destination parent.
+        #[zeroize(skip)]
         new_parent: NodeId,
         /// Where the destination sits relative to the source scope.
+        #[zeroize(skip)]
         crossing: ScopeCrossing,
     },
     /// Relink **and** rename a node in one entry, optionally replacing the node
@@ -162,21 +173,26 @@ pub enum OpKind {
     Move {
         /// The source parent the move was formed against — the presence
         /// condition for the source-remove and the move-race detector.
+        #[zeroize(skip)]
         from_parent: NodeId,
         /// The destination parent (the source parent for a pure rename).
+        #[zeroize(skip)]
         new_parent: NodeId,
         /// The name at the destination, as entered.
         new_name: String,
         /// The destination node this move vacates, if any.
+        #[zeroize(skip)]
         replacing: Option<Replaced>,
         /// Where the destination sits relative to the source scope. A kernel
         /// rename is the desktop's whole move surface, so a scope exit reaches
         /// the engine through this op as readily as through [`Self::Relink`].
+        #[zeroize(skip)]
         crossing: ScopeCrossing,
     },
     /// Write a new file version (fresh per-version content key).
     UpdateContent {
         /// The new version's staged content.
+        #[zeroize(skip)]
         content: StagedContent,
         /// The `contentCid` of the version this edit was formed against — the
         /// conditional-edit anchor (blueprint/engine.md "Per-op rebase rules").
@@ -201,6 +217,7 @@ pub enum OpKind {
         /// keeping zero would retire the live version along with its history —
         /// unrepresentable rather than guarded, matching
         /// [`RetentionPolicy::KeepLatest`](crate::content::RetentionPolicy).
+        #[zeroize(skip)]
         keep_latest: NonZeroU64,
     },
 }

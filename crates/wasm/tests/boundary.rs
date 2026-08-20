@@ -443,11 +443,14 @@ fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
 fn a_vault_settings_command_carries_the_stable_builder_name() {
     let settings = VaultSettings::new(
         PinMode::Dual,
-        Some(ByoIpfsConfig::new(
-            "https://kubo.example".to_owned(),
-            ByoKind::Kubo,
-            Some("s3cret".to_owned()),
-        )),
+        Some(
+            ByoIpfsConfig::new(
+                "https://kubo.example".to_owned(),
+                ByoKind::Kubo,
+                Some(b"s3cret".to_vec()),
+            )
+            .expect("UTF-8 token bytes build"),
+        ),
         Some(3),
     )
     .expect("a positive cap builds");
@@ -456,4 +459,27 @@ fn a_vault_settings_command_carries_the_stable_builder_name() {
         Command::save_vault_settings(settings).name(),
         "saveVaultSettings"
     );
+}
+
+/// A bearer the engine would refuse never reaches a config object: the refusal
+/// would otherwise land after the constructor minted one holding the
+/// credential, stranding that allocation with no owner to free it.
+#[wasm_bindgen_test]
+fn a_bearer_the_engine_would_refuse_never_builds_a_config() {
+    // Not text at all, empty, and text carrying bytes a header cannot splice.
+    for refused in [
+        vec![0xff, 0xfe],
+        vec![],
+        b"has space".to_vec(),
+        "\u{e9}".into(),
+    ] {
+        assert!(
+            ByoIpfsConfig::new(
+                "https://kubo.example".to_owned(),
+                ByoKind::Kubo,
+                Some(refused),
+            )
+            .is_err()
+        );
+    }
 }

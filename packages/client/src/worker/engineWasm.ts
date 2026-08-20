@@ -156,7 +156,11 @@ export interface EngineWasm {
     siweLogin(message: string, signature: Uint8Array): WasmCommand;
     logout(): WasmCommand;
   };
-  ByoIpfsConfig: new (endpoint: string, kind: number, accessToken?: string) => WasmByoIpfsConfig;
+  ByoIpfsConfig: new (
+    endpoint: string,
+    kind: number,
+    accessToken?: Uint8Array
+  ) => WasmByoIpfsConfig;
   VaultSettings: new (
     pinMode: number,
     byo?: WasmByoIpfsConfig,

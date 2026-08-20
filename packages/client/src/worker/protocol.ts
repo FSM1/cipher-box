@@ -126,8 +126,13 @@ export type ByoKind = 'kubo' | 'psa' | 'pinata';
 export interface ByoIpfsConfigDescriptor {
   endpoint: string;
   kind: ByoKind;
-  /** `null` for a provider that needs no credential. */
-  accessToken: string | null;
+  /**
+   * Bearer credential, `null` for a provider that needs none. Bytes rather
+   * than a string, which cannot be overwritten. A descriptor is cloned rather
+   * than transferred, so this scrubs the worker's copy only — the sender keeps
+   * one it owns and must wipe itself.
+   */
+  accessToken: Uint8Array | null;
 }
 
 /** The member's placement, provider and retention choice, as data. */

@@ -45,7 +45,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         }
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
-                node.name = new_name.clone();
+                node.rename(new_name.clone());
                 op.stamp_authored(node);
             }
         }
@@ -101,7 +101,7 @@ fn relocate(
     }
     if let Some(node) = view.node_mut(op.target) {
         if let Some(new_name) = new_name {
-            node.name = new_name.to_owned();
+            node.rename(new_name);
         }
         op.stamp_authored(node);
     }
@@ -163,7 +163,7 @@ mod tests {
         ];
         let view = apply_overlay(&base, &ops);
         assert_eq!(
-            view.node(id(1)).unwrap().name,
+            view.node(id(1)).unwrap().name(),
             "new.txt",
             "last write in FIFO order wins"
         );
@@ -211,7 +211,7 @@ mod tests {
 
         assert!(!view.contains(id(3)));
         assert_eq!(view.parent_of(id(2)), Some(id(1)));
-        assert_eq!(view.node(id(2)).unwrap().name, "target.txt");
+        assert_eq!(view.node(id(2)).unwrap().name(), "target.txt");
         assert!(view.children(id(0)).iter().all(|c| c.id != id(2)));
     }
 
@@ -240,7 +240,7 @@ mod tests {
         );
 
         assert!(view.contains(id(1)), "the target survives its own replace");
-        assert_eq!(view.node(id(1)).unwrap().name, "g.txt");
+        assert_eq!(view.node(id(1)).unwrap().name(), "g.txt");
     }
 
     #[test]

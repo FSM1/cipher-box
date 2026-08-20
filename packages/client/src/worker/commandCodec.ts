@@ -135,31 +135,53 @@ function retentionCap(value: unknown, field: string): number {
   return cap;
 }
 
-function byoConfig(wasm: EngineWasm, value: unknown): WasmByoIpfsConfig {
+function byoConfig(
+  wasm: EngineWasm,
+  value: unknown,
+  token: Uint8Array | undefined
+): WasmByoIpfsConfig {
   const config = record(value, 'settings.byo');
-  const endpoint = text(config.endpoint, 'settings.byo.endpoint');
-  const kind = byoKind(wasm, config.kind);
-  const token = config.accessToken ?? undefined;
   return new wasm.ByoIpfsConfig(
-    endpoint,
-    kind,
-    token === undefined ? undefined : text(token, 'settings.byo.accessToken')
+    text(config.endpoint, 'settings.byo.endpoint'),
+    byoKind(wasm, config.kind),
+    token
   );
+}
+
+/** The bearer a settings descriptor carries, checked but not yet spent. */
+function byoToken(value: unknown): Uint8Array | undefined {
+  const byo = record(value, 'settings').byo ?? undefined;
+  if (byo === undefined) return undefined;
+  const raw = record(byo, 'settings.byo').accessToken ?? undefined;
+  return raw === undefined ? undefined : bytes(raw, 'settings.byo.accessToken');
 }
 
 /**
  * Every scalar is checked before the first wasm object is built: a `new` that a
  * later refusal abandons strands its allocation — and the credential inside it
  * — in linear memory until the finalization registry runs.
+ *
+ * The bearer is read first and scrubbed last, so every refusal in between spends
+ * it too. Its view is the worker's own: a descriptor is cloned across the
+ * boundary, and the builder copies what it keeps.
  */
 function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
-  const settings = record(value, 'settings');
-  const mode = pinMode(wasm, settings.pinMode);
-  const rawKeep = settings.keepLatestVersions ?? undefined;
-  const keep =
-    rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
-  const byo = settings.byo ?? undefined;
-  return new wasm.VaultSettings(mode, byo === undefined ? undefined : byoConfig(wasm, byo), keep);
+  const token = byoToken(value);
+  try {
+    const settings = record(value, 'settings');
+    const mode = pinMode(wasm, settings.pinMode);
+    const rawKeep = settings.keepLatestVersions ?? undefined;
+    const keep =
+      rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
+    const byo = settings.byo ?? undefined;
+    return new wasm.VaultSettings(
+      mode,
+      byo === undefined ? undefined : byoConfig(wasm, byo, token),
+      keep
+    );
+  } finally {
+    token?.fill(0);
+  }
 }
 
 /**

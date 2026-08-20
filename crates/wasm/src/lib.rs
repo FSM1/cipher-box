@@ -28,10 +28,11 @@
 
 use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
+use cipherbox_engine::seams::check_bearer;
 use cipherbox_engine::{Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy};
 use core::num::NonZeroU64;
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod seams_bridge;
@@ -211,19 +212,46 @@ pub struct ByoIpfsConfig {
     inner: EngineByo,
 }
 
+/// The bearer a host sent as bytes, as the zeroizing text a request splices.
+/// `String::from_utf8` reuses the incoming allocation, so the credential is
+/// never copied; the rejected bytes are wiped before the refusal returns.
+fn decode_bearer(bytes: Vec<u8>) -> Result<Zeroizing<String>, JsError> {
+    let refused = || JsError::new("accessToken must be a sendable bearer");
+    let token = Zeroizing::new(String::from_utf8(bytes).map_err(|error| {
+        error.into_bytes().zeroize();
+        refused()
+    })?);
+    check_bearer(&token).map_err(|_| refused())?;
+    Ok(token)
+}
+
 #[wasm_bindgen]
 impl ByoIpfsConfig {
     /// Builds a provider config. `accessToken` is `undefined` for a provider
-    /// that needs none; when present it lands in a zeroizing buffer.
+    /// that needs none; when present it arrives as bytes and lands in a
+    /// zeroizing buffer.
+    ///
+    /// Bytes rather than a `String` so the host holds the credential in
+    /// something it can scrub: a JS string cannot be overwritten.
+    ///
+    /// The bytes are decoded and checked against [`check_bearer`] here rather
+    /// than at save time, so a credential the engine will refuse never reaches
+    /// a wasm object whose JS handle a later refusal could abandon. The
+    /// refusals carry no part of the value.
     #[wasm_bindgen(constructor)]
-    pub fn new(endpoint: String, kind: ByoKind, access_token: Option<String>) -> ByoIpfsConfig {
-        Self {
+    pub fn new(
+        endpoint: String,
+        kind: ByoKind,
+        access_token: Option<Vec<u8>>,
+    ) -> Result<ByoIpfsConfig, JsError> {
+        let access_token = access_token.map(decode_bearer).transpose()?;
+        Ok(Self {
             inner: EngineByo {
                 endpoint,
                 kind: kind.into(),
-                access_token: access_token.map(Zeroizing::new),
+                access_token,
             },
-        }
+        })
     }
 }
 

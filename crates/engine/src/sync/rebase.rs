@@ -26,6 +26,8 @@
 use core::num::NonZeroU64;
 use std::collections::HashSet;
 
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
 #[cfg(test)]
@@ -46,8 +48,10 @@ pub enum OpResolution {
     /// The op applied onto the (possibly advanced) base.
     Applied {
         /// The name the op resolves to publish under — `Some` for create and
-        /// rename (auto-suffixed when `suffixed`), `None` otherwise.
-        effective_name: Option<String>,
+        /// rename (auto-suffixed when `suffixed`), `None` otherwise. Zeroizing
+        /// because callers destructure the resolution, so the name outlives the
+        /// value that carried it.
+        effective_name: Option<Zeroizing<String>>,
         /// The add/add auto-suffix fired.
         suffixed: bool,
         /// The granted source scope root this op exited, resolved full-depth
@@ -116,9 +120,10 @@ pub enum DeadLetterReason {
 }
 
 /// One applied op, resolved for republish.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct AppliedOp {
     /// The durable-queue id.
+    #[zeroize(skip)]
     pub op_id: OpId,
     /// The op as journaled.
     pub op: Op,
@@ -126,6 +131,7 @@ pub struct AppliedOp {
     /// collision), `None` for ops that carry no name.
     pub effective_name: Option<String>,
     /// The add/add auto-suffix fired.
+    #[zeroize(skip)]
     pub suffixed: bool,
 }
 
@@ -268,7 +274,7 @@ pub fn replay(
                 applied.push(AppliedOp {
                     op_id: *op_id,
                     op: op.clone(),
-                    effective_name,
+                    effective_name: effective_name.map(|n| n.to_string()),
                     suffixed,
                 });
             }
@@ -400,7 +406,7 @@ fn rebase_create(
     working.upsert_node(NodeMeta::new(op.target, effective.clone(), kind));
     working.link_next(parent, op.target);
     OpResolution::Applied {
-        effective_name: Some(effective),
+        effective_name: Some(Zeroizing::new(effective)),
         suffixed,
         scope_exit_trigger: None,
     }
@@ -439,10 +445,10 @@ fn rebase_rename(working: &mut Snapshot, op: &Op, new_name: &str) -> OpResolutio
         None => (new_name.to_owned(), false),
     };
     if let Some(node) = working.node_mut(op.target) {
-        node.name = effective.clone();
+        node.rename(effective.clone());
     }
     OpResolution::Applied {
-        effective_name: Some(effective),
+        effective_name: Some(Zeroizing::new(effective)),
         suffixed,
         scope_exit_trigger: None,
     }
@@ -544,7 +550,7 @@ fn rebase_move(
             && working.parent_of(replaced.node) == Some(new_parent)
             && working
                 .node(replaced.node)
-                .is_some_and(|node| collation_key(&node.name) == collation_key(new_name))
+                .is_some_and(|node| collation_key(node.name()) == collation_key(new_name))
             // Conditional delete: a concurrent edit that advanced it wins.
             && working
                 .record_sequence(replaced.node)
@@ -555,7 +561,9 @@ fn rebase_move(
     // nothing left at the destination to vacate.
     if vacating.is_none()
         && current_parent == Some(new_parent)
-        && working.node(op.target).is_some_and(|n| n.name == new_name)
+        && working
+            .node(op.target)
+            .is_some_and(|n| n.name() == new_name)
     {
         return OpResolution::Dropped(DropReason::AlreadySatisfied);
     }
@@ -579,10 +587,10 @@ fn rebase_move(
         working.link_next(new_parent, op.target);
     }
     if let Some(node) = working.node_mut(op.target) {
-        node.name = effective.clone();
+        node.rename(effective.clone());
     }
     OpResolution::Applied {
-        effective_name: Some(effective),
+        effective_name: Some(Zeroizing::new(effective)),
         suffixed,
         scope_exit_trigger,
     }
@@ -626,18 +634,18 @@ fn rebase_update_content(
             // sibling may have taken it, so route through the one collision
             // resolver every other insert uses.
             let (effective, suffixed) =
-                match resolve_name(working, parent, &meta.name, &[op.target]) {
+                match resolve_name(working, parent, meta.name(), &[op.target]) {
                     Some(resolved) => resolved,
                     None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
                 };
             let mut resurrected = meta.clone();
-            resurrected.name = effective.clone();
+            resurrected.rename(effective.clone());
             resurrected.content_version = resurrected.content_version.map(|count| count + 1);
             resurrected.head_content_cid = op.staged_content().map(|c| c.root_cid.clone());
             working.upsert_node(resurrected);
             working.link_next(parent, op.target);
             OpResolution::Applied {
-                effective_name: Some(effective),
+                effective_name: Some(Zeroizing::new(effective)),
                 suffixed,
                 scope_exit_trigger: None,
             }
@@ -657,22 +665,42 @@ fn resolve_name(
 ) -> Option<(String, bool)> {
     // Fold the sibling collation keys once instead of rescanning the children on
     // every probe — identical to `name_taken`, which folds the same set.
-    let taken: HashSet<String> = snap
+    let taken: TakenNames = snap
         .children(parent)
         .into_iter()
         .filter(|child| !exclude.contains(&child.id))
-        .map(|child| collation_key(&child.name))
+        .map(|child| collation_key(child.name()).to_string())
         .collect();
-    if !taken.contains(&collation_key(name)) {
+    if !taken.0.contains(&*collation_key(name)) {
         return Some((name.to_owned(), false));
     }
     for n in 2..=MAX_SUFFIX_PROBE {
         let candidate = suffix_name(name, n);
-        if !taken.contains(&collation_key(&candidate)) {
-            return Some((candidate, true));
+        if !taken.0.contains(&*collation_key(&candidate)) {
+            return Some((candidate.to_string(), true));
         }
     }
     None
+}
+
+/// The folded sibling collation keys of one folder — a verbatim copy of every
+/// sibling name, so the set wipes what it held rather than freeing it intact.
+/// A `HashSet<Zeroizing<String>>` cannot stand in: `Zeroizing` is not `Hash`.
+#[derive(Default)]
+struct TakenNames(HashSet<String>);
+
+impl FromIterator<String> for TakenNames {
+    fn from_iter<I: IntoIterator<Item = String>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Drop for TakenNames {
+    fn drop(&mut self) {
+        for mut key in self.0.drain() {
+            key.zeroize();
+        }
+    }
 }
 
 /// A dual-link observed repair: the losing parents to unlink from one child.
@@ -1023,18 +1051,18 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("f (2).txt".to_owned()),
+                effective_name: Some(Zeroizing::new("f (2).txt".to_owned())),
                 suffixed: true,
                 scope_exit_trigger: None,
             },
             "the resurrected node auto-suffixes off the taken name"
         );
-        assert_eq!(working.node(id(1)).unwrap().name, "f (2).txt");
+        assert_eq!(working.node(id(1)).unwrap().name(), "f (2).txt");
         // Both siblings survive with distinct collation keys.
         let keys: std::collections::HashSet<String> = working
             .children(id(0))
             .iter()
-            .map(|n| collation_key(&n.name))
+            .map(|n| collation_key(n.name()).to_string())
             .collect();
         assert_eq!(
             keys.len(),
@@ -1112,12 +1140,12 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("a (2).txt".to_owned()),
+                effective_name: Some(Zeroizing::new("a (2).txt".to_owned())),
                 suffixed: true,
                 scope_exit_trigger: None,
             }
         );
-        assert_eq!(base.node(id(2)).unwrap().name, "a (2).txt");
+        assert_eq!(base.node(id(2)).unwrap().name(), "a (2).txt");
         // Both are visible.
         assert_eq!(base.children(id(0)).len(), 2);
     }
@@ -1127,7 +1155,7 @@ mod tests {
         let mut base = tree();
         with_node(&mut base, id(0), id(1), "start.txt", NodeKind::File);
         // A concurrent rename already moved it to "other.txt".
-        base.node_mut(id(1)).unwrap().name = "other.txt".into();
+        base.node_mut(id(1)).unwrap().rename("other.txt");
 
         let local = base.clone();
         let res = rebase_one(
@@ -1144,7 +1172,7 @@ mod tests {
             }
         ));
         assert_eq!(
-            base.node(id(1)).unwrap().name,
+            base.node(id(1)).unwrap().name(),
             "final.txt",
             "the rebasing writer wins"
         );
@@ -1269,7 +1297,7 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("renamed.txt".to_owned()),
+                effective_name: Some(Zeroizing::new("renamed.txt".to_owned())),
                 suffixed: false,
                 scope_exit_trigger: Some(id(5)),
             }
@@ -1368,7 +1396,7 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("target.txt".to_owned()),
+                effective_name: Some(Zeroizing::new("target.txt".to_owned())),
                 suffixed: false,
                 scope_exit_trigger: None,
             },
@@ -1376,7 +1404,7 @@ mod tests {
         );
         assert!(!base.contains(id(3)), "the replaced node is gone");
         assert_eq!(base.parent_of(id(2)), Some(id(1)));
-        assert_eq!(base.node(id(2)).unwrap().name, "target.txt");
+        assert_eq!(base.node(id(2)).unwrap().name(), "target.txt");
         assert!(base.children(id(0)).iter().all(|c| c.id != id(2)));
     }
 
@@ -1404,13 +1432,13 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("target (2).txt".to_owned()),
+                effective_name: Some(Zeroizing::new("target (2).txt".to_owned())),
                 suffixed: true,
                 scope_exit_trigger: None,
             }
         );
         assert!(base.contains(id(3)), "the edited node survives");
-        assert_eq!(base.node(id(2)).unwrap().name, "target (2).txt");
+        assert_eq!(base.node(id(2)).unwrap().name(), "target (2).txt");
     }
 
     #[test]
@@ -1419,7 +1447,7 @@ mod tests {
         // advances the node's own sequence — the conditional-delete anchor
         // alone would see this as "unchanged" and destroy a bystander.
         let mut base = replace_tree(1);
-        base.node_mut(id(3)).unwrap().name = "keep.txt".into();
+        base.node_mut(id(3)).unwrap().rename("keep.txt");
         let local = base.clone();
 
         let res = rebase_one(
@@ -1440,14 +1468,14 @@ mod tests {
         assert_eq!(
             res,
             OpResolution::Applied {
-                effective_name: Some("target.txt".to_owned()),
+                effective_name: Some(Zeroizing::new("target.txt".to_owned())),
                 suffixed: false,
                 scope_exit_trigger: None,
             },
             "the contested name is free, so the move just takes it"
         );
         assert!(base.contains(id(3)), "the renamed bystander survives");
-        assert_eq!(base.node(id(3)).unwrap().name, "keep.txt");
+        assert_eq!(base.node(id(3)).unwrap().name(), "keep.txt");
     }
 
     #[test]
@@ -1513,7 +1541,7 @@ mod tests {
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(base.contains(id(2)), "the target survives its own replace");
-        assert_eq!(base.node(id(2)).unwrap().name, "renamed.txt");
+        assert_eq!(base.node(id(2)).unwrap().name(), "renamed.txt");
         assert_eq!(base.parent_of(id(2)), Some(id(0)));
     }
 
@@ -1544,7 +1572,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(base.node(id(2)).unwrap().name, "g.txt");
+        assert_eq!(base.node(id(2)).unwrap().name(), "g.txt");
         assert_eq!(base.parent_of(id(2)), Some(id(0)));
         assert_eq!(
             base.winning_link(id(2)).unwrap().link_counter,
@@ -1619,7 +1647,7 @@ mod tests {
         base.remove_node(id(3));
         base.unlink(id(0), id(2));
         base.link(id(1), id(2), 2);
-        base.node_mut(id(2)).unwrap().name = "target.txt".into();
+        base.node_mut(id(2)).unwrap().rename("target.txt");
         let local = base.clone();
 
         let res = rebase_one(
