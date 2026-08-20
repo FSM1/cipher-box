@@ -1,25 +1,16 @@
 //! Rotation triggers (blueprint/engine.md "Rotation primitives: Triggers",
 //! #26 D7).
 //!
-//! | Trigger                  | Committed-set change       | Planes rotated                      |
-//! | ------------------------ | -------------------------- | ----------------------------------- |
-//! | Scope exit               | none (grantee flat)        | read — the single root re-publishes |
-//! | Read revoke              | revokee removed            | read — the fresh-seed eager cascade |
-//! | Write revoke / downgrade | revokee removed or demoted | write; plus read on a full revoke   |
-//! | Discovered link expiry   | expired rows pruned        | read; plus write for a write link   |
-//! | Manual hygiene           | none                       | read — per scope, same primitive    |
-//!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
-//! (#26 D5). The other three mutate it through an owner-only cut over the shared
-//! [`GrantCutPlan`], each returning the [`RotationPlanes`] its
-//! [`RevokedCommittedSet`] demands, which [`rotate_on_cut`] then drives. The cut
-//! party is thereby absent from the re-wrapped grant blobs: that absence **is**
-//! the revocation ("they keep what they saw; they lose everything new, now").
+//! (#26 D5). The other three cut the set through an owner-only edit over the
+//! shared [`GrantCutPlan`]. The cut party is thereby absent from the re-wrapped
+//! grant blobs: that absence **is** the revocation ("they keep what they saw;
+//! they lose everything new, now").
 //!
-//! Only the fresh-seed eager cascade completes a read revoke, never the sweep
-//! (rationale on [`super::cascade`]); only a write rotation ends a write grant
-//! (rationale on [`WriteRevokeKind`]).
+//! A cut on its own revokes nothing: only the fresh-seed eager cascade completes
+//! a read revoke, never the sweep (rationale on [`super::cascade`]), and only a
+//! write rotation ends a write grant (rationale on [`WriteRevokeKind`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -147,17 +138,34 @@ pub struct GrantCutPlan<'a> {
 }
 
 /// Which planes a committed-set cut must rotate before it is a real revocation.
+///
+/// Mintable and editable only by this module's cuts. A host that could forge or
+/// clear a flag would make [`rotate_on_cut`] skip a plane the cut demands and
+/// still report success — a revocation that never happened.
+///
+/// ```compile_fail
+/// let forged = cipherbox_engine::RotationPlanes { read: false, write: false };
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RotationPlanes {
+    read: bool,
+    write: bool,
+}
+
+impl RotationPlanes {
     /// Rotate the read plane — the fresh-seed eager cascade.
-    pub read: bool,
+    pub fn read(&self) -> bool {
+        self.read
+    }
+
     /// Rotate the write plane — `rotateScopeWrite`'s name wave.
-    pub write: bool,
+    pub fn write(&self) -> bool {
+        self.write
+    }
 }
 
 /// The owner-only committed-set cut a trigger produces, and the rotation it is
-/// not a revocation without. Mintable only through this module's cuts, so its
-/// [`planes`](Self::planes) always name a rotation that finishes it.
+/// not a revocation without. Mintable only through this module's cuts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RevokedCommittedSet {
@@ -168,10 +176,29 @@ pub struct RevokedCommittedSet {
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
     /// The grant ledger with the same cut applied.
     pub grant_ledger: Vec<GrantLedgerEntry>,
+    /// Read-only — see [`planes`](Self::planes).
+    planes: RotationPlanes,
+}
+
+impl RevokedCommittedSet {
     /// The planes [`rotate_on_cut`] must drive for this cut. Carried with the
-    /// cut rather than chosen by the caller, so a cut cannot be driven through
-    /// planes that do not finish it.
-    pub planes: RotationPlanes,
+    /// cut rather than chosen by the caller, and unreachable for writing, so a
+    /// cut cannot be driven through planes that do not finish it.
+    ///
+    /// ```compile_fail
+    /// fn clear(cut: &mut cipherbox_engine::RevokedCommittedSet) {
+    ///     cut.planes.read = false;
+    /// }
+    /// ```
+    ///
+    /// ```
+    /// fn inspect(cut: &cipherbox_engine::RevokedCommittedSet) -> (bool, bool) {
+    ///     (cut.planes().read(), cut.planes().write())
+    /// }
+    /// ```
+    pub fn planes(&self) -> RotationPlanes {
+        self.planes
+    }
 }
 
 /// A fail-closed committed-set-cut failure.
@@ -321,13 +348,10 @@ fn resign(
 /// the owner-signed commitment and the write-body ledger in `plan`, and
 /// owner-re-sign the pruned commitment.
 ///
-/// Owner-only by construction — it requires the owner's identity signer, and only
-/// the commitment (owner-signed) authorises the set ([`authorize_cut`]). The tag
-/// MUST be committed, and committed as [`Permission::Read`]: cutting a write
-/// grant from the read plane alone would leave its holder authoring at every
-/// current write name, so that is [`RevokeError::WriteGranted`], not a silent
-/// half-revoke. The result is the input a subsequent `rotate_scope` re-seals —
-/// after which the revokee has no grant blob at the new epoch.
+/// Owner-only by construction: only the owner-signed commitment authorises the
+/// set ([`authorize_cut`]). The tag MUST be committed as [`Permission::Read`]
+/// ([`RevokeError::WriteGranted`]). The revokee has no grant blob once the
+/// re-seal lands at the new epoch.
 pub fn revoke_read_grant(
     plan: &GrantCutPlan<'_>,
     revoked_tag: &[u8; 32],
@@ -375,9 +399,7 @@ pub enum WriteRevokeKind {
 /// owner-re-sign.
 ///
 /// Owner-only and scope-bound exactly as [`revoke_read_grant`] is. The tag MUST
-/// be committed with [`Permission::Write`] — a read-only grant is
-/// [`RevokeError::NotWriteGranted`], never a cut that moves every name in the
-/// scope for nothing.
+/// be committed with [`Permission::Write`] ([`RevokeError::NotWriteGranted`]).
 pub fn revoke_write_grant(
     plan: &GrantCutPlan<'_>,
     revoked_tag: &[u8; 32],
@@ -434,9 +456,7 @@ pub fn revoke_write_grant(
 /// layer reads, and a grant dies **at** its deadline, not a tick later
 /// ([`entry_is_live`](crate::grants::ledger::entry_is_live)).
 ///
-/// Owner-only by construction, exactly as [`revoke_read_grant`] is: a grantee
-/// holds no signer that authorizes the commitment, so a non-owner session
-/// observing the same expired grant cuts nothing.
+/// Owner-only by construction, exactly as [`revoke_read_grant`] is.
 pub fn prune_expired_grants(
     plan: &GrantCutPlan<'_>,
     owner_deadlines: &BTreeMap<[u8; 32], UnixMillis>,
@@ -550,10 +570,8 @@ impl RotateOnCutError {
 /// Read plane first: it publishes the cut set at the name survivors are still
 /// reading, which is the definitive revocation signal, and it is the record the
 /// write wave then re-mints its grant set from. The write wave moves the scope
-/// off every name the cut party can still author at, so it goes last.
-///
-/// Fail-closed: the first plane that does not complete aborts with the plane
-/// named, never a partial report mistakable for a finished revoke.
+/// off every name the cut party can still author at, so it goes last. The first
+/// plane that does not complete aborts the cut ([`RotateOnCutError`]).
 pub async fn rotate_on_cut<R: CutRotator>(
     rotator: &R,
     scope_root: NodeId,
