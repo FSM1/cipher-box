@@ -195,14 +195,16 @@ export class LeaderRelay {
    * Names the account this leadership's engine cold-started for. The origin
    * hosts a single engine, so it hosts a single account (blueprint/web-client.md
    * "Engine hosting and tab leadership"): this relay serves only followers that
-   * greet under the same one, and a port adopted under the account it held
-   * before is retired here rather than left to answer for the new one.
+   * greet under the same one, and a follower adopted under the account it held
+   * before is reclaimed here — the same abandonment a departure drives, since a
+   * write it still owns would otherwise hold its staging reservation for the
+   * rest of the session against an engine that will never serve it again.
    */
   serves(accountId: string | null): void {
     if (this.account === accountId) return;
     this.account = accountId;
     for (const entry of [...this.ports]) {
-      if (entry.clientId !== null && entry.accountId !== accountId) this.detachPort(entry);
+      if (entry.clientId !== null && entry.accountId !== accountId) this.reclaim(entry.clientId);
     }
   }
 

@@ -2,11 +2,9 @@ import { LoginError } from './LoginError';
 import { shortAccountId } from '../../utils/format';
 
 /**
- * The origin hosts one engine, so it hosts one account: a sign-in this browser
- * already has another tab's session for is refused rather than served that
- * tab's vault (blueprint/web-client.md "Engine hosting and tab leadership").
- * Only the tab holding the engine can give it up, so the way out is stated
- * here rather than offered as a button that cannot reach it.
+ * What a sign-in refused by the origin's one engine shows (`PortRequest`). Only
+ * the tab holding that engine can give it up, so the way out is stated here
+ * rather than offered as a button that cannot reach it.
  */
 export function SignedInElsewhere({ heldBy }: { heldBy: string | null }) {
   return (

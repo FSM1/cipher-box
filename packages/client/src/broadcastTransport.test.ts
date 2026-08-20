@@ -178,6 +178,23 @@ describe('one engine per origin is one account per origin', () => {
     expect(engine.snapshots).toHaveLength(1);
   });
 
+  it('releases the handles of a follower the leader engine stops holding the account for', async () => {
+    const { engine, relay, follower } = wire();
+    await startFollower(relay, follower);
+    engine.writeHandle = 7n;
+    engine.streamHandle = 9n;
+    const write = await follower.beginWrite({ node: new Uint8Array(16).fill(1) }, 4);
+    const stream = await follower.openContentStream(new Uint8Array(16).fill(2));
+
+    relay.serves(OTHER_ACCOUNT_ID);
+    await tick();
+
+    // A retained write keeps its staging reservation for the rest of the
+    // session, and a retained stream pins a content version and its key.
+    expect(engine.aborts).toEqual([write]);
+    expect(engine.closedStreams).toEqual([stream]);
+  });
+
   it('names no account on the origin-wide channel, only on the private port', async () => {
     const { bus, ports, relay, follower } = wire();
     const bystander: unknown[] = [];

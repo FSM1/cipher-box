@@ -71,13 +71,14 @@ describe('makeBrowserSeams', () => {
 
 /**
  * A stub origin: `existing` names every database on it, `staged` every OPFS
- * entry, and `queued` how many ops each account's op queue still holds. Records
- * what the sweep asked to delete, which is what these assert.
+ * entry, and `queued` how many ops each account's op queue still holds — or
+ * `'unreadable'` for one that will not open. Records what the sweep asked to
+ * delete, which is what these assert.
  */
 function stubOrigin(
   existing: string[],
   staged: string[] = [],
-  queued: Record<string, number> = {}
+  queued: Record<string, number | 'unreadable'> = {}
 ): { deleted: string[]; removed: string[] } {
   const deleted: string[] = [];
   const removed: string[] = [];
@@ -90,6 +91,13 @@ function stubOrigin(
       return request as unknown as IDBOpenDBRequest;
     },
     open: (name: string) => {
+      if (queued[name] === 'unreadable') {
+        const failing: { onerror?: () => void; error?: unknown } = {
+          error: new Error('IndexedDB open failed'),
+        };
+        queueMicrotask(() => failing.onerror?.());
+        return failing as unknown as IDBOpenDBRequest;
+      }
       const count = { result: queued[name] ?? 0, onsuccess: undefined as (() => void) | undefined };
       const request: { onsuccess?: () => void; result?: unknown } = {
         result: {
@@ -162,6 +170,33 @@ describe('reclaimOtherAccountStores', () => {
     expect(reclaimed).not.toContain(`cipherbox-${gone}-staging-staged`);
     expect(origin.removed).toEqual([]);
     expect(origin.deleted).toEqual([`cipherbox-${gone}-snapshot-cache`]);
+  });
+
+  it('takes the staged bytes of an account whose op queue database is gone', async () => {
+    // No queue database at all: nothing was ever enqueued, so nothing is owed.
+    const origin = stubOrigin([...liveStores], [`cipherbox-${gone}-staging-staged`]);
+
+    expect(await reclaimOtherAccountStores(CONFIG, live)).toEqual([
+      `cipherbox-${gone}-staging-staged`,
+    ]);
+    expect(origin.removed).toEqual([`cipherbox-${gone}-staging-staged`]);
+  });
+
+  it('leaves the staged bytes of an op queue it cannot read', async () => {
+    const origin = stubOrigin(
+      [...liveStores, ...goneStores],
+      [`cipherbox-${gone}-staging-staged`],
+      {
+        [`cipherbox-${gone}-staging`]: 'unreadable',
+      }
+    );
+
+    // A queue this sweep cannot read is not one it can prove drained, so the
+    // bytes stay rather than take unpublished work with them.
+    expect(await reclaimOtherAccountStores(CONFIG, live)).not.toContain(
+      `cipherbox-${gone}-staging-staged`
+    );
+    expect(origin.removed).toEqual([]);
   });
 
   it('never deletes an op queue, drained or not', async () => {

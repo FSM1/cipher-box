@@ -279,6 +279,8 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   };
   const live = 'liveaccount';
   const gone = 'goneaccount';
+  // A departed account with work still queued: its staged bytes are referenced.
+  const busy = 'busyaccount';
   // What a drained departed account gives back: its cache, and its staged bytes.
   const reclaimable = ['snapshot-cache'];
   const kept = ['floors', 'staging'];
@@ -305,6 +307,13 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   handle.write(new Uint8Array(4096).fill(9), { at: 0 });
   handle.flush();
   handle.close();
+
+  // A second departed account, seeded through the real seams so the queue the
+  // sweep reads is the one production writes — an op still queued, and the
+  // staged body it names.
+  const busySeams = makeBrowserSeams(config, busy);
+  await busySeams.stagingStore.enqueueOp(new Uint8Array([4, 5]));
+  await busySeams.stagingStore.putStagedBytes(new Uint8Array([0xab]), new Uint8Array(64).fill(1));
 
   // The live account's stores, open through the real seams as a running engine
   // holds them.
@@ -336,8 +345,13 @@ async function runStoreReclaimBehavioral(): Promise<void> {
       throw new Error(`storeReclaim: a departed account lost its ${suffix} store`);
     }
   }
+  let busyStagedKept = false;
   for await (const name of root.keys()) {
     if (name === stagedDir(gone)) throw new Error('storeReclaim: staged bytes survived the sweep');
+    if (name === stagedDir(busy)) busyStagedKept = true;
+  }
+  if (!busyStagedKept) {
+    throw new Error('storeReclaim: an undrained queue lost its staged bytes');
   }
 
   // The live account's stores are not merely present but still serving.

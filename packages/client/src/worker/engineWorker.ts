@@ -48,7 +48,9 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
  * already measured, so the bytes it frees are the *next* start's headroom.
  */
 function openAccount(config: EngineWorkerBootstrap, accountId: string): BrowserSeams {
-  void reclaimOtherAccountStores(config, accountId);
+  // Detached, so its own best-effort contract is the only thing holding a sweep
+  // fault off the cold start: make that structural rather than internal.
+  void reclaimOtherAccountStores(config, accountId).catch(() => undefined);
   return makeBrowserSeams(config, accountId);
 }
 

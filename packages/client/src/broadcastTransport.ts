@@ -19,11 +19,8 @@
  * leader, and command arguments, upload chunks, snapshots, plaintext windows and
  * the engine event stream all cross it — so a same-origin context that merely
  * opened the channel is no longer a receiver. The rendezvous is as authenticated
- * as the `cb:leader` beacon and no more: same origin remains the trust boundary.
- *
- * Same origin is not the same account: the greeting names the account this tab
- * is starting for, and a leader whose engine holds another refuses it
- * (`LeaderRelay.serves`).
+ * as the `cb:leader` beacon and no more: same origin remains the trust boundary,
+ * and same origin is not the same account (`PortRequest`).
  *
  * The tab also holds a **presence lock** for its whole life, released by the
  * browser when it dies; the leader watches that release to reclaim what this tab
