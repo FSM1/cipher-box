@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RequireAuth } from '../auth/RequireAuth';
 import { authStore } from '../stores/auth.store';
 import { authWrapper, fakeCoreKitSession, fakeEngineClient } from '../test/authFakes';
 import { FilesPage } from './FilesPage';
@@ -15,7 +16,14 @@ function renderDeepLink(coreKit: ReturnType<typeof fakeCoreKitSession>) {
       <MemoryRouter initialEntries={['/files']}>
         <Routes>
           <Route path="/" element={<p>FRONT DOOR</p>} />
-          <Route path="/files/:nodeId?" element={<FilesPage />} />
+          <Route
+            path="/files/:nodeId?"
+            element={
+              <RequireAuth>
+                <FilesPage />
+              </RequireAuth>
+            }
+          />
         </Routes>
       </MemoryRouter>
     </Wrapper>

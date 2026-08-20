@@ -21,7 +21,7 @@ import {
   TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
-import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = (): Promise<void> => after(0);
@@ -348,6 +348,37 @@ describe('broadcast transport ↔ leader relay', () => {
     await expect(follower.pushChunk(1n, plaintext.buffer as ArrayBuffer)).rejects.toThrow();
 
     expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('moves a command bearer onto the port rather than cloning it to the leader', async () => {
+    const { ports, engine, relay, follower } = wire();
+    await startFollower(relay, follower);
+    const accessToken = new TextEncoder().encode('s3cret').buffer as ArrayBuffer;
+
+    await follower.command(settingsCommand(accessToken), [accessToken]);
+
+    // Transferred, not cloned: the credential leaves this tab's heap outright,
+    // and reaches the engine intact at the far end of both hops.
+    expect(accessToken.byteLength).toBe(0);
+    expect(ports.transfers.some((list) => list[0] === accessToken)).toBe(true);
+    expect(bearerOf(engine.commands[0])).toEqual(new TextEncoder().encode('s3cret'));
+  });
+
+  it('wipes a command bearer it never gets onto a port', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    relayOn(bus, new FakeEngineTransport(), ports.courier('leader'));
+    // No port to move the credential out over, so this tab stays its owner.
+    const follower = followerOn(bus, 'follower-1', unavailableCourier);
+    const bearer = new TextEncoder().encode('s3cret');
+
+    await expect(
+      follower.command(settingsCommand(bearer.buffer as ArrayBuffer), [
+        bearer.buffer as ArrayBuffer,
+      ])
+    ).rejects.toThrow();
+
+    expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
   });
 
   it('keeps upload plaintext and command arguments off the channel', async () => {
@@ -1168,6 +1199,26 @@ function replies(port: FakeChannelPort, type: string): Array<Record<string, unkn
   return (port.posted as Array<Record<string, unknown>>).filter((m) => m.type === type);
 }
 
+/** A settings command carrying `accessToken` — the one credential-bearing command. */
+function settingsCommand(accessToken: ArrayBuffer): CommandDescriptor {
+  return {
+    kind: 'saveVaultSettings',
+    settings: {
+      pinMode: 'external',
+      byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken },
+      keepLatestVersions: null,
+    },
+  };
+}
+
+/** The bearer bytes a relayed settings command arrived with. */
+function bearerOf(command: CommandDescriptor | undefined): Uint8Array {
+  if (command?.kind !== 'saveVaultSettings' || !command.settings.byo?.accessToken) {
+    throw new Error('the relayed command carried no bearer');
+  }
+  return new Uint8Array(command.settings.byo.accessToken);
+}
+
 describe('leader relay write handles', () => {
   function bench(): {
     bus: FakeBus;
@@ -1344,6 +1395,41 @@ describe('leader relay write handles', () => {
     expect(replies(rebrokered, 'cb:portResult')).toContainEqual(
       expect.objectContaining({ requestId: 1, ok: true, result: 9n })
     );
+  });
+
+  it('carries a BYO bearer on to the engine by transfer, keeping no copy in the leader tab', async () => {
+    const { engine, leaderPort } = await portBench();
+    const bearer = new TextEncoder().encode('s3cret');
+
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      requestId: 1,
+      command: settingsCommand(bearer.buffer as ArrayBuffer),
+    });
+    await tick();
+
+    // Moved on, not cloned: the buffer the port handed the relay is detached by
+    // the onward transfer, so the credential is in the worker realm and nowhere
+    // else — and it arrived intact.
+    expect(engine.commandTransfers[0]).toHaveLength(1);
+    expect(bearer.byteLength).toBe(0);
+    expect(bearerOf(engine.commands[0])).toEqual(new TextEncoder().encode('s3cret'));
+  });
+
+  it('wipes a BYO bearer it drops for a malformed command', async () => {
+    const { engine, leaderPort } = await portBench();
+    const bearer = new TextEncoder().encode('s3cret');
+
+    // No `requestId`, so nothing can be answered — but the bearer already
+    // crossed by transfer, leaving the relay its last owner.
+    leaderPort.receive({
+      type: 'cb:portCommand',
+      command: settingsCommand(bearer.buffer as ArrayBuffer),
+    });
+    await tick();
+
+    expect([...bearer]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(engine.commands).toEqual([]);
   });
 
   it('wipes a transferred chunk it drops for a malformed request', async () => {

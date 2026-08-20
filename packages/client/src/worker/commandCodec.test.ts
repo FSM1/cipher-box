@@ -149,7 +149,9 @@ describe('buildCommand', () => {
 
   describe('saveVaultSettings', () => {
     /** A fresh bearer, since the codec scrubs the view it is handed. */
-    const token = (): Uint8Array => new TextEncoder().encode('s3cret');
+    const tokenBytes = (): Uint8Array => new TextEncoder().encode('s3cret');
+    /** The bearer as it crosses the boundary: transferred, so an `ArrayBuffer`. */
+    const token = (): ArrayBuffer => tokenBytes().buffer as ArrayBuffer;
 
     /** Records builder args, copying byte views before the codec scrubs them. */
     const spyWasm = (): { wasm: EngineWasm; byo: unknown[][]; settings: unknown[][] } => {
@@ -184,7 +186,7 @@ describe('buildCommand', () => {
         },
       });
 
-      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, token()]]);
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, tokenBytes()]]);
       expect(settings).toHaveLength(1);
       expect(settings[0][0]).toBe(fakeWasmEnums.PinMode.Dual);
       expect(settings[0][2]).toBe(3);
@@ -231,7 +233,7 @@ describe('buildCommand', () => {
         },
       });
 
-      expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+      expect([...new Uint8Array(bearer)]).toEqual(new Array(bearer.byteLength).fill(0));
     });
 
     it('scrubs the bearer even when the builder refuses', () => {
@@ -253,7 +255,7 @@ describe('buildCommand', () => {
           },
         })
       ).toThrow('accessToken must be a sendable bearer');
-      expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+      expect([...new Uint8Array(bearer)]).toEqual(new Array(bearer.byteLength).fill(0));
     });
 
     it('scrubs the bearer when a refusal lands before the provider is built', () => {
@@ -266,7 +268,7 @@ describe('buildCommand', () => {
         { pinMode: 'nowhere', keepLatestVersions: null },
         { pinMode: 'hosted', keepLatestVersions: 0 },
       ]) {
-        bearer.set(token());
+        new Uint8Array(bearer).set(tokenBytes());
         expect(() =>
           buildCommand(wasm, {
             kind: 'saveVaultSettings',
@@ -276,7 +278,7 @@ describe('buildCommand', () => {
             },
           } as unknown as CommandDescriptor)
         ).toThrow();
-        expect([...bearer]).toEqual(new Array(bearer.length).fill(0));
+        expect([...new Uint8Array(bearer)]).toEqual(new Array(bearer.byteLength).fill(0));
       }
       expect(byo).toEqual([]);
     });

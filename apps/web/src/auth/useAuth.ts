@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EngineHeldElsewhereError } from '@cipherbox/client';
 import { createLoginFlow, RecoveryRequiredError, type LoginProgress } from '@cipherbox/login';
 import { errorMessage } from '../lib/errorMessage';
+import { useEngineAccount } from '../engine/useEngineSession';
 import { authStore, useAuthState } from '../stores/auth.store';
 import { useEngine, useLoginSecretSource, useRebuildEngine } from '../providers/EngineProvider';
 import type { RecoveryEnrollment } from './coreKit';
@@ -27,7 +28,8 @@ export interface Auth {
   isReady: boolean;
   /**
    * True once the tab knows it has no session — the check settled signed out,
-   * or Core Kit could never answer it.
+   * Core Kit could never answer it, or the engine gave the session up. Routes
+   * that need a vault redirect on this.
    */
   isSignedOut: boolean;
   /** True while a restore, login, or logout is in flight. */
@@ -64,14 +66,22 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { isAuthenticated, recoveryRequired, recoveryEnrolled } = useAuthState();
+  const { recoveryRequired, recoveryEnrolled } = useAuthState();
+  // The engine's word, not this tab's: a logout in another tab zeroizes the one
+  // engine the origin has, and a UI reading its own store would keep rendering
+  // a vault over it.
+  const isAuthenticated = useEngineAccount() !== null;
 
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [heldElsewhere, setHeldElsewhere] = useState<HeldElsewhere | null>(null);
 
   const isReady = client !== null && session !== null && status === 'ready';
-  const isSignedOut = !isAuthenticated && (isReady || status === 'unavailable');
+  // A Core Kit session that outlived the page still owes the engine its secret;
+  // until that handoff settles the tab has not decided, and a guard that read
+  // it as signed out would throw the member out of their own vault.
+  const resuming = isReady && !isAuthenticated && (session?.isLoggedIn() ?? false);
+  const isSignedOut = !isAuthenticated && !resuming && (isReady || status === 'unavailable');
 
   const progress = useMemo<LoginProgress>(
     () => ({

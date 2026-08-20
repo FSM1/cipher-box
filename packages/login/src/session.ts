@@ -39,7 +39,11 @@ export interface CoreKitSession extends LoginSecretExporter {
   logout(): Promise<void>;
 }
 
-/** Where the host records who is signed in — its own UI chrome, never key material. */
+/**
+ * Where the host records how the session was established and what to display
+ * for it — its own UI chrome, never key material, and never *whether* a session
+ * exists: that is the started engine's to report.
+ */
 export interface AccountRecord {
   signedIn(method: IdentityMethod | null, email: string | null): void;
   signedOut(): void;

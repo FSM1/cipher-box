@@ -36,6 +36,7 @@ import { EngineRequestError, unknownHandle, type HandleKind } from './correlated
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
+import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -59,9 +60,19 @@ interface PortEntry {
 export interface LeaderRelayOptions {
   /** How long a freshly dialed port has to name the follower behind it. */
   namingTimeoutMs?: number;
+  /**
+   * A greeting named an account this leadership cannot serve because its engine
+   * holds none. The refusal is already sent; only the host can act on it, since
+   * only the lock holder can cold-start an engine.
+   */
+  onEngineWanted?: () => void;
 }
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
+
+function wipeBuffer(value: unknown): void {
+  if (value instanceof ArrayBuffer && value.byteLength > 0) new Uint8Array(value).fill(0);
+}
 
 /**
  * Wipes the upload chunk a write payload carries. A chunk arrives transferred,
@@ -69,9 +80,19 @@ const DEFAULT_NAMING_TIMEOUT_MS = 5000;
  * a detached buffer reads as empty, making this a no-op once it has moved on
  * (AGENTS.md 7). Takes the payload unvalidated: an off-shape one carries none.
  */
-function wipeCarried(payload: unknown): void {
-  const chunk = (payload as { chunk?: unknown } | null | undefined)?.chunk;
-  if (chunk instanceof ArrayBuffer && chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
+function wipeChunk(payload: unknown): void {
+  wipeBuffer((payload as { chunk?: unknown } | null | undefined)?.chunk);
+}
+
+/**
+ * Wipes every buffer a port message carries, on the routes that answer it with
+ * neither a relay nor a refusal — the upload chunk of a write step, and the BYO
+ * bearer of a settings command. Same terminal-owner rule as [`wipeChunk`].
+ */
+function wipeCarried(message: unknown): void {
+  const envelope = message as { write?: unknown; command?: unknown } | null | undefined;
+  wipeChunk(envelope?.write);
+  for (const buffer of commandTransfer(envelope?.command)) wipeBuffer(buffer);
 }
 
 /**
@@ -162,6 +183,7 @@ export class LeaderRelay {
   // port so a re-brokering tab keeps the watch it already proved alive under.
   private readonly presence = new Map<string, AbortController>();
   private readonly namingTimeoutMs: number;
+  private readonly onEngineWanted: () => void;
   // The account this leadership's engine holds; `null` until it cold-starts.
   private account: string | null = null;
   private readonly unsubscribe: () => void;
@@ -184,6 +206,7 @@ export class LeaderRelay {
     options: LeaderRelayOptions = {}
   ) {
     this.namingTimeoutMs = options.namingTimeoutMs ?? DEFAULT_NAMING_TIMEOUT_MS;
+    this.onEngineWanted = options.onEngineWanted ?? ((): void => undefined);
     this.channel.addEventListener('message', this.onMessage);
     this.unsubscribePorts = this.courier.onPort((port) => this.adoptPort(port));
     this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
@@ -328,7 +351,7 @@ export class LeaderRelay {
   private onPortMessage(entry: PortEntry, data: unknown): void {
     if (typeof data !== 'object' || data === null) return;
     const message = data as PortRequest | { type?: unknown };
-    if (!this.serve(entry, message)) wipeCarried((message as { write?: unknown }).write);
+    if (!this.serve(entry, message)) wipeCarried(message);
   }
 
   /**
@@ -353,6 +376,10 @@ export class LeaderRelay {
           accountId: this.account,
         });
         this.detachPort(entry);
+        // A leadership holding no engine can serve no account at all, and only
+        // the lock holder can cold-start one: the tab that has a session needs
+        // the lock, so the host is told to give it up.
+        if (this.account === null && accountId !== null) this.onEngineWanted();
         return true;
       }
       // A re-brokering follower supersedes the port it held before; whatever it
@@ -394,7 +421,9 @@ export class LeaderRelay {
       case 'cb:portCommand': {
         const { command } = message as Extract<PortRequest, { type: 'cb:portCommand' }>;
         if (!hasKind(command)) return this.refuse(entry, requestId, message);
-        void this.answerPort(entry, requestId, () => this.transport.command(command, []));
+        void this.answerPort(entry, requestId, () =>
+          this.transport.command(command, commandTransfer(command))
+        );
         return true;
       }
       case 'cb:portWrite': {
@@ -409,7 +438,7 @@ export class LeaderRelay {
 
   /** Refuses a request this relay will not serve, wiping anything it carried. */
   private refuse(entry: PortEntry, requestId: number, message: unknown): true {
-    wipeCarried((message as { write?: unknown } | null)?.write);
+    wipeCarried(message);
     void this.answerPort(entry, requestId, () => Promise.reject(malformed()));
     return true;
   }
@@ -499,7 +528,7 @@ export class LeaderRelay {
 
     const handle = write.handle;
     if (this.writeOwners.get(handle) !== clientId) {
-      wipeCarried(write);
+      wipeChunk(write);
       void this.answerPort(entry, requestId, () => Promise.reject(unknownHandle('write')));
       return;
     }
@@ -530,7 +559,7 @@ export class LeaderRelay {
               throw unknownKind(write);
           }
         } finally {
-          wipeCarried(write);
+          wipeChunk(write);
         }
       })
     );

@@ -153,7 +153,9 @@ function byoToken(value: unknown): Uint8Array | undefined {
   const byo = record(value, 'settings').byo ?? undefined;
   if (byo === undefined) return undefined;
   const raw = record(byo, 'settings.byo').accessToken ?? undefined;
-  return raw === undefined ? undefined : bytes(raw, 'settings.byo.accessToken');
+  // A view over the transferred buffer, not a copy: scrubbing it scrubs the
+  // only copy that crossed into this realm.
+  return raw === undefined ? undefined : new Uint8Array(buffer(raw, 'settings.byo.accessToken'));
 }
 
 /**
@@ -162,8 +164,8 @@ function byoToken(value: unknown): Uint8Array | undefined {
  * — in linear memory until the finalization registry runs.
  *
  * The bearer is read first and scrubbed last, so every refusal in between spends
- * it too. Its view is the worker's own: a descriptor is cloned across the
- * boundary, and the builder copies what it keeps.
+ * it too. It arrives transferred, so this realm holds the only copy and the
+ * builder copies what it keeps.
  */
 function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
   const token = byoToken(value);

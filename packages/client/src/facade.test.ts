@@ -139,6 +139,35 @@ describe('EngineFacade', () => {
     expect(transfer).toEqual([]);
   });
 
+  it('moves the BYO bearer out of this realm rather than cloning it to the worker', async () => {
+    const transport = new FakeTransport();
+    const accessToken = new TextEncoder().encode('bearer-token').buffer as ArrayBuffer;
+
+    await new EngineFacade(transport).saveVaultSettings({
+      pinMode: 'external',
+      byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken },
+      keepLatestVersions: null,
+    });
+
+    // Listed for transfer, so the send detaches the sender: this realm keeps no
+    // copy of the credential for anything to find later.
+    const { command, transfer } = transport.commands[0];
+    expect(transfer).toEqual([accessToken]);
+    expect(command.kind).toBe('saveVaultSettings');
+  });
+
+  it('transfers nothing for a provider that needs no bearer', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).saveVaultSettings({
+      pinMode: 'hosted',
+      byo: { endpoint: 'https://kubo.example', kind: 'kubo', accessToken: null },
+      keepLatestVersions: 3,
+    });
+
+    expect(transport.commands[0].transfer).toEqual([]);
+  });
+
   it('streams a new file through begin/push/commit and returns the op id', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);

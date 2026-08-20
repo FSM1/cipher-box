@@ -425,6 +425,8 @@ export function collect(value: unknown): { bytesHex: string; text: string } {
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
 export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
+  /** What each `command` was asked to move rather than copy. */
+  readonly commandTransfers: Transferable[][] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
@@ -462,8 +464,14 @@ export class FakeEngineTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
-    this.commands.push(command);
+  command(
+    command: CommandDescriptor,
+    transfer: Transferable[] = []
+  ): Promise<CommandOutcomeDescriptor> {
+    this.commandTransfers.push(transfer);
+    // `LocalTransport` moves a listed buffer into the worker; model that, so a
+    // sender reading it afterwards fails here exactly as it would in a browser.
+    this.commands.push(transfer.length > 0 ? structuredClone(command, { transfer }) : command);
     return this.respond(command);
   }
 

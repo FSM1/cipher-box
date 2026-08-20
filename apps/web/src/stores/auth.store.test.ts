@@ -6,7 +6,6 @@ afterEach(() => authStore.signedOut());
 describe('auth.store', () => {
   it('starts signed out', () => {
     expect(authStore.getState()).toEqual({
-      isAuthenticated: false,
       email: null,
       method: null,
       recoveryRequired: false,
@@ -23,7 +22,6 @@ describe('auth.store', () => {
     // Exact: a prompt or a factor policy carried over from whoever was signed
     // in last would be read against this account.
     expect(authStore.getState()).toEqual({
-      isAuthenticated: true,
       email: 'user@example.com',
       method: 'google',
       recoveryRequired: false,
@@ -44,8 +42,7 @@ describe('auth.store', () => {
 
   it('accepts a wallet login with no email', () => {
     authStore.signedIn('wallet');
-    expect(authStore.getState().email).toBeNull();
-    expect(authStore.getState().isAuthenticated).toBe(true);
+    expect(authStore.getState()).toMatchObject({ email: null, method: 'wallet' });
   });
 
   it('drops an email handed to a wallet login', () => {
@@ -67,7 +64,6 @@ describe('auth.store', () => {
     authStore.signedOut();
 
     expect(authStore.getState()).toEqual({
-      isAuthenticated: false,
       email: null,
       method: null,
       recoveryRequired: false,

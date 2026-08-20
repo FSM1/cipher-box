@@ -127,12 +127,12 @@ export interface ByoIpfsConfigDescriptor {
   endpoint: string;
   kind: ByoKind;
   /**
-   * Bearer credential, `null` for a provider that needs none. Bytes rather
-   * than a string, which cannot be overwritten. A descriptor is cloned rather
-   * than transferred, so this scrubs the worker's copy only — the sender keeps
-   * one it owns and must wipe itself.
+   * Bearer credential, `null` for a provider that needs none. A transferable
+   * buffer rather than a string, which cannot be overwritten: every hop moves
+   * it ([`commandTransfer`]), so the receiving realm is the only holder left
+   * and is the terminal owner that scrubs it.
    */
-  accessToken: Uint8Array | null;
+  accessToken: ArrayBuffer | null;
 }
 
 /** The member's placement, provider and retention choice, as data. */
@@ -170,6 +170,25 @@ export type CommandDescriptor =
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   | { kind: 'logout' };
+
+/**
+ * The buffers a command descriptor owns, for the `transfer` list of the send
+ * that carries it. A transfer detaches the sender, so the credential inside a
+ * settings command exists in exactly one realm at a time and its receiver is
+ * the terminal owner that scrubs it (AGENTS.md 7); a clone would leave an
+ * unwiped copy at every hop.
+ *
+ * Takes the descriptor unvalidated: a relay reads one off an untrusted port.
+ */
+export function commandTransfer(command: unknown): Transferable[] {
+  const envelope = command as
+    | { kind?: unknown; settings?: { byo?: { accessToken?: unknown } | null } | null }
+    | null
+    | undefined;
+  if (envelope?.kind !== 'saveVaultSettings') return [];
+  const token = envelope.settings?.byo?.accessToken;
+  return token instanceof ArrayBuffer ? [token] : [];
+}
 
 /**
  * What one command produced, as data (mirrors the facade `CommandOutcome`).

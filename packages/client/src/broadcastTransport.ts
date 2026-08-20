@@ -186,17 +186,14 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.ensurePort().then(() => undefined);
   }
 
-  command(
-    command: CommandDescriptor,
-    _transfer: Transferable[]
-  ): Promise<CommandOutcomeDescriptor> {
+  command(command: CommandDescriptor, transfer: Transferable[]): Promise<CommandOutcomeDescriptor> {
     // Command arguments name files and contacts, so they take the private port
-    // rather than the origin-wide channel.
-    return this.overPort<CommandOutcomeDescriptor>((requestId) => ({
-      type: 'cb:portCommand',
-      requestId,
-      command,
-    }));
+    // rather than the origin-wide channel. A credential the descriptor carries
+    // is moved rather than cloned, so it leaves this tab's heap outright.
+    return this.overPort<CommandOutcomeDescriptor>(
+      (requestId) => ({ type: 'cb:portCommand', requestId, command }),
+      transfer
+    );
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {

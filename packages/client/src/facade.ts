@@ -11,6 +11,7 @@
  */
 
 import type { EngineEventListener, EngineTransport } from './transport.js';
+import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -18,6 +19,7 @@ import type {
   Permission,
   SnapshotDescriptor,
   StreamHandle,
+  VaultSettingsDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -193,6 +195,16 @@ export class EngineFacade {
 
   rotateNow(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'rotateNow', node });
+  }
+
+  /**
+   * Saves the member's placement, provider and retention choice. A BYO bearer
+   * rides the transfer list, so the caller's buffer is detached and this realm
+   * keeps no copy of the credential to scrub or to leak.
+   */
+  saveVaultSettings(settings: VaultSettingsDescriptor): Promise<CommandOutcomeDescriptor> {
+    const descriptor: CommandDescriptor = { kind: 'saveVaultSettings', settings };
+    return this.command(descriptor, commandTransfer(descriptor));
   }
 
   /** Issues the single-use nonce an EIP-4361 message must embed. */
