@@ -26,7 +26,7 @@ use cipherbox_engine::rotation::{
     RotateError, RotationOutcome, RotationPublishError, ScopeExitReport, ScopeExitRotator,
     consume_scope_exit_triggers,
 };
-use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
+use cipherbox_engine::seams::{OpId, SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{open_repoint, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -837,6 +837,59 @@ fn an_intra_scope_move_rotates_nothing() {
 
     assert!(triggers.is_empty(), "the non-trigger list holds");
     assert!(rotator.seen.borrow().is_empty());
+    assert!(cut.is_complete());
+}
+
+/// Structurally, only a relocation carries a scope crossing: every other op kind
+/// answers `None` to `scope_exit_source`. Named here so the non-trigger list is
+/// asserted rather than merely true.
+#[test]
+fn create_delete_rename_and_content_edits_rotate_nothing() {
+    let base = granted_scope_tree();
+    let cases: [(&str, Op); 4] = [
+        (
+            "create",
+            Op::create(
+                id(7),
+                id(12),
+                "new.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
+        ),
+        ("delete", Op::delete(id(12), 1, AT, 1)),
+        ("rename", Op::rename(id(12), "renamed", 1, AT)),
+        (
+            "update-content",
+            Op::update_content(id(12), staged(b"edit"), None, 1, AT),
+        ),
+    ];
+
+    for (label, op) in cases {
+        let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
+        assert!(
+            report.scope_exit_triggers.is_empty(),
+            "{label} queues no scope-exit trigger"
+        );
+    }
+}
+
+/// An op whose relocation is already reflected in gate-passing state published
+/// nothing — but the node **has** left the granted source, so the rotation is
+/// still owed. Dropping it there would leave a revokee holding a live seed.
+#[test]
+fn a_scope_exit_already_reflected_in_gate_passing_state_still_rotates() {
+    let rotator = RecordingRotator::refusing(&[]);
+    // Seeded at the destination: the move is already satisfied on replay.
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(6))],
+        &[exiting_move(id(7), id(12), "m.txt")],
+        &rotator,
+    );
+
+    assert_eq!(triggers, vec![id(5)], "the exit is a fact, not a no-op");
+    assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
     assert!(cut.is_complete());
 }
 

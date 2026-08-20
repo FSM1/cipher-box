@@ -260,17 +260,18 @@ pub fn replay(
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
+        // Resolved against the base as this op meets it, since `rebase_one`
+        // advances `working`. Needed here as well as inside it: an
+        // already-satisfied relocation drops without applying, and still owes
+        // the rotation.
+        let exited = scope_exit_trigger(&working, op, scope_roots);
         match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
                 suffixed,
                 scope_exit_trigger,
             } => {
-                if let Some(scope_root) = scope_exit_trigger
-                    && !scope_exit_triggers.contains(&scope_root)
-                {
-                    scope_exit_triggers.push(scope_root);
-                }
+                queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
                 applied.push(AppliedOp {
                     op_id: *op_id,
                     op: op.clone(),
@@ -278,7 +279,15 @@ pub fn replay(
                     suffixed,
                 });
             }
-            OpResolution::Dropped(reason) => dropped.push((*op_id, reason)),
+            OpResolution::Dropped(reason) => {
+                // The relocation is already reflected in gate-passing state, so
+                // the exit is a fact this op simply did not have to publish; a
+                // lost race exited nothing, and dropping its trigger is right.
+                if reason == DropReason::AlreadySatisfied {
+                    queue_trigger(&mut scope_exit_triggers, exited);
+                }
+                dropped.push((*op_id, reason));
+            }
             OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
         }
     }
@@ -313,9 +322,7 @@ pub fn rebase_one(
     op: &Op,
     scope_roots: &[crate::facade::NodeId],
 ) -> OpResolution {
-    let scope_exit_trigger = op
-        .scope_exit_source()
-        .map(|from_parent| source_scope_root(working, from_parent, scope_roots));
+    let scope_exit_trigger = scope_exit_trigger(working, op, scope_roots);
     match &op.kind {
         OpKind::Create { parent, name, node } => {
             rebase_create(working, op, *parent, name, node.kind())
@@ -361,6 +368,30 @@ fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpR
         .content_version
         .map(|count| count.min(keep_latest.get()));
     OpResolution::applied(None)
+}
+
+/// Queue one scope root for a scope-exit rotation, deduped: N ops leaving one
+/// granted source are one cut, at the position the first of them took.
+fn queue_trigger(
+    triggers: &mut Vec<crate::facade::NodeId>,
+    scope_root: Option<crate::facade::NodeId>,
+) {
+    if let Some(scope_root) = scope_root
+        && !triggers.contains(&scope_root)
+    {
+        triggers.push(scope_root);
+    }
+}
+
+/// The granted source scope root `op` exits, resolved full-depth against `base`
+/// — `None` for every op that crosses no granted boundary.
+fn scope_exit_trigger(
+    base: &Snapshot,
+    op: &Op,
+    scope_roots: &[crate::facade::NodeId],
+) -> Option<crate::facade::NodeId> {
+    op.scope_exit_source()
+        .map(|from_parent| source_scope_root(base, from_parent, scope_roots))
 }
 
 /// The granted scope root a move exited, walking `from_parent` and then its

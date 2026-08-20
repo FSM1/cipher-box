@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    GrantLedgerEntry, GrantSetCommitment, Permission, sign_grant_set, verify_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, Permission, sign_grant_set,
+    verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 
@@ -24,7 +25,9 @@ use super::cascade::{CascadeError, CascadeOutcome};
 use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
+use crate::grants::ReceivedSharesList;
 use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
+use crate::net::GrantedScopeRoot;
 use crate::seams::UnixMillis;
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
@@ -117,6 +120,99 @@ pub async fn consume_scope_exit_triggers<R: ScopeExitRotator>(
         }
     }
     report
+}
+
+/// The caller-held pairing of scope id to scope-root name that every grantee-arm
+/// rotation resolves a trigger against.
+///
+/// A [`NodeId`] locates nothing on its own, and a grantee cannot derive a scope
+/// root's name — that derivation runs off the write scope seed only the record
+/// conveys — so the pairing has to be held rather than computed
+/// ([`GrantedScopeRoot`]). It is seeded at cold start from the durable
+/// received-shares bookmark ([`from_bookmarks`](Self::from_bookmarks)) and
+/// extended by each accept ([`record`](Self::record)).
+///
+/// Keyed by scope id: two names for one scope id is a re-point, not two grants,
+/// so the freshest name wins in place.
+#[derive(Debug, Clone, Default)]
+pub struct GrantedScopeRoots {
+    by_scope: BTreeMap<[u8; 16], IpnsName>,
+}
+
+impl GrantedScopeRoots {
+    /// An empty inventory.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The inventory the durable received-shares bookmark describes. A bookmark
+    /// whose stored name is not a well-formed IPNS name is skipped: nothing can
+    /// be resolved at it, and admitting it would hand a rotation an unusable
+    /// destination.
+    pub fn from_bookmarks(shares: &ReceivedSharesList) -> Self {
+        let mut inventory = Self::new();
+        for share in shares.iter() {
+            let Ok(text) = core::str::from_utf8(&share.scope_root_name) else {
+                continue;
+            };
+            if let Ok(name) = IpnsName::parse(text) {
+                inventory.record(share.scope_id, name);
+            }
+        }
+        inventory
+    }
+
+    /// Pair `scope_id` with `ipns_name`, replacing any name held for it — the
+    /// scope id from an accept's
+    /// [`AcceptOutcome`](crate::grants::AcceptOutcome), the name from the share
+    /// pointer that accept verified.
+    pub fn record(&mut self, scope_id: [u8; 16], ipns_name: IpnsName) {
+        self.by_scope.insert(scope_id, ipns_name);
+    }
+
+    /// Drop `scope_id` — a share this device no longer holds a grant for.
+    pub fn forget(&mut self, scope_id: &[u8; 16]) {
+        self.by_scope.remove(scope_id);
+    }
+
+    /// The scope root `scope_id` names, as the sweep addresses it. `None` for a
+    /// scope this device holds no grant for.
+    pub fn scope_ref(&self, scope_id: &[u8; 16]) -> Option<ChildScopeRef> {
+        self.by_scope
+            .get(scope_id)
+            .map(|name| ChildScopeRef::new(*scope_id, name.as_str().as_bytes().to_vec()))
+    }
+
+    /// Every scope root this device can rotate, as the grantee rotation arm
+    /// borrows them
+    /// ([`GranteeRotationNet::granted`](crate::net::GranteeRotationNet)).
+    pub fn granted(&self) -> Vec<GrantedScopeRoot> {
+        self.by_scope
+            .iter()
+            .map(|(scope_id, ipns_name)| GrantedScopeRoot {
+                scope_id: *scope_id,
+                ipns_name: ipns_name.clone(),
+            })
+            .collect()
+    }
+
+    /// The scopes the idle-cadence sweep job covers this round.
+    pub fn scope_refs(&self) -> Vec<ChildScopeRef> {
+        self.by_scope
+            .keys()
+            .filter_map(|scope_id| self.scope_ref(scope_id))
+            .collect()
+    }
+
+    /// How many scope roots are paired.
+    pub fn len(&self) -> usize {
+        self.by_scope.len()
+    }
+
+    /// Whether the inventory holds no pairing.
+    pub fn is_empty(&self) -> bool {
+        self.by_scope.is_empty()
+    }
 }
 
 /// The owner-authorized inputs every committed-set cut shares.
@@ -608,10 +704,12 @@ mod tests {
 
     use super::super::rotate_write::derive_write_name;
     use super::*;
-    use crate::seams::Scheduler;
+    use crate::seams::{FloorStore, Scheduler};
     use crate::testkit::block_on;
     use crate::testkit::fakes::VirtualScheduler;
-    use cipherbox_core::seal::{GrantSetEntry, PreservedFields, verify_grant_set};
+    use cipherbox_core::seal::{
+        GrantSetEntry, PreservedFields, encode_grant_set_commitment, verify_grant_set,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     /// Records the roots it was asked to cut, failing the ones named in
@@ -1236,5 +1334,280 @@ mod tests {
             "discovered-expiry"
         );
         assert_eq!(RotationTrigger::Manual.name(), "manual");
+    }
+    // --- The pairing every grantee-arm rotation resolves a trigger against ---
+
+    fn bookmark(scope_id: [u8; 16], name: &IpnsName) -> crate::grants::ReceivedShare {
+        crate::grants::ReceivedShare {
+            scope_root_name: name.as_str().as_bytes().to_vec(),
+            scope_id,
+            sharer_identity_pk: [0x02; 33],
+            display_name: "shared".into(),
+            permission: Permission::Read,
+            pointer_read_key: cipherbox_core::suite::secret::SecretBytes::new([0x8a; 32]),
+        }
+    }
+
+    fn a_name(seed: u8) -> IpnsName {
+        IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([seed; 32]).verifying_key(),
+        )
+    }
+
+    #[test]
+    fn the_inventory_pairs_a_scope_id_with_the_name_its_root_lives_at() {
+        let name = a_name(0x31);
+        let mut inventory = GrantedScopeRoots::new();
+        inventory.record([0x5c; 16], name.clone());
+
+        assert_eq!(
+            inventory.scope_ref(&[0x5c; 16]),
+            Some(ChildScopeRef::new(
+                [0x5c; 16],
+                name.as_str().as_bytes().to_vec()
+            ))
+        );
+        assert_eq!(inventory.granted().len(), 1);
+        assert!(
+            inventory.scope_ref(&[0x77; 16]).is_none(),
+            "a scope this device holds no grant for resolves to no name"
+        );
+    }
+
+    /// A scope re-pointed to a fresh name is one grant, not two: the inventory
+    /// heals in place, so a rotation is never aimed at a superseded name.
+    #[test]
+    fn re_recording_a_scope_replaces_its_name() {
+        let mut inventory = GrantedScopeRoots::new();
+        inventory.record([0x5c; 16], a_name(0x31));
+        inventory.record([0x5c; 16], a_name(0x32));
+
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(
+            inventory.scope_ref(&[0x5c; 16]).unwrap().ipns_name,
+            a_name(0x32).as_str().as_bytes()
+        );
+        inventory.forget(&[0x5c; 16]);
+        assert!(inventory.is_empty());
+    }
+
+    #[test]
+    fn the_inventory_rebuilds_from_the_durable_bookmarks() {
+        let mut shares = ReceivedSharesList::new();
+        shares.reconcile(bookmark([0x5c; 16], &a_name(0x31)));
+        shares.reconcile(bookmark([0x77; 16], &a_name(0x32)));
+
+        let inventory = GrantedScopeRoots::from_bookmarks(&shares);
+
+        assert_eq!(inventory.len(), 2);
+        assert_eq!(inventory.scope_refs().len(), 2);
+    }
+
+    /// Nothing resolves at a name that is not a well-formed IPNS name, so
+    /// admitting one would hand a rotation an unusable destination.
+    #[test]
+    fn a_bookmark_whose_stored_name_is_unusable_joins_no_inventory() {
+        let mut shares = ReceivedSharesList::new();
+        let mut junk = bookmark([0x5c; 16], &a_name(0x31));
+        junk.scope_root_name = b"not-an-ipns-name".to_vec();
+        shares.reconcile(junk);
+
+        assert!(GrantedScopeRoots::from_bookmarks(&shares).is_empty());
+    }
+
+    // --- The scope-exit cut is flat: one root, an untouched committed set ---
+
+    const SOURCE: [u8; 16] = [0x5c; 16];
+    const DESCENDANT: [u8; 16] = [0xdd; 16];
+
+    /// A [`ScopeExitRotator`] over the **real** [`rotate_scope`], so what the
+    /// driver produces is a published record rather than a recorded call.
+    struct FlatRotator {
+        entropy: RefCell<Option<crate::testkit::SeededEntropy>>,
+        floors: crate::testkit::fakes::InMemoryFloorStore,
+        scheduler: VirtualScheduler,
+        publisher: RecordingPublisher,
+        keys: FlatKeys,
+        committed: (
+            GrantSetCommitment,
+            [u8; ECDSA_SIG_LEN],
+            Vec<GrantLedgerEntry>,
+        ),
+        /// The one descendant scope root the source commits to.
+        child_index: Vec<ChildScopeRef>,
+        current_seed: [u8; 32],
+        current_read_epoch: u64,
+    }
+
+    struct FlatKeys {
+        owner_enc: cipherbox_core::suite::x25519::X25519Secret,
+        pseudonym: cipherbox_core::suite::ed25519::Ed25519Signer,
+        write_scope_seed: [u8; 32],
+        pointer_read_key: [u8; 32],
+    }
+
+    #[derive(Default)]
+    struct RecordingPublisher {
+        published: RefCell<Vec<super::super::rotate::ResealedScopeRoot>>,
+    }
+
+    impl super::super::rotate::ScopeRootPublisher for RecordingPublisher {
+        async fn publish_scope_root(
+            &self,
+            record: &super::super::rotate::ResealedScopeRoot,
+        ) -> Result<(), super::super::rotate::RotationPublishError> {
+            self.published.borrow_mut().push(record.clone());
+            Ok(())
+        }
+    }
+
+    impl ScopeExitRotator for FlatRotator {
+        async fn rotate_on_scope_exit(
+            &self,
+            scope_root: NodeId,
+        ) -> Result<RotationOutcome, RotateError> {
+            if scope_root.0 != SOURCE {
+                return Err(RotateError::Resolve(
+                    super::super::eager_set::ResolveFailure::Rejected,
+                ));
+            }
+            let (commitment, sig, ledger) = &self.committed;
+            let owner_enc_pub = self.keys.owner_enc.public();
+            let plan = super::super::rotate::RotateScopePlan {
+                identity: super::super::reseal::ScopeRootIdentity {
+                    v: 2,
+                    scope_id: SOURCE,
+                    ipns_name: b"source-root",
+                    owner_enc_pub: &owner_enc_pub,
+                    owner_enc_secret: None,
+                    ascent: None,
+                    owes_ascent_link: false,
+                    pseudonym_signer: &self.keys.pseudonym,
+                },
+                committed: super::super::reseal::CommittedSet {
+                    commitment,
+                    commitment_sig: sig,
+                    grant_ledger: ledger,
+                    direct_child_scope_index: &self.child_index,
+                },
+                current_override_seed: &self.current_seed,
+                current_read_epoch: self.current_read_epoch,
+                write_scope_seed: &self.keys.write_scope_seed,
+                write_epoch: 3,
+                write_history_link: b"",
+                pointer_read_key: &self.keys.pointer_read_key,
+                carried_history_links: &[],
+            };
+            // Handed out and back rather than borrowed across the await: the
+            // seam is `&self`, and a live `RefCell` borrow would outlive it.
+            let mut entropy = self.entropy.borrow_mut().take().expect("entropy");
+            let outcome = super::super::rotate::rotate_scope(
+                &mut entropy,
+                &self.floors,
+                &self.scheduler,
+                &self.publisher,
+                &plan,
+                || Box::pin(async {}),
+            )
+            .await;
+            *self.entropy.borrow_mut() = Some(entropy);
+            outcome
+        }
+    }
+
+    fn flat_rotator() -> FlatRotator {
+        let keys = FlatKeys {
+            owner_enc: cipherbox_core::suite::x25519::X25519Secret::from_scalar([0x11; 32]),
+            pseudonym: cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([0x22; 32]),
+            write_scope_seed: [0x55; 32],
+            pointer_read_key: [0x66; 32],
+        };
+        let owner_ecdsa = EcdsaSigner::from_scalar(&[0x33; 32]).expect("signer");
+        let grantee = cipherbox_core::suite::x25519::X25519Secret::from_scalar([0x77; 32]);
+        let commitment = GrantSetCommitment {
+            ipns_name: b"source-root".to_vec(),
+            owner_pseudonym_pk: keys.pseudonym.verifying_key().to_bytes(),
+            entries: vec![GrantSetEntry::new(READ_TAG, Permission::Read, [0x02; 32])],
+            unknown: PreservedFields::new(),
+        };
+        let sig = sign_grant_set(&owner_ecdsa, &commitment)
+            .expect("sign")
+            .to_compact();
+        let ledger = vec![GrantLedgerEntry::new(
+            [0x02; 33],
+            grantee.public().to_bytes(),
+            Permission::Read,
+            READ_TAG,
+        )];
+        FlatRotator {
+            entropy: RefCell::new(Some(crate::testkit::SeededEntropy::new(0xab))),
+            floors: crate::testkit::fakes::InMemoryFloorStore::default(),
+            scheduler: VirtualScheduler::new(),
+            publisher: RecordingPublisher::default(),
+            keys,
+            committed: (commitment, sig, ledger),
+            child_index: vec![ChildScopeRef::new(DESCENDANT, b"descendant-root".to_vec())],
+            current_seed: [0xaa; 32],
+            current_read_epoch: 4,
+        }
+    }
+
+    /// The eager-set law's grantee arm: a scope exit cuts the source root and
+    /// **nothing below it**. A descendant scope root is committed to by name and
+    /// carried verbatim — never re-keyed, never republished.
+    #[test]
+    fn a_scope_exit_cut_re_keys_the_source_root_and_no_descendant() {
+        let rotator = flat_rotator();
+
+        let report = block_on(consume_scope_exit_triggers(&rotator, &[NodeId(SOURCE)]));
+
+        assert!(report.is_complete());
+        let published = rotator.publisher.published.borrow();
+        assert_eq!(published.len(), 1, "one root cut, no descendant wave");
+        assert_eq!(published[0].scope_id, SOURCE);
+        assert_eq!(published[0].read_epoch, 5, "the source root advanced");
+        assert_eq!(
+            published[0].write_epoch, 3,
+            "a read-plane cut moves no write epoch"
+        );
+        assert_eq!(
+            block_on(FloorStore::epoch_floor(&rotator.floors, &SOURCE)).expect("floor"),
+            Some(5)
+        );
+        assert_eq!(
+            block_on(FloorStore::epoch_floor(&rotator.floors, &DESCENDANT)).expect("floor"),
+            None,
+            "the descendant scope root is committed to by name, never re-keyed"
+        );
+    }
+
+    /// A grantee re-wraps the committed tag set verbatim and can neither extend
+    /// nor shrink it (#26 D5), so the owner-signed commitment and its signature
+    /// must survive the cut byte-for-byte.
+    #[test]
+    fn a_scope_exit_cut_leaves_the_committed_tag_set_byte_identical() {
+        let rotator = flat_rotator();
+        let (commitment, sig, _) = &rotator.committed;
+        let before = encode_grant_set_commitment(commitment).expect("encodes");
+
+        block_on(consume_scope_exit_triggers(&rotator, &[NodeId(SOURCE)]));
+
+        let published = rotator.publisher.published.borrow();
+        let section = &published[0].section;
+        assert_eq!(
+            encode_grant_set_commitment(&section.commitment).expect("encodes"),
+            before,
+            "the epoch-free commitment needs no fresh owner signature"
+        );
+        assert_eq!(&section.commitment_sig, sig);
+        assert_eq!(
+            section
+                .grant_blobs
+                .iter()
+                .map(|blob| blob.tag)
+                .collect::<Vec<_>>(),
+            vec![READ_TAG],
+            "one re-wrapped blob per committed entry, at the same tags"
+        );
     }
 }

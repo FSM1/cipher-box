@@ -18,6 +18,7 @@ fn list(entries: &[(&[u8], u8, Permission)]) -> ReceivedSharesList {
     for (scope_root_name, key_byte, permission) in entries {
         shares.reconcile(ReceivedShare {
             scope_root_name: scope_root_name.to_vec(),
+            scope_id: [*key_byte; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "Shared Folder".into(),
             permission: *permission,
@@ -33,6 +34,7 @@ fn over_bound() -> ReceivedSharesList {
     for i in 0..=MAX_RECEIVED_SHARES {
         shares.reconcile(ReceivedShare {
             scope_root_name: format!("k51scoperoot-{i}").into_bytes(),
+            scope_id: (i as u128).to_be_bytes(),
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "Shared Folder".into(),
             permission: Permission::Read,

@@ -117,6 +117,7 @@ mod tests {
         let mut shares = ReceivedSharesList::new();
         shares.reconcile(ReceivedShare {
             scope_root_name: b"k51scoperoot".to_vec(),
+            scope_id: [0x5c; 16],
             sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
             display_name: "Shared Folder".into(),
             permission: Permission::Read,

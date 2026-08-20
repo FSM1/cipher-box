@@ -16,9 +16,10 @@
 //!   `rotateScope` per source scope root, and the driver that takes a cut
 //!   through the planes it demands.
 //! - [`sweep`] — the lazy wave over a scope's **interior nodes**: re-seal every
-//!   node whose epoch lags its scope's, plus the idle-cadence driver and the
-//!   direct-child-scope index self-heal. Descendant scope roots are eager-set
-//!   members it stops at — their re-key is the [`cascade`]'s job.
+//!   node whose epoch lags its scope's, plus the idle-cadence `Scheduler` job
+//!   that drives it and the direct-child-scope index self-heal. Descendant scope
+//!   roots are eager-set members it stops at — their re-key is the
+//!   [`cascade`]'s job.
 //! - [`cascade`] — the owner-revocation eager cascade (`rotateScope` on a read
 //!   revoke): re-key the root **and every transitively-reachable descendant scope
 //!   root** with a **fresh** override seed (`prev = Some`), threaded top-down.
@@ -65,12 +66,13 @@ pub use rotate_write::{
     WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub use sweep::{
-    LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
-    SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, sweep_pass,
+    LaggingNode, NodeRef, SWEEP_JOB_MAX_PASSES, SweepError, SweepOutcome, SweepPublisher,
+    SweepReporter, SweepResolveFailure, SweepResolver, SweepRound, SweptChild, SweptNode,
+    SweptScope, converge_subtree, run_sweep, run_sweep_job, sweep_pass, sweep_task,
 };
 pub use trigger::{
-    CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
-    RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport, ScopeExitRotator,
-    WriteRevokeKind, consume_scope_exit_triggers, prune_expired_grants, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut,
+    CutRotationReport, CutRotator, GrantCutPlan, GrantedScopeRoots, RevokeError,
+    RevokedCommittedSet, RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport,
+    ScopeExitRotator, WriteRevokeKind, consume_scope_exit_triggers, prune_expired_grants,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut,
 };
