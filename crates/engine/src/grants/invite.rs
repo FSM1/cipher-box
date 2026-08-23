@@ -466,9 +466,9 @@ pub async fn post_invite_claim<M: Mailbox>(
 /// the commitment, and the encryption subkey secret every blinded tag derives
 /// from. Holding both is what makes a caller the owner.
 pub struct OwnerAuthority<'a> {
-    /// Owner identity signer. Nothing here signs with it — it is the capability
-    /// token itself, since verifying the commitment against a *supplied* public
-    /// key would prove nothing about who is calling.
+    /// Owner identity signer. Both the capability token — verifying the
+    /// commitment against a *supplied* public key would prove nothing about who
+    /// is calling — and the signer of each minted row's recipient binding.
     pub identity_signer: &'a EcdsaSigner,
     /// Owner encryption subkey secret — the pairwise ECDH half.
     pub enc_secret: &'a X25519Secret,
