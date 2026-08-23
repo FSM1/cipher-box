@@ -498,13 +498,15 @@ fn engine_error(error: EngineError) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Permission;
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::Permission as CorePermission;
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
-    use cipherbox_engine::Headroom;
     use cipherbox_engine::facade::CommandOutcome as Outcome;
     use cipherbox_engine::import_contact;
     use cipherbox_engine::seams::OpId;
+    use cipherbox_engine::{AcceptOutcome, Headroom};
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -520,6 +522,15 @@ mod tests {
 
     fn bytes(value: JsValue) -> Vec<u8> {
         value.unchecked_into::<Uint8Array>().to_vec()
+    }
+
+    fn accepted_share(permission: CorePermission) -> Outcome {
+        Outcome::ShareAccepted(AcceptOutcome {
+            scope_id: [0x5c; 16],
+            sequence: u64::MAX,
+            permission,
+            newly_added: true,
+        })
     }
 
     fn imported_contact() -> Outcome {
@@ -619,6 +630,41 @@ mod tests {
         assert!(field(&crossed(Outcome::Done), "identityPublicKey").is_undefined());
     }
 
+    /// An accepted share's payload is what tells a host the scope it may now
+    /// open and on what terms, and the permission crossing is the
+    /// **owner-committed** one — the share pointer's claim never reaches a host.
+    /// The sequence rides the same `bigint` an op id does, so a record past 2^53
+    /// survives.
+    #[wasm_bindgen_test]
+    fn an_accepted_share_crosses_with_its_committed_terms() {
+        for (permission, expected) in [
+            (CorePermission::Read, Permission::Read),
+            (CorePermission::Write, Permission::Write),
+        ] {
+            let accepted = crossed(accepted_share(permission));
+            assert_eq!(bytes(field(&accepted, "scopeId")), vec![0x5c; 16]);
+            assert_eq!(
+                field(&accepted, "permission"),
+                JsValue::from(expected),
+                "the committed permission crosses verbatim"
+            );
+            assert_eq!(field(&accepted, "newlyAdded"), JsValue::from_bool(true));
+
+            let sequence = field(&accepted, "sequence");
+            assert_eq!(sequence.js_typeof(), JsValue::from_str("bigint"));
+            assert_eq!(
+                String::from(
+                    sequence
+                        .unchecked_into::<BigInt>()
+                        .to_string(10)
+                        .expect("bigint renders in base 10")
+                ),
+                u64::MAX.to_string(),
+            );
+        }
+        assert!(field(&crossed(Outcome::Done), "scopeId").is_undefined());
+    }
+
     /// Hosts switch on `kind`, so each arm's discriminant is a stable string
     /// literal — the marshalling `Event::kind` already uses.
     #[wasm_bindgen_test]
@@ -627,6 +673,7 @@ mod tests {
             (Outcome::Done, "done"),
             (Outcome::Queued { op_id: OpId(1) }, "queued"),
             (imported_contact(), "contactImported"),
+            (accepted_share(CorePermission::Read), "shareAccepted"),
         ] {
             assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));
         }

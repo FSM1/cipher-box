@@ -24,8 +24,9 @@ use std::rc::Rc;
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ChildScopeRef, ReadBody, Version, seal_content_key};
-use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::kdf;
+use cipherbox_core::seal::{ChildScopeRef, GrantSection, ReadBody, Version, seal_content_key};
+use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -41,26 +42,38 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::gate::{GateError, floor};
 use crate::grants::{
-    Contact, ContactStore, ContactStoreError, InviteError, InviteMintError, InviteMintPlan,
-    InviteStoreError, MintedInviteLink, OwnerAuthority, StagingContactStore, StagingInviteStore,
-    mint_invite_link,
+    AcceptError, AcceptOutcome, Contact, ContactStore, ContactStoreError, CreateGrantError,
+    GrantRecipient, GranteeScopePlan, InviteError, InviteMintError, InviteMintPlan,
+    InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, SharePointer,
+    StagingContactStore, StagingInviteStore, StagingReceivedShareStore, accept_share,
+    create_read_grant, mint_invite_link, recipient_blinded_tag, resolve_recipient,
 };
+use crate::mailbox::locate_verified;
+use crate::net::author::ENVELOPE_V;
+use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, retire};
+use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    VaultProvisionNet, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    VaultProvisionNet, assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
     refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
-use crate::owner_keys::OwnerSessionKeys;
+use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
-use crate::rotation::{ResealError, ResolveFailure, derive_write_name};
+use crate::rotation::{
+    AscentAuthority, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds,
+    ResolveFailure, Retryable, RevokeError, RotateError, RotateScopePlan, ScopeRootIdentity,
+    WriteHistory, WriteRevokeKind, bounded, derive_write_name, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+};
 use crate::seams::{
-    FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
-    StagingStore, UnixMillis,
+    BoxedTask, FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet,
+    SeamTypes, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -356,6 +369,15 @@ impl From<Permission> for cipherbox_core::seal::Permission {
         match permission {
             Permission::Read => Self::Read,
             Permission::Write => Self::Write,
+        }
+    }
+}
+
+impl From<cipherbox_core::seal::Permission> for Permission {
+    fn from(permission: cipherbox_core::seal::Permission) -> Self {
+        match permission {
+            cipherbox_core::seal::Permission::Read => Self::Read,
+            cipherbox_core::seal::Permission::Write => Self::Write,
         }
     }
 }
@@ -674,6 +696,11 @@ pub enum CommandOutcome {
     /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
     /// durable.
     InviteLinkMinted(MintedInviteLink),
+    /// [`Command::AcceptShare`] adopted a share: the gate passed, the seeds
+    /// opened, and the entry is durable in this vault's received-shares list.
+    /// Carries no key material — the permission is the owner-committed one, not
+    /// the pointer's claim.
+    ShareAccepted(AcceptOutcome),
 }
 
 impl fmt::Debug for CommandOutcome {
@@ -683,6 +710,7 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
             CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
             CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
+            CommandOutcome::ShareAccepted(_) => f.write_str("CommandOutcome(shareAccepted)"),
         }
     }
 }
@@ -1110,6 +1138,163 @@ impl EngineError {
         }
     }
 
+    /// Map a rotation failure on the axis its own classifier already answers: an
+    /// availability stall or a C2 label conflict the re-point wave repairs is
+    /// [`Seam`](EngineError::Seam); a gate-rejected record, a re-seal this build
+    /// refuses to sign, a refused publish and an exhausted epoch are fail-closed
+    /// verdicts on the owner's own state, never retried (rule 6). A terminal
+    /// failure on a cut means it is not a revocation yet, so the caller reports
+    /// it rather than treating the re-signed set as done.
+    fn from_rotation<E: Retryable + fmt::Display>(err: E) -> Self {
+        match err.is_retryable() {
+            true => EngineError::Seam {
+                message: err.to_string(),
+            },
+            false => EngineError::TrustViolation {
+                message: err.to_string(),
+            },
+        }
+    }
+
+    /// [`from_rotation`](EngineError::from_rotation), with the one arm a read
+    /// rotation raises that is neither: a failed entropy draw.
+    fn from_rotate(err: RotateError) -> Self {
+        match err {
+            RotateError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
+            other => EngineError::from_rotation(other),
+        }
+    }
+
+    /// Map a committed-set cut refusal. The authority arms are verdicts on the
+    /// owner's own published record; the rest refuse the request against the
+    /// committed set, which is an input the host can change.
+    fn from_revoke(err: RevokeError) -> Self {
+        match err {
+            RevokeError::UnauthorizedSigner
+            | RevokeError::CommitmentScopeMismatch
+            | RevokeError::LedgerDiverges(_) => EngineError::TrustViolation {
+                message: err.to_string(),
+            },
+            refused => EngineError::MalformedInput {
+                check: refused.check(),
+            },
+        }
+    }
+
+    /// Map a read-grant creation failure on the classes a host acts on:
+    /// availability it may retry, an input or a bound it can change, and a
+    /// fail-closed refusal it must never retry.
+    fn from_create_grant(err: CreateGrantError) -> Self {
+        match err {
+            CreateGrantError::Entropy(e) => EngineError::from_entropy(e),
+            CreateGrantError::Mailbox(e) => EngineError::from_seam(e),
+            CreateGrantError::Converge(e) if e.is_retryable() => EngineError::Seam {
+                message: e.to_string(),
+            },
+            CreateGrantError::Publish(e)
+            | CreateGrantError::DescendantPublish { error: e, .. }
+            | CreateGrantError::ParentPublish(e)
+                if e.is_retryable() =>
+            {
+                EngineError::Seam {
+                    message: e.to_string(),
+                }
+            }
+            CreateGrantError::DescendantResolve { reason, .. }
+                if reason != ResolveFailure::Rejected =>
+            {
+                EngineError::Seam {
+                    message: reason.to_string(),
+                }
+            }
+            // The recipient's own key, and a subtree the converge could not
+            // bring current: both are the request's inputs, not verdicts on a
+            // peer's record.
+            e @ (CreateGrantError::UnusableRecipientKey
+            | CreateGrantError::RecipientIsTheOwner
+            | CreateGrantError::SubtreeNotConverged { .. }) => {
+                EngineError::MalformedInput { check: e.check() }
+            }
+            terminal => EngineError::TrustViolation {
+                message: terminal.to_string(),
+            },
+        }
+    }
+
+    /// Map an accept-flow failure. Every binding arm is a fail-closed trust
+    /// verdict on the pointer or the record it named — never degraded to
+    /// staleness, which would tell a host to keep retrying a forgery.
+    fn from_accept(err: AcceptError) -> Self {
+        match err {
+            AcceptError::MalformedPointer(e) => EngineError::MalformedInput { check: e.check() },
+            AcceptError::Gate(e) => EngineError::from_gate(e),
+            AcceptError::Ack(e) => EngineError::from_seam(e),
+            AcceptError::Persist(e) => EngineError::from_received_share_store(e),
+            // No blob at your tag on an owner-signed record is the definitive
+            // "you were removed" (`grants/revocation.rs`), never a claim that the
+            // record is forged — a host that could not tell them apart would
+            // report a revocation as an attack.
+            AcceptError::NoBlobAtTag => EngineError::MalformedInput {
+                check: "no-grant-at-your-tag",
+            },
+            trust => EngineError::TrustViolation {
+                message: trust.to_string(),
+            },
+        }
+    }
+
+    /// Map a contact-book failure. The book is this vault's own state, so a
+    /// stored book that will not open is a fail-closed verdict; everything a
+    /// host can act on — a code it must re-scan, a book it must prune, a seam it
+    /// may retry — keeps its own class.
+    fn from_contact_store(err: ContactStoreError) -> Self {
+        match err {
+            ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
+                EngineError::MalformedInput { check: e.check() }
+            }
+            ContactStoreError::RecipientNotImported => EngineError::MalformedInput {
+                check: "recipient-not-imported",
+            },
+            ContactStoreError::Full => EngineError::MalformedInput {
+                check: "contact-book-full",
+            },
+            ContactStoreError::Encode(_) => EngineError::MalformedInput {
+                check: "contact-book-unstorable",
+            },
+            ContactStoreError::Seam(e) => EngineError::from_seam(e),
+            ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
+            // A seal refusal is deterministic in the book it was handed, so it
+            // joins `Encode` as an input the host must change — never `Seam`,
+            // whose retry would never converge.
+            ContactStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
+            // A rejected binding, and a stored book this build cannot read: both
+            // are fail-closed trust verdicts, not outages a host should retry.
+            other => EngineError::TrustViolation {
+                message: other.to_string(),
+            },
+        }
+    }
+
+    /// Map a received-shares store failure: a host seam is availability, and a
+    /// stored list this build cannot open or re-seal is an input the host must
+    /// resolve, never an outage a retry converges on.
+    fn from_received_share_store(err: ReceivedShareStoreError) -> Self {
+        match err {
+            ReceivedShareStoreError::Seam(e) => EngineError::from_seam(e),
+            ReceivedShareStoreError::Entropy(e) => EngineError::from_entropy(e),
+            ReceivedShareStoreError::Full => EngineError::MalformedInput {
+                check: "received-shares-full",
+            },
+            ReceivedShareStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
+            ReceivedShareStoreError::Encode(_) => EngineError::MalformedInput {
+                check: "received-shares-unstorable",
+            },
+            ReceivedShareStoreError::Unreadable(e) => EngineError::TrustViolation {
+                message: e.to_string(),
+            },
+        }
+    }
+
     /// Map a cold-start failure onto the facade error: every trust arm (forged
     /// pointer, regressed floor, rejected root) collapses to the single
     /// fail-closed [`ColdStart`](EngineError::ColdStart) — never retryable
@@ -1326,6 +1511,86 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
         });
     }
     Ok(())
+}
+
+/// The owner rotation arm over one engine's seam family.
+type OwnerNet<'a, T> = OwnerRotationNet<
+    'a,
+    <T as SeamTypes>::RecordTransport,
+    <T as SeamTypes>::Http,
+    <T as SeamTypes>::CredentialStore,
+    <T as SeamTypes>::FloorStore,
+    <T as SeamTypes>::Scheduler,
+    Box<dyn Entropy>,
+>;
+
+/// A scope root's opaque `ipnsName` bytes as a parsed name, on the resolve
+/// path's own definition of parseable. An address this build cannot read is a
+/// refusal of the bytes that carried it, never a verdict on their author.
+fn parsed_scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
+    scope_name(ipns_name).map_err(|_| EngineError::MalformedInput {
+        check: "scope-root-name-is-unparseable",
+    })
+}
+
+/// A scope root this session acts on as its owner, and the ancestor node seed a
+/// gated read of an interior one needs. `None` at the vault root, which carries
+/// no ascent link to prove.
+struct OwnerScope {
+    scope: ChildScopeRef,
+    parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+impl OwnerScope {
+    /// The ancestry a gated read of this scope root runs under: seeded with its
+    /// own ancestor seed when it is anchored below the vault root, which is also
+    /// what tells [`OwnerRotationNet::resolve_anchored`] which binding to prove.
+    fn ancestry(&self) -> RotationAncestry {
+        RotationAncestry::default()
+            .under_parent_node_seed(self.scope.scope_id, self.parent_node_seed.as_deref())
+    }
+}
+
+/// The entries of `index` whose scope roots sit inside `node`'s subtree — the
+/// descendant scopes a grant at `node` reparents into the fresh scope.
+///
+/// Fail-closed on an entry the rendered view cannot place: leaving a live scope
+/// root indexed under a scope that no longer contains it is a descendant the
+/// eager cascade never reaches, which is a silent revocation hole rather than a
+/// stale bookmark.
+fn subtree_child_scopes(
+    rendered: &Snapshot,
+    node: NodeId,
+    index: &[ChildScopeRef],
+) -> Result<Vec<ChildScopeRef>, EngineError> {
+    let mut inside = Vec::new();
+    for child in index {
+        let scope_root = NodeId(child.scope_id);
+        if !rendered.contains(scope_root) {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-cannot-place-a-child-scope",
+            });
+        }
+        if rendered.is_descendant_of(scope_root, node) {
+            inside.push(child.clone());
+        }
+    }
+    Ok(inside)
+}
+
+/// The published grant blobs of a gated scope root, as the accept flow's
+/// self-location reads them. The structure signature is the gate's to verify;
+/// self-location keys on the tag alone.
+fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGrantBlob> {
+    section
+        .grant_blobs
+        .iter()
+        .map(|blob| PublishedGrantBlob {
+            tag: blob.tag,
+            enc: blob.enc,
+            ciphertext: blob.ciphertext.clone(),
+        })
+        .collect()
 }
 
 fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
@@ -1782,6 +2047,26 @@ const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// The resolve-tick task, spawned once a root name exists to poll.
 type TickLoopSpawner = Box<dyn FnOnce(IpnsName)>;
 
+/// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
+/// ([`rotate_scope`]'s third effect), over the scope root the rotation read and
+/// the ancestor seed it read it under.
+type SweepTaskFactory = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
+
+/// The session material a spawned sweep opens and re-seals under, held in a cell
+/// the engine empties on drop so teardown revokes it rather than waiting out the
+/// task ([`Engine::tick_enc_subkey`] carries the tick loop's on the same terms).
+struct SweepKeys {
+    enc_secret: X25519Secret,
+    owner_identity: EcdsaVerifier,
+    scope_keys: OwnerSeedKeys,
+}
+
+/// How many sweep passes one enqueued task runs before it gives up and leaves
+/// the remainder to the next rotation or ordinary write. The idle sweep cadence
+/// is an open edge (blueprint/engine.md "Open edges"), so the task rides
+/// [`SyncTimingProfile::poll_cadence`] until it lands in the profile.
+const SWEEP_MAX_PASSES: u32 = 3;
+
 /// The engine — the single stateful brain behind the facade.
 ///
 /// Constructed over the whole seam set (missing seam = compile error), an
@@ -1910,6 +2195,14 @@ pub struct Engine<T: SeamTypes> {
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
+    /// Builds the sweep task every rotation arm enqueues. Built at
+    /// [`start`](Self::start) for the same reason the tick loop is: a spawned
+    /// task is `'static`, and the command path's seam bounds are narrower.
+    sweep_tasks: RefCell<Option<SweepTaskFactory>>,
+    /// What a spawned sweep opens and signs with, shared with every task it
+    /// produces and emptied on drop — the tasks read through this cell, so
+    /// teardown revokes the material instead of waiting out the last pass.
+    sweep_keys: Rc<RefCell<Option<Rc<SweepKeys>>>>,
     /// Where this session's bytes go, decided at [`start`](Self::start) from the
     /// vault settings load and re-decided by a settings save, and shared with
     /// the drain. Carries its own provenance, because an assumed placement must
@@ -1979,6 +2272,8 @@ impl<T: SeamTypes> Engine<T> {
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
+                sweep_tasks: RefCell::new(None),
+                sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
                 byo_reconciled: Cell::new(false),
                 api: None,
@@ -2109,6 +2404,7 @@ impl<T: SeamTypes> Engine<T> {
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
+        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         if let Some(root_name) = root_name {
             self.open_tick_loop(root_name);
@@ -2219,6 +2515,12 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
+        }
+        if let Ok(mut sweep_tasks) = self.sweep_tasks.try_borrow_mut() {
+            *sweep_tasks = None;
+        }
+        if let Ok(mut keys) = self.sweep_keys.try_borrow_mut() {
+            *keys = None;
         }
         if let Ok(mut placement) = self.placement.try_borrow_mut() {
             *placement = None;
@@ -2439,6 +2741,96 @@ where {
             },
         )
         .await
+    }
+
+    /// Build the factory for the lazy-wave sweep task every rotation enqueues
+    /// once its cut is durable (blueprint/engine.md "Rotation primitives:
+    /// sweep").
+    ///
+    /// Built here for the reason
+    /// [`build_tick_loop_spawner`](Self::build_tick_loop_spawner) is. `None`
+    /// when there is no session to derive the owner's two rotation seeds from.
+    fn build_sweep_task_factory(
+        &self,
+        api: Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) -> Option<SweepTaskFactory>
+    where
+        T::Http: Clone + 'static,
+        T::CredentialStore: Clone + 'static,
+        T::FloorStore: Clone + 'static,
+    {
+        let session = self.session.as_ref()?;
+        *self.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
+            enc_secret: session.enc_subkey().clone(),
+            owner_identity: session.owner_identity(),
+            scope_keys: OwnerSeedKeys::of(session),
+        }));
+        let held = self.sweep_keys.clone();
+        let transport = self.seams.record_transport.clone();
+        let floors = self.seams.floor_store.clone();
+        let scheduler = self.seams.scheduler.clone();
+        let http = self.seams.http.clone();
+        let gateway = self.gateway.clone();
+        let entropy = self.entropy.clone();
+        let alive = self.alive.clone();
+        let profile = self.profile;
+
+        Some(Rc::new(
+            move |scope: ChildScopeRef, parent_node_seed: Option<Zeroizing<[u8; 32]>>| {
+                let held = held.clone();
+                let api = api.clone();
+                let transport = transport.clone();
+                let floors = floors.clone();
+                let scheduler = scheduler.clone();
+                let http = http.clone();
+                let gateway = gateway.clone();
+                let entropy = entropy.clone();
+                let alive = alive.clone();
+                Box::pin(async move {
+                    // The pass owns a copy for exactly its own duration; the
+                    // engine emptied the cell if the session is already gone.
+                    let Some(keys) = held.borrow().clone() else {
+                        return;
+                    };
+                    let net = OwnerRotationNet {
+                        transport: &transport,
+                        api: api.as_ref(),
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        scheduler: &scheduler,
+                        profile: &profile,
+                        entropy: &entropy,
+                        keys: OwnerRotationKeys {
+                            enc_secret: &keys.enc_secret,
+                            identity: &keys.owner_identity,
+                            scope_keys: &keys.scope_keys,
+                        },
+                        // An interior scope root's every gated read must prove
+                        // its ascent link, so the walk carries the ancestor seed
+                        // the rotation read it under.
+                        ancestry: RotationAncestry::default()
+                            .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
+                        owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
+                        payload_version: POINTER_PAYLOAD_VERSION,
+                        gated: GatedRoots::default(),
+                        swept: SweptScopeState::default(),
+                    };
+                    // The wave is idempotent and every later write advances it,
+                    // so a pass that does not converge is left to the next one.
+                    let _ = run_sweep(
+                        &scheduler,
+                        &net,
+                        &net,
+                        &scope,
+                        profile.poll_cadence,
+                        SWEEP_MAX_PASSES,
+                        &|| alive.get() && held.borrow().is_some(),
+                    )
+                    .await;
+                }) as BoxedTask
+            },
+        ))
     }
 
     /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
@@ -2895,36 +3287,43 @@ where {
                 .record(&contact_code)
                 .await
                 .map(CommandOutcome::ContactImported)
-                .map_err(|err| match err {
-                    ContactStoreError::Import(e @ CodecError::Malformed(_)) => {
-                        EngineError::MalformedInput { check: e.check() }
-                    }
-                    ContactStoreError::Full => EngineError::MalformedInput {
-                        check: "contact-book-full",
-                    },
-                    ContactStoreError::Encode(_) => EngineError::MalformedInput {
-                        check: "contact-book-unstorable",
-                    },
-                    ContactStoreError::Seam(e) => EngineError::Seam {
-                        message: e.message().to_owned(),
-                    },
-                    ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
-                    // A seal refusal is deterministic in the book it was handed,
-                    // so it joins `Encode` as an input the host must change —
-                    // never `Seam`, whose retry would never converge.
-                    ContactStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
-                    // A rejected binding, and a stored book this build
-                    // cannot read: both are fail-closed trust verdicts, not
-                    // outages a host should retry.
-                    other => EngineError::TrustViolation {
-                        message: other.to_string(),
-                    },
-                })
+                .map_err(EngineError::from_contact_store)
             }
             Command::CreateInviteLink { node, permission } => self
                 .create_invite_link(node, permission)
                 .await
                 .map(CommandOutcome::InviteLinkMinted),
+            Command::Grant {
+                node,
+                recipient_identity_public_key,
+                permission,
+            } => self
+                .grant(node, &recipient_identity_public_key, permission)
+                .await
+                .map(|()| CommandOutcome::Done),
+            Command::Revoke {
+                node,
+                recipient_identity_public_key,
+            } => self
+                .revoke_grant(node, &recipient_identity_public_key)
+                .await
+                .map(|()| CommandOutcome::Done),
+            // A downgrade cuts the write plane only, and the wave re-mints the
+            // grant set from a record still carrying the pre-cut commitment. The
+            // pre-wave re-seal that would publish the demoted set is not
+            // implemented.
+            Command::Downgrade { .. } => Err(EngineError::UnsupportedTarget {
+                check: "downgrade-needs-a-pre-wave-reseal",
+            }),
+            Command::AcceptShare {
+                sealed_share_pointer,
+            } => self
+                .accept_share(&sealed_share_pointer)
+                .await
+                .map(CommandOutcome::ShareAccepted),
+            Command::RotateNow { node } => {
+                self.rotate_now(node).await.map(|()| CommandOutcome::Done)
+            }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
@@ -2957,46 +3356,24 @@ where {
     ) -> Result<MintedInviteLink, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let scope_id = self.snapshot.borrow().root.0;
-        if node.0 != scope_id {
+        if node.0 != self.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget {
                 check: "invite-target-is-not-a-scope-root",
             });
         }
-        let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
-            EngineError::ContentUnavailable {
-                message: "no write scope seed is held for the vault root".to_owned(),
-            },
-        )?;
-        let scope = ChildScopeRef::new(
-            scope_id,
-            derive_write_name(&write_scope_seed, &scope_id)
-                .as_str()
-                .as_bytes()
-                .to_vec(),
-        );
+        let scope = self.vault_root_scope()?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
-        let net = OwnerRotationNet {
-            transport: &self.seams.record_transport,
-            api: api.as_ref(),
-            gateway: &self.gateway,
-            http: &self.seams.http,
-            floors: &self.seams.floor_store,
-            scheduler: &self.seams.scheduler,
-            profile: &self.profile,
-            entropy: &self.entropy,
-            keys: OwnerRotationKeys {
+        let net = self.owner_rotation_net(
+            api,
+            OwnerRotationKeys {
                 enc_secret: session.enc_subkey(),
                 identity: &owner_identity,
                 scope_keys: &scope_keys,
             },
-            ancestry: RotationAncestry::default(),
-            owner_pointer_seed: None,
-            payload_version: POINTER_PAYLOAD_VERSION,
-            gated: GatedRoots::default(),
-            swept: SweptScopeState::default(),
-        };
+            RotationAncestry::default(),
+            None,
+        );
         let current = net
             .resolve_vault_root(&scope)
             .await
@@ -3022,6 +3399,543 @@ where {
         )
         .await
         .map_err(EngineError::from_invite_mint)
+    }
+
+    /// The vault root's scope reference: its scope id and the `ipnsName` the
+    /// session's write scope seed derives it at.
+    fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
+        let scope_id = self.snapshot.borrow().root.0;
+        let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
+            EngineError::ContentUnavailable {
+                message: "no write scope seed is held for the vault root".to_owned(),
+            },
+        )?;
+        Ok(ChildScopeRef::new(
+            scope_id,
+            derive_write_name(&write_scope_seed, &scope_id)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+        ))
+    }
+
+    /// The scope root `node` names, and the ancestor node seed a gated read of an
+    /// interior one needs.
+    ///
+    /// The authority for what is a scope root is the vault root's owner-signed
+    /// direct-child-scope index, so an interior root's `ipnsName` is taken from
+    /// that index rather than re-derived: a scope a write rotation has moved is
+    /// then read at the name its parent vouches for. A node the base snapshot
+    /// does not hold is refused before any resolve.
+    async fn owner_scope(
+        &self,
+        node: NodeId,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        check: &'static str,
+    ) -> Result<OwnerScope, EngineError> {
+        let root = self.snapshot.borrow().root;
+        if node == root {
+            return Ok(OwnerScope {
+                scope: self.vault_root_scope()?,
+                parent_node_seed: None,
+            });
+        }
+        if !self.snapshot.borrow().contains(node) {
+            return Err(EngineError::UnsupportedTarget { check });
+        }
+        let parent = self.vault_root_scope()?;
+        let current = self
+            .owner_rotation_net(api, keys, RotationAncestry::default(), None)
+            .resolve_vault_root(&parent)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        let scope = current
+            .direct_child_scope_index
+            .iter()
+            .find(|child| child.scope_id == node.0)
+            .cloned()
+            .ok_or(EngineError::UnsupportedTarget { check })?;
+        Ok(OwnerScope {
+            parent_node_seed: Some(Zeroizing::new(
+                *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
+            )),
+            scope,
+        })
+    }
+
+    /// The owner rotation arm over this session's seams.
+    #[allow(clippy::type_complexity)]
+    fn owner_rotation_net<'a>(
+        &'a self,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'a>,
+        ancestry: RotationAncestry,
+        owner_pointer_seed: Option<&'a [u8; 32]>,
+    ) -> OwnerNet<'a, T> {
+        OwnerRotationNet {
+            transport: &self.seams.record_transport,
+            api: api.as_ref(),
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys,
+            ancestry,
+            owner_pointer_seed,
+            payload_version: POINTER_PAYLOAD_VERSION,
+            gated: GatedRoots::default(),
+            swept: SweptScopeState::default(),
+        }
+    }
+
+    /// The sweep-task factory [`start`](Self::start) built, absent once the
+    /// engine has torn its session material down.
+    fn sweep_factory(&self) -> Result<SweepTaskFactory, EngineError> {
+        self.sweep_tasks
+            .borrow()
+            .clone()
+            .ok_or(EngineError::NotStarted)
+    }
+
+    /// The imported contact a grant or revoke names, or a fail-closed refusal.
+    ///
+    /// The recipient's encryption subkey is only usable because a verified
+    /// binding signature tied it to this identity key at import — a key taken
+    /// from the command instead would let a host wrap a grant to anyone.
+    async fn recipient_contact(
+        &self,
+        session: &SessionIdentity,
+        identity_public_key: &[u8],
+    ) -> Result<Contact, EngineError> {
+        let identity_pk: [u8; IDENTITY_PUBLIC_LEN] =
+            identity_public_key
+                .try_into()
+                .map_err(|_| EngineError::MalformedInput {
+                    check: "recipient-identity-key-length",
+                })?;
+        resolve_recipient(
+            &StagingContactStore::new(
+                &self.seams.staging_store,
+                session.enc_subkey(),
+                &self.entropy,
+            ),
+            &identity_pk,
+        )
+        .await
+        .map_err(EngineError::from_contact_store)
+    }
+
+    /// Re-drive `attempt` under the rotation caller contract's bound
+    /// ([`bounded`]), spaced on this session's poll cadence.
+    async fn bounded_rotation<V, E, A>(&self, attempt: A) -> Result<V, E>
+    where
+        A: AsyncFnMut() -> Result<V, E>,
+        E: Retryable,
+    {
+        bounded(
+            &self.seams.scheduler,
+            self.profile.poll_cadence,
+            MAX_ROTATION_ATTEMPTS,
+            attempt,
+        )
+        .await
+    }
+
+    /// Manual hygiene rotate-now over the vault root's scope
+    /// (blueprint/engine.md "Triggers": manual rotations re-seal the
+    /// **unchanged** committed set, so this is the flat root cut, not the
+    /// revocation cascade).
+    async fn rotate_now(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let sweep = self.sweep_factory()?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let target = self
+            .owner_scope(node, api, owner_keys(), "rotate-target-is-not-a-scope-root")
+            .await?;
+
+        self.bounded_rotation(async || {
+            let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+            let current = net
+                .resolve_anchored(&target.scope)
+                .await
+                .map_err(RotateError::Resolve)?;
+            rotate_scope(
+                &mut SharedEntropy(&self.entropy),
+                &self.seams.floor_store,
+                &self.seams.scheduler,
+                &net,
+                &RotateScopePlan {
+                    identity: ScopeRootIdentity {
+                        v: current.v,
+                        scope_id: target.scope.scope_id,
+                        ipns_name: &target.scope.ipns_name,
+                        owner_enc_pub: &current.owner_enc_pub,
+                        owner_enc_secret: Some(session.enc_subkey()),
+                        ascent: target
+                            .parent_node_seed
+                            .as_deref()
+                            .map(AscentAuthority::ParentSeed),
+                        owes_ascent_link: current.carried_ascent_link,
+                        pseudonym_signer: &current.pseudonym_signer,
+                    },
+                    committed: CommittedSet {
+                        commitment: &current.commitment,
+                        commitment_sig: &current.commitment_sig,
+                        grant_ledger: &current.grant_ledger,
+                        direct_child_scope_index: &current.direct_child_scope_index,
+                    },
+                    current_override_seed: &current.override_seed,
+                    current_read_epoch: current.current_read_epoch,
+                    write_scope_seed: &current.write_scope_seed,
+                    write_epoch: current.write_epoch,
+                    write_history_link: &current.write_history_link,
+                    pointer_read_key: &current.pointer_read_key,
+                    carried_history_links: &current.carried_history_links,
+                },
+                || sweep(target.scope.clone(), target.parent_node_seed.clone()),
+            )
+            .await
+        })
+        .await
+        .map(|_| ())
+        .map_err(EngineError::from_rotate)
+    }
+
+    /// Revoke a recipient's grant on the vault root's scope: cut them from the
+    /// owner-signed committed set, then drive the cut through the planes it
+    /// demands (blueprint/engine.md "Triggers").
+    ///
+    /// The cut alone revokes nothing — only the fresh-seed cascade completes a
+    /// read revoke, and only the name wave ends a write grant — so a failure to
+    /// rotate is reported rather than swallowed.
+    async fn revoke_grant(
+        &self,
+        node: NodeId,
+        recipient_identity_public_key: &[u8],
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let sweep = self.sweep_factory()?;
+        let contact = self
+            .recipient_contact(session, recipient_identity_public_key)
+            .await?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let owner_pointer_seed = session.owner_pointer_seed();
+        let target = self
+            .owner_scope(node, api, owner_keys(), "revoke-target-is-not-a-scope-root")
+            .await?;
+        let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
+        let current = self
+            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .resolve_anchored(&target.scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+
+        // The owner's half of the same pairwise ECDH the recipient self-locates
+        // under, so the tag is derived here and never taken from a caller.
+        let tag = recipient_blinded_tag(
+            session.enc_subkey(),
+            &contact.enc_subkey(),
+            &target.scope.ipns_name,
+        )
+        .ok_or(EngineError::MalformedInput {
+            check: "unusable-recipient-key",
+        })?;
+
+        let plan = GrantCutPlan {
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            scope_root_name: &scope_root_name,
+            owner_signer: session.identity(),
+        };
+        // A write grant is cut by `revoke_write_grant`, never by a read revoke —
+        // the read cut refuses it by name, which is what selects the arm.
+        let cut = match revoke_read_grant(&plan, &tag) {
+            Err(RevokeError::WriteGranted) => {
+                revoke_write_grant(&plan, &tag, WriteRevokeKind::Full)
+            }
+            read_cut => read_cut,
+        }
+        .map_err(EngineError::from_revoke)?;
+
+        let rotator = OwnerCutNet {
+            transport: &self.seams.record_transport,
+            api: api.as_ref(),
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys: owner_keys(),
+            owner_signer: session.identity(),
+            owner_pointer_seed: owner_pointer_seed.as_bytes(),
+            payload_version: POINTER_PAYLOAD_VERSION,
+            scope_root_name: &scope_root_name,
+            scope_id: target.scope.scope_id,
+            parent_node_seed: target.parent_node_seed.as_deref(),
+            session_root_scope_id: self.snapshot.borrow().root.0,
+            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+        };
+        rotate_on_cut(&rotator, node, &cut)
+            .await
+            .map(|_| ())
+            .map_err(EngineError::from_rotation)
+    }
+
+    /// Grant a node inside the vault root's scope to an imported contact:
+    /// converge the subtree, mint a fresh scope at epoch 1, reparent whatever
+    /// descendant scope roots the node carries, republish the parent's
+    /// direct-child-scope index, and post the sealed share pointer
+    /// (blueprint/engine.md "Grant creation").
+    ///
+    /// Owner-only by construction: the parent's re-seal is signed under the
+    /// owner's writer pseudonym and its commitment under the owner identity, so
+    /// no other session can author it.
+    async fn grant(
+        &self,
+        node: NodeId,
+        recipient_identity_public_key: &[u8],
+        permission: Permission,
+    ) -> Result<(), EngineError> {
+        // A write grant owes a write-scope cut — a fresh write scope seed and a
+        // name wave over the granted subtree — which the read-grant mint does
+        // not author.
+        if permission == Permission::Write {
+            return Err(EngineError::UnsupportedTarget {
+                check: "write-grants-need-a-write-scope-cut",
+            });
+        }
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let contact = self
+            .recipient_contact(session, recipient_identity_public_key)
+            .await?;
+        // The vault root is granted through an invite link over its existing
+        // committed set; minting a scope at it would replace the session's own.
+        if node.0 == self.snapshot.borrow().root.0 {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-target-is-the-vault-root",
+            });
+        }
+        let parent = self.vault_root_scope()?;
+        let rendered = self.render().await?;
+        let display_name = rendered
+            .node(node)
+            .ok_or(EngineError::UnknownNode)?
+            .name()
+            .to_owned();
+        // The recipient's own received-shares codec hard-rejects a longer label,
+        // so a pointer carrying one is an item they can never store and never
+        // ack — it would redeliver until its TTL. Refuse it here, where the name
+        // is still the owner's to change (AGENTS.md rule 8).
+        if display_name.len() > MAX_DISPLAY_NAME_BYTES {
+            return Err(EngineError::MalformedInput {
+                check: "grant-display-name-too-long",
+            });
+        }
+
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        // The converge pass consults the scope pointer, which only this seed
+        // names.
+        let owner_pointer_seed = session.owner_pointer_seed();
+        let net = self.owner_rotation_net(
+            api,
+            OwnerRotationKeys {
+                enc_secret: session.enc_subkey(),
+                identity: &owner_identity,
+                scope_keys: &scope_keys,
+            },
+            RotationAncestry::default(),
+            Some(owner_pointer_seed.as_bytes()),
+        );
+        let current = net
+            .resolve_vault_root(&parent)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+
+        // The share pointer is sealed under the parent record's envelope version
+        // and opened under the one this build authors, so a divergence would mint
+        // a grant whose pointer no accept can open.
+        if current.v != ENVELOPE_V {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-parent-envelope-version-unsupported",
+            });
+        }
+
+        // A second grant on the same folder would mint another scope at epoch 1,
+        // replacing the seed every existing grantee of it holds — a silent
+        // revocation dressed as a share. Adding a recipient to a scope that
+        // already exists is a row on its committed set, not a fresh mint.
+        if current
+            .direct_child_scope_index
+            .iter()
+            .any(|child| child.scope_id == node.0)
+        {
+            return Err(EngineError::UnsupportedTarget {
+                check: "grant-target-already-names-a-scope",
+            });
+        }
+
+        let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
+
+        let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
+        let pointer_read_key = session.pointer_read_key(&node.0);
+        let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
+        create_read_grant(
+            &mut SharedEntropy(&self.entropy),
+            &net,
+            &net,
+            &self.seams.mailbox,
+            &GranteeScopePlan {
+                v: current.v,
+                scope_id: node.0,
+                parent_node_seed: parent_node_seed.as_bytes(),
+                owner_enc_pub: &current.owner_enc_pub,
+                // A read grant cuts no write scope: the granted node keeps the
+                // write-plane material it already publishes under.
+                write_scope_seed: &current.write_scope_seed,
+                write_epoch: current.write_epoch,
+                pointer_read_key: pointer_read_key.as_bytes(),
+                subtree_child_index: &subtree,
+            },
+            &GrantRecipient {
+                identity_pk: contact.identity_pk(),
+                enc_pub: &contact.enc_subkey(),
+                display_name,
+            },
+            &OwnerGrantKeys {
+                enc_secret: session.enc_subkey(),
+                identity_signer: session.identity(),
+                pseudonym_signer: &pseudonym_signer,
+            },
+            &ParentScopePlan {
+                identity: ScopeRootIdentity {
+                    v: current.v,
+                    scope_id: parent.scope_id,
+                    ipns_name: &parent.ipns_name,
+                    owner_enc_pub: &current.owner_enc_pub,
+                    owner_enc_secret: Some(session.enc_subkey()),
+                    ascent: None,
+                    owes_ascent_link: current.carried_ascent_link,
+                    pseudonym_signer: &current.pseudonym_signer,
+                },
+                seeds: ResealSeeds {
+                    override_seed: &current.override_seed,
+                    read_epoch: current.current_read_epoch,
+                    // Updating the index is a metadata-only re-seal at the same
+                    // epoch, so it cuts no read plane and mints no history link.
+                    prev: None,
+                    write_scope_seed: &current.write_scope_seed,
+                    write_epoch: current.write_epoch,
+                    write_history: WriteHistory::Carried(&current.write_history_link),
+                    pointer_read_key: &current.pointer_read_key,
+                },
+                commitment: &current.commitment,
+                commitment_sig: &current.commitment_sig,
+                grant_ledger: &current.grant_ledger,
+                current_child_index: &current.direct_child_scope_index,
+                carried_history_links: &current.carried_history_links,
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(EngineError::from_create_grant)
+    }
+
+    /// Accept a share the mailbox delivered: bind the pointer to the imported
+    /// contact, resolve and gate the scope root it names, self-locate the grant
+    /// blob by blinded tag, unseal the seeds, and append the entry to this
+    /// vault's sealed received-shares list before acking
+    /// (blueprint/engine.md "Accept flow").
+    ///
+    /// Fail-closed throughout: an unverifiable sender, an uncommitted tag, or a
+    /// gate rejection is a trust verdict, never staleness.
+    async fn accept_share(
+        &self,
+        sealed_share_pointer: &[u8],
+    ) -> Result<AcceptOutcome, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        // The version the sender sealed under is the envelope version its scope
+        // root was minted at, which is the one this build authors; a payload from
+        // any other is an item that does not open, and is dropped.
+        let item = locate_verified(
+            &self.seams.mailbox,
+            session.enc_subkey(),
+            ENVELOPE_V,
+            sealed_share_pointer,
+        )
+        .await
+        .map_err(EngineError::from_seam)?
+        .ok_or(EngineError::MalformedInput {
+            check: "share-pointer-is-not-on-this-inbox",
+        })?;
+
+        let contact = self
+            .recipient_contact(session, &item.sender_identity.to_sec1())
+            .await?;
+        let pointer = SharePointer::decode(&item.payload)
+            .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
+        // Bind the pointer to the contact before it names anything to fetch, so
+        // one imported peer cannot steer a resolve at a scope root of their
+        // choosing. The accept flow re-checks it against the same contact.
+        if pointer.sharer_identity_pk != contact.identity_pk().to_sec1() {
+            return Err(EngineError::TrustViolation {
+                message: AcceptError::SharerMismatch.to_string(),
+            });
+        }
+        let name = parsed_scope_name(&pointer.scope_root_name)?;
+        let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
+            .await
+            .ok_or(EngineError::ContentUnavailable {
+                message: "the shared scope root did not resolve".to_owned(),
+            })?;
+        let candidate =
+            assemble_candidate(&self.gateway, &self.seams.http, &name, &record_bytes, None)
+                .await
+                .map_err(EngineError::from_gate)?;
+
+        let store = StagingReceivedShareStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        );
+        let mut received = store
+            .load()
+            .await
+            .map_err(EngineError::from_received_share_store)?;
+        let blobs = published_grant_blobs(&candidate.grant_section);
+        accept_share(
+            &self.seams.floor_store,
+            &self.seams.mailbox,
+            &store,
+            &item,
+            &contact,
+            session.enc_subkey(),
+            &candidate,
+            &blobs,
+            &mut received,
+        )
+        .await
+        .map_err(EngineError::from_accept)
     }
 
     /// Seal and publish the vault settings record, then adopt what it
@@ -5271,17 +6185,94 @@ mod tests {
         assert_eq!(block_on(engine.view()).unwrap().statfs().nodes, 3);
     }
 
+    /// The catch-all's remaining coverage, asserted rather than inferred: every
+    /// grant, share and rotation arm is wired, so a command that still reports
+    /// `Unimplemented` names a slice that genuinely has not landed.
     #[test]
-    fn non_metadata_commands_stay_unimplemented() {
+    fn logout_is_the_only_command_left_unimplemented() {
         let (mut engine, _events) = started();
-        let out = block_on(engine.command(Command::RotateNow {
-            node: NodeId([1; 16]),
-        }));
         assert_eq!(
-            out,
-            Err(EngineError::Unimplemented {
-                command: "rotateNow"
-            })
+            block_on(engine.command(Command::Logout)),
+            Err(EngineError::Unimplemented { command: "logout" }),
+        );
+    }
+
+    /// A wired arm refuses with its own typed verdict, never by falling through
+    /// the catch-all, and refuses before it reaches any key material.
+    #[test]
+    fn a_rotation_arm_refuses_a_node_that_names_no_scope_root() {
+        let (mut engine, _events) = started();
+        let node = NodeId([1; 16]);
+        for (command, check) in [
+            (
+                Command::RotateNow { node },
+                "rotate-target-is-not-a-scope-root",
+            ),
+            (
+                Command::Downgrade {
+                    node,
+                    recipient_identity_public_key: vec![2u8; 33],
+                },
+                "downgrade-needs-a-pre-wave-reseal",
+            ),
+        ] {
+            let name = command.name();
+            assert_eq!(
+                block_on(engine.command(command)),
+                Err(EngineError::UnsupportedTarget { check }),
+                "`{name}` must refuse with its own typed verdict",
+            );
+        }
+    }
+
+    /// A revoke names a recipient before it names a scope: the contact book is
+    /// local, so a recipient this vault never imported is refused without a
+    /// resolve — and without deriving a blinded tag against an unverified key.
+    #[test]
+    fn a_revoke_refuses_an_unimported_recipient_before_it_resolves_anything() {
+        let (mut engine, _events) = started();
+        assert_eq!(
+            block_on(engine.command(Command::Revoke {
+                node: NodeId([1; 16]),
+                recipient_identity_public_key: vec![2u8; 33],
+            })),
+            Err(EngineError::MalformedInput {
+                check: "recipient-not-imported"
+            }),
+        );
+    }
+
+    /// A read grant mints a fresh scope at the granted folder; a write grant
+    /// additionally owes a write-scope cut this build does not author, so it is
+    /// a typed refusal rather than a half-done grant.
+    #[test]
+    fn a_write_grant_is_refused_before_anything_is_minted() {
+        let (mut engine, _events) = started();
+        assert_eq!(
+            block_on(engine.command(Command::Grant {
+                node: NodeId([1; 16]),
+                recipient_identity_public_key: vec![2u8; 33],
+                permission: Permission::Write,
+            })),
+            Err(EngineError::UnsupportedTarget {
+                check: "write-grants-need-a-write-scope-cut"
+            }),
+        );
+    }
+
+    /// A share pointer the inbox does not hold cannot be accepted: the accept
+    /// acks by transport id, so there would be nothing to ack and the item would
+    /// redeliver forever.
+    #[test]
+    fn a_share_pointer_off_the_inbox_is_refused() {
+        let (mut engine, _events) = started();
+        assert_eq!(
+            block_on(engine.command(Command::AcceptShare {
+                sealed_share_pointer: b"not-a-sealed-item".to_vec(),
+            })),
+            Err(EngineError::MalformedInput {
+                check: "share-pointer-is-not-on-this-inbox"
+            }),
         );
     }
 

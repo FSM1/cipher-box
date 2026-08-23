@@ -739,6 +739,10 @@ impl Cumulative {
 /// residual surfaced, so a host racing a persistently hot writer — or a name it
 /// cannot fetch — sees what is left rather than a false "complete".
 ///
+/// `still_running` is consulted between passes, so a caller whose session has
+/// ended stops the wave at the next pass boundary rather than only at its own
+/// bound — the same granularity the resolve tick's liveness check gives.
+///
 /// # Caller contract
 ///
 /// An `Ok` outcome is convergence-complete **only when both
@@ -753,6 +757,7 @@ pub async fn run_sweep<S, R, P>(
     scope: &ChildScopeRef,
     cadence: Duration,
     max_passes: u32,
+    still_running: &dyn Fn() -> bool,
 ) -> Result<SweepOutcome, SweepError>
 where
     S: Scheduler,
@@ -767,12 +772,12 @@ where
             Ok(pass) => {
                 let again = pass.worth_another_pass();
                 cumulative.absorb(pass);
-                if !again || attempts >= max_passes {
+                if !again || attempts >= max_passes || !still_running() {
                     return Ok(cumulative.finish());
                 }
                 scheduler.sleep(cadence).await;
             }
-            Err(e) if e.is_retryable() && attempts < max_passes => {
+            Err(e) if e.is_retryable() && attempts < max_passes && still_running() => {
                 scheduler.sleep(cadence).await;
             }
             Err(e) => return Err(e),
@@ -811,7 +816,9 @@ pub async fn run_sweep_job<S, R, P>(
             return;
         };
         for scope in &scopes {
-            let result = run_sweep(scheduler, resolver, publisher, scope, cadence, 1).await;
+            // The job's session boundary is `round()` answering `None`.
+            let result =
+                run_sweep(scheduler, resolver, publisher, scope, cadence, 1, &|| true).await;
             report(scope, &result);
         }
     }
@@ -1347,6 +1354,16 @@ mod tests {
         max_passes: u32,
         expected_sleeps: u32,
     ) -> Result<SweepOutcome, SweepError> {
+        drive_while(net, max_passes, expected_sleeps, &|| true)
+    }
+
+    /// [`drive`] under a caller-supplied liveness answer.
+    fn drive_while(
+        net: &FakeNet,
+        max_passes: u32,
+        expected_sleeps: u32,
+        still_running: &dyn Fn() -> bool,
+    ) -> Result<SweepOutcome, SweepError> {
         let scheduler = VirtualScheduler::new().with_auto_advance();
         let result = block_on(run_sweep(
             &scheduler,
@@ -1355,6 +1372,7 @@ mod tests {
             &scope_ref(0x00),
             Duration::from_secs(30),
             max_passes,
+            still_running,
         ));
         assert_eq!(
             scheduler.now(),
@@ -1399,6 +1417,43 @@ mod tests {
         let err = drive(&net, 3, 2).expect_err("the stall surfaces");
         assert_eq!(err.check(), "publish-failed");
         assert_eq!(net.publishes(0x01), 3, "one attempt per allowed pass");
+    }
+
+    /// The wave belongs to the session that spawned it: once that session is
+    /// gone the driver stops at the next pass boundary, surfacing what the pass
+    /// it had already started produced rather than sweeping on.
+    #[test]
+    fn an_ended_session_stops_the_driver_at_the_next_pass_boundary() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .lost_race_next(0x01, 2);
+        let outcome = drive_while(&net, 5, 0, &|| false).expect("the started pass still settles");
+        assert_eq!(
+            outcome.dropped_lost_race,
+            vec![id(0x01)],
+            "the pass in flight is absorbed, not discarded"
+        );
+        assert!(
+            outcome.converged.is_empty(),
+            "and the retry that would have won it never ran"
+        );
+        assert_eq!(
+            net.publishes(0x01),
+            1,
+            "one pass, not the five the cap allows"
+        );
+    }
+
+    /// The same boundary bounds the retry arm: an availability stall a live
+    /// session would re-drive is surfaced instead once the session has ended.
+    #[test]
+    fn an_ended_session_stops_the_drivers_retry_of_a_stall() {
+        let net = FakeNet::new(5, &[0x01])
+            .node(0x01, 1, &[])
+            .fault(0x01, RotationPublishError::NotPublished);
+        let err = drive_while(&net, 3, 0, &|| false).expect_err("the stall surfaces");
+        assert_eq!(err.check(), "publish-failed");
+        assert_eq!(net.publishes(0x01), 1, "the stall was not re-driven");
     }
 
     #[test]

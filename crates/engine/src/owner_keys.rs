@@ -1,8 +1,9 @@
 //! The owner's production [`OwnerScopeKeys`] arm over the session identity
 //! (blueprint/engine.md "Rotation primitives").
 
+use cipherbox_core::kdf;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 use crate::net::rotation::OwnerScopeKeys;
@@ -31,6 +32,41 @@ impl OwnerScopeKeys for OwnerSessionKeys<'_> {
 
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*self.session.pointer_read_key(scope_id).as_bytes())
+    }
+}
+
+/// The same two derivations over **owned** seeds, for the spawned sweep task,
+/// which is polled after every borrow of the session has ended.
+///
+/// Two seeds and no wider capability: the login secret and the identity signer
+/// stay behind. It also carries the `ownerPointerSeed` itself, which the sweep's
+/// pointer consult needs to derive a superseded root's scope-pointer name.
+pub(crate) struct OwnerSeedKeys {
+    pseudonym_seed: SecretBytes,
+    pointer_seed: SecretBytes,
+}
+
+impl OwnerSeedKeys {
+    pub(crate) fn of(session: &SessionIdentity) -> Self {
+        Self {
+            pseudonym_seed: session.owner_pseudonym_seed(),
+            pointer_seed: session.owner_pointer_seed(),
+        }
+    }
+
+    /// The scope-pointer derivation input the sweep's consult needs.
+    pub(crate) fn pointer_seed(&self) -> &[u8; SECRET_LEN] {
+        self.pointer_seed.as_bytes()
+    }
+}
+
+impl OwnerScopeKeys for OwnerSeedKeys {
+    fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+        kdf::pseudonym_sign(self.pseudonym_seed.as_bytes(), scope_id)
+    }
+
+    fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
+        Zeroizing::new(*kdf::pointer_read_key(self.pointer_seed.as_bytes(), scope_id).as_bytes())
     }
 }
 
@@ -111,6 +147,41 @@ mod tests {
         assert!(!ct_eq(
             &keys.pointer_read_key(&SCOPE),
             &keys.pointer_read_key(&other),
+        ));
+    }
+    /// The spawned sweep signs under the owned arm while every other rotation
+    /// signs under the borrowed one, and a scope's `ownerPseudonymPk` is
+    /// committed epoch-free and never revised — so a divergence between them is
+    /// a permanent `SignerNotCommitted` on every later rotation of that scope,
+    /// discoverable only in production.
+    #[test]
+    fn the_owned_arm_reproduces_the_session_arm_for_every_scope() {
+        let session = session();
+        let borrowed = OwnerSessionKeys::new(&session);
+        let owned = OwnerSeedKeys::of(&session);
+
+        for scope in [[0x00u8; 16], SCOPE, [0xff; 16]] {
+            assert_eq!(
+                borrowed.writer_pseudonym(&scope).verifying_key().to_bytes(),
+                owned.writer_pseudonym(&scope).verifying_key().to_bytes(),
+                "the two arms must name one committed pseudonym per scope",
+            );
+            assert!(ct_eq(
+                &borrowed.pointer_read_key(&scope),
+                &owned.pointer_read_key(&scope),
+            ));
+        }
+    }
+
+    /// The seed the sweep's pointer consult derives its name from is the
+    /// session's own, not a per-scope key derived from it.
+    #[test]
+    fn the_owned_arm_carries_the_sessions_pointer_seed() {
+        let session = session();
+        let owned = OwnerSeedKeys::of(&session);
+        assert!(ct_eq(
+            owned.pointer_seed(),
+            kdf::owner_pointer_seed(&SECRET).as_bytes(),
         ));
     }
 }

@@ -303,7 +303,7 @@ pub(crate) const STORED_LIST_V: u64 = 2;
 /// sealed structure.
 pub const MAX_RECEIVED_SHARES: usize = 1024;
 /// The bound on a bookmark's courtesy display label.
-pub(crate) const MAX_DISPLAY_NAME_BYTES: usize = 256;
+pub const MAX_DISPLAY_NAME_BYTES: usize = 256;
 /// The bound on a bookmarked scope root's opaque `ipnsName`.
 pub(crate) const MAX_SCOPE_ROOT_NAME_BYTES: usize = 128;
 

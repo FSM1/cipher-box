@@ -209,6 +209,25 @@ impl RotateError {
             RotateError::EpochExhausted => "epoch-exhausted",
         }
     }
+
+    /// Whether re-running the rotation could clear this failure — an
+    /// availability stall, or a C2 label conflict the re-point wave repairs —
+    /// versus a trust violation no retry can fix. Mirrors
+    /// [`CascadeError::is_retryable`](super::cascade::CascadeError::is_retryable);
+    /// a caller MUST still bound its retries, because a permanent label
+    /// disagreement is retryable and never self-heals.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            RotateError::Resolve(reason) => matches!(
+                reason,
+                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
+            ),
+            RotateError::Reseal(error) => matches!(error, ResealError::Entropy(_)),
+            RotateError::Publish(error) => error.is_retryable(),
+            RotateError::Floor(_) => true,
+            RotateError::EpochExhausted => false,
+        }
+    }
 }
 
 /// The result of a completed read-plane root cut.
@@ -314,6 +333,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entropy::EntropyError;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
@@ -328,6 +348,41 @@ mod tests {
     use std::rc::Rc;
 
     const SCOPE: [u8; 16] = [0x5c; 16];
+
+    /// The caller-side bound needs one classifier it can trust: an availability
+    /// stall — including one at the entropy seam — and the C2 label conflict the
+    /// re-point wave repairs are re-drivable; a refused publish, a re-seal this
+    /// build will not sign and an exhausted epoch are verdicts no retry reaches
+    /// differently.
+    #[test]
+    fn only_availability_and_the_repairable_label_conflict_are_retryable() {
+        for retryable in [
+            RotateError::Resolve(ResolveFailure::Unavailable),
+            RotateError::Resolve(ResolveFailure::ConflictingChildLabel),
+            RotateError::Reseal(ResealError::Entropy(EntropyError::new("no entropy"))),
+            RotateError::Publish(RotationPublishError::NotPublished),
+            RotateError::Publish(RotationPublishError::LostRace),
+            RotateError::Floor(SeamError::new("floor store unavailable")),
+        ] {
+            assert!(
+                retryable.is_retryable(),
+                "{} must be re-drivable",
+                retryable.check()
+            );
+        }
+        for terminal in [
+            RotateError::Resolve(ResolveFailure::Rejected),
+            RotateError::Reseal(ResealError::SignerNotCommitted),
+            RotateError::Publish(RotationPublishError::Rejected),
+            RotateError::EpochExhausted,
+        ] {
+            assert!(
+                !terminal.is_retryable(),
+                "{} is a verdict, not an outage",
+                terminal.check()
+            );
+        }
+    }
 
     /// A publisher that records what it was handed and returns a scripted result;
     /// it snapshots the floor at publish time so a test can prove publish-before-

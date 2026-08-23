@@ -274,6 +274,29 @@ impl Snapshot {
         chain
     }
 
+    /// Whether `node` sits anywhere under `ancestor`, walking parent links up
+    /// from `node`. A node is not its own ancestor.
+    ///
+    /// Cheaper than scanning [`ancestors`](Self::ancestors), which allocates the
+    /// whole chain, and it stops at the first match.
+    pub fn is_descendant_of(&self, node: NodeId, ancestor: NodeId) -> bool {
+        let mut seen = vec![node];
+        let mut current = node;
+        while let Some(parent) = self.parent_of(current) {
+            // The cycle guard runs first: a link cycle that walks back to `node`
+            // must not answer that it is its own ancestor.
+            if seen.contains(&parent) {
+                return false;
+            }
+            if parent == ancestor {
+                return true;
+            }
+            seen.push(parent);
+            current = parent;
+        }
+        false
+    }
+
     /// Whether `parent` already links a child (other than `exclude`) whose name
     /// folds equal to `name` under the strict comparator — the add/add and
     /// rename collision predicate.
@@ -428,5 +451,39 @@ mod tests {
         assert!(snap.name_taken(id(0), "report.txt", None));
         assert!(!snap.name_taken(id(0), "report.txt", Some(id(1))));
         assert!(!snap.name_taken(id(0), "other.txt", None));
+    }
+    /// The predicate the grant path splits a parent's child-scope index on: a
+    /// node is not its own ancestor, and a cycle in the links terminates the
+    /// walk rather than hanging it.
+    #[test]
+    fn descent_is_strict_and_cycle_safe() {
+        let root = NodeId([0; 16]);
+        let mid = NodeId([1; 16]);
+        let leaf = NodeId([2; 16]);
+        let mut snapshot = Snapshot::new(root);
+        snapshot.upsert_node(NodeMeta::new(mid, "mid", NodeKind::Folder));
+        snapshot.upsert_node(NodeMeta::new(leaf, "leaf", NodeKind::Folder));
+        snapshot.link(root, mid, 1);
+        snapshot.link(mid, leaf, 1);
+
+        assert!(snapshot.is_descendant_of(leaf, root));
+        assert!(snapshot.is_descendant_of(leaf, mid));
+        assert!(!snapshot.is_descendant_of(mid, leaf));
+        assert!(
+            !snapshot.is_descendant_of(root, root),
+            "a node is not its own ancestor"
+        );
+
+        // Close a cycle: `mid`'s winning link now comes from its own descendant.
+        snapshot.link(leaf, mid, 2);
+        assert_eq!(snapshot.parent_of(mid), Some(leaf), "the cycle is linked");
+        assert!(
+            !snapshot.is_descendant_of(mid, mid),
+            "a cycle does not make a node its own ancestor"
+        );
+        assert!(
+            !snapshot.is_descendant_of(mid, root),
+            "and the walk terminates rather than looping"
+        );
     }
 }

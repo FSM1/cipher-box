@@ -498,8 +498,8 @@ pub fn prune_expired_grants(
 ///
 /// The pure driver ([`rotate_on_cut`]) owns which planes fire and in what order;
 /// this seam owns assembling each plane's plan from the scope's resolved records
-/// and running the primitive over the live plane. No production arm is landed;
-/// tests fake it.
+/// and running the primitive over the live plane — `OwnerCutNet` over the real
+/// transport.
 pub trait CutRotator {
     /// Run the fresh-seed read cascade at `scope_root` over `cut`
     /// ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)).
@@ -546,6 +546,17 @@ pub enum RotateOnCutError {
     /// until this does.
     Write(WriteRotateError),
 }
+
+impl core::fmt::Display for RotateOnCutError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
+            RotateOnCutError::Write(e) => write!(f, "write-plane wave failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for RotateOnCutError {}
 
 impl RotateOnCutError {
     /// A stable, key-material-free classification name.
