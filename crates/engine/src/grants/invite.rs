@@ -307,6 +307,7 @@ pub struct MintedInvite {
 /// link holder re-derives it from the record it resolves, so binding anything but
 /// the real resolvable name would mint a link nobody can self-locate.
 pub fn mint_invite_grant(
+    owner_identity_signer: &EcdsaSigner,
     owner_enc_secret: &X25519Secret,
     invitee: &EphemeralInvitee,
     scope_id: &[u8; 16],
@@ -320,6 +321,7 @@ pub fn mint_invite_grant(
     };
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
     let mut row = mint_grant_row(
+        owner_identity_signer,
         owner_enc_secret,
         invitee.identity_pk().to_sec1(),
         &invitee.enc_public(),
@@ -464,9 +466,9 @@ pub async fn post_invite_claim<M: Mailbox>(
 /// the commitment, and the encryption subkey secret every blinded tag derives
 /// from. Holding both is what makes a caller the owner.
 pub struct OwnerAuthority<'a> {
-    /// Owner identity signer. Nothing here signs with it — it is the capability
-    /// token itself, since verifying the commitment against a *supplied* public
-    /// key would prove nothing about who is calling.
+    /// Owner identity signer. Both the capability token — verifying the
+    /// commitment against a *supplied* public key would prove nothing about who
+    /// is calling — and the signer of each minted row's recipient binding.
     pub identity_signer: &'a EcdsaSigner,
     /// Owner encryption subkey secret — the pairwise ECDH half.
     pub enc_secret: &'a X25519Secret,
@@ -644,6 +646,7 @@ pub fn convert_invite_claim(
         return Err(InviteError::ClaimantIsTheOwner);
     }
     let mut row = mint_grant_row(
+        owner.identity_signer,
         owner.enc_secret,
         contact.identity_pk().to_sec1(),
         &contact.enc_subkey(),
@@ -818,7 +821,7 @@ mod tests {
         encode_grant_section, open_grant_blob, sign_grant_set, verify_structure,
     };
     use cipherbox_core::suite::contact::ContactCode;
-    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+    use cipherbox_core::suite::ecdsa::{IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN};
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
     use cipherbox_core::suite::secret::ct_eq;
 
@@ -855,6 +858,7 @@ mod tests {
 
     fn invite(permission: Permission, expires_at: Option<UnixMillis>) -> GrantRow {
         mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &invitee(),
             &SCOPE,
@@ -908,6 +912,7 @@ mod tests {
                 write_history: WriteHistory::Carried(&[]),
             },
             &CommittedSet {
+                owner_identity: &owner_identity().verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &sig,
                 grant_ledger: &ledger,
@@ -990,6 +995,7 @@ mod tests {
         let contact = X25519Secret::from_scalar([0x77; 32]);
         let contact_identity = EcdsaSigner::from_scalar(&[0x78; 32]).expect("valid scalar");
         let personal = mint_grant_row(
+            &owner_identity(),
             &owner_enc(),
             contact_identity.verifying_key().to_sec1(),
             &contact.public(),
@@ -1025,6 +1031,7 @@ mod tests {
     fn the_fragment_secret_unseals_the_scope_seeds_and_verifies_the_structure_signature() {
         let minted = invitee();
         let invite = mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &minted,
             &SCOPE,
@@ -1106,6 +1113,7 @@ mod tests {
     fn a_zero_deadline_is_refused_at_the_mint() {
         assert_eq!(
             mint_invite_grant(
+                &owner_identity(),
                 &owner_enc(),
                 &invitee(),
                 &SCOPE,
@@ -1139,6 +1147,7 @@ mod tests {
         // different name and therefore a different tag.
         let minted = invitee();
         let here = mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &minted,
             &SCOPE,
@@ -1149,6 +1158,7 @@ mod tests {
         .expect("mints")
         .row;
         let elsewhere = mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &minted,
             &SCOPE,
@@ -1170,6 +1180,7 @@ mod tests {
     fn a_write_invite_conveys_the_write_scope_seed_to_the_fragment_holder() {
         let minted = invitee();
         let row = mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &minted,
             &SCOPE,
@@ -1200,6 +1211,7 @@ mod tests {
     fn an_invite_blob_transplanted_across_epoch_or_structure_fails_to_open() {
         let minted = invitee();
         let row = mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &minted,
             &SCOPE,
@@ -1333,6 +1345,7 @@ mod tests {
     /// A minted link over `SCOPE`, keyed by its fragment secret.
     fn link(secret: u8, permission: Permission, expires_at: Option<UnixMillis>) -> MintedInvite {
         mint_invite_grant(
+            &owner_identity(),
             &owner_enc(),
             &EphemeralInvitee::from_secret(&[secret; 32]).expect("valid"),
             &SCOPE,
@@ -1517,6 +1530,7 @@ mod tests {
         let grantee_identity = EcdsaSigner::from_scalar(&[0x7a; 32]).expect("valid scalar");
         let grantee_enc = X25519Secret::from_scalar([0x7b; 32]);
         let grantee = mint_grant_row(
+            &owner_identity(),
             &owner_enc(),
             grantee_identity.verifying_key().to_sec1(),
             &grantee_enc.public(),
@@ -2041,11 +2055,14 @@ mod tests {
             full_commitment
                 .entries
                 .push(GrantSetEntry::new(tag, Permission::Read, [0x02; 32]));
+            // Ceiling padding: never read as a live grant, so it carries no
+            // owner attestation.
             full_ledger.push(GrantLedgerEntry::new(
                 [0x02; IDENTITY_PUBLIC_LEN],
                 [0x11; 32],
                 Permission::Read,
                 tag,
+                [0u8; ECDSA_SIG_LEN],
             ));
         }
         let full_sig = sign_grant_set(&owner_identity(), &full_commitment).expect("signs");

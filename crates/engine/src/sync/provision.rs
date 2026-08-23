@@ -566,6 +566,7 @@ where
             pointer_read_key: root.pointer_read_key,
         },
         &CommittedSet {
+            owner_identity: &plan.owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

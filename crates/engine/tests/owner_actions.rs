@@ -45,6 +45,9 @@ use cipherbox_engine::{
 /// The recipient account's login secret — every key their engine derives, and
 /// the contact code the owner imports, hangs off it.
 const RECIPIENT_SECRET: [u8; 32] = [0x5B; 32];
+/// A second grantee's login secret — committed at the same root, and never the
+/// party a revoke names.
+const BYSTANDER_SECRET: [u8; 32] = [0x7C; 32];
 /// The entropy seed the seeded vault pointer's re-point seal draws its nonce
 /// from, and the one the seeded root's grant section draws its HPKE ephemerals
 /// from. Named apart because a single (key, nonce) pair must never cover two
@@ -150,6 +153,7 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
             pointer_read_key: &pointer_read_key,
         },
         &CommittedSet {
+            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
@@ -358,6 +362,7 @@ fn contact_code(scalar: &[u8; 32]) -> Vec<u8> {
 /// to find in the owner-signed set before it can cut anything.
 fn recipient_row_at_root() -> GrantRow {
     mint_grant_row(
+        &owner_identity(),
         &kdf::enc_subkey(&SECRET),
         recipient_identity().verifying_key().to_sec1(),
         &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
@@ -366,6 +371,24 @@ fn recipient_row_at_root() -> GrantRow {
         CorePermission::Read,
     )
     .expect("a contributory recipient key")
+}
+
+/// A second grantee's committed row, carrying an `ownerSig` no owner key
+/// verifies — a stale or corrupted signature over an otherwise honest row.
+fn bystander_row_with_corrupt_sig() -> GrantRow {
+    let bystander = EcdsaSigner::from_scalar(&BYSTANDER_SECRET).expect("valid identity scalar");
+    let mut row = mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        bystander.verifying_key().to_sec1(),
+        &kdf::enc_subkey(&BYSTANDER_SECRET).public(),
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Read,
+    )
+    .expect("a contributory recipient key");
+    row.ledger_entry.owner_sig[0] ^= 0xff;
+    row
 }
 
 /// Import the recipient into the owner's contact book, which is the only thing
@@ -728,6 +751,43 @@ fn revoking_a_read_grant_republishes_the_root_without_the_revokees_blob() {
     assert!(
         !after.commitment.entries.iter().any(|e| e.tag == row.tag),
         "and their row is no longer committed"
+    );
+}
+
+/// The owner's own encryption subkey is the stronger of the two authorities over
+/// a ledger row's `recipientEncPk`: it re-derives the committed tag, so a row it
+/// proves survives an `ownerSig` that verifies against nothing. The owner cut is
+/// an adoption site like any other, and adopts in that order too.
+#[test]
+fn a_cut_keeps_a_row_its_own_subkey_proves_despite_an_unverifiable_owner_signature() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let revokee = recipient_row_at_root();
+    let bystander = bystander_row_with_corrupt_sig();
+    seed_vault(&world, &blocks, vec![revokee.clone(), bystander.clone()]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+
+    assert_eq!(
+        block_on(engine.command(Command::Revoke {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let after = published_grant_section(&world, &blocks, ROOT).expect("the root republished");
+    assert!(
+        !after.grant_blobs.iter().any(|blob| blob.tag == revokee.tag),
+        "the revokee's blob is gone from the re-sealed set"
+    );
+    assert!(
+        after
+            .grant_blobs
+            .iter()
+            .any(|blob| blob.tag == bystander.tag),
+        "and the bystander keeps a blob its tag proves it is entitled to"
     );
 }
 

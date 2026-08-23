@@ -72,7 +72,8 @@ pub use settings_record::{
 pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
 pub use write_body::{
     ChildScopeRef, GrantLedgerEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_HISTORY_LINK_BYTES,
-    WriteBody, decode_write_body, encode_write_body,
+    WriteBody, decode_write_body, encode_recipient_binding, encode_write_body,
+    sign_recipient_binding, verify_recipient_binding,
 };
 
 use crate::error::{CodecError, Malformed, TrustViolation};

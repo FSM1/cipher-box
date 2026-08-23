@@ -168,6 +168,7 @@ pub async fn mint_invite_link<P: ScopeRootPublisher, S: InviteStore, E: Entropy>
     let invitee =
         EphemeralInvitee::mint(&mut *entropy.borrow_mut()).map_err(InviteMintError::Mint)?;
     let minted = mint_invite_grant(
+        owner.identity_signer,
         owner.enc_secret,
         &invitee,
         &plan.scope.scope_id,
@@ -202,6 +203,7 @@ pub async fn mint_invite_link<P: ScopeRootPublisher, S: InviteStore, E: Entropy>
             pointer_read_key: &current.pointer_read_key,
         },
         &CommittedSet {
+            owner_identity: &owner.identity_signer.verifying_key(),
             commitment: &commitment,
             commitment_sig: &extended_sig.to_compact(),
             grant_ledger: &ledger,
@@ -325,6 +327,7 @@ mod tests {
             let mut f = Self::new();
             let grantee = signer(&GRANTEE_SECRET);
             let row = mint_grant_row(
+                &f.owner,
                 &f.enc,
                 grantee.verifying_key().to_sec1(),
                 &kdf::enc_subkey(&GRANTEE_SECRET).public(),

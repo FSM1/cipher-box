@@ -50,17 +50,18 @@ use cipherbox_core::seal::{
     decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
     encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
     encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
-    encode_read_body, encode_write_body, op_record_aad, open_ascent_link, open_content_key,
-    open_grant_blob, open_history_link, open_op_record, open_owner_blob, open_owner_history_link,
-    open_owner_local, open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad,
-    seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link, seal_op_record,
-    seal_owner_blob, seal_owner_history_link, seal_owner_local, seal_owner_write_blob,
-    seal_read_body, seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    encode_read_body, encode_recipient_binding, encode_write_body, op_record_aad, open_ascent_link,
+    open_content_key, open_grant_blob, open_history_link, open_op_record, open_owner_blob,
+    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
+    open_settings_record, owner_local_aad, seal_ascent_link, seal_content_key, seal_grant_blob,
+    seal_history_link, seal_op_record, seal_owner_blob, seal_owner_history_link, seal_owner_local,
+    seal_owner_write_blob, seal_read_body, seal_settings_record, settings_record_aad,
+    sign_grant_set, sign_recipient_binding, sign_structure, structure_sig_preimage,
+    verify_grant_set, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
-use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{self, ENC_LEN, MODE_AUTH, hpke_open, hpke_seal};
@@ -521,6 +522,7 @@ struct GrantSection {
     write_history_link_struct_tag: u8,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
+    recipient_binding_accept: FileCount,
     grant_blob_accept: FileCount,
     grant_blob_reject: RejectSection,
     owner_blob_accept: FileCount,
@@ -550,6 +552,22 @@ struct WriteBodyAcceptVector {
     hex: String,
     ledger_count: usize,
     child_scope_count: usize,
+}
+
+/// A recipient-binding accept vector: the frozen det-CBOR preimage the owner
+/// signs over one grant-ledger row, and their signature over it. `permission`
+/// and `expiresAt` are absent by construction — they are outside the preimage.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecipientBindingAcceptVector {
+    name: String,
+    owner_identity_pk: String,
+    ipns_name: String,
+    recipient_identity_pk: String,
+    recipient_enc_pk: String,
+    tag: String,
+    preimage: String,
+    signature: String,
 }
 
 /// A grant-section accept vector: the canonical bundle plus the counts the
@@ -1066,6 +1084,10 @@ fn main() {
     write_pretty(
         &grant_dir.join("write_body_reject.json"),
         &g.write_body_reject,
+    );
+    write_pretty(
+        &grant_dir.join("recipient_binding_accept.json"),
+        &g.recipient_binding_accept,
     );
     write_pretty(
         &grant_dir.join("grant_blob_accept.json"),
@@ -2410,6 +2432,10 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         write_history_link_struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
         write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
         write_body_reject: reject("write_body_reject", &g.write_body_reject),
+        recipient_binding_accept: file_count(
+            "recipient_binding_accept",
+            g.recipient_binding_accept.len(),
+        ),
         grant_blob_accept: file_count("grant_blob_accept", g.grant_blob_accept.len()),
         grant_blob_reject: blob_reject("grant_blob_reject", &g.grant_blob_reject),
         owner_blob_accept: file_count("owner_blob_accept", g.owner_blob_accept.len()),
@@ -4643,6 +4669,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
 struct GrantVectors {
     write_body_accept: Vec<WriteBodyAcceptVector>,
     write_body_reject: Vec<RejectVector>,
+    recipient_binding_accept: Vec<RecipientBindingAcceptVector>,
     grant_blob_accept: Vec<HpkeStructureVector>,
     grant_blob_reject: Vec<BlobRejectVector>,
     owner_blob_accept: Vec<HpkeStructureVector>,
@@ -4669,6 +4696,7 @@ impl GrantVectors {
             + self.section_reject.len()
             + self.write_body_accept.len()
             + self.write_body_reject.len()
+            + self.recipient_binding_accept.len()
             + self.grant_blob_accept.len()
             + self.grant_blob_reject.len()
             + self.owner_blob_accept.len()
@@ -4713,6 +4741,7 @@ fn build_grant_vectors() -> GrantVectors {
     GrantVectors {
         write_body_accept: build_write_body_accept(),
         write_body_reject: build_write_body_reject(),
+        recipient_binding_accept: build_recipient_binding_accept(),
         section_accept: build_grant_section_accept(),
         section_reject: build_grant_section_reject(),
         grant_blob_accept: build_grant_blob_accept(),
@@ -4736,11 +4765,46 @@ fn build_grant_vectors() -> GrantVectors {
 
 // --- Write-body -------------------------------------------------------------
 
+/// The frozen owner identity every grant-ledger row is bound to, and the scope
+/// root the binding names. RFC 6979 signing is deterministic, so a fixed scalar
+/// over a fixed preimage gives byte-stable vectors.
+fn write_body_owner() -> EcdsaSigner {
+    EcdsaSigner::from_scalar(&[0xd1; 32]).expect("valid identity scalar")
+}
+
+const WRITE_BODY_IPNS_NAME: &[u8] = b"scope-root-ipns";
+
+/// A grant-ledger row stamped with the owner's signature over its recipient
+/// binding, self-checked against the verify path.
+fn signed_ledger_row(
+    recipient_identity_pk: [u8; 33],
+    recipient_enc_pk: [u8; 32],
+    permission: Permission,
+    tag: [u8; 32],
+) -> GrantLedgerEntry {
+    let owner = write_body_owner();
+    let mut entry = GrantLedgerEntry::new(
+        recipient_identity_pk,
+        recipient_enc_pk,
+        permission,
+        tag,
+        [0u8; ECDSA_SIG_LEN],
+    );
+    entry.owner_sig = sign_recipient_binding(&owner, WRITE_BODY_IPNS_NAME, &entry)
+        .expect("ledger row binding signs")
+        .to_compact();
+    assert!(
+        verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry).is_ok(),
+        "ledger row binding must verify"
+    );
+    entry
+}
+
 fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
     let full = WriteBody {
         grant_ledger: vec![
-            GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
-            GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
+            signed_ledger_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+            signed_ledger_row([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
         ],
         write_history_link: b"sealed-write-history-link".to_vec(),
         direct_child_scope_index: vec![
@@ -4758,7 +4822,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         unknown: PreservedFields::new(),
     };
     let read_only = WriteBody {
-        grant_ledger: vec![GrantLedgerEntry::new(
+        grant_ledger: vec![signed_ledger_row(
             [0x02; 33],
             [0x11; 32],
             Permission::Read,
@@ -4772,10 +4836,10 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
     // has none. Only the deadline distinguishes the two on the wire.
     let expiring = WriteBody {
         grant_ledger: vec![
-            GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+            signed_ledger_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
             GrantLedgerEntry {
                 expires_at: NonZeroU64::new(1_700_000_000_000),
-                ..GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Read, [0x22; 32])
+                ..signed_ledger_row([0x03; 33], [0x12; 32], Permission::Read, [0x22; 32])
             },
         ],
         write_history_link: b"h".to_vec(),
@@ -4802,6 +4866,14 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
             bytes,
             "write-body accept {name}: not byte-stable"
         );
+        for row in &decoded.grant_ledger {
+            verify_recipient_binding(
+                &write_body_owner().verifying_key(),
+                WRITE_BODY_IPNS_NAME,
+                row,
+            )
+            .unwrap_or_else(|e| panic!("write-body accept {name}: row binding: {e}"));
+        }
         out.push(WriteBodyAcceptVector {
             name: name.to_string(),
             hex: hexstr(&bytes),
@@ -4813,13 +4885,36 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
 }
 
 /// A grant-ledger entry map value, for hand-crafting write-body reject vectors.
+/// `ownerSig` is a fixed filler — these vectors pin codec rejects, not
+/// signature verification.
 fn ledger_entry_map(identity: Vec<u8>, enc: Vec<u8>, permission: &str, tag: Vec<u8>) -> Value {
-    map_of(vec![
+    ledger_entry_map_with_sig(
+        identity,
+        enc,
+        permission,
+        tag,
+        Some(vec![0x77; ECDSA_SIG_LEN]),
+    )
+}
+
+/// The same map with caller-chosen `ownerSig` bytes, or the key omitted.
+fn ledger_entry_map_with_sig(
+    identity: Vec<u8>,
+    enc: Vec<u8>,
+    permission: &str,
+    tag: Vec<u8>,
+    owner_sig: Option<Vec<u8>>,
+) -> Value {
+    let mut kv = vec![
         ("permission", Value::Text(permission.to_string())),
         ("recipientEncPk", Value::Bytes(enc)),
         ("recipientIdentityPk", Value::Bytes(identity)),
         ("tag", Value::Bytes(tag)),
-    ])
+    ];
+    if let Some(sig) = owner_sig {
+        kv.push(("ownerSig", Value::Bytes(sig)));
+    }
+    map_of(kv)
 }
 
 fn build_write_body_reject() -> Vec<RejectVector> {
@@ -4893,6 +4988,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
                 vec![],
                 vec![map_of(vec![
                     ("expiresAt", Value::Unsigned(0)),
+                    ("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN])),
                     ("permission", Value::Text("read".to_string())),
                     ("recipientEncPk", Value::Bytes(vec![0x11; 32])),
                     ("recipientIdentityPk", Value::Bytes(vec![0x02; 33])),
@@ -4954,9 +5050,98 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "too-many-structures",
             "malformed",
         ),
+        (
+            // A row whose owner authority over `recipientEncPk` is unusable:
+            // the width is fixed, so a short one is refused before any verify.
+            "owner-sig-wrong-length",
+            body(
+                vec![],
+                vec![ledger_entry_map_with_sig(
+                    vec![0x02; 33],
+                    vec![0x11; 32],
+                    "read",
+                    vec![0x21; 32],
+                    Some(vec![0x77; ECDSA_SIG_LEN - 1]),
+                )],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            // A row with no owner authority at all — the pre-binding shape a
+            // write-grantee could otherwise author.
+            "missing-owner-sig",
+            body(
+                vec![],
+                vec![ledger_entry_map_with_sig(
+                    vec![0x02; 33],
+                    vec![0x11; 32],
+                    "read",
+                    vec![0x21; 32],
+                    None,
+                )],
+                Value::Bytes(vec![]),
+            ),
+            "missing-field",
+            "malformed",
+        ),
     ];
 
     finish_hex_reject_vectors("write-body", cases, decode_write_body)
+}
+
+// --- Recipient binding (the per-row owner authority) ------------------------
+
+/// The frozen `{ipnsName, recipientEncPk, recipientIdentityPk, tag}` preimage
+/// and the owner's signature over it, for two rows of the write-body ledger.
+/// The permission each row carries is deliberately not a vector field: it is
+/// outside the preimage, which this generator asserts.
+fn build_recipient_binding_accept() -> Vec<RecipientBindingAcceptVector> {
+    let owner = write_body_owner();
+    let cases: Vec<(&str, GrantLedgerEntry)> = vec![
+        (
+            "read-grantee",
+            signed_ledger_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+        ),
+        (
+            "write-grantee",
+            signed_ledger_row([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, entry) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate recipient-binding accept {name}"
+        );
+        let preimage = encode_recipient_binding(WRITE_BODY_IPNS_NAME, &entry)
+            .unwrap_or_else(|e| panic!("recipient-binding {name}: preimage: {e}"));
+        assert!(
+            verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry).is_ok(),
+            "recipient-binding {name}: must verify"
+        );
+        // The same row under another scope root is a different preimage: the
+        // binding is what stops a row being replayed into a foreign ledger.
+        assert_ne!(
+            encode_recipient_binding(b"another-scope-root", &entry).unwrap(),
+            preimage,
+            "recipient-binding {name}: ipnsName must be bound"
+        );
+        out.push(RecipientBindingAcceptVector {
+            name: name.to_string(),
+            owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
+            ipns_name: hexstr(WRITE_BODY_IPNS_NAME),
+            recipient_identity_pk: hexstr(&entry.recipient_identity_pk),
+            recipient_enc_pk: hexstr(&entry.recipient_enc_pk),
+            tag: hexstr(&entry.tag),
+            preimage: hexstr(&preimage),
+            signature: hexstr(&entry.owner_sig),
+        });
+    }
+    out
 }
 
 // --- Grant section (the seed-bearing-structure bundle) ----------------------

@@ -53,9 +53,9 @@ pub use invite_store::{
     MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,
 };
 pub use ledger::{
-    AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
-    entry_tag_is_bound, mint_grant_row, recipient_blinded_tag, recipient_self_location,
-    self_locate, self_locate_signed,
+    AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK, bound_recipient,
+    enforce_committed_ledger, entry_is_live, mint_grant_row, recipient_blinded_tag,
+    recipient_self_location, row_is_owner_attested, self_locate, self_locate_signed,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use received_share_store::{RECEIVED_SHARES_PREFIX, StagingReceivedShareStore};

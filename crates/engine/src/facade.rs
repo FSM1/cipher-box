@@ -3589,6 +3589,7 @@ where {
                         pseudonym_signer: &current.pseudonym_signer,
                     },
                     committed: CommittedSet {
+                        owner_identity: &owner_identity,
                         commitment: &current.commitment,
                         commitment_sig: &current.commitment_sig,
                         grant_ledger: &current.grant_ledger,

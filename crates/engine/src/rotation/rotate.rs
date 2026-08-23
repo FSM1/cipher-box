@@ -339,9 +339,9 @@ mod tests {
     use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
-        sign_grant_set,
+        sign_grant_set, sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
@@ -431,6 +431,7 @@ mod tests {
         owner_enc: X25519Secret,
         pseudonym: Ed25519Signer,
         owner_ecdsa: EcdsaSigner,
+        owner_identity: EcdsaVerifier,
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
         grantee: X25519Secret,
@@ -438,10 +439,12 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            let owner_ecdsa = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
             Self {
                 owner_enc: X25519Secret::from_scalar([0x11; 32]),
                 pseudonym: Ed25519Signer::from_seed([0x22; 32]),
-                owner_ecdsa: EcdsaSigner::from_scalar(&[0x33; 32]).unwrap(),
+                owner_identity: owner_ecdsa.verifying_key(),
+                owner_ecdsa,
                 write_scope_seed: [0x55; 32],
                 pointer_read_key: [0x66; 32],
                 grantee: X25519Secret::from_scalar([0x77; 32]),
@@ -458,12 +461,17 @@ mod tests {
             let sig = sign_grant_set(&self.owner_ecdsa, &commitment)
                 .unwrap()
                 .to_compact();
-            let ledger = vec![GrantLedgerEntry::new(
+            let mut row = GrantLedgerEntry::new(
                 [0x02; 33],
                 self.grantee.public().to_bytes(),
                 Permission::Read,
                 [0xa1; 32],
-            )];
+                [0u8; 64],
+            );
+            row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, b"scope-root", &row)
+                .unwrap()
+                .to_compact();
+            let ledger = vec![row];
             (commitment, sig, ledger)
         }
     }
@@ -510,6 +518,7 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
+                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -638,6 +647,7 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
+                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -707,6 +717,7 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
+                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -771,6 +782,7 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
+                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,

@@ -328,7 +328,9 @@ where
 
     // 3) Build the committed set for the recipient — the same pairwise mint an
     // invite link goes through, keyed off the name derived above.
+    let owner_identity = owner.identity_signer.verifying_key();
     let row = mint_grant_row(
+        owner.identity_signer,
         owner.enc_secret,
         recipient.identity_pk.to_sec1(),
         recipient.enc_pub,
@@ -380,6 +382,7 @@ where
         // shape the convergence pass would later have to repair.
         let grantee_child_index = canonicalize(grantee.subtree_child_index);
         let committed = CommittedSet {
+            owner_identity: &owner_identity,
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
@@ -441,6 +444,7 @@ where
         };
         let canonical_index = canonicalize(&target.direct_child_scope_index);
         let committed = CommittedSet {
+            owner_identity: &owner_identity,
             commitment: &target.commitment,
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
@@ -485,6 +489,7 @@ where
 
     let parent_section = {
         let committed = CommittedSet {
+            owner_identity: &owner_identity,
             commitment: parent.commitment,
             commitment_sig: parent.commitment_sig,
             grant_ledger: parent.grant_ledger,
@@ -573,12 +578,12 @@ mod tests {
     use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
-        STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob,
+        STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob, sign_recipient_binding,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::ct_eq;
-    use cipherbox_core::suite::x25519::X25519Secret;
+    use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
     use std::cell::RefCell;
     use std::rc::Rc;
     use zeroize::Zeroizing;
@@ -1612,36 +1617,97 @@ mod tests {
     }
 
     #[test]
-    fn a_swapped_recipient_key_in_the_parent_ledger_fails_closed_release_active() {
+    fn a_swapped_recipient_key_in_the_parent_ledger_costs_only_its_own_row() {
         // A committed write-grantee of the PARENT scope swaps a victim's
         // `recipientEncPk` under the victim's owner-committed tag. Tag and
-        // permission still match, so owner authority passes; only the owner's own
-        // subkey re-derives the tag and catches it. The owner runs this leg, so
-        // the parent re-seal must run that check too, or it wraps the parent's
-        // override seed and pointer read key to the swapped key. The refusal is a
-        // runtime `Err`, never a debug_assert. Active in release.
+        // permission still match, so owner authority over the set passes — but
+        // the row's own owner signature covers the key, so the swap detaches the
+        // row. The parent re-seal wraps no seed to the attacker's key and still
+        // completes: refusing would let any co-writer block every share the owner
+        // makes from that scope.
         let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);
         let attacker = X25519Secret::from_scalar([0x52; SECRET_LEN]);
-        let mut row = mint_grant_row(
-            &owner_enc(),
-            recipient_identity().to_sec1(),
-            &victim.public(),
-            &PARENT_SCOPE,
-            PARENT_NAME,
-            Permission::Read,
-        )
-        .expect("a contributory recipient key");
+        let bystander = X25519Secret::from_scalar([0x53; SECRET_LEN]);
+        let mut row = parent_row(&victim.public());
         row.ledger_entry.recipient_enc_pk = attacker.public().to_bytes();
+        let untouched = parent_row(&bystander.public());
+        let bystander_tag = untouched.tag;
+
+        let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row, untouched]);
+
+        outcome.expect("the share the swapped row was meant to block still lands");
+        let parent = published
+            .iter()
+            .find(|r| r.scope_id == PARENT_SCOPE)
+            .expect("the parent record reaches the network");
+        let ctx = AadContext {
+            v: V,
+            id: PARENT_SCOPE,
+            scope: PARENT_SCOPE,
+            epoch: parent.read_epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        assert!(
+            parent.section.grant_blobs.iter().all(|b| open_grant_blob(
+                &attacker,
+                &b.enc,
+                &ctx,
+                &b.ciphertext
+            )
+            .is_err()),
+            "no blob in the parent section opens under the swapped key"
+        );
+        let blob = parent
+            .section
+            .grant_blobs
+            .iter()
+            .find(|b| b.tag == bystander_tag)
+            .expect("the untouched co-grantee still gets its blob");
+        assert!(
+            open_grant_blob(&bystander, &blob.enc, &ctx, &blob.ciphertext).is_ok(),
+            "and it opens, so the swept-past section is real"
+        );
+    }
+
+    #[test]
+    fn an_attested_parent_row_the_owner_cannot_re_derive_fails_closed_release_active() {
+        // The owner's two authorities over one row disagree: its signature binds
+        // a `recipientEncPk` its own encryption subkey cannot re-derive the tag
+        // from. Wrapping the parent's override seed and pointer read key under
+        // that disagreement is what the refusal prevents. Runtime `Err`, never a
+        // debug_assert. Active in release.
+        let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);
+        let attacker = X25519Secret::from_scalar([0x52; SECRET_LEN]);
+        let mut row = parent_row(&victim.public());
+        row.ledger_entry.recipient_enc_pk = attacker.public().to_bytes();
+        row.ledger_entry.owner_sig =
+            sign_recipient_binding(&owner_identity(), PARENT_NAME, &row.ledger_entry)
+                .expect("the owner attests the row")
+                .to_compact();
 
         let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row]);
 
         assert_eq!(
-            outcome.expect_err("the parent re-seal refuses the swapped key"),
+            outcome.expect_err("the parent re-seal refuses the row"),
             CreateGrantError::ParentMint(ResealError::TagNotBoundToRecipient)
         );
         assert!(
             published.iter().all(|r| r.scope_id != PARENT_SCOPE),
             "no parent record reaches the network"
         );
+    }
+
+    /// One honestly minted parent-scope row for `recipient`.
+    fn parent_row(recipient: &X25519Public) -> GrantRow {
+        mint_grant_row(
+            &owner_identity(),
+            &owner_enc(),
+            recipient_identity().to_sec1(),
+            recipient,
+            &PARENT_SCOPE,
+            PARENT_NAME,
+            Permission::Read,
+        )
+        .expect("a contributory recipient key")
     }
 }
