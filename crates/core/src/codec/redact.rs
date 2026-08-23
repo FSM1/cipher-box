@@ -19,10 +19,11 @@ use core::fmt;
 use crate::error::DisplayKey;
 
 /// A byte buffer rendered as its length alone.
-pub(crate) struct RedactedBytes(usize);
+pub struct RedactedBytes(usize);
 
 impl RedactedBytes {
-    pub(crate) fn of(bytes: &[u8]) -> Self {
+    /// Render `bytes` as its length alone.
+    pub fn of(bytes: &[u8]) -> Self {
         Self(bytes.len())
     }
 }
@@ -34,10 +35,11 @@ impl fmt::Debug for RedactedBytes {
 }
 
 /// Text rendered as its character count alone.
-pub(crate) struct RedactedText(usize);
+pub struct RedactedText(usize);
 
 impl RedactedText {
-    pub(crate) fn of(s: &str) -> Self {
+    /// Render `s` as its character count alone.
+    pub fn of(s: &str) -> Self {
         Self(s.chars().count())
     }
 }

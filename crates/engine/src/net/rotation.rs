@@ -48,7 +48,7 @@ use super::retire::{retire, root_retire_ready};
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::content::root_block_cid;
-use crate::entropy::{Entropy, SharedEntropy};
+use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
@@ -417,12 +417,7 @@ fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
 
 /// A fresh per-seal nonce from the injected entropy seam.
 fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], RotationPublishError> {
-    let mut nonce = [0u8; 24];
-    entropy
-        .borrow_mut()
-        .fill(&mut nonce)
-        .map_err(|_| RotationPublishError::NotPublished)?;
-    Ok(nonce)
+    fresh_nonce(&mut *entropy.borrow_mut()).map_err(|_| RotationPublishError::NotPublished)
 }
 
 /// A rotation root read's verdict, carrying ADR 0003 D2's below-floor split: a
@@ -2573,10 +2568,7 @@ where
             return Err(WritePublishError::Rejected);
         }
 
-        let mut nonce = [0u8; 24];
-        self.entropy
-            .borrow_mut()
-            .fill(&mut nonce)
+        let nonce = fresh_nonce(&mut *self.entropy.borrow_mut())
             .map_err(|_| WritePublishError::NotLanded)?;
         let authoring = EnvelopeAuthoring {
             node_id: node.node_id,
@@ -3003,6 +2995,19 @@ mod tests {
     /// The pointer-payload envelope version every re-point in this suite is
     /// sealed and read under.
     const PAYLOAD_VERSION: u64 = 1;
+
+    /// A seam that reports success having written nothing — the failure every
+    /// fresh draw refuses, and the one an unguarded draw turns into a fixed
+    /// all-zero nonce.
+    struct SilentEntropy;
+
+    impl Entropy for SilentEntropy {
+        // A seam implementation, not a consumer.
+        #[allow(clippy::disallowed_methods)]
+        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+            Ok(())
+        }
+    }
 
     /// The owner's derivation arm: the two per-scope edges the rotation needs,
     /// off this test owner's root secret and pointer seed.
@@ -5287,15 +5292,8 @@ mod tests {
         }
     }
 
-    type Wave<'a, T> = WriteWaveNet<
-        'a,
-        T,
-        ScriptedHttp,
-        InMemoryCredentialStore,
-        InMemoryFloorStore,
-        VirtualScheduler,
-        SeededEntropy,
-    >;
+    type Wave<'a, T, F = InMemoryFloorStore, E = SeededEntropy> =
+        WriteWaveNet<'a, T, ScriptedHttp, InMemoryCredentialStore, F, VirtualScheduler, E>;
 
     /// A stand-in authorized set for a wave whose test republishes no root: only
     /// the root re-seal reads it, and it matches no record, so a test that grows
@@ -5315,25 +5313,25 @@ mod tests {
         current_root: &'a IpnsName,
         plan: &'a GrantSetCommitment,
     ) -> Wave<'a, T> {
-        wave_with_floors(harness, owner, current_root, plan, &harness.floors)
+        wave_with(
+            harness,
+            owner,
+            current_root,
+            plan,
+            &harness.floors,
+            &harness.entropy,
+        )
     }
 
-    /// [`wave`] over an arbitrary floor store.
-    fn wave_with_floors<'a, T: RecordTransport + Clone, F: FloorStore>(
+    /// [`wave`] over a caller-chosen floor store and entropy source.
+    fn wave_with<'a, T: RecordTransport + Clone, F: FloorStore, E: Entropy>(
         harness: &'a Harness<T>,
         owner: &'a EcdsaSigner,
         current_root: &'a IpnsName,
         plan: &'a GrantSetCommitment,
         floors: &'a F,
-    ) -> WriteWaveNet<
-        'a,
-        T,
-        ScriptedHttp,
-        InMemoryCredentialStore,
-        F,
-        VirtualScheduler,
-        SeededEntropy,
-    > {
+        entropy: &'a RefCell<E>,
+    ) -> Wave<'a, T, F, E> {
         WriteWaveNet {
             transport: &harness.transport,
             api: &harness.api,
@@ -5342,7 +5340,7 @@ mod tests {
             floors,
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
-            entropy: &harness.entropy,
+            entropy,
             scope_id: SCOPE,
             read_scope_seed: &OWNER_ROOT_SCOPE_SEED,
             parent_node_seed: None,
@@ -5514,6 +5512,62 @@ mod tests {
             child_names_of(&body)[0],
             leaf_old.as_str().as_bytes().to_vec(),
             "no retired name survives in the republished body"
+        );
+    }
+
+    /// The re-seal plane's nonce is a fresh draw or nothing. A seam reporting
+    /// success having written nothing would seal every record a wave moves under
+    /// one fixed nonce, and `publish_moved` re-seals under one read key for the
+    /// whole subtree — many plaintexts at one key and one nonce.
+    #[test]
+    fn a_silent_seam_publishes_no_moved_record() {
+        let harness = Harness::plain();
+        let leaf_id = [0x0a; 16];
+        let leaf_old = stage_node(&harness, leaf_id, &folder(Vec::new()));
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let silent = RefCell::new(SilentEntropy);
+        let net = wave_with(
+            &harness,
+            &owner,
+            &current_root,
+            &plan,
+            &harness.floors,
+            &silent,
+        );
+
+        let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
+        assert_eq!(
+            block_on(net.republish(&leaf)),
+            Err(WritePublishError::NotLanded),
+            "the move refuses rather than sealing under a nonce the seam never wrote"
+        );
+        let endpoint = &harness.store.endpoints()[0];
+        assert!(
+            harness
+                .store
+                .record_at(endpoint, leaf.new_name.as_str())
+                .is_none(),
+            "nothing is published at the name the wave would have moved the node to"
+        );
+    }
+
+    /// The rotation plane's seal nonce, at its own draw: the scope-root re-seal
+    /// takes it from [`nonce`], which refuses a silent seam rather than handing
+    /// back the all-zero buffer it was given.
+    #[test]
+    fn a_silent_seam_draws_no_rotation_seal_nonce() {
+        assert_eq!(
+            nonce(&RefCell::new(SilentEntropy)),
+            Err(RotationPublishError::NotPublished),
+        );
+        assert!(
+            nonce(&RefCell::new(SeededEntropy::new(7)))
+                .expect("a real seam draws")
+                .iter()
+                .any(|byte| *byte != 0),
         );
     }
 
@@ -6340,12 +6394,13 @@ mod tests {
         let root = staged_childless_root(&harness);
         let owner = owner_identity();
         let floors = ConsultingFloors::wrapping(&harness.floors);
-        let net = wave_with_floors(
+        let net = wave_with(
             &harness,
             &owner,
             &root.name,
             &root.grant_section.commitment,
             &floors,
+            &harness.entropy,
         );
         block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
 

@@ -38,7 +38,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use core::fmt;
 use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_seed};
+use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
@@ -538,10 +538,8 @@ where
     // public (`kdf::blinded_tag`) and ships in the clear in every scope root's
     // grant section, so deriving from it would rebuild that edge — and the
     // granted folder — from a cached record.
-    let mut idempotency_bytes = [0u8; 16];
-    entropy
-        .fill(&mut idempotency_bytes)
-        .map_err(CreateGrantError::Entropy)?;
+    let idempotency_bytes: [u8; 16] =
+        fresh_bytes(entropy, "grant idempotency key").map_err(CreateGrantError::Entropy)?;
     let idempotency_key = format!("grant-{}", hex_lower(&idempotency_bytes));
     post_sealed(
         mailbox,
@@ -1175,6 +1173,54 @@ mod tests {
         };
         let published = net.published.borrow().clone();
         (outcome, published, hub)
+    }
+
+    /// A real seeded source that goes silent for draws of one width. The grant
+    /// idempotency key is the only 16-byte draw on this path, so silencing that
+    /// width reaches it without stopping the seed and ephemeral draws before it.
+    struct SilentAtWidth {
+        inner: SeededEntropy,
+        width: usize,
+    }
+
+    impl Entropy for SilentAtWidth {
+        // A seam implementation, not a consumer.
+        #[allow(clippy::disallowed_methods)]
+        fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+            match dest.len() == self.width {
+                true => Ok(()),
+                false => self.inner.fill(dest),
+            }
+        }
+    }
+
+    /// The API keeps `sha256(senderPublicKey : idempotencyKey)`, so an
+    /// idempotency key an observer can recompute hands it back the sender to
+    /// recipient edge. A seam that writes nothing makes every key that constant.
+    #[test]
+    fn a_silent_seam_delivers_no_grant_pointer() {
+        let (outcome, _published, hub) = run_for(
+            SilentAtWidth {
+                inner: SeededEntropy::new(9),
+                width: 16,
+            },
+            &[],
+            FakeNet::new(Ok(())),
+            &[],
+            &recipient_enc(),
+        );
+
+        assert!(matches!(
+            outcome.expect_err("the zero draw is refused"),
+            CreateGrantError::Entropy(_),
+        ));
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        assert!(
+            block_on(poll_verified(&recip_box, &recipient_enc(), V))
+                .unwrap()
+                .is_empty(),
+            "nothing is posted under a key the API could recompute",
+        );
     }
 
     #[test]

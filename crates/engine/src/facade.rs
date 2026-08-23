@@ -39,7 +39,7 @@ use crate::content::{
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
-use crate::entropy::{Entropy, SharedEntropy};
+use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
 use crate::grants::{
     AcceptError, AcceptOutcome, Contact, ContactStore, ContactStoreError, CreateGrantError,
@@ -4750,6 +4750,21 @@ where {
         let slot =
             StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
         let (version, version_count) = self.head_version(node).await?;
+        // Pairing rule: a partial write composes its new bytes over the version a
+        // stream serves, at the length the rendered view reports, and the overlay
+        // reports the staged version's length. A stream pinned to any other
+        // version would publish the pinned version's bytes under that length —
+        // the truncation-resurrection defect, as a silent success. Availability,
+        // not trust: the drain publishes the staged version and the open lands.
+        if self
+            .staged_version_cid(node)
+            .await?
+            .is_some_and(|staged| staged != version.content_cid)
+        {
+            return Err(EngineError::ContentUnavailable {
+                message: "a newer content version is staged and not yet published".to_owned(),
+            });
+        }
         let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
             .await
             .map_err(open_engine_error)?;
@@ -5034,13 +5049,7 @@ where {
     /// drain can only refuse, after a whole upload. Fails closed: a head that
     /// will not resolve is a write that cannot prove what it replaces.
     async fn write_anchor(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
-        let queued = self.pending_ops().await?;
-        let authored = queued.iter().rev().find_map(|op| {
-            (op.target == node)
-                .then(|| op.staged_content())
-                .flatten()
-                .map(|content| content.root_cid.clone())
-        });
+        let authored = self.staged_version_cid(node).await?;
         if authored.is_some() {
             return Ok(authored);
         }
@@ -5065,6 +5074,18 @@ where {
         }
     }
 
+    /// The `contentCid` of the newest version a queued op has staged for `node`,
+    /// `None` when the queue authors none — the version the rendered
+    /// (overlay) size and mtime describe.
+    async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+        Ok(self.pending_ops().await?.iter().rev().find_map(|op| {
+            (op.target == node)
+                .then(|| op.staged_content())
+                .flatten()
+                .map(|content| content.root_cid.clone())
+        }))
+    }
+
     /// The base sequence to anchor an op at: the target's own record sequence in
     /// the rendered view, defaulting to 1 for a node not yet in gate-passing
     /// state (a pending create).
@@ -5076,13 +5097,8 @@ where {
     /// (id16, non-secret; blueprint/core.md). Fails closed on entropy failure —
     /// never a predictable id.
     fn mint_node_id(&self) -> Result<NodeId, EngineError> {
-        let mut id = [0u8; 16];
-        self.entropy
-            .borrow_mut()
-            .fill(&mut id)
-            .map_err(|e| EngineError::Entropy {
-                message: e.message().to_owned(),
-            })?;
+        let id = fresh_bytes(&mut *self.entropy.borrow_mut(), "node id")
+            .map_err(EngineError::from_entropy)?;
         Ok(NodeId(id))
     }
 
@@ -5108,13 +5124,8 @@ where {
             .as_ref()
             .ok_or(EngineError::NotStarted)?
             .enc_subkey();
-        let mut ephemeral_scalar = Zeroizing::new([0u8; 32]);
-        self.entropy
-            .borrow_mut()
-            .fill(ephemeral_scalar.as_mut())
-            .map_err(|e| EngineError::Entropy {
-                message: e.message().to_owned(),
-            })?;
+        let ephemeral_scalar =
+            fresh_ephemeral(&mut *self.entropy.borrow_mut()).map_err(EngineError::from_entropy)?;
         Ok(RecordSeal {
             owner_enc_secret,
             ephemeral_scalar,

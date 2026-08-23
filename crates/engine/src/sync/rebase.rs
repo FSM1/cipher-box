@@ -26,6 +26,8 @@
 use core::num::NonZeroU64;
 use std::collections::HashSet;
 
+use cipherbox_core::codec::RedactedText;
+
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
@@ -134,7 +136,7 @@ pub enum DeadLetterReason {
 }
 
 /// One applied op, resolved for republish.
-#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct AppliedOp {
     /// The durable-queue id.
     #[zeroize(skip)]
@@ -147,6 +149,21 @@ pub struct AppliedOp {
     /// The add/add auto-suffix fired.
     #[zeroize(skip)]
     pub suffixed: bool,
+}
+
+/// Renders the applied op without the name the rebase resolved for it.
+impl core::fmt::Debug for AppliedOp {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AppliedOp")
+            .field("op_id", &self.op_id)
+            .field("op", &self.op)
+            .field(
+                "effective_name",
+                &self.effective_name.as_deref().map(RedactedText::of),
+            )
+            .field("suffixed", &self.suffixed)
+            .finish()
+    }
 }
 
 /// The full replay result.
@@ -2115,5 +2132,25 @@ mod tests {
             );
             assert_eq!(opened.get(), 2, "the reading identity is part of the key");
         }
+    }
+
+    /// The name the rebase resolved for an op is still a filename, auto-suffix
+    /// and all.
+    #[test]
+    fn debug_renders_no_effective_name() {
+        let applied = AppliedOp {
+            op_id: OpId(1),
+            op: Op::rename(NodeId([1; 16]), "secret-name.txt", 1, AT),
+            effective_name: Some("secret-name (2).txt".to_owned()),
+            suffixed: true,
+        };
+        let rendered = format!("{applied:?}");
+
+        assert!(
+            !rendered.contains("secret-name"),
+            "a filename never renders: {rendered}"
+        );
+        assert!(rendered.contains("AppliedOp"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 }

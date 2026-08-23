@@ -44,9 +44,8 @@ use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
 use core::num::NonZeroU64;
 use std::collections::BTreeSet;
-use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError, fresh_bytes};
+use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_seed};
 use crate::grants::accept::{fixed, req};
 use crate::grants::contact::import_contact;
 use crate::grants::{
@@ -180,15 +179,13 @@ impl std::error::Error for InviteError {}
 impl EphemeralInvitee {
     /// Mint a fresh ephemeral identity from the injected entropy seam.
     ///
-    /// Fails closed on an entropy error, and on the ~2^-128 chance that the
-    /// sampled bytes are zero or at least the secp256k1 group order — never by
+    /// Fails closed on an entropy error, on a seam that reports success having
+    /// written nothing ([`fresh_seed`]), and on the ~2^-128 chance that the
+    /// sampled bytes are at least the secp256k1 group order — never by
     /// re-sampling until one lands, which would make the entropy each mint draws
     /// variable and desynchronize every downstream draw from the same seam.
     pub fn mint<E: Entropy>(entropy: &mut E) -> Result<Self, InviteError> {
-        let mut secret = Zeroizing::new([0u8; SECRET_LEN]);
-        entropy
-            .fill(secret.as_mut_slice())
-            .map_err(InviteError::Entropy)?;
+        let secret = fresh_seed(entropy).map_err(InviteError::Entropy)?;
         Self::from_secret(&secret)
     }
 
@@ -957,8 +954,7 @@ mod tests {
     #[test]
     fn minting_draws_the_secret_from_the_injected_entropy_seam() {
         let from_seam = EphemeralInvitee::mint(&mut SeededEntropy::new(7)).expect("mints");
-        let mut expected = [0u8; 32];
-        SeededEntropy::new(7).fill(&mut expected).expect("fills");
+        let expected = fresh_seed(&mut SeededEntropy::new(7)).expect("fills");
         assert!(
             ct_eq(from_seam.secret().as_bytes(), &expected),
             "the invite secret is exactly the seam's bytes — no direct RNG",

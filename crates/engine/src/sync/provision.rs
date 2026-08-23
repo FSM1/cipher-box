@@ -1561,6 +1561,8 @@ mod tests {
     fn a_seam_that_zeroes_only_the_nonce_mints_nothing() {
         struct NonceSilent(SeededEntropy);
         impl Entropy for NonceSilent {
+            // A seam implementation, not a consumer: it forwards the draw it wraps.
+            #[allow(clippy::disallowed_methods)]
             fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
                 if dest.len() == cipherbox_core::suite::aead::NONCE_LEN {
                     return Ok(());

@@ -1816,6 +1816,50 @@ mod published {
         assert_eq!(read, expected);
     }
 
+    /// The length a partial write composes at and the bytes it composes over
+    /// must come from one version. The overlay reports the **staged** version's
+    /// length the moment a write reaches the queue, while the read plane
+    /// resolves published heads only — so composing over the published head
+    /// would seal `published ++ zero-hole ++ tail` under the staged length, with
+    /// no byte of the staged version in it and no error anywhere. The write
+    /// refuses until the drain publishes what it would compose over; the
+    /// drained control is
+    /// `a_patch_over_a_published_version_keeps_the_bytes_it_did_not_touch`.
+    #[test]
+    fn an_append_over_a_staged_version_never_publishes_the_previous_versions_bytes() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+
+        // A whole-file rewrite, wider than the published version, journaled but
+        // deliberately not drained.
+        let staged = vec![0xBB; 323];
+        let writer =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        // A second handle sees the staged length and appends an unaligned tail.
+        let appender =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file reopens");
+        let appended = block_on(mount.core.write(appender, staged.len() as u64, b"TAIL"));
+        assert!(
+            matches!(appended, Err(VfsError::Unavailable { .. })),
+            "the append refuses while the version it would compose over is unpublished: \
+             {appended:?}"
+        );
+        let _ = block_on(mount.core.release(appender));
+        advance_and_pump(&mut mount);
+
+        let reader = opened(&mut mount);
+        let read = block_on(mount.core.read(reader, 0, staged.len() as u32))
+            .expect("the staged version publishes");
+        assert_eq!(
+            read, staged,
+            "the published version is the staged one, whole — never the previous \
+             version's bytes under the staged version's length"
+        );
+    }
+
     #[test]
     fn bytes_a_shrink_removed_never_come_back_when_the_file_grows_again() {
         // Truncating is how a member destroys a file's tail. Those bytes must

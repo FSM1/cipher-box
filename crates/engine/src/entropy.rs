@@ -7,6 +7,10 @@
 //! injected — engine logic never calls an RNG directly — so tests substitute
 //! the test kit's seeded source and every seed and nonce becomes reproducible.
 
+// The fresh-draw helpers below are where the raw seam draw is made and checked;
+// `clippy.toml`'s `disallowed_methods` policy gates every other site.
+#![allow(clippy::disallowed_methods)]
+
 use core::cell::RefCell;
 use core::fmt;
 
@@ -127,6 +131,10 @@ pub fn fresh_nonce<E: Entropy + ?Sized>(entropy: &mut E) -> Result<[u8; NONCE_LE
 ///
 /// The same refusal as [`fresh_ephemeral`], for values that are neither keys nor
 /// seeds and so want no [`Zeroizing`]. `what` names the draw in the error.
+///
+/// The refusal detects an untouched zero-initialised buffer. A seam that writes
+/// the *same non-zero* bytes on every call passes it: catching that needs
+/// cross-draw state no fresh draw holds.
 pub fn fresh_bytes<const N: usize, E: Entropy + ?Sized>(
     entropy: &mut E,
     what: &str,

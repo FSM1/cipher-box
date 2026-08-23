@@ -1,5 +1,8 @@
 //! Seeded, deterministic entropy for tests.
 
+// The seam's test implementation, so it draws where every consumer must not.
+#![allow(clippy::disallowed_methods)]
+
 use crate::entropy::{Entropy, EntropyError};
 
 /// Deterministic entropy from a 64-bit seed (SplitMix64 stream).
