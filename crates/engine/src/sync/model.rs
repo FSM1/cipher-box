@@ -283,11 +283,13 @@ impl Snapshot {
         let mut seen = vec![node];
         let mut current = node;
         while let Some(parent) = self.parent_of(current) {
-            if parent == ancestor {
-                return true;
-            }
+            // The cycle guard runs first: a link cycle that walks back to `node`
+            // must not answer that it is its own ancestor.
             if seen.contains(&parent) {
                 return false;
+            }
+            if parent == ancestor {
+                return true;
             }
             seen.push(parent);
             current = parent;
@@ -470,6 +472,18 @@ mod tests {
         assert!(
             !snapshot.is_descendant_of(root, root),
             "a node is not its own ancestor"
+        );
+
+        // Close a cycle: `mid`'s winning link now comes from its own descendant.
+        snapshot.link(leaf, mid, 2);
+        assert_eq!(snapshot.parent_of(mid), Some(leaf), "the cycle is linked");
+        assert!(
+            !snapshot.is_descendant_of(mid, mid),
+            "a cycle does not make a node its own ancestor"
+        );
+        assert!(
+            !snapshot.is_descendant_of(mid, root),
+            "and the walk terminates rather than looping"
         );
     }
 }

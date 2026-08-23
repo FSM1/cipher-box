@@ -333,6 +333,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entropy::EntropyError;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
@@ -349,14 +350,16 @@ mod tests {
     const SCOPE: [u8; 16] = [0x5c; 16];
 
     /// The caller-side bound needs one classifier it can trust: an availability
-    /// stall and the C2 label conflict the re-point wave repairs are re-drivable;
-    /// a refused publish, a re-seal this build will not sign and an exhausted
-    /// epoch are verdicts no retry reaches differently.
+    /// stall — including one at the entropy seam — and the C2 label conflict the
+    /// re-point wave repairs are re-drivable; a refused publish, a re-seal this
+    /// build will not sign and an exhausted epoch are verdicts no retry reaches
+    /// differently.
     #[test]
     fn only_availability_and_the_repairable_label_conflict_are_retryable() {
         for retryable in [
             RotateError::Resolve(ResolveFailure::Unavailable),
             RotateError::Resolve(ResolveFailure::ConflictingChildLabel),
+            RotateError::Reseal(ResealError::Entropy(EntropyError::new("no entropy"))),
             RotateError::Publish(RotationPublishError::NotPublished),
             RotateError::Publish(RotationPublishError::LostRace),
             RotateError::Floor(SeamError::new("floor store unavailable")),
@@ -369,6 +372,7 @@ mod tests {
         }
         for terminal in [
             RotateError::Resolve(ResolveFailure::Rejected),
+            RotateError::Reseal(ResealError::SignerNotCommitted),
             RotateError::Publish(RotationPublishError::Rejected),
             RotateError::EpochExhausted,
         ] {

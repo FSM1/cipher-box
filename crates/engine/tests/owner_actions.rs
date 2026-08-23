@@ -22,7 +22,8 @@ use cipherbox_engine::grants::{GrantRow, mint_grant_row};
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
-use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport};
+use cipherbox_engine::rotation::MAX_ROTATION_ATTEMPTS;
+use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
@@ -50,11 +51,8 @@ const RECIPIENT_SECRET: [u8; 32] = [0x5B; 32];
 /// plaintexts (blueprint/core.md "Crypto suite").
 const POINTER_SEAL_ENTROPY_SEED: u64 = 0;
 const ROOT_SEAL_ENTROPY_SEED: u64 = 1;
-/// The seeded root's committed set varies per fixture, so its seal entropy must
-/// too: one (key, nonce) pair must never cover two plaintexts, and every other
-/// input to these seals is a module constant.
-/// The seeded root body's seal nonce, and the share pointer's HPKE ephemeral,
-/// for the same reason.
+/// The seeded root body's seal nonce and the share pointer's HPKE ephemeral,
+/// held apart for the same reason.
 const ROOT_BODY_NONCE: [u8; 24] = [0x31; 24];
 const SHARE_POINTER_EPHEMERAL: [u8; 32] = [0x42; 32];
 
@@ -730,5 +728,46 @@ fn revoking_a_read_grant_republishes_the_root_without_the_revokees_blob() {
     assert!(
         !after.commitment.entries.iter().any(|e| e.tag == row.tag),
         "and their row is no longer committed"
+    );
+}
+
+/// A stalled cut spends **one** retry bound, the per-plane one `OwnerCutNet`
+/// carries. The read cascade mints a fresh override seed on every run, so a
+/// second bound around the driver would re-drive a landed cut — and the spacing
+/// it costs is what counts the attempts.
+#[test]
+fn a_stalled_cut_re_drives_the_read_cascade_under_one_bound() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks, vec![recipient_row_at_root()]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    // The cut's own publish is the whole fault: every attempt re-keys, fails to
+    // land, and leaves the network where the previous one found it.
+    world.record_store.fail_put_for(write_name(ROOT).as_str());
+    let cadence = u64::try_from(engine.profile().poll_cadence.as_millis()).expect("a sane cadence");
+    let before = world.scheduler.now();
+    // The spacing between attempts is virtual time nothing else here advances.
+    let _clock = world.scheduler.clone().with_auto_advance();
+
+    assert!(
+        block_on(engine.command(Command::Revoke {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        }))
+        .is_err(),
+        "the cut that never published is not a revocation"
+    );
+
+    assert_eq!(
+        world.scheduler.now(),
+        UnixMillis(before.0 + cadence * u64::from(MAX_ROTATION_ATTEMPTS - 1)),
+        "one bound's worth of attempts, not a bound multiplied by a second one"
+    );
+    assert_eq!(
+        published_read_epoch(&world, &blocks, ROOT),
+        EPOCH,
+        "and nothing the stall re-drove landed"
     );
 }

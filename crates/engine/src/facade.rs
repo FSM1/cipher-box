@@ -3694,7 +3694,7 @@ where {
             session_root_scope_id: self.snapshot.borrow().root.0,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
         };
-        self.bounded_rotation(async || rotate_on_cut(&rotator, node, &cut).await)
+        rotate_on_cut(&rotator, node, &cut)
             .await
             .map(|_| ())
             .map_err(EngineError::from_rotation)

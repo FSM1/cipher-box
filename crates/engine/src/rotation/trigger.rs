@@ -498,8 +498,8 @@ pub fn prune_expired_grants(
 ///
 /// The pure driver ([`rotate_on_cut`]) owns which planes fire and in what order;
 /// this seam owns assembling each plane's plan from the scope's resolved records
-/// and running the primitive over the live plane —
-/// [`OwnerCutNet`](crate::net::cut::OwnerCutNet) over the real transport.
+/// and running the primitive over the live plane — `OwnerCutNet` over the real
+/// transport.
 pub trait CutRotator {
     /// Run the fresh-seed read cascade at `scope_root` over `cut`
     /// ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)).
