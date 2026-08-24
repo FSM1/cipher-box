@@ -101,14 +101,11 @@ impl std::error::Error for InviteMintError {}
 /// the link, mint and publish the fresh scope its row is the whole committed set
 /// of, and hand back the bearer capability.
 ///
-/// Read-only, exactly as [`create_read_grant`](super::create_read_grant) is: the
-/// minted scope inherits the parent's write plane, so a write row's blob would
-/// hand the bearer the seed every name in that scope derives from.
-///
-/// Owner-only by construction, exactly as
+/// Owner-only by construction and read-only, exactly as
 /// [`create_read_grant`](super::create_read_grant) is: the scope this publishes
 /// is signed under the owner's writer pseudonym and its commitment under the
-/// owner identity, so no other session can author it.
+/// owner identity, and it inherits the parent's write plane — so a write row's
+/// blob would hand the bearer the seed every name in that scope derives from.
 pub async fn mint_invite_link<E, R, P, S>(
     entropy: &mut E,
     resolver: &R,
