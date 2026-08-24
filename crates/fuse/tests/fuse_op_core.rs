@@ -13,11 +13,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use cipherbox_engine::seams::StagingStore;
-use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
+use cipherbox_engine::testkit::fakes::{InMemoryStagingStore, VirtualScheduler};
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, GatewayConfig, LoginSecret,
-    NodeId, NodeKind, Staleness, StoragePolicy, SyncTimingProfile,
+    ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, Event, EventStream,
+    GatewayConfig, LoginSecret, NodeId, NodeKind, Staleness, StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
     Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
@@ -41,16 +41,23 @@ fn spill_area_at(dir: &Path) -> SpillArea {
 }
 
 /// A mount that records what it was told to invalidate.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct RecordingAdapter {
-    push_invalidation: bool,
+    capabilities: HostCapabilities,
     seen: Rc<RefCell<Vec<Invalidation>>>,
 }
 
 impl RecordingAdapter {
     fn push_capable() -> Self {
-        Self {
+        Self::declaring(HostCapabilities {
             push_invalidation: true,
+            attribute_cache: true,
+        })
+    }
+
+    fn declaring(capabilities: HostCapabilities) -> Self {
+        Self {
+            capabilities,
             seen: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -62,9 +69,7 @@ impl RecordingAdapter {
 
 impl HostAdapter for RecordingAdapter {
     fn capabilities(&self) -> HostCapabilities {
-        HostCapabilities {
-            push_invalidation: self.push_invalidation,
-        }
+        self.capabilities
     }
 
     fn invalidate(&self, invalidation: Invalidation) {
@@ -154,11 +159,50 @@ fn mount_over(engine: Engine<FakeSeamTypes>) -> Core {
 
 /// Mount over an engine seeded with the given root children.
 fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -> Core {
-    let (mut engine, root) = started_engine();
+    mount_clocked(adapter, root_children).0
+}
+
+/// Feed the mount everything the engine has emitted, the way the host's
+/// event-stream task does, and report what came through.
+fn absorb_pending(core: &mut Core, events: &mut EventStream) -> Vec<Event> {
+    let mut seen = Vec::new();
+    while let Some(event) = events.try_next() {
+        block_on(core.absorb_event(&event)).expect("the mount absorbs the event");
+        seen.push(event);
+    }
+    seen
+}
+
+/// A seeded mount plus its rendered root and the virtual clock its engine
+/// reads, for the freshness tests: aging a snapshot advances that clock rather
+/// than sleeping.
+fn mount_clocked(
+    adapter: RecordingAdapter,
+    root_children: &[(&str, NodeKind)],
+) -> (Core, NodeId, VirtualScheduler, EventStream) {
+    let world = FakeWorld::new();
+    let clock = world.scheduler.clone();
+    let device = world.device(b"alice-pk");
+    let (mut engine, events) = Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(42)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::offline(),
+        GatewayConfig::disabled(),
+    );
+    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
+    let root = block_on(engine.view()).expect("view").root();
     for (name, kind) in root_children {
         seed_child(&mut engine, root, name, *kind);
     }
-    OperationCore::new(engine, adapter, CacheBudget::CI, spill_area())
+    (
+        OperationCore::new(engine, adapter, CacheBudget::CI, spill_area()),
+        root,
+        clock,
+        events,
+    )
 }
 
 /// Poll a future exactly once. `Ready` proves the operation reached its answer
@@ -624,10 +668,223 @@ fn a_refused_operation_pushes_nothing() {
     );
 }
 
+// --- freshness: the FUSE-op TTL check and the focus window ---
+
+/// The staleness threshold this mount's engine runs under.
+fn stale_after() -> core::time::Duration {
+    SyncTimingProfile::CI.stale_after
+}
+
+#[test]
+fn a_read_path_operation_past_the_staleness_threshold_hints_a_refresh_for_its_folder() {
+    let (mut core, root, clock, _events) = mount_clocked(RecordingAdapter::push_capable(), &[]);
+
+    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    assert_eq!(
+        core.last_refresh_hint(),
+        Some(root),
+        "a folder no pass has refreshed is stale"
+    );
+
+    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    assert_eq!(
+        core.last_refresh_hint(),
+        None,
+        "inside the threshold the hint already filed covers the access"
+    );
+
+    clock.advance(stale_after());
+    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    assert_eq!(
+        core.last_refresh_hint(),
+        Some(root),
+        "past the threshold the folder is stale again"
+    );
+}
+
+#[test]
+fn every_read_path_operation_runs_the_ttl_check_against_the_folder_it_has_in_view() {
+    let (mut core, root, clock, _events) = mount_clocked(
+        RecordingAdapter::push_capable(),
+        &[("notes.txt", NodeKind::File)],
+    );
+    let file = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    assert_eq!(core.last_refresh_hint(), Some(root), "a lookup's parent");
+
+    clock.advance(stale_after());
+    block_on(core.getattr(ROOT_INO)).expect("getattr");
+    assert_eq!(
+        core.last_refresh_hint(),
+        Some(root),
+        "a getattr on a folder is that folder"
+    );
+
+    clock.advance(stale_after());
+    block_on(core.getattr(file.ino)).expect("getattr");
+    assert_eq!(
+        core.last_refresh_hint(),
+        None,
+        "a file puts no folder in view — its lookup already focused the parent"
+    );
+}
+
+/// The never-block law: the TTL check fires a hint, it never turns a callback
+/// into a resolve.
+#[test]
+fn a_stale_hit_answers_from_the_render_without_yielding() {
+    let (mut core, root, clock, _events) = mount_clocked(
+        RecordingAdapter::push_capable(),
+        &[("notes.txt", NodeKind::File)],
+    );
+    block_on(core.readdir(ROOT_INO)).expect("readdir");
+
+    clock.advance(stale_after());
+    assert!(poll_once(core.readdir(ROOT_INO)).is_ready());
+    assert_eq!(core.last_refresh_hint(), Some(root));
+
+    clock.advance(stale_after());
+    assert!(poll_once(core.lookup(ROOT_INO, "notes.txt")).is_ready());
+    assert_eq!(core.last_refresh_hint(), Some(root));
+
+    clock.advance(stale_after());
+    assert!(poll_once(core.getattr(ROOT_INO)).is_ready());
+    assert_eq!(
+        core.last_refresh_hint(),
+        Some(root),
+        "every stale hit answers from the render it already has, and still hints"
+    );
+}
+
+#[test]
+fn fuse_traffic_puts_a_folder_in_the_focus_set_until_the_horizon_closes_it() {
+    let (mut core, root, clock, _events) = mount_clocked(
+        RecordingAdapter::push_capable(),
+        &[("notes.txt", NodeKind::File)],
+    );
+    let file = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    assert_eq!(
+        core.engine_mut().focus_folder(),
+        Some(root),
+        "traffic on a folder is what makes it open"
+    );
+
+    clock.advance(SyncTimingProfile::CI.focus_horizon);
+    block_on(core.getattr(file.ino)).expect("getattr");
+    assert_eq!(
+        core.engine_mut().focus_folder(),
+        None,
+        "a folder nobody has looked at for a horizon stops riding the tick"
+    );
+
+    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    assert_eq!(
+        core.engine_mut().focus_folder(),
+        Some(root),
+        "fresh traffic reopens the window"
+    );
+}
+
+/// The gap that closes v1's dir-TTL-0 and pump-thread workarounds: nothing on
+/// the callback path knows a listing the kernel holds went stale, so the event
+/// stream is what tells the mount to repaint it.
+#[test]
+fn a_snapshot_the_mount_did_not_author_invalidates_the_listing_the_kernel_holds() {
+    let adapter = RecordingAdapter::push_capable();
+    let (mut core, root, _clock, mut events) = mount_clocked(adapter.clone(), &[]);
+    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    adapter.drain();
+    while events.try_next().is_some() {}
+
+    // Straight at the facade: the mount performed no operation, so nothing on
+    // its own path could have pushed anything.
+    seed_child(core.engine_mut(), root, "from-elsewhere.txt", NodeKind::File);
+    let seen = absorb_pending(&mut core, &mut events);
+
+    assert!(seen.contains(&Event::SnapshotUpdated), "{seen:?}");
+    assert_eq!(
+        adapter.drain(),
+        vec![Invalidation::Entry {
+            parent: ROOT_INO,
+            name: "from-elsewhere.txt".to_owned(),
+        }],
+        "the one entry that moved, and nothing else"
+    );
+}
+
+#[test]
+fn a_snapshot_that_moved_nothing_the_kernel_holds_invalidates_nothing() {
+    let adapter = RecordingAdapter::push_capable();
+    let (mut core, _root, _clock, mut events) = mount_clocked(
+        adapter.clone(),
+        &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
+    );
+    let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
+    block_on(core.readdir(sub.ino)).expect("the kernel takes the listing");
+    adapter.drain();
+    while events.try_next().is_some() {}
+
+    block_on(core.absorb_event(&Event::SnapshotUpdated)).expect("the mount absorbs");
+
+    assert!(
+        adapter.drain().is_empty(),
+        "the kernel is only told about state that actually moved"
+    );
+}
+
+/// A name reused for a different node is a change the kernel cannot see by
+/// counting entries, and an uninvalidated one never revalidates.
+#[test]
+fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
+    let adapter = RecordingAdapter::push_capable();
+    let (mut core, root, _clock, mut events) =
+        mount_clocked(adapter.clone(), &[("notes.txt", NodeKind::File)]);
+    let original = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    adapter.drain();
+    while events.try_next().is_some() {}
+
+    block_on(core.engine_mut().command(Command::Delete {
+        node: original.node,
+    }))
+    .expect("the delete stages");
+    seed_child(core.engine_mut(), root, "notes.txt", NodeKind::File);
+    absorb_pending(&mut core, &mut events);
+
+    assert!(
+        adapter.drain().contains(&Invalidation::Entry {
+            parent: ROOT_INO,
+            name: "notes.txt".to_owned(),
+        }),
+        "the name survived, the node behind it did not"
+    );
+}
+
+#[test]
+fn a_noattrcache_mount_keeps_its_entry_cache_and_loses_only_the_attribute_one() {
+    let (with_attrs, _adapter) = mount();
+    let suppressed = mount_with(RecordingAdapter::declaring(HostCapabilities {
+        push_invalidation: true,
+        attribute_cache: false,
+    }));
+
+    assert!(
+        suppressed.cache_ttls().attr.is_zero(),
+        "there is no attribute cache to time out"
+    );
+    assert_eq!(
+        suppressed.cache_ttls().entry,
+        with_attrs.cache_ttls().entry,
+        "noattrcache suppresses attributes, not name lookups"
+    );
+}
+
 #[test]
 fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
     let (with_push, _adapter) = mount();
-    let without_push = mount_with(RecordingAdapter::default());
+    let without_push = mount_with(RecordingAdapter::declaring(HostCapabilities {
+        push_invalidation: false,
+        attribute_cache: true,
+    }));
 
     assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
     assert!(!without_push.cache_ttls().attr.is_zero());
@@ -1358,8 +1615,8 @@ mod published {
             .count()
     }
 
-    fn engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
-        let (engine, _events) = Engine::new(
+    fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+        Engine::new(
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
@@ -1370,8 +1627,7 @@ mod published {
                 accelerator: Some("https://gw.test".into()),
                 public_fallbacks: Vec::new(),
             },
-        );
-        engine
+        )
     }
 
     /// A mount over an engine that has published `plaintext` as `clip.bin`.
@@ -1388,16 +1644,27 @@ mod published {
         /// The engine's spawned loops, kept so a test can drain a write it
         /// stages after the mount is up.
         tasks: Vec<BoxedTask>,
+        /// The mount's own engine event stream — what a reconcile landing
+        /// behind the kernel announces itself on.
+        events: EventStream,
     }
 
     fn mount_published(plaintext: &[u8], budget: CacheBudget) -> Mount {
+        mount_published_with(plaintext, budget, RecordingAdapter::push_capable())
+    }
+
+    fn mount_published_with(
+        plaintext: &[u8],
+        budget: CacheBudget,
+        adapter: RecordingAdapter,
+    ) -> Mount {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
         seed_account(&world, &blocks);
 
         let device = world.device(b"alice");
         serve_http(&device, &blocks, 1_000);
-        let mut engine = engine_on(&device);
+        let (mut engine, events) = engine_on(&device);
         block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
             .expect("the cold start adopts the owner root");
         let mut tasks = world.scheduler.take_spawned_tasks();
@@ -1418,7 +1685,6 @@ mod published {
         world.scheduler.advance(engine.profile().poll_cadence);
         poll_tasks_until_parked(&mut tasks);
 
-        let adapter = RecordingAdapter::push_capable();
         let mut core = OperationCore::new(engine, adapter.clone(), budget, spill_area());
         let published =
             block_on(core.lookup(ROOT_INO, CLIP)).expect("the published file is rendered");
@@ -1432,6 +1698,7 @@ mod published {
             ino: published.ino,
             node: published.node,
             tasks,
+            events,
         }
     }
 
@@ -1457,17 +1724,17 @@ mod published {
     /// tell it the head moved.
     fn publish_from_another_device(mount: &mut Mount, plaintext: &[u8]) {
         let node = mount.node;
+        let target = WriteTarget::Version { node };
         let device = mount.world.device(b"alice-second-device");
         serve_http(&device, &mount.blocks, 1_000);
-        let mut engine = engine_on(&device);
+        let (mut engine, _events) = engine_on(&device);
         block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
             .expect("the second device adopts the same owner root");
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle =
-            block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
-                .expect("the second device's write opens");
+        let handle = block_on(engine.begin_write(target, plaintext.len() as u64))
+            .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
         }
@@ -2145,6 +2412,69 @@ mod published {
                 .stream
                 .is_none(),
             "a write that replaces whole blocks must not have resolved the content"
+        );
+    }
+
+    /// The gap blueprint/desktop.md names: a snapshot lands with no operation
+    /// of the kernel's involved, so only the event stream can tell the mount
+    /// that the pages and attributes it served went stale. Nothing on the
+    /// callback path re-binds this inode, so an uninvalidated page cache would
+    /// serve the old version for as long as the kernel kept it.
+    #[test]
+    fn a_version_the_mount_never_served_repaints_the_kernels_caches_off_the_event_stream() {
+        let mut mount = mount_published(&clip_bytes(), CacheBudget::CI);
+        let ino = mount.ino;
+        block_on(mount.core.getattr(ino)).expect("the kernel takes the attributes");
+        mount.adapter.drain();
+        while mount.events.try_next().is_some() {}
+
+        // Straight at the engine the mount projects — the shell writing while
+        // the mount is up, which the mount itself performs no operation for.
+        publish_version(&mut mount, &[0xBB; 323]);
+        let seen = absorb_pending(&mut mount.core, &mut mount.events);
+
+        assert!(seen.contains(&Event::SnapshotUpdated), "{seen:?}");
+        assert_eq!(
+            mount.adapter.drain(),
+            vec![
+                Invalidation::Data { ino },
+                Invalidation::Attributes { ino },
+            ],
+            "data before attributes, so a kernel that learns the new size first \
+             serves the pages it still holds as the new version"
+        );
+    }
+
+    /// A mount that cannot push takes the shorter kernel TTL *and* is still
+    /// told what moved: the two are independent, and a mount told nothing would
+    /// never revalidate cached data whatever its TTLs said.
+    #[test]
+    fn a_mount_without_push_takes_the_shorter_ttl_and_is_still_told() {
+        let mut mount = mount_published_with(
+            &clip_bytes(),
+            CacheBudget::CI,
+            RecordingAdapter::declaring(HostCapabilities {
+                push_invalidation: false,
+                attribute_cache: true,
+            }),
+        );
+        let ino = mount.ino;
+        block_on(mount.core.getattr(ino)).expect("the kernel takes the attributes");
+        mount.adapter.drain();
+        while mount.events.try_next().is_some() {}
+
+        assert_eq!(
+            mount.core.cache_ttls().entry,
+            SyncTimingProfile::CI.poll_cadence,
+            "without push the kernel may cache no longer than one poll cycle"
+        );
+
+        publish_version(&mut mount, &[0xCC; 96]);
+        absorb_pending(&mut mount.core, &mut mount.events);
+
+        assert!(
+            mount.adapter.drain().contains(&Invalidation::Data { ino }),
+            "a mount that cannot push is still the one told what moved"
         );
     }
 }

@@ -8,12 +8,12 @@
 //! machinery, no freshness policy — those decisions all happened below the
 //! facade.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{
-    Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, SessionStatus, StatFs, StreamHandle,
-    WriteHandle, WriteTarget,
+    Command, Engine, EngineView, Event, NodeAttrs, NodeId, NodeKind, SessionStatus, StatFs,
+    StreamHandle, WriteHandle, WriteTarget,
 };
 
 use zeroize::Zeroizing;
@@ -83,6 +83,15 @@ impl Pending {
     }
 }
 
+/// The attributes this mount last handed the kernel for one node — the state
+/// the kernel's cache holds, and so the only state a repaint has to correct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Served {
+    size: Option<u64>,
+    mtime_millis: Option<u64>,
+    content_version: Option<u64>,
+}
+
 /// How a block-fetching path uses the chunk cache: a path that will come back
 /// to these bytes retains and promotes them; a one-shot pass reads through,
 /// leaving neither the budget nor the recency order spent on blocks it will
@@ -109,6 +118,16 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     /// hold bytes this mount served, so a bind at a different version is
     /// exactly the condition under which those pages went stale.
     streamed: HashMap<NodeId, Vec<u8>>,
+    /// Per node, the attributes this mount last served. Only nodes the kernel
+    /// actually asked about are here, and a repaint drops each one it
+    /// invalidates — the map tracks what the kernel is believed to hold, not
+    /// the tree.
+    served: HashMap<NodeId, Served>,
+    /// Per directory, the entries this mount last listed, on the same terms.
+    listed: HashMap<NodeId, BTreeMap<String, NodeId>>,
+    /// The folder the last read-path operation found past the staleness
+    /// threshold, if any.
+    refresh_hint: Option<NodeId>,
 }
 
 impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
@@ -125,6 +144,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             spill,
             pending: HashMap::new(),
             streamed: HashMap::new(),
+            served: HashMap::new(),
+            listed: HashMap::new(),
+            refresh_hint: None,
         }
     }
 
@@ -149,6 +171,98 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         CacheTtls::for_host(&self.adapter.capabilities(), self.engine.profile())
     }
 
+    /// The folder the most recent read-path operation found past the staleness
+    /// threshold, if any — the refresh hint that operation's TTL check fired.
+    /// The engine's next tick is what acts on it; a host surfaces it as the
+    /// "checking for updates" state.
+    pub fn last_refresh_hint(&self) -> Option<NodeId> {
+        self.refresh_hint
+    }
+
+    /// Fold one engine event into the kernel's caches.
+    ///
+    /// A background reconcile lands a new snapshot without any operation of the
+    /// kernel's having asked for one, so nothing on the callback path would ever
+    /// tell it that the entries and pages it holds stopped being the truth — the
+    /// event stream is what does (blueprint/desktop.md "Freshness"). The host
+    /// drives this from the task holding the stream; no kernel callback reaches
+    /// it.
+    pub async fn absorb_event(&mut self, event: &Event) -> Result<(), VfsError> {
+        if *event != Event::SnapshotUpdated {
+            return Ok(());
+        }
+        self.repaint().await
+    }
+
+    /// Invalidate everything the new render moved out from under what this
+    /// mount last served, and forget it: the kernel holds it no longer, so the
+    /// next callback for it re-reads through the adapter.
+    async fn repaint(&mut self) -> Result<(), VfsError> {
+        let view = self.render().await?;
+
+        let mut moved = Vec::new();
+        for (node, served) in &self.served {
+            let Some(meta) = view.attrs(*node) else {
+                moved.push((*node, false));
+                continue;
+            };
+            let fresh = self.serving(&meta, self.pending_len(*node).or(meta.size));
+            if fresh != *served {
+                moved.push((*node, fresh.content_version != served.content_version));
+            }
+        }
+        for (node, content_moved) in moved {
+            self.served.remove(&node);
+            let ino = self.inodes.ino_for(node);
+            // Data before attributes, as a commit does: a kernel that learns
+            // the new size first serves the pages it still holds as the new
+            // version.
+            if content_moved {
+                self.adapter.invalidate(Invalidation::Data { ino });
+            }
+            self.adapter.invalidate(Invalidation::Attributes { ino });
+        }
+
+        let mut relisted = Vec::new();
+        for (dir, listed) in &self.listed {
+            let fresh = emittable_children(&view, *dir);
+            if fresh != *listed {
+                relisted.push((*dir, rebound_names(listed, &fresh)));
+            }
+        }
+        for (dir, names) in relisted {
+            self.listed.remove(&dir);
+            let parent = self.inodes.ino_for(dir);
+            for name in names {
+                self.entry_changed(parent, &name);
+            }
+        }
+        Ok(())
+    }
+
+    /// The **FUSE-op TTL check**: put the folder this operation has in view into
+    /// the engine's focus window, and record the refresh hint a folder past the
+    /// staleness threshold fires (blueprint/desktop.md "Freshness"). Synchronous
+    /// and network-free — the hint rides the next tick, and the operation
+    /// answers from the render it already has (the never-block law).
+    fn ttl_check(&mut self, folder: Option<NodeId>) {
+        self.refresh_hint = self
+            .engine
+            .note_focus_access(folder)
+            .then_some(folder)
+            .flatten();
+    }
+
+    /// What a node's attributes look like to the kernel, at the size the
+    /// pending-op overlay projects.
+    fn serving(&self, meta: &NodeAttrs, size: Option<u64>) -> Served {
+        Served {
+            size,
+            mtime_millis: meta.mtime,
+            content_version: meta.content_version,
+        }
+    }
+
     /// Resolve a name under a directory.
     pub async fn lookup(&mut self, parent: u64, name: &str) -> Result<Attributes, VfsError> {
         if !is_emittable(name) {
@@ -156,6 +270,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
+        self.ttl_check(Some(parent_node));
         let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
         Ok(self.attributes(&meta))
     }
@@ -165,6 +280,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let node = self.node_of(ino)?;
         let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
+        // A file puts no folder in view: the lookup that minted its inode
+        // already put its parent there.
+        self.ttl_check((meta.kind == NodeKind::Folder).then_some(node));
         Ok(self.attributes(&meta))
     }
 
@@ -175,18 +293,22 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     pub async fn readdir(&mut self, ino: u64) -> Result<Vec<DirEntry>, VfsError> {
         let view = self.render().await?;
         let node = self.directory(&view, ino)?;
+        self.ttl_check(Some(node));
         let children = view.children(node);
         let mut entries = Vec::with_capacity(children.len());
+        let mut listed = BTreeMap::new();
         for child in children {
             if is_platform_junk(&child.name) || !is_emittable(&child.name) {
                 continue;
             }
+            listed.insert(child.name.clone(), child.id);
             entries.push(DirEntry {
                 ino: self.inodes.ino_for(child.id),
                 name: child.name,
                 kind: child.kind,
             });
         }
+        self.listed.insert(node, listed);
         Ok(entries)
     }
 
@@ -463,6 +585,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.pending.clear();
         self.cache.clear();
         self.streamed.clear();
+        self.served.clear();
+        self.listed.clear();
+        self.refresh_hint = None;
     }
 
     /// Give `handle` a write state if it has none, sized to the file it is
@@ -786,6 +911,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
 
     fn attributes(&mut self, meta: &NodeAttrs) -> Attributes {
         let size = self.pending_len(meta.id).or(meta.size);
+        self.served.insert(meta.id, self.serving(meta, size));
         Attributes {
             ino: self.inodes.ino_for(meta.id),
             node: meta.id,
@@ -866,6 +992,33 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         Ok(())
     }
+}
+
+/// The entries of `dir` a listing would emit, by name. A directory the render
+/// no longer holds emits nothing, which is itself the change.
+fn emittable_children(view: &EngineView, dir: NodeId) -> BTreeMap<String, NodeId> {
+    view.children(dir)
+        .into_iter()
+        .filter(|child| !is_platform_junk(&child.name) && is_emittable(&child.name))
+        .map(|child| (child.name, child.id))
+        .collect()
+}
+
+/// The names whose binding moved between two listings: added, removed, or the
+/// same name over a different node. Each name appears once however it moved —
+/// one entry invalidation is all the kernel needs.
+fn rebound_names(before: &BTreeMap<String, NodeId>, after: &BTreeMap<String, NodeId>) -> Vec<String> {
+    before
+        .iter()
+        .filter(|(name, node)| after.get(*name) != Some(node))
+        .map(|(name, _)| name.clone())
+        .chain(
+            after
+                .iter()
+                .filter(|(name, _)| !before.contains_key(*name))
+                .map(|(name, _)| name.clone()),
+        )
+        .collect()
 }
 
 /// Copy the first `want` bytes of `block` over the head of `out`, leaving the
