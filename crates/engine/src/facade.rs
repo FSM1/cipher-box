@@ -26,7 +26,7 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{ChildScopeRef, GrantSection, ReadBody, Version, seal_content_key};
-use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -42,12 +42,13 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
 use crate::grants::{
-    AcceptError, AcceptOutcome, Contact, ContactStore, ContactStoreError, CreateGrantError,
-    GrantRecipient, GranteeScopePlan, InviteError, InviteMintError, InviteMintPlan,
-    InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
-    ParentScopePlan, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, SharePointer,
-    StagingContactStore, StagingInviteStore, StagingReceivedShareStore, accept_share,
-    create_read_grant, mint_invite_link, recipient_blinded_tag, resolve_recipient,
+    AcceptError, AcceptOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
+    CreateGrantError, GrantRecipient, GranteeScopePlan, InviteError, InviteMintError,
+    InviteMintPlan, InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink,
+    OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
+    ReceivedShareStoreError, SharePointer, StagingContactStore, StagingInviteStore,
+    StagingReceivedShareStore, accept_share, create_read_grant, link_binds_scope,
+    locate_invite_link, mint_invite_link, recipient_blinded_tag, resolve_recipient,
 };
 use crate::mailbox::locate_verified;
 use crate::net::author::ENVELOPE_V;
@@ -586,24 +587,37 @@ pub enum Command {
         recipient_identity_public_key: Vec<u8>,
     },
     /// Mint an invite link for a node (#25 D6). The returned URL fragment
-    /// carries the ephemeral secret. `node` must be a scope root — this build
-    /// invites at the vault root only, since inviting to a folder below it
-    /// mints that folder's scope first.
-    ///
-    /// What a host must tell a user before it shows the link: a read grant
-    /// mints a fresh scope at epoch 1, but an invite adds a row to the scope
-    /// root's existing set, so the bearer gets that scope's current seed **and
-    /// the retained history links that walk back from it** — every epoch the
-    /// owner has cut, including cuts made to revoke someone. It carries no
-    /// deadline, and only a write rotation ends a write link
-    /// ([`LinkCapability::BearerWrite`](crate::grants::LinkCapability)).
-    ///
-    /// [`LinkCapability`]: crate::grants::LinkCapability
+    /// carries the ephemeral secret. `node` is a folder inside the vault root's
+    /// scope: the link mints that folder's scope, so its bearer starts at the
+    /// scope's first epoch and reaches nothing the owner sealed before the link
+    /// existed.
     CreateInviteLink {
         /// Node to invite to.
         node: NodeId,
         /// Read or write.
         permission: Permission,
+        /// The link's deadline, or `None` for a link that never expires. A
+        /// claim past it is refused without owner action; the published copy is
+        /// a hint, and this recorded one is the authority.
+        expires_at: Option<UnixMillis>,
+    },
+    /// Revoke an invite link the owner minted at `node` (owner-only). The cut
+    /// rotates the read plane, and the grants claims already converted from the
+    /// link keep standing — ending a link ends future claims, not the personal
+    /// grants it produced.
+    RevokeInviteLink {
+        /// The node the link was minted at.
+        node: NodeId,
+    },
+    /// Drop the invite records at `node` whose row the scope's own owner-signed
+    /// commitment does not carry — the slots a mint spent on a publish that
+    /// never landed, and the links a revoke has already cut.
+    ///
+    /// Fail-closed: it proves a row dead against a gate-passing record before
+    /// dropping anything, so a scope that will not resolve prunes nothing.
+    PruneInviteLinks {
+        /// The node whose links are being pruned.
+        node: NodeId,
     },
     /// Accept a share from a polled mailbox pointer or claimed invite.
     AcceptShare {
@@ -656,6 +670,8 @@ impl Command {
             Command::Revoke { .. } => "revoke",
             Command::Downgrade { .. } => "downgrade",
             Command::CreateInviteLink { .. } => "createInviteLink",
+            Command::RevokeInviteLink { .. } => "revokeInviteLink",
+            Command::PruneInviteLinks { .. } => "pruneInviteLinks",
             Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
@@ -1037,40 +1053,57 @@ impl EngineError {
     /// it may retry, an input or a bound it can change, and a fail-closed
     /// refusal it must never retry (rule 6).
     fn from_invite_mint(err: InviteMintError) -> Self {
-        let refused = |check: &'static str| EngineError::MalformedInput { check };
         match err {
-            InviteMintError::Mint(InviteError::Entropy(e))
-            | InviteMintError::Store(InviteStoreError::Entropy(e))
-            | InviteMintError::Reseal(ResealError::Entropy(e)) => EngineError::from_entropy(e),
-            // The vault root's own commitment is not signed by this session's
-            // identity key, or the ledger it carries diverges from it: verdicts
-            // on the record, never on the request.
+            InviteMintError::WriteNeedsAScopeCut => EngineError::UnsupportedTarget {
+                check: "write-links-need-a-write-scope-cut",
+            },
+            InviteMintError::Mint(InviteError::Entropy(e)) => EngineError::from_entropy(e),
             e @ InviteMintError::Mint(InviteError::NotOwner | InviteError::Authority(_)) => {
                 EngineError::TrustViolation {
                     message: e.to_string(),
                 }
             }
-            InviteMintError::Mint(e) => refused(e.check()),
-            InviteMintError::Sign(e) => refused(e.check()),
-            // Only a mint's own link can overflow the set it offers, and the
-            // host acts on it by revoking a live one.
-            InviteMintError::Store(InviteStoreError::Full { .. }) => refused("invite-records-full"),
-            InviteMintError::Store(InviteStoreError::Encode(_)) => {
-                refused("invite-records-unstorable")
-            }
-            InviteMintError::Store(InviteStoreError::Seal(e)) => refused(e.check()),
-            InviteMintError::Store(InviteStoreError::Seam(e)) => EngineError::Seam {
+            InviteMintError::Mint(e) => EngineError::MalformedInput { check: e.check() },
+            InviteMintError::Store(e) => EngineError::from_invite_store(e),
+            InviteMintError::Create(e) => EngineError::from_create_grant(e),
+        }
+    }
+
+    /// Map an invite-record store failure. A stored set that will not open is a
+    /// report that the owner's own authority was tampered with, never a
+    /// retryable outage (`invite_store.rs` header).
+    fn from_invite_store(err: InviteStoreError) -> Self {
+        match err {
+            InviteStoreError::Entropy(e) => EngineError::from_entropy(e),
+            // Only the offered set can overflow, and the host acts on it by
+            // revoking a live link or pruning the dead ones.
+            InviteStoreError::Full { .. } => EngineError::MalformedInput {
+                check: "invite-records-full",
+            },
+            InviteStoreError::Encode(_) => EngineError::MalformedInput {
+                check: "invite-records-unstorable",
+            },
+            InviteStoreError::Seal(e) => EngineError::MalformedInput { check: e.check() },
+            InviteStoreError::Seam(e) => EngineError::Seam {
                 message: e.message().to_owned(),
             },
-            InviteMintError::Publish(e) if e.is_retryable() => EngineError::Seam {
+            e @ InviteStoreError::Unreadable(_) => EngineError::TrustViolation {
                 message: e.to_string(),
             },
-            // A stored set that will not open, a re-seal this build refuses to
-            // sign, a root that is not the vault root, and a rejected publish
-            // are all fail-closed verdicts on the owner's own state.
-            other => EngineError::TrustViolation {
-                message: other.to_string(),
-            },
+        }
+    }
+
+    /// Map a link-selection failure: every arm is a verdict on the owner's own
+    /// records against the owner-signed set, never availability.
+    fn from_invite(err: InviteError) -> Self {
+        match err {
+            InviteError::Entropy(e) => EngineError::from_entropy(e),
+            e @ (InviteError::NotOwner | InviteError::Authority(_)) => {
+                EngineError::TrustViolation {
+                    message: e.to_string(),
+                }
+            }
+            e => EngineError::MalformedInput { check: e.check() },
         }
     }
 
@@ -1549,6 +1582,32 @@ impl OwnerScope {
         RotationAncestry::default()
             .under_parent_node_seed(self.scope.scope_id, self.parent_node_seed.as_deref())
     }
+}
+
+/// Who a freshly minted scope is shared with.
+enum ScopeShare<'a> {
+    /// An imported contact, whose verified binding signature is what ties the
+    /// key the grant wraps to the identity the pointer is addressed to.
+    Contact(&'a Contact),
+    /// A bearer link: the recipient is a throwaway keypair the engine draws,
+    /// and its secret is the whole capability.
+    InviteLink {
+        /// The link's deadline, or `None` for a link that never expires.
+        expires_at: Option<UnixMillis>,
+    },
+}
+
+/// The host-facing names a scope mint's refusals carry. One rule, one name per
+/// command: a grant and an invite link are different actions to a user, so they
+/// do not report each other's.
+struct ShareChecks {
+    /// The vault root is refused as a target.
+    vault_root: &'static str,
+    /// The node already names a scope, so a mint would replace it.
+    already_a_scope: &'static str,
+    /// The parent scope root's envelope version is not the one this build
+    /// authors.
+    envelope_version: &'static str,
 }
 
 /// The entries of `index` whose scope roots sit inside `node`'s subtree — the
@@ -3289,18 +3348,27 @@ where {
                 .map(CommandOutcome::ContactImported)
                 .map_err(EngineError::from_contact_store)
             }
-            Command::CreateInviteLink { node, permission } => self
-                .create_invite_link(node, permission)
+            Command::CreateInviteLink {
+                node,
+                permission,
+                expires_at,
+            } => self.create_invite_link(node, permission, expires_at).await,
+            Command::RevokeInviteLink { node } => self
+                .revoke_invite_link(node)
                 .await
-                .map(CommandOutcome::InviteLinkMinted),
+                .map(|()| CommandOutcome::Done),
+            Command::PruneInviteLinks { node } => self
+                .prune_invite_links(node)
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::Grant {
                 node,
                 recipient_identity_public_key,
                 permission,
-            } => self
-                .grant(node, &recipient_identity_public_key, permission)
-                .await
-                .map(|()| CommandOutcome::Done),
+            } => {
+                self.grant(node, &recipient_identity_public_key, permission)
+                    .await
+            }
             Command::Revoke {
                 node,
                 recipient_identity_public_key,
@@ -3340,65 +3408,6 @@ where {
                 command: other.name(),
             }),
         }
-    }
-
-    /// Mint an invite link over the vault root's scope: record it, publish the
-    /// row into the owner-signed commitment, and only then hand the bearer
-    /// capability back ([`mint_invite_link`]).
-    ///
-    /// The engine holds no node-to-scope mapping, so a node below the root
-    /// names no scope root this can invite to — a grant there mints the scope
-    /// first, which is the grant-creation arm's job.
-    async fn create_invite_link(
-        &self,
-        node: NodeId,
-        permission: Permission,
-    ) -> Result<MintedInviteLink, EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        if node.0 != self.snapshot.borrow().root.0 {
-            return Err(EngineError::UnsupportedTarget {
-                check: "invite-target-is-not-a-scope-root",
-            });
-        }
-        let scope = self.vault_root_scope()?;
-        let owner_identity = session.owner_identity();
-        let scope_keys = OwnerSessionKeys::new(session);
-        let net = self.owner_rotation_net(
-            api,
-            OwnerRotationKeys {
-                enc_secret: session.enc_subkey(),
-                identity: &owner_identity,
-                scope_keys: &scope_keys,
-            },
-            RotationAncestry::default(),
-            None,
-        );
-        let current = net
-            .resolve_vault_root(&scope)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
-        mint_invite_link(
-            &OwnerAuthority {
-                identity_signer: session.identity(),
-                enc_secret: session.enc_subkey(),
-            },
-            &net,
-            &StagingInviteStore::new(
-                &self.seams.staging_store,
-                session.enc_subkey(),
-                &self.entropy,
-            ),
-            &self.entropy,
-            &InviteMintPlan {
-                scope: &scope,
-                current: &current,
-                permission: permission.into(),
-                expires_at: None,
-            },
-        )
-        .await
-        .map_err(EngineError::from_invite_mint)
     }
 
     /// The vault root's scope reference: its scope id and the `ipnsName` the
@@ -3701,21 +3710,14 @@ where {
             .map_err(EngineError::from_rotation)
     }
 
-    /// Grant a node inside the vault root's scope to an imported contact:
-    /// converge the subtree, mint a fresh scope at epoch 1, reparent whatever
-    /// descendant scope roots the node carries, republish the parent's
-    /// direct-child-scope index, and post the sealed share pointer
+    /// Grant a node inside the vault root's scope to an imported contact
     /// (blueprint/engine.md "Grant creation").
-    ///
-    /// Owner-only by construction: the parent's re-seal is signed under the
-    /// owner's writer pseudonym and its commitment under the owner identity, so
-    /// no other session can author it.
     async fn grant(
         &self,
         node: NodeId,
         recipient_identity_public_key: &[u8],
         permission: Permission,
-    ) -> Result<(), EngineError> {
+    ) -> Result<CommandOutcome, EngineError> {
         // A write grant owes a write-scope cut — a fresh write scope seed and a
         // name wave over the granted subtree — which the read-grant mint does
         // not author.
@@ -3725,15 +3727,71 @@ where {
             });
         }
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        // The vault root is granted through an invite link over its existing
-        // committed set; minting a scope at it would replace the session's own.
+        self.share_scope(
+            node,
+            ScopeShare::Contact(&contact),
+            &ShareChecks {
+                vault_root: "grant-target-is-the-vault-root",
+                already_a_scope: "grant-target-already-names-a-scope",
+                envelope_version: "grant-parent-envelope-version-unsupported",
+            },
+        )
+        .await
+    }
+
+    /// Mint an invite link over a node inside the vault root's scope: the same
+    /// fresh scope a grant mints, committed to a throwaway keypair whose secret
+    /// is the link's whole capability ([`mint_invite_link`]).
+    async fn create_invite_link(
+        &self,
+        node: NodeId,
+        permission: Permission,
+        expires_at: Option<UnixMillis>,
+    ) -> Result<CommandOutcome, EngineError> {
+        // The minted scope inherits the parent's write plane, so a write link
+        // would hand the bearer the seed every name in that scope derives from.
+        if permission == Permission::Write {
+            return Err(EngineError::UnsupportedTarget {
+                check: "write-links-need-a-write-scope-cut",
+            });
+        }
+        self.share_scope(
+            node,
+            ScopeShare::InviteLink { expires_at },
+            &ShareChecks {
+                vault_root: "invite-target-is-the-vault-root",
+                already_a_scope: "invite-target-already-names-a-scope",
+                envelope_version: "invite-parent-envelope-version-unsupported",
+            },
+        )
+        .await
+    }
+
+    /// Mint the fresh scope a share of `node` is granted at: converge the
+    /// subtree, mint the scope at epoch 1, reparent whatever descendant scope
+    /// roots the node carries, republish the parent's direct-child-scope index,
+    /// and deliver what `share` owes its recipient
+    /// (blueprint/engine.md "Grant creation").
+    ///
+    /// Owner-only by construction: the parent's re-seal is signed under the
+    /// owner's writer pseudonym and its commitment under the owner identity, so
+    /// no other session can author it.
+    async fn share_scope(
+        &self,
+        node: NodeId,
+        share: ScopeShare<'_>,
+        checks: &ShareChecks,
+    ) -> Result<CommandOutcome, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        // The vault root's own scope is the session's; minting one at it would
+        // replace the scope every record this vault publishes lives in.
         if node.0 == self.snapshot.borrow().root.0 {
             return Err(EngineError::UnsupportedTarget {
-                check: "grant-target-is-the-vault-root",
+                check: checks.vault_root,
             });
         }
         let parent = self.vault_root_scope()?;
@@ -3778,11 +3836,11 @@ where {
         // a grant whose pointer no accept can open.
         if current.v != ENVELOPE_V {
             return Err(EngineError::UnsupportedTarget {
-                check: "grant-parent-envelope-version-unsupported",
+                check: checks.envelope_version,
             });
         }
 
-        // A second grant on the same folder would mint another scope at epoch 1,
+        // A second share of the same folder would mint another scope at epoch 1,
         // replacing the seed every existing grantee of it holds — a silent
         // revocation dressed as a share. Adding a recipient to a scope that
         // already exists is a row on its committed set, not a fresh mint.
@@ -3792,7 +3850,7 @@ where {
             .any(|child| child.scope_id == node.0)
         {
             return Err(EngineError::UnsupportedTarget {
-                check: "grant-target-already-names-a-scope",
+                check: checks.already_a_scope,
             });
         }
 
@@ -3801,65 +3859,265 @@ where {
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
-        create_read_grant(
-            &mut SharedEntropy(&self.entropy),
-            &net,
-            &net,
-            &self.seams.mailbox,
-            &GranteeScopePlan {
+        let grantee = GranteeScopePlan {
+            v: current.v,
+            scope_id: node.0,
+            parent_node_seed: parent_node_seed.as_bytes(),
+            owner_enc_pub: &current.owner_enc_pub,
+            // A read grant cuts no write scope: the granted node keeps the
+            // write-plane material it already publishes under.
+            write_scope_seed: &current.write_scope_seed,
+            write_epoch: current.write_epoch,
+            pointer_read_key: pointer_read_key.as_bytes(),
+            subtree_child_index: &subtree,
+        };
+        let owner = OwnerGrantKeys {
+            enc_secret: session.enc_subkey(),
+            identity_signer: session.identity(),
+            pseudonym_signer: &pseudonym_signer,
+        };
+        let parent_plan = ParentScopePlan {
+            identity: ScopeRootIdentity {
                 v: current.v,
-                scope_id: node.0,
-                parent_node_seed: parent_node_seed.as_bytes(),
+                scope_id: parent.scope_id,
+                ipns_name: &parent.ipns_name,
                 owner_enc_pub: &current.owner_enc_pub,
-                // A read grant cuts no write scope: the granted node keeps the
-                // write-plane material it already publishes under.
+                owner_enc_secret: Some(session.enc_subkey()),
+                ascent: None,
+                owes_ascent_link: current.carried_ascent_link,
+                pseudonym_signer: &current.pseudonym_signer,
+            },
+            seeds: ResealSeeds {
+                override_seed: &current.override_seed,
+                read_epoch: current.current_read_epoch,
+                // Updating the index is a metadata-only re-seal at the same
+                // epoch, so it cuts no read plane and mints no history link.
+                prev: None,
                 write_scope_seed: &current.write_scope_seed,
                 write_epoch: current.write_epoch,
-                pointer_read_key: pointer_read_key.as_bytes(),
-                subtree_child_index: &subtree,
+                write_history: WriteHistory::Carried(&current.write_history_link),
+                pointer_read_key: &current.pointer_read_key,
             },
-            &GrantRecipient {
-                identity_pk: contact.identity_pk(),
-                enc_pub: &contact.enc_subkey(),
-                display_name,
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            current_child_index: &current.direct_child_scope_index,
+            carried_history_links: &current.carried_history_links,
+        };
+
+        match share {
+            ScopeShare::Contact(contact) => create_read_grant(
+                &mut SharedEntropy(&self.entropy),
+                &net,
+                &net,
+                &self.seams.mailbox,
+                &grantee,
+                &GrantRecipient {
+                    identity_pk: contact.identity_pk(),
+                    enc_pub: &contact.enc_subkey(),
+                    display_name,
+                },
+                &owner,
+                &parent_plan,
+            )
+            .await
+            .map(|_| CommandOutcome::Done)
+            .map_err(EngineError::from_create_grant),
+            ScopeShare::InviteLink { expires_at } => mint_invite_link(
+                &mut SharedEntropy(&self.entropy),
+                &net,
+                &net,
+                &StagingInviteStore::new(
+                    &self.seams.staging_store,
+                    session.enc_subkey(),
+                    &self.entropy,
+                ),
+                &owner,
+                &InviteMintPlan {
+                    grantee: &grantee,
+                    parent: &parent_plan,
+                    permission: cipherbox_core::seal::Permission::Read,
+                    expires_at,
+                },
+            )
+            .await
+            .map(CommandOutcome::InviteLinkMinted)
+            .map_err(EngineError::from_invite_mint),
+        }
+    }
+
+    /// Revoke the invite link the owner minted at `node`: cut its row from the
+    /// owner-signed committed set, drive the cut through the planes it demands,
+    /// and only then forget the record.
+    ///
+    /// The cut alone revokes nothing — only the fresh-seed cascade completes a
+    /// read revoke — so a failure to rotate is reported rather than swallowed,
+    /// and the record outlives it so the next attempt can still name the link.
+    async fn revoke_invite_link(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let sweep = self.sweep_factory()?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let owner_pointer_seed = session.owner_pointer_seed();
+        let target = self
+            .owner_scope(
+                node,
+                api,
+                owner_keys(),
+                "revoke-link-target-is-not-a-scope-root",
+            )
+            .await?;
+        let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
+        let current = self
+            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .resolve_anchored(&target.scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+
+        let store = StagingInviteStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        );
+        let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
+        let commitment_sig = EcdsaSignature::from_compact(&current.commitment_sig).ok_or(
+            EngineError::TrustViolation {
+                message: "the scope root's commitment signature is unparseable".to_owned(),
             },
-            &OwnerGrantKeys {
-                enc_secret: session.enc_subkey(),
+        )?;
+        // Owner-only, and derived from the owner's own records: the tag comes
+        // from a record this session's encryption subkey re-derives, never from
+        // the command.
+        let tag = locate_invite_link(
+            &OwnerAuthority {
                 identity_signer: session.identity(),
-                pseudonym_signer: &pseudonym_signer,
+                enc_secret: session.enc_subkey(),
             },
-            &ParentScopePlan {
-                identity: ScopeRootIdentity {
-                    v: current.v,
-                    scope_id: parent.scope_id,
-                    ipns_name: &parent.ipns_name,
-                    owner_enc_pub: &current.owner_enc_pub,
-                    owner_enc_secret: Some(session.enc_subkey()),
-                    ascent: None,
-                    owes_ascent_link: current.carried_ascent_link,
-                    pseudonym_signer: &current.pseudonym_signer,
-                },
-                seeds: ResealSeeds {
-                    override_seed: &current.override_seed,
-                    read_epoch: current.current_read_epoch,
-                    // Updating the index is a metadata-only re-seal at the same
-                    // epoch, so it cuts no read plane and mints no history link.
-                    prev: None,
-                    write_scope_seed: &current.write_scope_seed,
-                    write_epoch: current.write_epoch,
-                    write_history: WriteHistory::Carried(&current.write_history_link),
-                    pointer_read_key: &current.pointer_read_key,
-                },
+            &CommittedScope {
+                scope_id: &target.scope.scope_id,
                 commitment: &current.commitment,
-                commitment_sig: &current.commitment_sig,
-                grant_ledger: &current.grant_ledger,
-                current_child_index: &current.direct_child_scope_index,
-                carried_history_links: &current.carried_history_links,
+                commitment_sig: &commitment_sig,
+                ledger: &current.grant_ledger,
             },
+            &records.links,
         )
-        .await
-        .map(|_| ())
-        .map_err(EngineError::from_create_grant)
+        .map_err(EngineError::from_invite)?
+        .tag;
+
+        let plan = GrantCutPlan {
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            scope_root_name: &scope_root_name,
+            owner_signer: session.identity(),
+        };
+        // A write link keeps an extractable subtree signing key until the name
+        // wave runs, so the read cut refuses it by name and that refusal is what
+        // selects the arm that also rotates the write plane.
+        let cut = match revoke_read_grant(&plan, &tag) {
+            Err(RevokeError::WriteGranted) => {
+                revoke_write_grant(&plan, &tag, WriteRevokeKind::Full)
+            }
+            read_cut => read_cut,
+        }
+        .map_err(EngineError::from_revoke)?;
+
+        let rotator = OwnerCutNet {
+            transport: &self.seams.record_transport,
+            api: api.as_ref(),
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys: owner_keys(),
+            owner_signer: session.identity(),
+            owner_pointer_seed: owner_pointer_seed.as_bytes(),
+            payload_version: POINTER_PAYLOAD_VERSION,
+            scope_root_name: &scope_root_name,
+            scope_id: target.scope.scope_id,
+            parent_node_seed: target.parent_node_seed.as_deref(),
+            session_root_scope_id: self.snapshot.borrow().root.0,
+            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+        };
+        rotate_on_cut(&rotator, node, &cut)
+            .await
+            .map_err(EngineError::from_rotation)?;
+
+        // The cut has landed, so the link is dead and the claims it produced can
+        // no longer be re-converted through it (`ConvertedClaimRecord::link_tag`).
+        records.links.retain(|link| link.tag != tag);
+        records.claims.retain(|claim| claim.link_tag != tag);
+        store
+            .persist(&records)
+            .await
+            .map_err(EngineError::from_invite_store)
+    }
+
+    /// Drop the invite records at `node` the scope's own owner-signed commitment
+    /// no longer carries — a mint whose publish never landed, and a link a
+    /// revoke has already cut.
+    ///
+    /// Fail-closed: a record is dropped only against a gate-passing commitment
+    /// that does not carry its tag. An unresolvable scope root is staleness, not
+    /// a revocation signal (blueprint/engine.md "Revocation is discovered"), so
+    /// it prunes nothing rather than forgetting a row that may be live.
+    async fn prune_invite_links(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let target = self
+            .owner_scope(node, api, owner_keys(), "prune-target-is-not-a-scope-root")
+            .await?;
+        let current = self
+            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .resolve_anchored(&target.scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+
+        let store = StagingInviteStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        );
+        let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
+        let dead: BTreeSet<[u8; 32]> = records
+            .links
+            .iter()
+            .filter(|link| {
+                link_binds_scope(session.enc_subkey(), link, &target.scope.ipns_name)
+                    && !current
+                        .commitment
+                        .entries
+                        .iter()
+                        .any(|entry| entry.tag == link.tag)
+            })
+            .map(|link| link.tag)
+            .collect();
+        if dead.is_empty() {
+            return Ok(());
+        }
+        records.links.retain(|link| !dead.contains(&link.tag));
+        records
+            .claims
+            .retain(|claim| !dead.contains(&claim.link_tag));
+        store
+            .persist(&records)
+            .await
+            .map_err(EngineError::from_invite_store)
     }
 
     /// Accept a share the mailbox delivered: bind the pointer to the imported

@@ -28,7 +28,7 @@
 
 use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
-use cipherbox_engine::seams::check_bearer;
+use cipherbox_engine::seams::{UnixMillis, check_bearer};
 use cipherbox_engine::{
     AcceptOutcome, Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy,
 };
@@ -939,12 +939,35 @@ impl Command {
         })
     }
 
-    /// Mint an invite link for a node.
+    /// Mint an invite link for a node. `expires_at` is the link's deadline in
+    /// Unix milliseconds, or `undefined` for a link that never expires.
     #[wasm_bindgen(js_name = createInviteLink)]
-    pub fn create_invite_link(node: &NodeId, permission: Permission) -> Command {
+    pub fn create_invite_link(
+        node: &NodeId,
+        permission: Permission,
+        expires_at: Option<u64>,
+    ) -> Command {
         Self::wrap(facade::Command::CreateInviteLink {
             node: node.facade(),
             permission: permission.into(),
+            expires_at: expires_at.map(UnixMillis),
+        })
+    }
+
+    /// Revoke the invite link minted at a node (owner-only).
+    #[wasm_bindgen(js_name = revokeInviteLink)]
+    pub fn revoke_invite_link(node: &NodeId) -> Command {
+        Self::wrap(facade::Command::RevokeInviteLink {
+            node: node.facade(),
+        })
+    }
+
+    /// Drop the invite records at a node whose row the scope's own owner-signed
+    /// commitment no longer carries.
+    #[wasm_bindgen(js_name = pruneInviteLinks)]
+    pub fn prune_invite_links(node: &NodeId) -> Command {
+        Self::wrap(facade::Command::PruneInviteLinks {
+            node: node.facade(),
         })
     }
 

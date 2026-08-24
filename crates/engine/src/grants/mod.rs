@@ -39,13 +39,13 @@ pub use contact_store::{
 };
 pub use create::{
     CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
-    ParentScopePlan, create_read_grant,
+    ParentScopePlan, create_read_grant, mint_grantee_scope,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
-    EphemeralInvitee, InviteClaim, InviteError, InviteRevocation, LinkCapability, MintedInvite,
-    OwnerAuthority, RecordedInvite, convert_invite_claim, mint_invite_grant, post_invite_claim,
-    revoke_invite_link,
+    EphemeralInvitee, InviteClaim, InviteError, LinkCapability, MintedInvite, OwnerAuthority,
+    RecordedInvite, convert_invite_claim, link_binds_scope, locate_invite_link, mint_invite_grant,
+    post_invite_claim,
 };
 pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
 pub use invite_store::{

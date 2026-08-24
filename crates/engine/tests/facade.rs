@@ -93,6 +93,18 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
                 check: "rotate-target-is-not-a-scope-root",
             },
         ),
+        (
+            Command::RevokeInviteLink { node },
+            EngineError::UnsupportedTarget {
+                check: "revoke-link-target-is-not-a-scope-root",
+            },
+        ),
+        (
+            Command::PruneInviteLinks { node },
+            EngineError::UnsupportedTarget {
+                check: "prune-target-is-not-a-scope-root",
+            },
+        ),
     ]
 }
 
@@ -220,11 +232,32 @@ fn the_owner_action_arms_refuse_with_their_own_verdicts() {
     }
 }
 
-/// The invite mint is wired, so it refuses with its own verdict rather than
-/// falling through the catch-all — and it refuses a node that names no scope
-/// root before it reaches any key material.
+/// A link mints the invited folder's own scope, so the vault root — whose scope
+/// is the session's — is refused before any key material is reached.
 #[test]
-fn minting_an_invite_link_refuses_a_node_that_names_no_scope_root() {
+fn minting_an_invite_link_refuses_the_vault_root() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let root = block_on(engine.view()).expect("view").root();
+
+    assert_eq!(
+        block_on(engine.command(Command::CreateInviteLink {
+            node: root,
+            permission: Permission::Read,
+            expires_at: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "invite-target-is-the-vault-root"
+        }),
+    );
+}
+
+/// A write link would hand the bearer the write-scope seed the whole parent
+/// scope derives its names from, so it is refused ahead of every other check.
+#[test]
+fn minting_a_write_invite_link_is_refused() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
@@ -233,28 +266,29 @@ fn minting_an_invite_link_refuses_a_node_that_names_no_scope_root() {
     assert_eq!(
         block_on(engine.command(Command::CreateInviteLink {
             node: NodeId([1; 16]),
-            permission: Permission::Read,
+            permission: Permission::Write,
+            expires_at: None,
         })),
         Err(EngineError::UnsupportedTarget {
-            check: "invite-target-is-not-a-scope-root"
+            check: "write-links-need-a-write-scope-cut"
         }),
     );
 }
 
-/// The vault root passes the target check, so an offline engine stops at the
-/// scope material it has not resolved — availability, never the catch-all.
+/// A folder passes the target check, so an offline engine stops at the scope
+/// material it has not resolved — availability, never the catch-all.
 #[test]
-fn minting_an_invite_link_on_an_unresolved_vault_root_reports_availability() {
+fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
-    let root = block_on(engine.view()).expect("view").root();
 
     assert!(matches!(
         block_on(engine.command(Command::CreateInviteLink {
-            node: root,
+            node: NodeId([1; 16]),
             permission: Permission::Read,
+            expires_at: None,
         })),
         Err(EngineError::ContentUnavailable { .. }),
     ));
