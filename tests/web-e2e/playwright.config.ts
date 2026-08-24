@@ -1,10 +1,26 @@
-// The web e2e smoke slice (blueprint/testing.md "E2E"). Both projects run
-// against the production static build, served from a built directory — the
-// artifact that ships is the artifact tested. `e2e` drives the build carrying
-// the introspection hook; `release` drives the same build without the flag.
+// The web e2e suite (blueprint/testing.md "E2E"). Both projects run against the
+// production static build, served from a built directory — the artifact that
+// ships is the artifact tested. `e2e` drives the build carrying the
+// introspection hook; `release` drives the same build without the flag.
 //
-// `retries: 0` is policy, not tuning: a flaky test is a defect.
+// `E2E_SUITE` picks the slice: `smoke` (the default) is the PR gate's
+// bounded-minutes budget and drops every `@full`-tagged test; `full` is the main
+// gate and runs everything.
+//
+// `retries: 0` is policy in both slices, not tuning: a flaky test is a defect.
 import { defineConfig, devices } from '@playwright/test';
+
+const SUITES = ['smoke', 'full'] as const;
+type Suite = (typeof SUITES)[number];
+
+/** Reject an unrecognized value rather than silently running the smaller slice. */
+const suite: Suite = ((): Suite => {
+  const requested = process.env.E2E_SUITE ?? 'smoke';
+  if (!(SUITES as readonly string[]).includes(requested)) {
+    throw new Error(`E2E_SUITE must be one of ${SUITES.join(' | ')}; got "${requested}"`);
+  }
+  return requested as Suite;
+})();
 
 const E2E_PORT = 4173;
 const RELEASE_PORT = 4174;
@@ -33,6 +49,8 @@ export default defineConfig({
   // is shared to serialize around.
   fullyParallel: true,
   forbidOnly: isCi,
+  // The full slice is everything; the smoke slice drops what carries `@full`.
+  grepInvert: suite === 'smoke' ? /@full/ : undefined,
   retries: 0,
   timeout: 120_000,
   reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',

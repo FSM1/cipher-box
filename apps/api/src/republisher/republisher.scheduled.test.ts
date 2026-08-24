@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeClock, fakeConfig } from '../testing/fakes';
+import { minimalIpnsRecord } from '../testing/ipns-record';
 import { MinimalIpnsSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
 import { RepublisherAlerter } from './republisher.alerter';
@@ -20,18 +21,6 @@ import type { CacheUpsertResult } from './services/record-cache.service';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-
-function record(sequence: bigint): Buffer {
-  const bytes: number[] = [(5 << 3) | 0];
-  let v = sequence;
-  do {
-    let byte = Number(v & 0x7fn);
-    v >>= 7n;
-    if (v > 0n) byte |= 0x80;
-    bytes.push(byte);
-  } while (v > 0n);
-  return Buffer.from(bytes);
-}
 
 interface CacheRow {
   record: Buffer;
@@ -78,7 +67,7 @@ class HorizonTransport extends RecordTransport {
     super();
   }
   async resolve(_name: string): Promise<Buffer | null> {
-    return record(1n); // the record is EOL-stable; only re-PUT keeps it live
+    return minimalIpnsRecord(1n); // the record is EOL-stable; only re-PUT keeps it live
   }
   async republish(name: string, _record: Buffer): Promise<void> {
     if (!this.canRepublish(name)) throw new Error('re-PUT failed');
@@ -155,7 +144,7 @@ describe('republisher long-horizon liveness (compressed EOL)', () => {
     // the revival aid a key-holder uses to mint a fresh record.
     const survived = await cache.fetch('abandoned');
     expect(survived).not.toBeNull();
-    expect(Buffer.compare(survived!, record(1n))).toBe(0);
+    expect(Buffer.compare(survived!, minimalIpnsRecord(1n))).toBe(0);
     expect(compressedEolMs).toBeLessThan(horizonDays * DAY); // the horizon truly exceeds EOL
   });
 });

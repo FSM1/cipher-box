@@ -100,6 +100,15 @@ fastify.addContentTypeParser(
   async (_request: unknown, payload: Buffer) => payload
 );
 
+// Test control, not routing API: forget ONE name, so a suite can starve a single
+// name of records while the rest of the store keeps answering.
+fastify.post<{ Params: { name: string } }>('/forget/:name', async (request) => {
+  const { name } = request.params;
+  const forgotten = ipnsRecords.delete(name);
+  fastify.log.info({ name, forgotten }, 'Forgot IPNS record');
+  return { ok: true, forgotten };
+});
+
 // Reset endpoint for tests - clears all stored records
 fastify.post('/reset', async () => {
   const count = ipnsRecords.size;
@@ -120,6 +129,7 @@ const start = async () => {
     fastify.log.info('  GET  /health - Health check');
     fastify.log.info('  GET  /routing/v1/ipns/:name - Get IPNS record');
     fastify.log.info('  PUT  /routing/v1/ipns/:name - Store IPNS record');
+    fastify.log.info('  POST /forget/:name - Drop one record');
     fastify.log.info('  POST /reset - Clear all records');
   } catch (err) {
     fastify.log.error(err);

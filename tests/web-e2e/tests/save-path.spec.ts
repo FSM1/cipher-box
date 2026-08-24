@@ -3,6 +3,10 @@
  * a member downloads a file. The round trip in `write-path.spec.ts` saves too,
  * but only to claim the bytes survive; these cases pin the route they took, the
  * name they landed under, and the tab that answered for them.
+ *
+ * `@full`: the byte-survival claim is already in the smoke slice's round trip,
+ * and these cases pay for a multi-window transfer and a second tab — the depth
+ * the main gate buys, not the PR gate's minutes budget.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -21,7 +25,7 @@ const NAME = 'notes — édition 1.md';
  */
 const LONG = PAYLOAD.repeat(40_000);
 
-test('a saved file is its own bytes, not the app shell', async ({ page }) => {
+test('a saved file is its own bytes, not the app shell', { tag: '@full' }, async ({ page }) => {
   const { vault, files } = await coldStart(page);
 
   const bytes = new TextEncoder().encode(LONG);
@@ -41,24 +45,28 @@ test('a saved file is its own bytes, not the app shell', async ({ page }) => {
   await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
 });
 
-test('a save reaches the tab that minted it, whatever tab brokered last', async ({ page }) => {
-  const { vault, files } = await coldStart(page);
+test(
+  'a save reaches the tab that minted it, whatever tab brokered last',
+  { tag: '@full' },
+  async ({ page }) => {
+    const { vault, files } = await coldStart(page);
 
-  const bytes = new TextEncoder().encode(PAYLOAD);
-  await files.upload('shared.md', bytes);
-  await expect(files.row('shared.md')).toBeVisible();
-  await drained(files, vault);
+    const bytes = new TextEncoder().encode(PAYLOAD);
+    await files.upload('shared.md', bytes);
+    await expect(files.row('shared.md')).toBeVisible();
+    await drained(files, vault);
 
-  // A second tab brokers the newest port, and a save carries no client id, so
-  // the pipe borrows that tab's port — whose registry minted no ticket.
-  const second = await page.context().newPage();
-  await second.goto('/');
-  await second.waitForFunction(() => navigator.serviceWorker.controller !== null);
+    // A second tab brokers the newest port, and a save carries no client id, so
+    // the pipe borrows that tab's port — whose registry minted no ticket.
+    const second = await page.context().newPage();
+    await second.goto('/');
+    await second.waitForFunction(() => navigator.serviceWorker.controller !== null);
 
-  const download = await files.save('shared.md');
+    const download = await files.save('shared.md');
 
-  const saved = await download.path();
-  expect(new Uint8Array(await readFile(saved))).toEqual(bytes);
-  await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
-  await second.close();
-});
+    const saved = await download.path();
+    expect(new Uint8Array(await readFile(saved))).toEqual(bytes);
+    await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
+    await second.close();
+  }
+);
