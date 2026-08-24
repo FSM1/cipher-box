@@ -473,6 +473,13 @@ impl PreservedFields {
     pub(crate) fn insert(&mut self, key: String, value: Value) {
         self.0.insert(key, value);
     }
+
+    /// Drop the entries marked in `cut`, indexed as [`Self::entries`] yields
+    /// them. The set is the terminal owner of the clones it holds, so each
+    /// value that goes is wiped here rather than handed back.
+    pub(crate) fn cut_at(&mut self, cut: &[bool]) {
+        self.0.cut_at(cut);
+    }
 }
 
 impl FromIterator<(String, Value)> for PreservedFields {

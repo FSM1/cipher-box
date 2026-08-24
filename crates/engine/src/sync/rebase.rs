@@ -88,7 +88,9 @@ pub enum DropReason {
     MoveRaceLost,
 }
 
-/// Why an op terminally dead-lettered.
+/// Why an op terminally dead-lettered. Every reason but
+/// [`Self::ContentUnrecoverable`] keeps the op's staged content, which is what
+/// makes it a dead letter rather than a drop (CONTEXT.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterReason {
     /// The op's target/parent is absent from gate-passing state and cannot be
@@ -110,10 +112,14 @@ pub enum DeadLetterReason {
     /// The network refused the op's own bytes or its registration for a reason
     /// no retry changes — an over-cap payload, not a full account.
     PayloadRefused,
-    /// The op's drain attempt budget ran out. A budget spent before the record
-    /// PUT retires what the op uploaded; once a PUT is acked the publish may
-    /// have landed, so that half retires nothing.
+    /// The op's drain attempt budget ran out.
     AttemptsExhausted,
+    /// Every attempt authored a head over the block ceiling reads enforce, so
+    /// no retry and no rebase shrinks it — the node's own listing is larger than
+    /// one record can carry, and splitting it is the remedy. Distinct from
+    /// [`Self::AttemptsExhausted`] because a transport outage and a record that
+    /// will never fit call for different member actions.
+    HeadTooLarge,
     /// A concurrent publish gave the target a version this edit was not formed
     /// against. Publishing anyway would move the head off bytes this device
     /// never saw and no read path can reach again, so the edit refuses and

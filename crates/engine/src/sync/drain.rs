@@ -45,7 +45,7 @@ use crate::content::{
     read_block, validate_byo_config, version_cids,
 };
 use crate::entropy::{Entropy, fresh_nonce};
-use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
+use crate::facade::{BlockProgress, Event, NodeId, OpPhase, emit_trust_violation};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -70,7 +70,7 @@ use crate::seams::{
     SeamResult, SnapshotCache, StagingStore,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{Destinations, Placement, PlacementDecision};
+use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -227,28 +227,29 @@ enum Halt {
     Unclassified,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a retry re-signs at the same
-    /// sequence and a jammed name would otherwise retry forever.
+    /// sequence and a jammed name would otherwise retry forever. The PUT was
+    /// acked, so a record may be resolvable at the name and a spent budget
+    /// hands nothing back — cutting a name a live record carries would leave a
+    /// reference outliving its referent.
     Attempt,
     /// A refusal this pass cannot attribute, raised before the record it was
     /// authoring reached the transport: an upload, a registration, or a
-    /// produce-side trust refusal. Charged like [`Halt::Attempt`], but
-    /// exhausting the budget may retire what the op uploaded — the op's target
-    /// is still unreachable, so no record a parent links names it.
+    /// produce-side trust refusal. Charged like [`Halt::Attempt`], and a spent
+    /// budget hands back a create's own derived name — the op's target is still
+    /// unreachable, so no record a parent links names it.
     UploadAttempt,
     /// The authored head is over the block ceiling its own ingress enforces.
-    /// Charged like an attempt — no re-author shrinks it, since a fresh nonce
-    /// moves the sealed bytes and never their count — but exhausting the budget
-    /// **preserves** the staged version instead of releasing it: the version is
-    /// intact and openable, and only the record naming it was too large. What
-    /// it does owe back is a create's own derived name, since the record that
-    /// would have referenced it is the one that never published.
+    /// Charged like an attempt, since no re-author shrinks it — a fresh nonce
+    /// moves the sealed bytes and never their count — and hands back the same
+    /// unreferenced create name [`Halt::UploadAttempt`] does, under its own
+    /// dead-letter reason.
     HeadOversized,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
-    /// The member's own provider settings were refused before any request was
-    /// built. Not a failure of the op — it holds the head and its staging
-    /// reservation until those settings change ([`SettingsHold`]).
-    HeldBySettings(ProviderError),
+    /// The member's own settings were refused before any request was built.
+    /// Not a failure of the op — it holds the head and its staging reservation
+    /// until those settings change ([`SettingsHold`]).
+    HeldBySettings(SettingsRefusal),
     /// Over the account quota. Not a failure of the op — it holds the head and
     /// its staging reservation until a quota probe reports room.
     Blocked {
@@ -358,22 +359,20 @@ pub struct BlockedOp {
     pub needed_bytes: u64,
 }
 
-/// The queue head is held over rather than failed: [`validate_byo_config`]
-/// refused the member's own provider settings before any request was built, so
-/// every retry reaches the same verdict and charging one would spend the
-/// version's budget and then release its staged blocks. It keeps its place and
-/// its staging reservation until the settings name a placement that clears the
-/// refusal.
+/// The queue head is held over rather than failed: the member's own settings
+/// were refused before any request was built, so every retry reaches the same
+/// verdict and charging one would spend the version's budget and then release
+/// its staged blocks. It keeps its place and its staging reservation until the
+/// settings name a placement that clears the refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SettingsHold {
     /// The held op.
     pub op_id: OpId,
     /// The node the op targets, so a host can point at it.
     pub node: NodeId,
-    /// Which rule refused the config. Render it through
-    /// [`ProviderError::check`], which names the rule and never the endpoint or
-    /// the bearer the settings carry.
-    pub refusal: ProviderError,
+    /// Which rule refused. Render it through [`SettingsRefusal::check`], which
+    /// names the rule and never the endpoint or the bearer the settings carry.
+    pub refusal: SettingsRefusal,
 }
 
 /// The owner-scope material one drain pass publishes under. Every field is
@@ -741,31 +740,24 @@ where
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
-                let reason = DeadLetterReason::AttemptsExhausted;
-                match halt {
-                    Halt::UploadAttempt => {
-                        self.dead_letter(scope, op_id, op, reason, report).await;
-                    }
-                    // On the terms `Halt::HeadOversized` carries: the version
-                    // stays staged and openable, and only the name no published
-                    // record reached goes back.
-                    Halt::HeadOversized => {
-                        if self.retire_unreferenced_name(scope, op).await.is_ok()
-                            && self.preserve_dead_letter(op_id).await.is_ok()
-                            && self.dequeue_op(op_id).await.is_ok()
-                        {
-                            report.dead_letters.push((op_id, op.target, reason));
-                        }
-                    }
-                    // An acked PUT may be resolvable at the name, so nothing is
-                    // retired: unpinning content a live record still names is
-                    // loss, where leaving the rows charged is only a leak.
-                    _ => {
-                        if self.dequeue_op(op_id).await.is_ok() {
-                            self.release_staged_blocks(op).await;
-                            report.dead_letters.push((op_id, op.target, reason));
-                        }
-                    }
+                // A spent budget is still a dead letter, so it keeps the
+                // version and hands back at most the name no published record
+                // ever reached ([`Halt`]).
+                let (reason, owes_its_name) = match halt {
+                    Halt::Attempt => (DeadLetterReason::AttemptsExhausted, false),
+                    Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
+                    _ => (DeadLetterReason::AttemptsExhausted, true),
+                };
+                let handed_back = if owes_its_name {
+                    self.retire_unreferenced_name(scope, op).await
+                } else {
+                    Ok(())
+                };
+                if handed_back.is_ok()
+                    && self.preserve_dead_letter(op_id).await.is_ok()
+                    && self.dequeue_op(op_id).await.is_ok()
+                {
+                    report.dead_letters.push((op_id, op.target, reason));
                 }
             }
             // A conditional-edit loser keeps its staged version and retires
@@ -847,7 +839,7 @@ where
             return true;
         };
         if still_queued(queued, hold.op_id)
-            && placement_refusal(self.placement) == Some(hold.refusal)
+            && settings_refusal(self.placement) == Some(hold.refusal)
         {
             return false;
         }
@@ -2011,6 +2003,35 @@ where
         Ok(uploaded)
     }
 
+    /// Classify an authoring refusal, naming a trust refusal on the event
+    /// stream first. The produce side mirrors the gate's own verdicts on the
+    /// bytes it is about to sign, so a refusal here is reported the way an
+    /// arriving record's rejection is ([`emit_trust_violation`]).
+    fn report_author_refusal(&self, name: &IpnsName, error: AuthorError) -> Halt {
+        if error.is_trust_refusal() {
+            emit_trust_violation(self.events, name.as_str(), &error);
+        }
+        classify_author(error)
+    }
+
+    /// Name a carried set this authoring had to cut. The cut only fires where
+    /// the record resolved at this name already ran to the block ceiling, so
+    /// what it reports is that someone's bytes at that name are costing this
+    /// node its forward-compatible fields.
+    fn report_carried_cut(&self, name: &IpnsName, cut: &[String]) {
+        if cut.is_empty() {
+            return;
+        }
+        emit_trust_violation(
+            self.events,
+            name.as_str(),
+            format_args!(
+                "carried fields dropped to fit the block ceiling: {}",
+                cut.join(", ")
+            ),
+        );
+    }
+
     /// Tell the member their mirror is short of this version — after the record
     /// published, because [`OpPhase::ExternalPinFailed`] promises the content is
     /// retrievable, which is only true once the record naming it is live.
@@ -2028,10 +2049,16 @@ where
         applied: &AppliedOp,
         staged: &StagedContent,
     ) -> Result<UploadedVersion, Halt> {
-        // Resolved before any byte moves: a session that cannot authenticate the
-        // member's placement choice holds its content ops rather than picking a
-        // destination for them.
-        let placement = self.placement.as_ref().map_err(|_| Halt::UploadAttempt)?;
+        // Resolved before any byte moves: a session with no authenticated
+        // destination publishes no version. What the refusal costs is
+        // [`PlacementRefusal::holds`]'s to say — an outage this pass could not
+        // resolve is retried uncharged rather than spending a budget that ends
+        // by releasing the version's staged blocks.
+        let placement = self.placement.as_ref().map_err(|refusal| {
+            refusal
+                .holds()
+                .map_or(Halt::Unclassified, Halt::HeldBySettings)
+        })?;
         // What the mark may claim, narrowed as the mirror misses blocks the mark
         // covers ([`Destinations::mirror_missed`]).
         let mut reached = placement.destinations();
@@ -2404,7 +2431,8 @@ where
         } else {
             author_child_envelope(authoring)
         }
-        .map_err(|error| PublishHalt::before_the_put(classify_author(error)))?;
+        .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
+        self.report_carried_cut(name, &head.cut);
 
         let record_bytes = self
             .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
@@ -3040,24 +3068,30 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 /// A policy verdict is neither: it is deterministic, so it holds the op rather
 /// than charging it ([`SettingsHold`]).
 fn classify_placement(error: ProviderError) -> Halt {
+    if error.is_deterministic() {
+        return Halt::HeldBySettings(SettingsRefusal::Byo(error));
+    }
     match error {
         ProviderError::Unreachable => Halt::Unclassified,
-        ProviderError::InvalidEndpoint
-        | ProviderError::InsecureTransport
-        | ProviderError::BlockedAddress
-        | ProviderError::InvalidCredential => Halt::HeldBySettings(error),
         _ => Halt::UploadAttempt,
     }
 }
 
-/// The verdict this session's placement reaches on the member's own config
-/// before any request is built, which is what a [`Halt::HeldBySettings`] hold
-/// waits on changing. Only the external-only leg can hold an op on it: a dual
-/// write's mirror is best-effort and never fails the op.
-fn placement_refusal(placement: &PlacementDecision) -> Option<ProviderError> {
+/// The verdict this session's settings reach before any request is built,
+/// which is what a [`Halt::HeldBySettings`] hold waits on changing. Two
+/// sources, one axis: a placement that decided but names a config
+/// [`validate_byo_config`] refuses, and one that could not decide at all.
+///
+/// Only the external-only leg can hold an op on its config: a dual write's
+/// mirror is best-effort and never fails the op.
+fn settings_refusal(placement: &PlacementDecision) -> Option<SettingsRefusal> {
     match placement {
-        Ok(Placement::External(config)) => validate_byo_config(config).err(),
-        _ => None,
+        Ok(Placement::External(config)) => validate_byo_config(config)
+            .err()
+            .filter(ProviderError::is_deterministic)
+            .map(SettingsRefusal::Byo),
+        Ok(_) => None,
+        Err(refusal) => refusal.holds(),
     }
 }
 
@@ -3076,8 +3110,6 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         // A cancel reports `UploadCancelled` from the facade that ordered it.
         Halt::Blocked { .. } | Halt::HeldBySettings(_) | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
-        // Both charge the attempt budget; which one it is decides only what
-        // exhausting that budget retires, not what the host is told.
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
@@ -3144,6 +3176,7 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{DefaultsReason, PlacementRefusal};
 
     fn attempts(pairs: &[(u64, u32)]) -> Attempts {
         let mut attempts = Attempts::default();
@@ -3342,21 +3375,25 @@ mod tests {
         ] {
             assert_eq!(
                 classify_placement(settings),
-                Halt::HeldBySettings(settings),
+                Halt::HeldBySettings(SettingsRefusal::Byo(settings)),
                 "{}",
                 settings.check(),
             );
         }
     }
 
-    /// The hold's exit is the config, not a timer: it stands exactly while the
-    /// placement this session runs under still reaches the same verdict.
+    /// The hold's exit is the settings, not a timer: it stands exactly while
+    /// the placement this session runs under still reaches the same verdict.
     #[test]
     fn a_settings_hold_lets_go_only_once_the_placement_stops_refusing() {
         let refused = byo("file:///etc/passwd");
         assert_eq!(
-            placement_refusal(&Ok(Placement::External(refused.clone()))),
-            Some(ProviderError::InvalidEndpoint),
+            settings_refusal(&Ok(Placement::External(refused.clone()))),
+            Some(SettingsRefusal::Byo(ProviderError::InvalidEndpoint)),
+        );
+        assert_eq!(
+            settings_refusal(&Err(PlacementRefusal::NoProvider)),
+            Some(SettingsRefusal::Placement(PlacementRefusal::NoProvider)),
         );
         for admitted in [
             Ok(Placement::External(byo("https://node.example"))),
@@ -3364,9 +3401,12 @@ mod tests {
             // A dual write's mirror is best-effort, so no verdict on it holds
             // the op that the hosted leg is already carrying.
             Ok(Placement::Dual(refused)),
-            Err(crate::settings::PlacementRefusal::NoProvider),
+            // A degraded load repairs itself, so no member action is its exit.
+            Err(PlacementRefusal::SettingsUnavailable(
+                DefaultsReason::Suppressed,
+            )),
         ] {
-            assert_eq!(placement_refusal(&admitted), None);
+            assert_eq!(settings_refusal(&admitted), None);
         }
     }
 

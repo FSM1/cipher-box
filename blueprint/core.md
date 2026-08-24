@@ -129,6 +129,23 @@ node UUID.
   ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
   A node's own body still
   moves names untouched, since `ipnsName` is not in the AAD (FSM1/cipher-box-next#39 D7).
+- **Carried unknown fields** (FSM1/cipher-box-next#27 D10): a rewrite preserves every top-level
+  and `epochTag` field it does not type, byte-stable, so an old client never
+  strips a newer one's. The set comes off a resolved record and so runs to the
+  same 2 MiB block ceiling every read enforces — which makes it
+  attacker-influenced, since anyone who can publish at a name could otherwise
+  push every later re-author of that node past the ceiling and stop the owner's
+  own publishes there, the revoking rotation included. So the produce side
+  **truncates, never refuses**: an encode over the ceiling cuts carried fields
+  until the block fits, and refuses only what the typed fields alone overflow.
+  `grantSection` and `writeSealed` are never cut — losing either publishes a
+  record the reader rejects outright, which is the refusal the cut exists to
+  avoid. Cuts run largest first, so the fewest fields go and one pass relieves
+  the pressure; that bounds the _count_, not the bytes, and a party padding a
+  record below the size of an honest field can aim the first cut at it. What
+  keeps that from mattering is that no cuttable field carries a trust decision —
+  a field that starts to must say so on the wire, not rely on every already
+  shipped reader knowing its name. A cut is reported, never silent.
 - **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the

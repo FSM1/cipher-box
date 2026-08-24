@@ -265,6 +265,58 @@ pub enum PlacementRefusal {
     NoExternalIngress(ByoKind),
 }
 
+impl PlacementRefusal {
+    /// The stable check name a host branches on. Never carries the endpoint or
+    /// the credential the settings hold.
+    pub fn check(&self) -> &'static str {
+        match self {
+            Self::SettingsUnavailable(_) => "settings-unavailable",
+            Self::NoProvider => "byo-provider-missing",
+            Self::NoExternalIngress(_) => "byo-no-external-ingress",
+        }
+    }
+
+    /// The hold this refusal takes, if a member action is its exit at all.
+    /// Editing the settings clears a deterministic refusal, where a degraded
+    /// load repairs itself on a later tick and no edit reaches it — so the
+    /// second holds nothing, and the queue head keeps retrying instead.
+    ///
+    /// The one place the split is decided, so a hold cannot be taken on terms
+    /// its release check does not recognise.
+    pub fn holds(self) -> Option<SettingsRefusal> {
+        match self {
+            Self::NoProvider | Self::NoExternalIngress(_) => Some(SettingsRefusal::Placement(self)),
+            Self::SettingsUnavailable(_) => None,
+        }
+    }
+}
+
+/// What a settings-refused hold is waiting on the member to change: their BYO
+/// provider config, or the placement their settings name. Both are reached
+/// before any request is built and both repeat verbatim until the settings
+/// themselves change, which is what makes one hold rather than an attempt.
+/// Built through [`PlacementRefusal::holds`] and
+/// [`ProviderError::is_deterministic`], never by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsRefusal {
+    /// [`validate_byo_config`](crate::content::validate_byo_config) refused the
+    /// member's own provider config.
+    Byo(ProviderError),
+    /// The settings name a mode no byte destination follows from.
+    Placement(PlacementRefusal),
+}
+
+impl SettingsRefusal {
+    /// The stable check name of the rule that refused. Never the endpoint or
+    /// the bearer the settings carry.
+    pub fn check(&self) -> &'static str {
+        match self {
+            Self::Byo(error) => error.check(),
+            Self::Placement(refusal) => refusal.check(),
+        }
+    }
+}
+
 /// Where a session's placement decision came from. An assumed default
 /// authorises the session's own writes but must never latch account-scoped
 /// state: a device that authenticated no settings record would otherwise
@@ -1003,6 +1055,8 @@ fn kind_str(kind: ByoKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::content::{GatewayConfig, SessionBearer};
     use crate::testkit::{FakeWorld, SeededEntropy, block_on};
@@ -1230,6 +1284,60 @@ mod tests {
                 PlacementRefusal::SettingsUnavailable(reason),
                 "{reason:?} must not widen placement"
             );
+        }
+    }
+
+    /// The two axes a hold reads off a refusal: the name a host branches on,
+    /// and whether a member action is its exit at all.
+    #[test]
+    fn only_a_settings_fixable_refusal_takes_a_hold() {
+        let mut names = BTreeSet::new();
+        for refusal in [
+            PlacementRefusal::NoProvider,
+            PlacementRefusal::NoExternalIngress(ByoKind::Pinata),
+        ] {
+            assert_eq!(
+                refusal.holds(),
+                Some(SettingsRefusal::Placement(refusal)),
+                "{}",
+                refusal.check(),
+            );
+            assert!(names.insert(refusal.check()), "{}", refusal.check());
+            assert_eq!(SettingsRefusal::Placement(refusal).check(), refusal.check());
+        }
+        // A degraded load repairs itself on a later tick, so no settings edit
+        // is its exit and holding on it would park the queue head for good.
+        let degraded = PlacementRefusal::SettingsUnavailable(DefaultsReason::TimedOut);
+        assert_eq!(degraded.holds(), None);
+        assert!(names.insert(degraded.check()));
+
+        assert_eq!(
+            SettingsRefusal::Byo(ProviderError::InsecureTransport).check(),
+            ProviderError::InsecureTransport.check(),
+            "a widened hold reason renames neither half"
+        );
+    }
+
+    /// The BYO half of the same axis, so the two agree on which verdicts a
+    /// retry can move.
+    #[test]
+    fn only_a_policy_verdict_on_the_config_is_deterministic() {
+        for policy in [
+            ProviderError::InvalidEndpoint,
+            ProviderError::InsecureTransport,
+            ProviderError::BlockedAddress,
+            ProviderError::InvalidCredential,
+        ] {
+            assert!(policy.is_deterministic(), "{}", policy.check());
+        }
+        for answered in [
+            ProviderError::Unreachable,
+            ProviderError::NoVerdict,
+            ProviderError::Rejected { status: 500 },
+            ProviderError::MalformedBlockAddress,
+            ProviderError::AddressMismatch,
+        ] {
+            assert!(!answered.is_deterministic(), "{}", answered.check());
         }
     }
 
