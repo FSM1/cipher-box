@@ -1770,11 +1770,11 @@ mod tests {
 
     #[test]
     fn a_wave_whose_retire_refused_on_a_floor_rise_converges_on_the_next_run() {
-        // #1306's trace: the wave republishes the subtree and flips the pointer,
-        // a concurrent read rotation raises the read-epoch floor, and the retire
-        // refuses fail-closed. The next run must pick the wave up through the
-        // MOVED root — the pre-wave root lingers below the raised floor, so
-        // enumerating it re-derives the same refused evidence for ever.
+        // The wave republishes the subtree and flips the pointer, a concurrent read
+        // rotation raises the read-epoch floor, and the retire refuses fail-closed.
+        // The next run must pick the wave up through the MOVED root — the pre-wave
+        // root lingers below the raised floor, so enumerating it re-derives the
+        // same refused evidence for ever.
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let state = WaveState::default();
