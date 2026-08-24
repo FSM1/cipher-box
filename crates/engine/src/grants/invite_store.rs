@@ -17,8 +17,11 @@
 //! `ephemeralIdentityPk` and the tag binds only the **encryption** half, so a
 //! party who could author a record would pair a real link's `ephemeralEncPk`
 //! with an identity key it holds and drive the owner into minting a genuine
-//! grant at that link's committed permission. The recorded deadline is the
-//! authority for expiry on the same rule.
+//! grant at that link's committed permission. The same authorship cuts the other
+//! way now that a revoke names its link here: a record pairing an ordinary
+//! grantee's `encPk` with that grantee's committed tag re-derives under the
+//! owner's own half, so it would drive the owner into cutting a grant it never
+//! revoked. The recorded deadline is the authority for expiry on the same rule.
 //!
 //! What the seal does *not* buy, because the structure carries no monotone
 //! generation: a host replaying an earlier sealed set restores a deadline the
