@@ -95,14 +95,8 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
         ),
         (
             Command::RevokeInviteLink { node },
-            EngineError::UnsupportedTarget {
-                check: "revoke-link-target-is-not-a-scope-root",
-            },
-        ),
-        (
-            Command::PruneInviteLinks { node },
-            EngineError::UnsupportedTarget {
-                check: "prune-target-is-not-a-scope-root",
+            EngineError::MalformedInput {
+                check: "link-not-committed",
             },
         ),
     ]
@@ -251,6 +245,24 @@ fn minting_an_invite_link_refuses_the_vault_root() {
         Err(EngineError::UnsupportedTarget {
             check: "invite-target-is-the-vault-root"
         }),
+    );
+}
+
+/// The records decide the whole of a prune, so an owner holding none is a no-op
+/// rather than a refusal — and answers without resolving anything, which an
+/// engine with no scope material could not do at all.
+#[test]
+fn pruning_invite_links_an_owner_never_minted_is_a_no_op() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::PruneInviteLinks {
+            node: NodeId([1; 16])
+        })),
+        Ok(CommandOutcome::Done),
     );
 }
 

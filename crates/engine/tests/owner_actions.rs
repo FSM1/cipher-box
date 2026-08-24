@@ -398,7 +398,7 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
 
 /// An invite link over the vault root's scope: the row the owner commits, and
 /// the record that is the owner's only authority for calling that row a link.
-fn invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>) -> MintedInvite {
+fn invite_link_at_root(secret_byte: u8) -> MintedInvite {
     let invitee = EphemeralInvitee::from_secret(&[secret_byte; 32]).expect("a valid scalar");
     mint_invite_grant(
         &owner_identity(),
@@ -407,7 +407,7 @@ fn invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>) -> Minte
         &SCOPE,
         &WRITE_SCOPE_SEED,
         CorePermission::Read,
-        expires_at,
+        None,
     )
     .expect("a contributory invitee key")
 }
@@ -888,7 +888,7 @@ fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() 
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let bystander = recipient_row_at_root();
-    let link = invite_link_at_root(0x4e, None);
+    let link = invite_link_at_root(0x4e);
     seed_vault(&world, &blocks, vec![link.row.clone(), bystander.clone()]);
     let alice = world.device(b"alice");
     record_links(&alice, &[link.link]);
@@ -982,8 +982,8 @@ fn revoking_a_link_the_owner_never_recorded_publishes_nothing() {
 fn pruning_drops_the_records_the_commitment_does_not_carry_and_keeps_the_rest() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let live = invite_link_at_root(0x4e, None);
-    let never_published = invite_link_at_root(0x5f, None);
+    let live = invite_link_at_root(0x4e);
+    let never_published = invite_link_at_root(0x5f);
     seed_vault(&world, &blocks, vec![live.row.clone()]);
     let alice = world.device(b"alice");
     record_links(&alice, &[live.link, never_published.link]);

@@ -39,7 +39,7 @@ pub use contact_store::{
 };
 pub use create::{
     CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
-    ParentScopePlan, create_read_grant, mint_grantee_scope,
+    ParentScopePlan, converge_grant_subtree, create_read_grant, mint_grantee_scope,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,

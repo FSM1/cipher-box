@@ -735,9 +735,11 @@ pub fn locate_invite_link<'a>(
 ) -> Result<&'a RecordedInvite, InviteError> {
     owner.authorise(scope)?;
     let name = scope.commitment.ipns_name.as_slice();
+    // Membership first: it costs a lookup, where binding the record to this
+    // scope costs an ECDH.
     let mut live = links.iter().filter(|link| {
-        link_binds_scope(owner.enc_secret, link, name)
-            && scope.commitment.entries.iter().any(|e| e.tag == link.tag)
+        scope.commitment.entries.iter().any(|e| e.tag == link.tag)
+            && link_binds_scope(owner.enc_secret, link, name)
     });
     let link = live.next().ok_or(InviteError::LinkNotCommitted)?;
     if live.next().is_some() {

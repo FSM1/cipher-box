@@ -25,9 +25,10 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, mint_grantee_scope,
+    CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, converge_grant_subtree,
+    mint_grantee_scope,
 };
-use super::invite::{EphemeralInvitee, InviteError, LinkCapability, mint_invite_grant};
+use super::invite::{EphemeralInvitee, InviteError, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
 
 /// What one mint needs beyond the owner's own key material: the scope the link
@@ -39,9 +40,6 @@ pub struct InviteMintPlan<'a> {
     /// The scope root the invited folder currently lives in, which gains the
     /// new scope in its direct-child-scope index.
     pub parent: &'a ParentScopePlan<'a>,
-    /// Read or write. Only [`Permission::Read`] is mintable here
-    /// ([`InviteMintError::WriteNeedsAScopeCut`]).
-    pub permission: Permission,
     /// The link's deadline, or `None` for a link that never expires. The
     /// recorded copy is the authority for it
     /// ([`RecordedInvite::expires_at`](super::RecordedInvite::expires_at)).
@@ -62,8 +60,6 @@ pub struct MintedInviteLink {
     pub owner_contact_code: Vec<u8>,
     /// The scope root's opaque `ipnsName`, which a claim names.
     pub scope_root_name: Vec<u8>,
-    /// What the link hands out.
-    pub capability: LinkCapability,
 }
 
 impl fmt::Debug for MintedInviteLink {
@@ -78,11 +74,6 @@ impl fmt::Debug for MintedInviteLink {
 /// capability.
 #[derive(Debug)]
 pub enum InviteMintError {
-    /// A write link over a scope that inherits its parent's write plane would
-    /// hand the bearer the seed every name in that parent derives from. A write
-    /// link is mintable only once a write-scope cut gives the invited folder a
-    /// write plane of its own.
-    WriteNeedsAScopeCut,
     /// Minting the link's row failed.
     Mint(InviteError),
     /// The link could not be recorded durably. The row is unpublished, so the
@@ -97,9 +88,6 @@ pub enum InviteMintError {
 impl fmt::Display for InviteMintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            InviteMintError::WriteNeedsAScopeCut => {
-                f.write_str("a write link needs a write-scope cut")
-            }
             InviteMintError::Mint(e) => write!(f, "{e}"),
             InviteMintError::Store(e) => write!(f, "{e}"),
             InviteMintError::Create(e) => write!(f, "{e}"),
@@ -109,9 +97,13 @@ impl fmt::Display for InviteMintError {
 
 impl std::error::Error for InviteMintError {}
 
-/// Mint one invite link over the invited folder: record it, mint and publish
-/// the fresh scope its row is the whole committed set of, and hand back the
-/// bearer capability.
+/// Mint one invite link over the invited folder: converge the subtree, record
+/// the link, mint and publish the fresh scope its row is the whole committed set
+/// of, and hand back the bearer capability.
+///
+/// Read-only, exactly as [`create_read_grant`](super::create_read_grant) is: the
+/// minted scope inherits the parent's write plane, so a write row's blob would
+/// hand the bearer the seed every name in that scope derives from.
 ///
 /// Owner-only by construction, exactly as
 /// [`create_read_grant`](super::create_read_grant) is: the scope this publishes
@@ -131,9 +123,6 @@ where
     P: ScopeRootPublisher + SweepPublisher,
     S: InviteStore,
 {
-    if plan.permission == Permission::Write {
-        return Err(InviteMintError::WriteNeedsAScopeCut);
-    }
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
     let minted = mint_invite_grant(
         owner.identity_signer,
@@ -141,10 +130,16 @@ where
         &invitee,
         &plan.grantee.scope_id,
         plan.grantee.write_scope_seed,
-        plan.permission,
+        Permission::Read,
         plan.expires_at,
     )
     .map_err(InviteMintError::Mint)?;
+
+    // Ahead of the record, so a subtree the gate cannot prove converged costs no
+    // durable slot.
+    converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
+        .await
+        .map_err(InviteMintError::Create)?;
 
     // Whole-set replacement, so the load is what keeps the links already
     // recorded.
@@ -172,7 +167,6 @@ where
         owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
             .encode(),
         scope_root_name: plan.grantee.ipns_name().as_str().as_bytes().to_vec(),
-        capability: minted.capability,
     })
 }
 
@@ -327,8 +321,6 @@ mod tests {
 
     impl CascadeResealResolver for FakeNet {
         async fn resolve(&self, _scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
-            // The invited folder carries no descendant scope roots, so step 5b
-            // reaches nothing.
             Err(ResolveFailure::Rejected)
         }
     }
@@ -398,7 +390,6 @@ mod tests {
 
         fn mint(
             &self,
-            permission: Permission,
             expires_at: Option<UnixMillis>,
         ) -> Result<MintedInviteLink, InviteMintError> {
             let owner_enc_pub = self.enc.public();
@@ -451,7 +442,6 @@ mod tests {
                 &InviteMintPlan {
                     grantee: &grantee,
                     parent: &parent,
-                    permission,
                     expires_at,
                 },
             ))
@@ -473,7 +463,7 @@ mod tests {
     fn a_minted_link_is_recorded_and_its_scope_published() {
         let f = Fixture::new();
 
-        let link = f.mint(Permission::Read, None).expect("the mint lands");
+        let link = f.mint(None).expect("the mint lands");
 
         let [record] = f.recovered()[..] else {
             panic!("one link was minted");
@@ -486,7 +476,6 @@ mod tests {
             "the recovered record answers to the fragment holder's identity",
         );
         assert_eq!(record.expires_at, None);
-        assert_eq!(link.capability, LinkCapability::Read);
         assert_eq!(link.scope_root_name, folder_name());
 
         let published = f.net.published.borrow();
@@ -518,7 +507,7 @@ mod tests {
     fn a_minted_links_scope_starts_at_epoch_one_with_no_history() {
         let f = Fixture::new();
 
-        f.mint(Permission::Read, None).expect("the mint lands");
+        f.mint(None).expect("the mint lands");
 
         let published = f.net.published.borrow();
         let scope_root = published
@@ -538,29 +527,12 @@ mod tests {
     fn a_links_deadline_is_recorded_as_minted() {
         let f = Fixture::new();
 
-        f.mint(Permission::Read, Some(DEADLINE))
-            .expect("the mint lands");
+        f.mint(Some(DEADLINE)).expect("the mint lands");
 
         let [record] = f.recovered()[..] else {
             panic!("one link was minted");
         };
         assert_eq!(record.expires_at, Some(DEADLINE));
-    }
-
-    /// A write link over an inherited write plane would hand out the seed every
-    /// name in the parent scope derives from, so it is refused before anything
-    /// is recorded or published.
-    #[test]
-    fn a_write_link_is_refused_until_a_write_scope_cut_exists() {
-        let f = Fixture::new();
-
-        let refused = f
-            .mint(Permission::Write, None)
-            .expect_err("a write link is refused");
-
-        assert!(matches!(refused, InviteMintError::WriteNeedsAScopeCut));
-        assert!(f.net.published.borrow().is_empty());
-        assert!(f.recovered().is_empty(), "a refused mint records nothing");
     }
 
     /// An unclaimable link is worse than a refused mint: a record that did not
@@ -571,9 +543,7 @@ mod tests {
         f.staging
             .interrupt_staged_write_after(f.store().staging_key(), 0);
 
-        let refused = f
-            .mint(Permission::Read, None)
-            .expect_err("an unrecorded link is refused");
+        let refused = f.mint(None).expect_err("an unrecorded link is refused");
 
         assert!(matches!(
             refused,
@@ -592,9 +562,7 @@ mod tests {
         let mut f = Fixture::new();
         f.net.refuse_publish = true;
 
-        let refused = f
-            .mint(Permission::Read, None)
-            .expect_err("an unpublished link is refused");
+        let refused = f.mint(None).expect_err("an unpublished link is refused");
 
         assert!(matches!(refused, InviteMintError::Create(_)));
         assert_eq!(

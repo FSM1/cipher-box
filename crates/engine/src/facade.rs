@@ -67,10 +67,10 @@ use crate::net::{
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds,
-    ResolveFailure, Retryable, RevokeError, RotateError, RotateScopePlan, ScopeRootIdentity,
-    WriteHistory, WriteRevokeKind, bounded, derive_write_name, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+    AscentAuthority, CascadeTarget, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError,
+    ResealSeeds, ResolveFailure, Retryable, RevokeError, RotateError, RotateScopePlan,
+    ScopeRootIdentity, WriteHistory, WriteRevokeKind, bounded, derive_write_name,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet,
@@ -1054,16 +1054,7 @@ impl EngineError {
     /// refusal it must never retry (rule 6).
     fn from_invite_mint(err: InviteMintError) -> Self {
         match err {
-            InviteMintError::WriteNeedsAScopeCut => EngineError::UnsupportedTarget {
-                check: "write-links-need-a-write-scope-cut",
-            },
-            InviteMintError::Mint(InviteError::Entropy(e)) => EngineError::from_entropy(e),
-            e @ InviteMintError::Mint(InviteError::NotOwner | InviteError::Authority(_)) => {
-                EngineError::TrustViolation {
-                    message: e.to_string(),
-                }
-            }
-            InviteMintError::Mint(e) => EngineError::MalformedInput { check: e.check() },
+            InviteMintError::Mint(e) => EngineError::from_invite(e),
             InviteMintError::Store(e) => EngineError::from_invite_store(e),
             InviteMintError::Create(e) => EngineError::from_create_grant(e),
         }
@@ -1574,6 +1565,19 @@ struct OwnerScope {
     parent_node_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
+/// What an action does when the parent's owner-signed index does not vouch for
+/// the node's scope root.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnindexedScope {
+    /// Refuse: the node names no scope root this action can reach.
+    Refuse,
+    /// Read it at the name its write material derives. A mint publishes the
+    /// scope root before it updates the parent's index, so a link committed by a
+    /// mint that stopped in between is live at that name and reachable nowhere
+    /// else — and an owner that cannot reach it cannot revoke it.
+    Derive,
+}
+
 impl OwnerScope {
     /// The ancestry a gated read of this scope root runs under: seeded with its
     /// own ancestor seed when it is anchored below the vault root, which is also
@@ -1608,6 +1612,23 @@ struct ShareChecks {
     /// The parent scope root's envelope version is not the one this build
     /// authors.
     envelope_version: &'static str,
+}
+
+impl ScopeShare<'_> {
+    fn checks(&self) -> ShareChecks {
+        match self {
+            ScopeShare::Contact(_) => ShareChecks {
+                vault_root: "grant-target-is-the-vault-root",
+                already_a_scope: "grant-target-already-names-a-scope",
+                envelope_version: "grant-parent-envelope-version-unsupported",
+            },
+            ScopeShare::InviteLink { .. } => ShareChecks {
+                vault_root: "invite-target-is-the-vault-root",
+                already_a_scope: "invite-target-already-names-a-scope",
+                envelope_version: "invite-parent-envelope-version-unsupported",
+            },
+        }
+    }
 }
 
 /// The entries of `index` whose scope roots sit inside `node`'s subtree — the
@@ -3436,12 +3457,17 @@ where {
     /// that index rather than re-derived: a scope a write rotation has moved is
     /// then read at the name its parent vouches for. A node the base snapshot
     /// does not hold is refused before any resolve.
+    ///
+    /// `unindexed` decides what an index miss means — see [`UnindexedScope`].
+    /// Either way the read is gated and its ascent link is proved under the
+    /// parent node seed, so a record planted at a derived name is refused.
     async fn owner_scope(
         &self,
         node: NodeId,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'_>,
         check: &'static str,
+        unindexed: UnindexedScope,
     ) -> Result<OwnerScope, EngineError> {
         let root = self.snapshot.borrow().root;
         if node == root {
@@ -3459,12 +3485,24 @@ where {
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
-        let scope = current
+        let indexed = current
             .direct_child_scope_index
             .iter()
             .find(|child| child.scope_id == node.0)
-            .cloned()
-            .ok_or(EngineError::UnsupportedTarget { check })?;
+            .cloned();
+        let scope = match (indexed, unindexed) {
+            (Some(child), _) => child,
+            (None, UnindexedScope::Refuse) => {
+                return Err(EngineError::UnsupportedTarget { check });
+            }
+            (None, UnindexedScope::Derive) => ChildScopeRef::new(
+                node.0,
+                derive_write_name(&current.write_scope_seed, &node.0)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+            ),
+        };
         Ok(OwnerScope {
             parent_node_seed: Some(Zeroizing::new(
                 *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
@@ -3569,7 +3607,13 @@ where {
             scope_keys: &scope_keys,
         };
         let target = self
-            .owner_scope(node, api, owner_keys(), "rotate-target-is-not-a-scope-root")
+            .owner_scope(
+                node,
+                api,
+                owner_keys(),
+                "rotate-target-is-not-a-scope-root",
+                UnindexedScope::Refuse,
+            )
             .await?;
 
         self.bounded_rotation(async || {
@@ -3621,24 +3665,60 @@ where {
         .map_err(EngineError::from_rotate)
     }
 
-    /// Revoke a recipient's grant on the vault root's scope: cut them from the
-    /// owner-signed committed set, then drive the cut through the planes it
-    /// demands (blueprint/engine.md "Triggers").
+    /// Revoke a recipient's grant on the vault root's scope.
     ///
-    /// The cut alone revokes nothing — only the fresh-seed cascade completes a
-    /// read revoke, and only the name wave ends a write grant — so a failure to
-    /// rotate is reported rather than swallowed.
+    /// The owner's half of the same pairwise ECDH the recipient self-locates
+    /// under names the tag, so it is derived here and never taken from a caller.
     async fn revoke_grant(
         &self,
         node: NodeId,
         recipient_identity_public_key: &[u8],
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let sweep = self.sweep_factory()?;
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
+        self.cut_and_rotate(
+            node,
+            "revoke-target-is-not-a-scope-root",
+            UnindexedScope::Refuse,
+            async |target: &OwnerScope, _current: &CascadeTarget| {
+                recipient_blinded_tag(
+                    session.enc_subkey(),
+                    &contact.enc_subkey(),
+                    &target.scope.ipns_name,
+                )
+                .ok_or(EngineError::MalformedInput {
+                    check: "unusable-recipient-key",
+                })
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Cut the tag `select` names out of the owner-signed committed set at
+    /// `node`'s scope root, then drive the cut through the planes it demands
+    /// (blueprint/engine.md "Triggers"). Returns the tag it cut.
+    ///
+    /// The cut alone revokes nothing — only the fresh-seed cascade completes a
+    /// read revoke, and only the name wave ends a write grant — so a failure to
+    /// rotate is reported rather than swallowed. `select` runs over the resolved
+    /// set: what makes a revoke owner-only is where that tag comes from, and it
+    /// is never the command.
+    async fn cut_and_rotate<S>(
+        &self,
+        node: NodeId,
+        check: &'static str,
+        unindexed: UnindexedScope,
+        select: S,
+    ) -> Result<[u8; 32], EngineError>
+    where
+        S: AsyncFnOnce(&OwnerScope, &CascadeTarget) -> Result<[u8; 32], EngineError>,
+    {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let sweep = self.sweep_factory()?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let owner_keys = || OwnerRotationKeys {
@@ -3648,7 +3728,7 @@ where {
         };
         let owner_pointer_seed = session.owner_pointer_seed();
         let target = self
-            .owner_scope(node, api, owner_keys(), "revoke-target-is-not-a-scope-root")
+            .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let current = self
@@ -3656,17 +3736,7 @@ where {
             .resolve_anchored(&target.scope)
             .await
             .map_err(EngineError::from_resolve_failure)?;
-
-        // The owner's half of the same pairwise ECDH the recipient self-locates
-        // under, so the tag is derived here and never taken from a caller.
-        let tag = recipient_blinded_tag(
-            session.enc_subkey(),
-            &contact.enc_subkey(),
-            &target.scope.ipns_name,
-        )
-        .ok_or(EngineError::MalformedInput {
-            check: "unusable-recipient-key",
-        })?;
+        let tag = select(&target, &current).await?;
 
         let plan = GrantCutPlan {
             commitment: &current.commitment,
@@ -3706,8 +3776,8 @@ where {
         };
         rotate_on_cut(&rotator, node, &cut)
             .await
-            .map(|_| ())
-            .map_err(EngineError::from_rotation)
+            .map_err(EngineError::from_rotation)?;
+        Ok(tag)
     }
 
     /// Grant a node inside the vault root's scope to an imported contact
@@ -3730,16 +3800,7 @@ where {
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        self.share_scope(
-            node,
-            ScopeShare::Contact(&contact),
-            &ShareChecks {
-                vault_root: "grant-target-is-the-vault-root",
-                already_a_scope: "grant-target-already-names-a-scope",
-                envelope_version: "grant-parent-envelope-version-unsupported",
-            },
-        )
-        .await
+        self.share_scope(node, ScopeShare::Contact(&contact)).await
     }
 
     /// Mint an invite link over a node inside the vault root's scope: the same
@@ -3758,16 +3819,8 @@ where {
                 check: "write-links-need-a-write-scope-cut",
             });
         }
-        self.share_scope(
-            node,
-            ScopeShare::InviteLink { expires_at },
-            &ShareChecks {
-                vault_root: "invite-target-is-the-vault-root",
-                already_a_scope: "invite-target-already-names-a-scope",
-                envelope_version: "invite-parent-envelope-version-unsupported",
-            },
-        )
-        .await
+        self.share_scope(node, ScopeShare::InviteLink { expires_at })
+            .await
     }
 
     /// Mint the fresh scope a share of `node` is granted at: converge the
@@ -3783,8 +3836,8 @@ where {
         &self,
         node: NodeId,
         share: ScopeShare<'_>,
-        checks: &ShareChecks,
     ) -> Result<CommandOutcome, EngineError> {
+        let checks = share.checks();
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         // The vault root's own scope is the session's; minting one at it would
@@ -3937,7 +3990,6 @@ where {
                 &InviteMintPlan {
                     grantee: &grantee,
                     parent: &parent_plan,
-                    permission: cipherbox_core::seal::Permission::Read,
                     expires_at,
                 },
             )
@@ -3951,111 +4003,51 @@ where {
     /// owner-signed committed set, drive the cut through the planes it demands,
     /// and only then forget the record.
     ///
-    /// The cut alone revokes nothing — only the fresh-seed cascade completes a
-    /// read revoke — so a failure to rotate is reported rather than swallowed,
-    /// and the record outlives it so the next attempt can still name the link.
+    /// The record outlives a failed rotation, so the next attempt can still name
+    /// the link; it is spent only once the cut has landed.
     async fn revoke_invite_link(&self, node: NodeId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let sweep = self.sweep_factory()?;
-        let owner_identity = session.owner_identity();
-        let scope_keys = OwnerSessionKeys::new(session);
-        let owner_keys = || OwnerRotationKeys {
-            enc_secret: session.enc_subkey(),
-            identity: &owner_identity,
-            scope_keys: &scope_keys,
-        };
-        let owner_pointer_seed = session.owner_pointer_seed();
-        let target = self
-            .owner_scope(
-                node,
-                api,
-                owner_keys(),
-                "revoke-link-target-is-not-a-scope-root",
-            )
-            .await?;
-        let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
-        let current = self
-            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
-            .resolve_anchored(&target.scope)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
-
-        let store = StagingInviteStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        );
+        let store = self.invite_store(session);
         let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
-        let commitment_sig = EcdsaSignature::from_compact(&current.commitment_sig).ok_or(
-            EngineError::TrustViolation {
-                message: "the scope root's commitment signature is unparseable".to_owned(),
-            },
-        )?;
+        if records.links.is_empty() {
+            return Err(EngineError::from_invite(InviteError::LinkNotCommitted));
+        }
+        let links = records.links.clone();
+
         // Owner-only, and derived from the owner's own records: the tag comes
         // from a record this session's encryption subkey re-derives, never from
         // the command.
-        let tag = locate_invite_link(
-            &OwnerAuthority {
-                identity_signer: session.identity(),
-                enc_secret: session.enc_subkey(),
-            },
-            &CommittedScope {
-                scope_id: &target.scope.scope_id,
-                commitment: &current.commitment,
-                commitment_sig: &commitment_sig,
-                ledger: &current.grant_ledger,
-            },
-            &records.links,
-        )
-        .map_err(EngineError::from_invite)?
-        .tag;
+        let tag = self
+            .cut_and_rotate(
+                node,
+                "revoke-link-target-is-not-a-scope-root",
+                UnindexedScope::Derive,
+                async |target: &OwnerScope, current: &CascadeTarget| {
+                    let commitment_sig = EcdsaSignature::from_compact(&current.commitment_sig)
+                        .ok_or(EngineError::TrustViolation {
+                            message: "the scope root's commitment signature is unparseable"
+                                .to_owned(),
+                        })?;
+                    locate_invite_link(
+                        &OwnerAuthority {
+                            identity_signer: session.identity(),
+                            enc_secret: session.enc_subkey(),
+                        },
+                        &CommittedScope {
+                            scope_id: &target.scope.scope_id,
+                            commitment: &current.commitment,
+                            commitment_sig: &commitment_sig,
+                            ledger: &current.grant_ledger,
+                        },
+                        &links,
+                    )
+                    .map(|link| link.tag)
+                    .map_err(EngineError::from_invite)
+                },
+            )
+            .await?;
 
-        let plan = GrantCutPlan {
-            commitment: &current.commitment,
-            commitment_sig: &current.commitment_sig,
-            grant_ledger: &current.grant_ledger,
-            scope_root_name: &scope_root_name,
-            owner_signer: session.identity(),
-        };
-        // A write link keeps an extractable subtree signing key until the name
-        // wave runs, so the read cut refuses it by name and that refusal is what
-        // selects the arm that also rotates the write plane.
-        let cut = match revoke_read_grant(&plan, &tag) {
-            Err(RevokeError::WriteGranted) => {
-                revoke_write_grant(&plan, &tag, WriteRevokeKind::Full)
-            }
-            read_cut => read_cut,
-        }
-        .map_err(EngineError::from_revoke)?;
-
-        let rotator = OwnerCutNet {
-            transport: &self.seams.record_transport,
-            api: api.as_ref(),
-            gateway: &self.gateway,
-            http: &self.seams.http,
-            floors: &self.seams.floor_store,
-            scheduler: &self.seams.scheduler,
-            profile: &self.profile,
-            entropy: &self.entropy,
-            keys: owner_keys(),
-            owner_signer: session.identity(),
-            owner_pointer_seed: owner_pointer_seed.as_bytes(),
-            payload_version: POINTER_PAYLOAD_VERSION,
-            scope_root_name: &scope_root_name,
-            scope_id: target.scope.scope_id,
-            parent_node_seed: target.parent_node_seed.as_deref(),
-            session_root_scope_id: self.snapshot.borrow().root.0,
-            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
-        };
-        rotate_on_cut(&rotator, node, &cut)
-            .await
-            .map_err(EngineError::from_rotation)?;
-
-        // The cut has landed, so the link is dead and the claims it produced can
-        // no longer be re-converted through it (`ConvertedClaimRecord::link_tag`).
-        records.links.retain(|link| link.tag != tag);
-        records.claims.retain(|claim| claim.link_tag != tag);
+        records.forget_links(&BTreeSet::from([tag]));
         store
             .persist(&records)
             .await
@@ -4063,8 +4055,8 @@ where {
     }
 
     /// Drop the invite records at `node` the scope's own owner-signed commitment
-    /// no longer carries — a mint whose publish never landed, and a link a
-    /// revoke has already cut.
+    /// no longer carries — a link a revoke has cut, and one a later mint at the
+    /// same node superseded.
     ///
     /// Fail-closed: a record is dropped only against a gate-passing commitment
     /// that does not carry its tag. An unresolvable scope root is staleness, not
@@ -4073,6 +4065,13 @@ where {
     async fn prune_invite_links(&self, node: NodeId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let store = self.invite_store(session);
+        let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
+        // The records are local and decide the whole outcome, so an owner with
+        // none spends no resolve on a pass that can drop nothing.
+        if records.links.is_empty() {
+            return Ok(());
+        }
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let owner_keys = || OwnerRotationKeys {
@@ -4081,7 +4080,13 @@ where {
             scope_keys: &scope_keys,
         };
         let target = self
-            .owner_scope(node, api, owner_keys(), "prune-target-is-not-a-scope-root")
+            .owner_scope(
+                node,
+                api,
+                owner_keys(),
+                "prune-target-is-not-a-scope-root",
+                UnindexedScope::Derive,
+            )
             .await?;
         let current = self
             .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
@@ -4089,36 +4094,43 @@ where {
             .await
             .map_err(EngineError::from_resolve_failure)?;
 
-        let store = StagingInviteStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        );
-        let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
+        let committed: BTreeSet<[u8; 32]> = current
+            .commitment
+            .entries
+            .iter()
+            .map(|entry| entry.tag)
+            .collect();
         let dead: BTreeSet<[u8; 32]> = records
             .links
             .iter()
+            // Membership first: it costs a lookup, where binding the record to
+            // this scope costs an ECDH.
             .filter(|link| {
-                link_binds_scope(session.enc_subkey(), link, &target.scope.ipns_name)
-                    && !current
-                        .commitment
-                        .entries
-                        .iter()
-                        .any(|entry| entry.tag == link.tag)
+                !committed.contains(&link.tag)
+                    && link_binds_scope(session.enc_subkey(), link, &target.scope.ipns_name)
             })
             .map(|link| link.tag)
             .collect();
         if dead.is_empty() {
             return Ok(());
         }
-        records.links.retain(|link| !dead.contains(&link.tag));
-        records
-            .claims
-            .retain(|claim| !dead.contains(&claim.link_tag));
+        records.forget_links(&dead);
         store
             .persist(&records)
             .await
             .map_err(EngineError::from_invite_store)
+    }
+
+    /// This session's durable invite records.
+    fn invite_store<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+    ) -> StagingInviteStore<'a, T::StagingStore, Box<dyn Entropy>> {
+        StagingInviteStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
     }
 
     /// Accept a share the mailbox delivered: bind the pointer to the imported

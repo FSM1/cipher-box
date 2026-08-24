@@ -496,14 +496,6 @@ impl CommandOutcome {
         self.link().map(|link| link.scope_root_name.clone())
     }
 
-    /// `inviteLinkMinted`: whether the link hands out an extractable subtree
-    /// signing key, which only a write rotation revokes — the bearer-write flag
-    /// a host UI must show; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = isBearerWrite)]
-    pub fn is_bearer_write(&self) -> Option<bool> {
-        self.link().map(|link| link.capability.is_bearer_write())
-    }
-
     /// `shareAccepted`: the accepted scope's raw 16-byte id, the same
     /// `NodeId.bytes` shape a command names it by; otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = scopeId)]

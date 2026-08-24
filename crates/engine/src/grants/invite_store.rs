@@ -154,6 +154,20 @@ pub struct InviteRecords {
     pub claims: Vec<ConvertedClaimRecord>,
 }
 
+impl InviteRecords {
+    /// Drop the links `tags` names, and the conversions they produced.
+    ///
+    /// A spent-claim record is what makes a claim single-use, and it is
+    /// collectable exactly when the link it came in on is gone: no claim on a
+    /// link the owner no longer records can convert
+    /// ([`ConvertedClaimRecord::link_tag`](super::ConvertedClaimRecord::link_tag)),
+    /// so dropping the pair together re-admits nothing.
+    pub fn forget_links(&mut self, tags: &BTreeSet<[u8; 32]>) {
+        self.links.retain(|link| !tags.contains(&link.tag));
+        self.claims.retain(|claim| !tags.contains(&claim.link_tag));
+    }
+}
+
 /// Durable persistence for the owner's invite state.
 ///
 /// Whole-set replacement, like the received-shares store: the caller's set is

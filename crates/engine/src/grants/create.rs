@@ -166,7 +166,7 @@ pub struct CreateGrantOutcome {
 
 /// A read-grant creation failure.
 ///
-/// Failures **through the grantee scope-root publish (step 5)** are truly
+/// Failures **through the grantee scope-root publish** are truly
 /// fail-closed — nothing is minted or shared. Failures **after** that publish
 /// are NOT atomic: the grantee root is already committed to the network, so a
 /// stale orphan can outlive the error. Each post-publish variant below documents
@@ -310,6 +310,7 @@ where
         Permission::Read,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
+    converge_grant_subtree(resolver, publisher, grantee, parent).await?;
     let outcome =
         mint_grantee_scope(entropy, resolver, publisher, grantee, &row, owner, parent).await?;
 
@@ -347,18 +348,60 @@ where
     Ok(outcome)
 }
 
+/// Prove the granted folder's subtree epoch-converged inside the scope it still
+/// lives in, so no interior node the grantee will read lags that scope's epoch.
+///
+/// [`mint_grantee_scope`] publishes a scope its grantee reads from epoch 1, and
+/// this is what has to hold before it does. Split from the mint so a caller can
+/// put its own durable write between the two: a dropped lost race means
+/// convergence is unproven, and refusing there should cost nothing that outlives
+/// the refusal (CONTEXT.md "Epoch-converged").
+pub async fn converge_grant_subtree<R, P>(
+    resolver: &R,
+    publisher: &P,
+    grantee: &GranteeScopePlan<'_>,
+    parent: &ParentScopePlan<'_>,
+) -> Result<(), CreateGrantError>
+where
+    R: SweepResolver,
+    P: SweepPublisher,
+{
+    let ipns_name = grantee.ipns_name();
+    let swept = converge_subtree(
+        resolver,
+        publisher,
+        &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
+        &NodeRef {
+            node_id: grantee.scope_id,
+            ipns_name: ipns_name.as_str().as_bytes().to_vec(),
+        },
+    )
+    .await
+    .map_err(CreateGrantError::Converge)?;
+    // A node the pass could not read is as unproven as one whose convergence
+    // publish lost the race: either way the grantee could descend into a node
+    // still sealed at an epoch its fresh seed does not reach.
+    if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
+        let mut unconverged = swept.dropped_lost_race.clone();
+        unconverged.extend(swept.unreachable_nodes());
+        unconverged.sort_unstable();
+        return Err(CreateGrantError::SubtreeNotConverged { unconverged });
+    }
+    Ok(())
+}
+
 /// Mint the grantee scope `row` is committed at, and hand the granted folder to
-/// it: converge → mint (epoch 1) → publish (grantee first) → re-key the
-/// reparented descendants under the fresh grantee derivation → parent index
-/// update.
+/// it: mint (epoch 1) → publish (grantee first) → re-key the reparented
+/// descendants under the fresh grantee derivation → parent index update.
 ///
 /// The scope it mints commits exactly `row` and carries no history links, so
 /// whoever holds that row's grant blob reaches this scope's first epoch and
 /// nothing before it — the property that separates a scope mint from a row
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
-/// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
+/// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes,
+/// and [`converge_grant_subtree`] must have passed over the same plan.
 ///
-/// Fail-closed **through the grantee publish** (step 5).
+/// Fail-closed **through the grantee publish**.
 pub async fn mint_grantee_scope<E, R, P>(
     entropy: &mut E,
     resolver: &R,
@@ -377,33 +420,7 @@ where
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
 
-    // 2) Convergence gate — converge the granted folder's own subtree inside the
-    // scope it still lives in, so no interior node the grantee will read lags
-    // that scope's epoch. A dropped lost race means convergence is unproven:
-    // refuse rather than share a possibly-lagging subtree (CONTEXT.md
-    // "Epoch-converged").
-    let swept = converge_subtree(
-        resolver,
-        publisher,
-        &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
-        &NodeRef {
-            node_id: grantee.scope_id,
-            ipns_name: name_bytes.to_vec(),
-        },
-    )
-    .await
-    .map_err(CreateGrantError::Converge)?;
-    // A node the pass could not read is as unproven as one whose convergence
-    // publish lost the race: either way the grantee could descend into a node
-    // still sealed at an epoch its fresh seed does not reach.
-    if !swept.dropped_lost_race.is_empty() || !swept.unreachable.is_empty() {
-        let mut unconverged = swept.dropped_lost_race.clone();
-        unconverged.extend(swept.unreachable_nodes());
-        unconverged.sort_unstable();
-        return Err(CreateGrantError::SubtreeNotConverged { unconverged });
-    }
-
-    // 3) Build the committed set around the row — one entry, so the scope's
+    // 2) Build the committed set around the row — one entry, so the scope's
     // whole grant set is the one this mint authorises.
     let owner_identity = owner.identity_signer.verifying_key();
     let tag = row.tag;
@@ -418,7 +435,7 @@ where
         .to_compact();
     let ledger = vec![row.ledger_entry.clone()];
 
-    // 4) Mint at read epoch 1 with a FRESH RANDOM override seed (never
+    // 3) Mint at read epoch 1 with a FRESH RANDOM override seed (never
     // KDF-derived). The new scope adopts the folder's descendant scope roots as
     // its direct-child-scope index (they now live inside the granted scope).
     let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
@@ -466,7 +483,7 @@ where
         section: grantee_section,
     };
 
-    // 5) Publish the grantee scope root FIRST: it exists before the parent
+    // 4) Publish the grantee scope root FIRST: it exists before the parent
     // references it (register-first / never-orphan), and its index carries the
     // reparented descendants before they are removed from the parent
     // (dest-first).
@@ -475,7 +492,7 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    // 5b) Re-key the reparented direct children so each ascent link re-seals under
+    // 4b) Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
     // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
     // current epoch, `prev = None`), threaded top-down as the eager cascade does
@@ -544,7 +561,7 @@ where
             })?;
     }
 
-    // 6) Parent index update — a metadata-only re-seal at the same epoch.
+    // 5) Parent index update — a metadata-only re-seal at the same epoch.
     let mut parent_index = parent.current_child_index.to_vec();
     for descendant in grantee.subtree_child_index {
         parent_index = remove_child(&parent_index, &descendant.scope_id);
@@ -671,7 +688,7 @@ mod tests {
     }
 
     /// The whole net arm the primitive composes over: the convergence sweep's
-    /// two seams, the cascade re-seal resolve step 5b runs, and the scope-root
+    /// two seams, the cascade re-seal resolve the re-key step runs, and the scope-root
     /// publisher. It records every committed publish and can force a lost race
     /// to model an unconvergeable subtree.
     ///
@@ -1435,7 +1452,7 @@ mod tests {
     fn parent_publish_failure_leaves_the_grantee_root_committed_and_no_share() {
         // Post-publish partial commit: the grantee root publishes (call 0), then
         // the parent publish (call 1) loses the CAS race. The primitive is NOT
-        // atomic past step 5 — the grantee root is already on the network and NO
+        // atomic past the grantee publish — the root is already on the network and NO
         // share pointer is posted. This pins the doc comment's post-publish caveat
         // to behavior.
         let (outcome, published, hub) = run(
@@ -1499,7 +1516,7 @@ mod tests {
 
     #[test]
     fn creation_is_deterministic_under_a_fixed_entropy_seed() {
-        // A non-empty subtree drives step 5b's entropy draws (HPKE ephemerals,
+        // A non-empty subtree drives the re-key's entropy draws (HPKE ephemerals,
         // seal nonces in the descendant re-key), proving they too are byte-identical
         // under a fixed seed.
         let subtree = vec![ChildScopeRef::new(
@@ -1633,7 +1650,7 @@ mod tests {
 
     #[test]
     fn descendant_scope_root_publishes_under_the_enumerated_ref_name() {
-        // The re-key step 5b must publish/reseal the reparented descendant under
+        // The re-key must publish/reseal the reparented descendant under
         // the name from the enumerated `ChildScopeRef` (`descendant.ipns_name`),
         // not the resolved target's — the scope-root publication binding enforced
         // in sweep.rs. A regression to any other name (e.g. the parent's) is
