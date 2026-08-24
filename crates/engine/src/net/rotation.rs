@@ -2130,6 +2130,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::HistoryLinkNotDescending
         | ResealError::HistoryLinkNotContiguous
         | ResealError::OwnerKeyRequiredForWriteCut
+        | ResealError::WriteBodyTooLarge
         | ResealError::Encode(_) => WritePublishError::Rejected,
     }
 }
@@ -5025,9 +5026,9 @@ mod tests {
 
     #[test]
     fn a_grantee_cut_refuses_a_root_whose_ascent_link_was_stripped() {
-        // `ascentPublic` and the link's presence are covered by no structure
-        // signature, so anyone holding the write scope seed can drop the link.
-        // Re-publishing without one would sever the owner's descent for good.
+        // The link's *presence* is covered by no structure signature, so anyone
+        // holding the write scope seed can drop it. Re-publishing without one
+        // would sever the owner's descent for good.
         let world = plain_world(Permission::Write);
         let mut stripped = world.root.grant_section.clone();
         stripped.ascent_link = None;
@@ -6883,6 +6884,7 @@ mod tests {
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
+            ResealError::WriteBodyTooLarge,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -6905,6 +6907,7 @@ mod tests {
                 | ResealError::HistoryLinkNotDescending
                 | ResealError::HistoryLinkNotContiguous
                 | ResealError::OwnerKeyRequiredForWriteCut
+                | ResealError::WriteBodyTooLarge
                 | ResealError::Encode(_) => (
                     WritePublishError::Rejected,
                     "deterministic on inputs the wave already gated; retrying never converges",

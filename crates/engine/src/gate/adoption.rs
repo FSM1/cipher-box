@@ -27,7 +27,7 @@ use cipherbox_core::seal::{
     PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
     STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
-    open_read_body, verify_grant_set, verify_structure,
+    open_read_body, verify_grant_set_bound, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -402,10 +402,11 @@ impl StructureAuthenticator {
 }
 
 /// Visit every seed-bearing structure `section` carries — its `structTag`,
-/// recipient tag, signed-over ciphertext and detached signature — short-circuit
-/// on the first `Err`. The single definition of *what* stage 3 authenticates,
-/// so a new structure kind cannot reach the wire covered by only some of the
-/// passes that walk one.
+/// recipient tag, signed-over bytes and detached signature — short-circuit on
+/// the first `Err`. The single definition of *what* stage 3 authenticates, so a
+/// new structure kind cannot reach the wire covered by only some of the passes
+/// that walk one. The signed-over bytes are the structure's ciphertext, except
+/// for the ascent link ([`ascent_link_sig_body`]).
 #[doc(hidden)]
 pub fn for_each_structure<E>(
     section: &GrantSection,
@@ -440,7 +441,7 @@ pub fn for_each_structure<E>(
     let body = &section.write_body;
     visit(STRUCT_TAG_WRITE_BODY, None, &body.sealed, &body.signature)?;
     if let Some(a) = &section.ascent_link {
-        visit(STRUCT_TAG_ASCENT_LINK, None, &a.ciphertext, &a.signature)?;
+        visit(STRUCT_TAG_ASCENT_LINK, None, &a.sig_body(), &a.signature)?;
     }
     Ok(())
 }
@@ -557,14 +558,18 @@ pub async fn adopt_deferred<F: FloorStore>(
                 RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
             )
         })?;
-    verify_grant_set(reader.owner_identity, &section.commitment, &commitment_sig)
-        .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
-    if section.commitment.ipns_name != candidate.name.as_str().as_bytes() {
-        return Err(reject(
+    verify_grant_set_bound(
+        reader.owner_identity,
+        &section.commitment,
+        &commitment_sig,
+        candidate.name.as_str().as_bytes(),
+    )
+    .map_err(|e| {
+        reject(
             GateStage::CommitmentVerify,
-            RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
-        ));
-    }
+            RejectionReason::Trust(e.into()),
+        )
+    })?;
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
     // recompute contract. Any failure rejects the whole record (#39 D3).

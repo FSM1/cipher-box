@@ -13,9 +13,12 @@ use super::profile::ContentProfile;
 /// gate work to a fixed budget and fails closed on anything larger
 /// (blueprint/engine.md "Content plane").
 ///
-/// The value is the IPFS single-block ceiling: `block/put` refuses anything over
-/// 2 MiB (blueprint/api.md), so a larger record is authorable but unpinnable —
-/// signed by this engine and then refused by its own ingress.
+/// The value is core's [`MAX_BLOCK_BYTES`](cipherbox_core::seal::MAX_BLOCK_BYTES)
+/// — the IPFS single-block ceiling, since `block/put` refuses anything over
+/// 2 MiB (blueprint/api.md), so a larger record is authorable but unpinnable,
+/// signed by this engine and then refused by its own ingress. Aliased rather
+/// than restated: core's frozen `MAX_WRITE_BODY_BYTES` reserves its re-seal
+/// headroom under the same number, and two copies drift.
 ///
 /// Must exceed the 1 MiB sealed leaf, which [`ContentProfile::new`] enforces
 /// for every injected profile. A legitimate flat-DAG root inlines every
@@ -23,7 +26,7 @@ use super::profile::ContentProfile;
 /// size); `assemble` enforces that ceiling as a release-active `Err`, so this
 /// crate never publishes a root its own `read_block` rejects (the encode/decode
 /// fail-closed symmetry of AGENTS.md rule 8).
-pub(crate) const MAX_RESOLVED_RECORD_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_RESOLVED_RECORD_BYTES: usize = cipherbox_core::seal::MAX_BLOCK_BYTES;
 
 /// The shipped framing's sealed leaf must fit the block ceiling, or every
 /// content block this engine authors is refused by the ingress it publishes

@@ -11,6 +11,10 @@
 //! under another recipient's tag, `H(ciphertext)` binds the exact sealed bytes,
 //! and `scopeId + epoch` bind the structure to its scope and rotation.
 //!
+//! One structure signs over more than its ciphertext: an ascent link's signed
+//! bytes are [`ascent_link_sig_body`], which folds the plaintext `ascentPublic`
+//! and the HPKE `enc` in beside it.
+//!
 //! The preimage is a det-CBOR map, never decoded — only signed and verified — so
 //! it carries no unknown-field tolerance. Verification is per-structure and
 //! pure; the whole-record fail-closed policy over these verdicts (a missing or
@@ -21,6 +25,7 @@ use crate::codec::{Map, Value, encode_fixed_depth};
 use crate::error::{CodecError, TrustViolation};
 use crate::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use crate::suite::hash::hash;
+use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 /// The context a structure signature binds, alongside the ciphertext hash. The
@@ -36,27 +41,28 @@ pub struct StructureSigInput {
     pub struct_tag: u8,
     /// The recipient's blinded tag — grant blobs only.
     pub recipient_tag: Option<[u8; SECRET_LEN]>,
-    /// `H(ciphertext)`: the BLAKE3 digest of the structure's sealed bytes.
+    /// The BLAKE3 digest of the structure's signed bytes.
     pub ciphertext_hash: [u8; SECRET_LEN],
 }
 
 impl StructureSigInput {
-    /// Build the input over a structure's `ciphertext`, hashing it with the
-    /// frozen BLAKE3 `H` so a caller can never sign a preimage over a differently
+    /// Build the input over a structure's signed bytes — its `ciphertext`, or
+    /// [`ascent_link_sig_body`] for an ascent link — hashing them with the frozen
+    /// BLAKE3 `H` so a caller can never sign a preimage over a differently
     /// computed digest.
     pub fn over_ciphertext(
         scope_id: [u8; 16],
         epoch: u64,
         struct_tag: u8,
         recipient_tag: Option<[u8; SECRET_LEN]>,
-        ciphertext: &[u8],
+        signed_bytes: &[u8],
     ) -> Self {
         Self {
             scope_id,
             epoch,
             struct_tag,
             recipient_tag,
-            ciphertext_hash: hash(ciphertext),
+            ciphertext_hash: hash(signed_bytes),
         }
     }
 }
@@ -75,6 +81,31 @@ pub fn structure_sig_preimage(input: &StructureSigInput) -> Vec<u8> {
     }
     m.insert("scopeId", Value::Bytes(input.scope_id.to_vec()));
     m.insert("structTag", Value::Unsigned(u64::from(input.struct_tag)));
+    encode_fixed_depth(&Value::Map(m))
+}
+
+/// The bytes an **ascent link's** structure signature is taken over — the
+/// det-CBOR binding `{ascentPublic, ciphertext, enc}` — in place of the bare
+/// ciphertext every other structure signs.
+///
+/// `ascentPublic` is the key a re-sealer holding no ancestor seed addresses the
+/// override seed to, so outside the signature it is authenticated by possession
+/// of the scope's `writeScopeSeed` alone: a holder could swap it and leave every
+/// ciphertext, structure signature and commitment byte-identical, and the next
+/// honest scope-exit rotation would seal a freshly minted seed to the planted
+/// key (blueprint/core.md "Structure signatures").
+///
+/// Any field added to the published link must be added here too, or it lands
+/// outside the signature exactly as `ascentPublic` did.
+pub fn ascent_link_sig_body(
+    ascent_public: &[u8; ENC_LEN],
+    enc: &[u8; ENC_LEN],
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    let mut m = Map::new();
+    m.insert("ascentPublic", Value::Bytes(ascent_public.to_vec()));
+    m.insert("ciphertext", Value::Bytes(ciphertext.to_vec()));
+    m.insert("enc", Value::Bytes(enc.to_vec()));
     encode_fixed_depth(&Value::Map(m))
 }
 
@@ -156,6 +187,44 @@ mod tests {
         };
         assert_eq!(
             verify_structure(&signer.verifying_key(), &transplanted, &sig)
+                .unwrap_err()
+                .check(),
+            "structure-signature-invalid"
+        );
+    }
+
+    /// Every field of the ascent link's signed body changes the signed bytes, so
+    /// a swap of any of the three is a signature the committed writer never made.
+    #[test]
+    fn each_ascent_link_field_moves_the_signed_body() {
+        let base = ascent_link_sig_body(&[0x01; 32], &[0x02; 32], b"ct");
+        assert_ne!(base, ascent_link_sig_body(&[0x11; 32], &[0x02; 32], b"ct"));
+        assert_ne!(base, ascent_link_sig_body(&[0x01; 32], &[0x12; 32], b"ct"));
+        assert_ne!(base, ascent_link_sig_body(&[0x01; 32], &[0x02; 32], b"ct!"));
+    }
+
+    /// A signature over the honest link never verifies once `ascentPublic` is
+    /// swapped — the plaintext public half is inside the preimage.
+    #[test]
+    fn a_swapped_ascent_public_never_verifies() {
+        let signer = Ed25519Signer::from_seed([7u8; 32]);
+        let honest = StructureSigInput::over_ciphertext(
+            [0xa0; 16],
+            5,
+            super::super::STRUCT_TAG_ASCENT_LINK,
+            None,
+            &ascent_link_sig_body(&[0x01; 32], &[0x02; 32], b"ct"),
+        );
+        let sig = sign_structure(&signer, &honest);
+        let swapped = StructureSigInput::over_ciphertext(
+            [0xa0; 16],
+            5,
+            super::super::STRUCT_TAG_ASCENT_LINK,
+            None,
+            &ascent_link_sig_body(&[0xee; 32], &[0x02; 32], b"ct"),
+        );
+        assert_eq!(
+            verify_structure(&signer.verifying_key(), &swapped, &sig)
                 .unwrap_err()
                 .check(),
             "structure-signature-invalid"

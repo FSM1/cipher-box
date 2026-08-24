@@ -385,7 +385,7 @@ impl Fixture {
             self.epoch,
             STRUCT_TAG_ASCENT_LINK,
             None,
-            &link.ciphertext,
+            &link.sig_body(),
         );
         SignedAscentLink {
             ascent_public: link.ascent_public,
@@ -1296,6 +1296,46 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     reader.parent_node_seed = Some(&parent_seed);
     let (adopted, _) = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
     assert_eq!(adopted.sequence, 1);
+}
+
+#[test]
+fn a_swapped_ascent_public_fails_stage_three_on_both_reader_arms() {
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let parent_seed = [0xAB; 32];
+    let planted = X25519Secret::from_scalar([0x5E; 32]).public().to_bytes();
+
+    let mut candidate = fx.candidate(1);
+    let mut link = fx.ascent_link_under(&parent_seed);
+    assert_ne!(
+        link.ascent_public, planted,
+        "the swap must change the field"
+    );
+    link.ascent_public = planted;
+    candidate.grant_section.ascent_link = Some(link);
+
+    // The ancestor arm.
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some(&parent_seed);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+
+    // The grantee arm, which holds no ancestor seed and so runs no
+    // derive-and-verify — stage 3 is its only check on the field.
+    let grantee = X25519Secret::from_scalar([0xC7; 32]);
+    let grantee_reader = ReaderContext {
+        owner_identity: &fx.owner_identity_verifier,
+        scope_id: fx.scope_id,
+        read_key: &fx.read_key,
+        parent_node_seed: None,
+        seed_blob: Some(fx.grantee_seed_blob(&grantee)),
+    };
+    let err = block_on(adopt(&floors, &grantee_reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
 }
 
 #[test]

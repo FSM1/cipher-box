@@ -21,6 +21,7 @@ pub(crate) mod scrub;
 mod value;
 
 pub use decode::decode;
+pub(crate) use encode::head_len;
 pub use encode::{encode, encode_fixed_depth, encoded_key_len, encoded_len};
 pub use fields::{UnknownFields, decode_map_partial, encode_map_partial, known_key_set};
 pub(crate) use redact::fmt_redacted_keys;

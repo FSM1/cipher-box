@@ -155,8 +155,35 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   decode and encode at 1024 entries, each entry's opaque `ipnsName` at the name
   codec's own ceiling (`too-many-structures`) — unbounded, a committed writer
   grows it until the head block the revoking rotation re-seals it into no longer
-  fits the block ceiling every read enforces. Interior nodes publish no
-  write-body at all.
+  fits the block ceiling every read enforces. The ledger's row count is bounded
+  the same way, at `MAX_GRANT_BLOBS` (1024), the ceiling its own commitment
+  already carries. Interior nodes publish no write-body at all.
+  Those per-field bounds narrow the byte lever but cannot close it: the
+  preserved unknown maps at every level are the one thing a decoder must keep
+  byte-stable, so refusing a body for the size of what it preserves would refuse
+  honest forward-compatible bodies too. What closes it is a **total encoded-size
+  bound**, `MAX_WRITE_BODY_BYTES` = the block ceiling (2 MiB) minus a frozen
+  64 KiB re-seal headroom for the seal, section and envelope framing a re-seal
+  wraps the body in. The headroom reserves nothing for the grant section's own
+  contents, which are bounded far above it, so the bound narrows the head-size
+  lever rather than closing it — the whole-record ceiling stays the engine's
+  `HeadTooLarge` backstop. Decode and encode refuse an over-bound body with the
+  same `too-many-structures` verdict, release-active on the encode side; the
+  value is frozen in the KAT manifest (`grant.writeBodyMaxBytes`) rather than in
+  a multi-megabyte reject vector.
+  The measured length **charges `writeHistoryLink` at its own 512-byte ceiling**
+  whatever the body actually carries. That field is the one thing a re-seal
+  replaces, so charging it flat is what makes "this body decodes" imply "this
+  body still encodes after a cut swaps its link" — otherwise a committed writer
+  pads to exactly the bound with an empty link, and the freshly minted link of
+  the rotation that revokes them pushes the re-encode over, a permanent refusal
+  at a size the attacker chose. A re-seal that still cannot author its body
+  refuses under its own name (`write-body-too-large`) rather than the generic
+  encode fold.
+  None of this weakens the strict-preserve rule: that law governs field
+  **treatment** — never strip, keep unknowns byte-stable — not total size, and a
+  size constant every client shares refuses the same bodies everywhere, so a body
+  an old client re-emits stays conforming by construction.
   The write-plane history link departs from the read plane's ratchet
   construction and carries its own struct tag, `write-history-link` (`0x0e`): it
   is **HPKE auth-mode sealed by the owner to the owner**
@@ -237,9 +264,20 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   capability to ancestor read-only readers).
 - **Structure signatures** (FSM1/cipher-box-next#39 D2/D3): the rotator's pseudonym Ed25519
   signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
-H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
-  link, history links, and the write-body. Verification is per-structure and
-  pure; the whole-record fail-closed policy is the engine's gate stage.
+H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
+  link, history links, and the write-body. The signed bytes are the structure's
+  `ciphertext`, with one exception: an **ascent link** signs over the det-CBOR
+  binding `{ascentPublic, ciphertext, enc}`, so its plaintext public half is
+  covered too. Outside the signature that field is authenticated by possession of
+  `writeScopeSeed` alone — a holder could republish the root with `ascentPublic`
+  swapped for a key it holds, leaving every ciphertext, signature and commitment
+  byte-identical, and the next honest scope-exit rotation would seal a freshly
+  minted override seed to the planted key. The binding does not make the field
+  unforgeable — a **committed** writer can plant its own key and sign the swapped
+  body — but it makes the swap attributable to a pseudonym the owner committed,
+  and an owner cut overwrites it by deriving the public half from the parent seed
+  instead of carrying it. Verification is per-structure and pure; the
+  whole-record fail-closed policy is the engine's gate stage.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer

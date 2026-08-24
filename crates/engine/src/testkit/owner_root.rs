@@ -198,7 +198,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         )
         .unwrap();
         SignedAscentLink {
-            signature: sign(STRUCT_TAG_ASCENT_LINK, &link.ciphertext),
+            signature: sign(STRUCT_TAG_ASCENT_LINK, &link.sig_body()),
             ascent_public: link.ascent_public,
             enc: link.enc,
             ciphertext: link.ciphertext,
