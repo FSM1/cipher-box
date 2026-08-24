@@ -2981,8 +2981,8 @@ mod tests {
     };
     use crate::testkit::{
         FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on,
-        owner_root_fixture, requested_cid,
+        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, SilentEntropy,
+        block_on, owner_root_fixture, requested_cid,
     };
 
     const SCOPE: [u8; 16] = [0x44; 16];
@@ -2995,19 +2995,6 @@ mod tests {
     /// The pointer-payload envelope version every re-point in this suite is
     /// sealed and read under.
     const PAYLOAD_VERSION: u64 = 1;
-
-    /// A seam that reports success having written nothing — the failure every
-    /// fresh draw refuses, and the one an unguarded draw turns into a fixed
-    /// all-zero nonce.
-    struct SilentEntropy;
-
-    impl Entropy for SilentEntropy {
-        // A seam implementation, not a consumer.
-        #[allow(clippy::disallowed_methods)]
-        fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
-            Ok(())
-        }
-    }
 
     /// The owner's derivation arm: the two per-scope edges the rotation needs,
     /// off this test owner's root secret and pointer seed.
@@ -5554,9 +5541,8 @@ mod tests {
         );
     }
 
-    /// The rotation plane's seal nonce, at its own draw: the scope-root re-seal
-    /// takes it from [`nonce`], which refuses a silent seam rather than handing
-    /// back the all-zero buffer it was given.
+    /// The scope-root re-seal's nonce, at its own draw: it refuses a silent seam
+    /// rather than handing back the all-zero buffer it was given.
     #[test]
     fn a_silent_seam_draws_no_rotation_seal_nonce() {
         assert_eq!(
@@ -5568,6 +5554,7 @@ mod tests {
                 .expect("a real seam draws")
                 .iter()
                 .any(|byte| *byte != 0),
+            "the refusal is the silence, not every draw"
         );
     }
 

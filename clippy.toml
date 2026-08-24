@@ -1,7 +1,5 @@
 # Every entropy draw goes through `crates/engine/src/entropy.rs`'s `fresh_*`
-# helpers, which refuse a seam that reports success having written nothing. The
-# helpers themselves, the forwarding `Entropy` impls, and the test kit's seeded
-# source carry a local allow.
+# helpers, which refuse a seam that reports success having written nothing.
 disallowed-methods = [
   { path = "cipherbox_engine::entropy::Entropy::fill", reason = "draw through entropy.rs's fresh_ephemeral/fresh_seed/fresh_nonce/fresh_bytes, which fail closed on a silent seam" },
 ]

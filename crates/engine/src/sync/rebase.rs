@@ -26,8 +26,9 @@
 use core::num::NonZeroU64;
 use std::collections::HashSet;
 
-use cipherbox_core::codec::RedactedText;
+use core::fmt;
 
+use cipherbox_core::codec::RedactedText;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
@@ -151,9 +152,8 @@ pub struct AppliedOp {
     pub suffixed: bool,
 }
 
-/// Renders the applied op without the name the rebase resolved for it.
-impl core::fmt::Debug for AppliedOp {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for AppliedOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AppliedOp")
             .field("op_id", &self.op_id)
             .field("op", &self.op)

@@ -471,6 +471,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if self.pending.contains_key(&handle) {
             return Ok(());
         }
+        // A stream bound before the staging is never re-opened, so the engine's
+        // own pairing refusal cannot see it: it would serve the pinned version's
+        // bytes under the staged version's length.
+        let pinned = self.handles.get(handle).ok_or(VfsError::BadHandle)?.stream;
+        if let Some(stream) = pinned
+            && let Some(staged) = self.engine.staged_version_cid(node).await?
+            && self
+                .engine
+                .stream_version_cid(stream)
+                .is_some_and(|bound| bound != staged)
+        {
+            return Err(VfsError::Unavailable {
+                message: "a newer content version is staged and not yet published".to_owned(),
+            });
+        }
         let len = self.base_len(handle, node).await?;
         self.pending.insert(handle, Pending::over(len));
         Ok(())

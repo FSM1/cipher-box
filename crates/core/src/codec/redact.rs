@@ -22,7 +22,6 @@ use crate::error::DisplayKey;
 pub struct RedactedBytes(usize);
 
 impl RedactedBytes {
-    /// Render `bytes` as its length alone.
     pub fn of(bytes: &[u8]) -> Self {
         Self(bytes.len())
     }
@@ -38,7 +37,6 @@ impl fmt::Debug for RedactedBytes {
 pub struct RedactedText(usize);
 
 impl RedactedText {
-    /// Render `s` as its character count alone.
     pub fn of(s: &str) -> Self {
         Self(s.chars().count())
     }

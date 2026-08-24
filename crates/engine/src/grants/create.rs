@@ -573,7 +573,7 @@ mod tests {
         SweptChild, SweptNode, SweptScope,
     };
     use crate::testkit::fakes::InMemoryMailboxHub;
-    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentAtWidth, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob, sign_recipient_binding,
@@ -1175,45 +1175,29 @@ mod tests {
         (outcome, published, hub)
     }
 
-    /// A real seeded source that goes silent for draws of one width. The grant
-    /// idempotency key is the only 16-byte draw on this path, so silencing that
-    /// width reaches it without stopping the seed and ephemeral draws before it.
-    struct SilentAtWidth {
-        inner: SeededEntropy,
-        width: usize,
-    }
-
-    impl Entropy for SilentAtWidth {
-        // A seam implementation, not a consumer.
-        #[allow(clippy::disallowed_methods)]
-        fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-            match dest.len() == self.width {
-                true => Ok(()),
-                false => self.inner.fill(dest),
-            }
-        }
-    }
-
     /// The API keeps `sha256(senderPublicKey : idempotencyKey)`, so an
     /// idempotency key an observer can recompute hands it back the sender to
     /// recipient edge. A seam that writes nothing makes every key that constant.
     #[test]
     fn a_silent_seam_delivers_no_grant_pointer() {
+        // The idempotency key is the only 16-byte draw on this path, so
+        // silencing that width reaches it past the guarded draws before it.
         let (outcome, _published, hub) = run_for(
-            SilentAtWidth {
-                inner: SeededEntropy::new(9),
-                width: 16,
-            },
+            SilentAtWidth::new(9, 16),
             &[],
             FakeNet::new(Ok(())),
             &[],
             &recipient_enc(),
         );
 
-        assert!(matches!(
-            outcome.expect_err("the zero draw is refused"),
-            CreateGrantError::Entropy(_),
-        ));
+        // Name the draw: without it the assertion holds for a refusal from any
+        // earlier draw on the same path.
+        let refused = outcome.expect_err("the zero draw is refused");
+        assert!(
+            matches!(&refused, CreateGrantError::Entropy(e)
+                if e.message().contains("grant idempotency key")),
+            "the refusal is the idempotency draw, not an earlier one: {refused:?}"
+        );
         let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
         assert!(
             block_on(poll_verified(&recip_box, &recipient_enc(), V))

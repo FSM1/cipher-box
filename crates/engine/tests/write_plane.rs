@@ -278,6 +278,18 @@ impl Entropy for SilenceableEntropy {
     }
 }
 
+/// A seeded seam and the flag that silences it.
+fn silenceable(seed: u64) -> (Box<dyn Entropy>, Arc<AtomicBool>) {
+    let silent = Arc::new(AtomicBool::new(false));
+    (
+        Box::new(SilenceableEntropy {
+            inner: SeededEntropy::new(seed),
+            silent: silent.clone(),
+        }),
+        silent,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Record-plane inspection: what a node's published record actually carries.
 // ---------------------------------------------------------------------------
@@ -1337,12 +1349,9 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
-/// A stream pins one version, and its consumer pairs the bytes it serves with
-/// the length the rendered view reports — which the overlay takes from a staged
-/// version the moment one is queued. Serving the published head under that
-/// length is how a partial write publishes the previous version's bytes, so the
-/// open refuses until the drain lands what it would compose over. Availability,
-/// not trust: the very next drain admits it.
+/// The bytes a stream serves and the length the rendered view reports must come
+/// from one version. Availability, not trust: the very next drain admits the
+/// open.
 #[test]
 fn a_stream_refuses_to_pin_a_version_the_rendered_size_does_not_name() {
     let world = FakeWorld::new();
@@ -1907,16 +1916,8 @@ fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let silent = Arc::new(AtomicBool::new(false));
-    let (mut engine, _events, mut tasks) = boot_with(
-        &world,
-        &blocks,
-        &alice,
-        Box::new(SilenceableEntropy {
-            inner: SeededEntropy::new(42),
-            silent: silent.clone(),
-        }),
-    );
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, mut tasks) = boot_with(&world, &blocks, &alice, entropy);
 
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -1950,16 +1951,8 @@ fn a_seam_that_draws_a_silent_record_ephemeral_queues_no_op() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let silent = Arc::new(AtomicBool::new(false));
-    let (mut engine, _events, _tasks) = boot_with(
-        &world,
-        &blocks,
-        &alice,
-        Box::new(SilenceableEntropy {
-            inner: SeededEntropy::new(42),
-            silent: silent.clone(),
-        }),
-    );
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, _tasks) = boot_with(&world, &blocks, &alice, entropy);
 
     silent.store(true, Ordering::Relaxed);
     let refused = block_on(engine.command(Command::Rename {
@@ -1968,7 +1961,7 @@ fn a_seam_that_draws_a_silent_record_ephemeral_queues_no_op() {
     }));
 
     assert!(
-        matches!(refused, Err(EngineError::Entropy { .. })),
+        matches!(&refused, Err(EngineError::Entropy { message }) if message.contains("ephemeral")),
         "a rename seals no record under an ephemeral the seam never wrote: {refused:?}"
     );
     assert!(
@@ -1988,16 +1981,8 @@ fn a_seam_that_draws_a_silent_node_id_creates_nothing() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let silent = Arc::new(AtomicBool::new(false));
-    let (mut engine, _events, _tasks) = boot_with(
-        &world,
-        &blocks,
-        &alice,
-        Box::new(SilenceableEntropy {
-            inner: SeededEntropy::new(42),
-            silent: silent.clone(),
-        }),
-    );
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, _tasks) = boot_with(&world, &blocks, &alice, entropy);
 
     silent.store(true, Ordering::Relaxed);
     let refused = block_on(engine.command(Command::Create {
@@ -2007,7 +1992,7 @@ fn a_seam_that_draws_a_silent_node_id_creates_nothing() {
     }));
 
     assert!(
-        matches!(refused, Err(EngineError::Entropy { .. })),
+        matches!(&refused, Err(EngineError::Entropy { message }) if message.contains("node id")),
         "the create refuses rather than minting a predictable id: {refused:?}"
     );
     assert!(

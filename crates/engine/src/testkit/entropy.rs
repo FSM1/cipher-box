@@ -61,6 +61,33 @@ impl Entropy for SilentEntropy {
     }
 }
 
+/// A seeded seam that goes silent for draws of one width. **Test-only.** It
+/// reaches a guarded draw past the draws before it, which a wholly silent seam
+/// would refuse first.
+pub struct SilentAtWidth {
+    inner: SeededEntropy,
+    width: usize,
+}
+
+impl SilentAtWidth {
+    /// A seeded source that writes nothing for every `width`-byte draw.
+    pub fn new(seed: u64, width: usize) -> Self {
+        Self {
+            inner: SeededEntropy::new(seed),
+            width,
+        }
+    }
+}
+
+impl Entropy for SilentAtWidth {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        match dest.len() == self.width {
+            true => Ok(()),
+            false => self.inner.fill(dest),
+        }
+    }
+}
+
 /// A seam that refuses every draw. **Test-only.** Nothing may be sealed or
 /// written when entropy cannot be had.
 pub struct FailingEntropy;

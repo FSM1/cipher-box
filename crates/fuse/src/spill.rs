@@ -57,8 +57,6 @@ impl SpillArea {
                 message: "a spill needs a non-zero block size".to_owned(),
             });
         }
-        // Drawn straight into its zeroizing owner: a plain array would leave an
-        // unwiped copy of the key behind (AGENTS.md 7).
         let key = fresh_seed(self.entropy.as_mut()).map_err(spill_entropy)?;
         // Named from entropy, not a counter: two areas over one dir would mint
         // the same counter and each would then unlink the other's live spill.
@@ -77,9 +75,7 @@ impl SpillArea {
     }
 }
 
-/// A refused draw: the engine's helpers fail closed on a seam that reports
-/// success having written nothing, which would otherwise seal every spill under
-/// one known key and give every spill file one name.
+/// A draw the engine's fail-closed helpers refused.
 fn spill_entropy(error: EntropyError) -> VfsError {
     VfsError::Internal {
         message: error.message().to_owned(),
@@ -305,7 +301,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut area =
             SpillArea::open(dir.path().to_path_buf(), Box::new(SilentEntropy)).expect("spill area");
-        assert!(matches!(area.create(8), Err(VfsError::Internal { .. })));
+        assert!(
+            matches!(area.create(8), Err(VfsError::Internal { message }) if message.contains("all-zero")),
+            "the refusal is the entropy guard, not any internal error"
+        );
         assert!(
             std::fs::read_dir(dir.path()).unwrap().next().is_none(),
             "no spill file is left behind"

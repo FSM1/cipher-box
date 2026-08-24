@@ -4726,6 +4726,7 @@ where {
     /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
         let (version, version_count) = self.head_version(node).await?;
+        self.refuse_unpaired_version(node, &version).await?;
         // The range clamps to the version's size, so the whole file is the
         // unbounded window.
         let bytes = open_content_range(&self.gateway, &self.seams.http, &version, 0, u64::MAX)
@@ -4750,21 +4751,7 @@ where {
         let slot =
             StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
         let (version, version_count) = self.head_version(node).await?;
-        // Pairing rule: a partial write composes its new bytes over the version a
-        // stream serves, at the length the rendered view reports, and the overlay
-        // reports the staged version's length. A stream pinned to any other
-        // version would publish the pinned version's bytes under that length —
-        // the truncation-resurrection defect, as a silent success. Availability,
-        // not trust: the drain publishes the staged version and the open lands.
-        if self
-            .staged_version_cid(node)
-            .await?
-            .is_some_and(|staged| staged != version.content_cid)
-        {
-            return Err(EngineError::ContentUnavailable {
-                message: "a newer content version is staged and not yet published".to_owned(),
-            });
-        }
+        self.refuse_unpaired_version(node, &version).await?;
         let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
             .await
             .map_err(open_engine_error)?;
@@ -5074,15 +5061,39 @@ where {
         }
     }
 
+    /// Refuse to serve `version` when the queue has staged a different one.
+    ///
+    /// A read's consumer pairs the bytes it serves with the length the rendered
+    /// view reports, and the overlay takes that length from the staged version.
+    /// Serving any other version under it publishes that version's bytes — the
+    /// truncation-resurrection defect, as a silent success. Availability, not
+    /// trust: the drain publishes the staged version and the read lands.
+    async fn refuse_unpaired_version(
+        &self,
+        node: NodeId,
+        version: &Version,
+    ) -> Result<(), EngineError> {
+        match self
+            .staged_version_cid(node)
+            .await?
+            .is_some_and(|staged| staged != version.content_cid)
+        {
+            true => Err(EngineError::ContentUnavailable {
+                message: "a newer content version is staged and not yet published".to_owned(),
+            }),
+            false => Ok(()),
+        }
+    }
+
     /// The `contentCid` of the newest version a queued op has staged for `node`,
     /// `None` when the queue authors none — the version the rendered
     /// (overlay) size and mtime describe.
-    async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+    pub async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
         Ok(self.pending_ops().await?.iter().rev().find_map(|op| {
             (op.target == node)
-                .then(|| op.staged_content())
+                .then(|| op.content_root_cid())
                 .flatten()
-                .map(|content| content.root_cid.clone())
+                .map(<[u8]>::to_vec)
         }))
     }
 

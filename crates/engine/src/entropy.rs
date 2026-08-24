@@ -132,9 +132,8 @@ pub fn fresh_nonce<E: Entropy + ?Sized>(entropy: &mut E) -> Result<[u8; NONCE_LE
 /// The same refusal as [`fresh_ephemeral`], for values that are neither keys nor
 /// seeds and so want no [`Zeroizing`]. `what` names the draw in the error.
 ///
-/// The refusal detects an untouched zero-initialised buffer. A seam that writes
-/// the *same non-zero* bytes on every call passes it: catching that needs
-/// cross-draw state no fresh draw holds.
+/// The refusal covers an untouched zero buffer only, not a seam stuck on one
+/// non-zero value — no single draw can tell those apart.
 pub fn fresh_bytes<const N: usize, E: Entropy + ?Sized>(
     entropy: &mut E,
     what: &str,

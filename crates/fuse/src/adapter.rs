@@ -33,8 +33,6 @@ pub enum Invalidation {
     },
 }
 
-/// Renders the entry without its name: a filename is decoded user content, and
-/// an adapter's invalidation is the value nearest a host log line.
 impl core::fmt::Debug for Invalidation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

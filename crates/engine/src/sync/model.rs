@@ -62,8 +62,6 @@ pub struct NodeMeta {
     pub ipns_name: Option<Vec<u8>>,
 }
 
-/// Renders the node without its name or its live `ipnsName`, the two decoded
-/// user-content fields (`crates/core`'s `ChildRef` redacts the same pair).
 impl fmt::Debug for NodeMeta {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NodeMeta")

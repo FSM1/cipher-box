@@ -238,9 +238,6 @@ pub enum OpKind {
     },
 }
 
-/// Renders the mutation without the names it carries: a name is decoded user
-/// content, and these types reach a host's log through a panic format
-/// (`crates/core`'s `ChildRef` redacts the same fields for the same reason).
 impl fmt::Debug for OpKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -534,12 +531,12 @@ mod tests {
         NodeId([b; 16])
     }
 
-    /// Every op carrying a name renders it as a length, and the staged key blob
-    /// renders as a length too — these are public engine types, and a wasm panic
-    /// format reaches the browser console.
+    /// These are public engine types and a wasm panic format reaches the
+    /// browser console, so every name and the sealed key render as a length.
     #[test]
     fn debug_renders_no_name_and_no_sealed_key() {
         let content = staged(b"root-cid", 9);
+        let unredacted_key = format!("{:?}", content.sealed_content_key);
         let ops = [
             Op::create(
                 id(1),
@@ -572,7 +569,7 @@ mod tests {
                 "a filename never renders: {rendered}"
             );
             assert!(
-                !rendered.contains("sealed-key-blob"),
+                !rendered.contains(&unredacted_key),
                 "a sealed content key never renders: {rendered}"
             );
             assert!(
