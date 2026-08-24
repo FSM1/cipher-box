@@ -103,8 +103,8 @@ use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, resolve_mode,
-    run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, on_access_refresh_due,
+    resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2151,6 +2151,11 @@ pub struct Engine<T: SeamTypes> {
     /// staleness threshold renders state already held instead of re-probing the
     /// record plane (blueprint/engine.md: refresh on access past the threshold).
     focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// When a host operation last put the focus window's folder in view, for
+    /// hosts that derive focus from an operation stream rather than navigation
+    /// ([`note_focus_access`](Self::note_focus_access)). `None` when no window
+    /// is open.
+    focus_touched: Cell<Option<UnixMillis>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2261,6 +2266,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
+                focus_touched: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -5159,6 +5165,59 @@ where {
         Ok(RecordSeal {
             owner_enc_secret,
             ephemeral_scalar,
+        })
+    }
+
+    /// Note that a host filesystem operation put `folder` in view, and report
+    /// whether its state is past the staleness threshold — the desktop
+    /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness").
+    ///
+    /// Desktop derives the focus window from the operation stream where web
+    /// derives it from navigation ([`Command::SetFocus`]): the folder in view
+    /// becomes the open folder, and an operation stream that has gone quiet
+    /// past the profile's focus horizon closes the window rather than leaving
+    /// the poll tick on a folder nobody is looking at. `None` is an operation
+    /// with no folder in view — it only ages the window.
+    ///
+    /// Nothing resolves here: a kernel callback never waits on the record plane
+    /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
+    /// refresh hint, and the next tick is what acts on it, over the window this
+    /// call just set. The hint stamps the folder as attempted, so a burst of
+    /// callbacks over one folder costs one hint rather than one per callback —
+    /// the damper [`refresh_focus_on_access`](Self::refresh_focus_on_access)
+    /// applies to navigation.
+    pub fn note_focus_access(&self, folder: Option<NodeId>) -> bool {
+        let now = self.seams.scheduler.now();
+        let Some(folder) = folder else {
+            if self.focus_gone_quiet(now) {
+                self.focus.borrow_mut().open_folder = None;
+                self.focus_touched.set(None);
+            }
+            return false;
+        };
+        self.focus.borrow_mut().open_folder = Some(folder);
+        self.focus_touched.set(Some(now));
+        let stale = self
+            .focus_refreshed
+            .borrow()
+            .get(&folder)
+            .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile));
+        if stale {
+            self.focus_refreshed.borrow_mut().insert(folder, now);
+        }
+        stale
+    }
+
+    /// The folder the focus window currently holds open.
+    pub fn focus_folder(&self) -> Option<NodeId> {
+        self.focus.borrow().open_folder
+    }
+
+    /// Whether the operation stream driving the focus window has been quiet
+    /// longer than the profile's focus horizon.
+    fn focus_gone_quiet(&self, now: UnixMillis) -> bool {
+        self.focus_touched.get().is_some_and(|last| {
+            now.0.saturating_sub(last.0) >= crate::sync::duration_millis(self.profile.focus_horizon)
         })
     }
 
@@ -8569,5 +8628,109 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// The FUSE-op TTL check and the operation-stream focus window
+/// (blueprint/desktop.md "Freshness"). Driven at the facade because the focus
+/// window and its refresh stamps are engine state; `fuse-op-core` covers what
+/// the mount does with the answer.
+#[cfg(test)]
+mod focus_access_tests {
+    use super::*;
+    use crate::testkit::fakes::VirtualScheduler;
+    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy};
+
+    const FOLDER: NodeId = NodeId([3; 16]);
+    const OTHER: NodeId = NodeId([4; 16]);
+
+    fn engine() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice-pk");
+        let scheduler = world.scheduler.clone();
+        let (engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        (engine, scheduler)
+    }
+
+    #[test]
+    fn a_folder_this_device_has_never_refreshed_is_stale() {
+        let (engine, _clock) = engine();
+        assert!(engine.note_focus_access(Some(FOLDER)));
+    }
+
+    #[test]
+    fn a_second_access_inside_the_threshold_fires_no_second_hint() {
+        let (engine, clock) = engine();
+        assert!(engine.note_focus_access(Some(FOLDER)));
+
+        clock.advance(SyncTimingProfile::CI.stale_after / 2);
+        assert!(
+            !engine.note_focus_access(Some(FOLDER)),
+            "the hint already filed covers this access"
+        );
+
+        clock.advance(SyncTimingProfile::CI.stale_after);
+        assert!(
+            engine.note_focus_access(Some(FOLDER)),
+            "past the threshold the folder is stale again"
+        );
+    }
+
+    #[test]
+    fn the_folder_in_view_becomes_the_open_folder() {
+        let (engine, _clock) = engine();
+        assert_eq!(engine.focus_folder(), None);
+
+        engine.note_focus_access(Some(FOLDER));
+        assert_eq!(engine.focus_folder(), Some(FOLDER));
+
+        engine.note_focus_access(Some(OTHER));
+        assert_eq!(engine.focus_folder(), Some(OTHER));
+    }
+
+    #[test]
+    fn an_operation_with_no_folder_in_view_keeps_the_window_open_inside_the_horizon() {
+        let (engine, clock) = engine();
+        engine.note_focus_access(Some(FOLDER));
+
+        clock.advance(SyncTimingProfile::CI.focus_horizon / 2);
+        assert!(
+            !engine.note_focus_access(None),
+            "a folderless operation is never itself a stale hit"
+        );
+        assert_eq!(engine.focus_folder(), Some(FOLDER));
+    }
+
+    #[test]
+    fn an_operation_stream_quiet_past_the_focus_horizon_closes_the_window() {
+        let (engine, clock) = engine();
+        engine.note_focus_access(Some(FOLDER));
+
+        clock.advance(SyncTimingProfile::CI.focus_horizon);
+        engine.note_focus_access(None);
+        assert_eq!(
+            engine.focus_folder(),
+            None,
+            "a folder nobody has looked at for a horizon stops riding the tick"
+        );
+    }
+
+    #[test]
+    fn traffic_reopens_a_window_the_horizon_closed() {
+        let (engine, clock) = engine();
+        engine.note_focus_access(Some(FOLDER));
+        clock.advance(SyncTimingProfile::CI.focus_horizon);
+        engine.note_focus_access(None);
+
+        assert!(engine.note_focus_access(Some(FOLDER)));
+        assert_eq!(engine.focus_folder(), Some(FOLDER));
     }
 }
