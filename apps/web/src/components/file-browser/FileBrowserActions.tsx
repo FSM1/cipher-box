@@ -8,10 +8,8 @@ import { useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useFileDownload, type SaveRequest } from '../../hooks/useFileDownload';
-import { useSharingActions } from '../../hooks/useSharingActions';
 import { useVaultActions, type BatchOutcome } from '../../hooks/useVaultActions';
 import { ShareDialog } from '../sharing/ShareDialog';
-import { ImportContactDialog } from '../sharing/ImportContactDialog';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
 import { useSelection } from '../../vault/selection';
@@ -33,8 +31,7 @@ const saveRequest = (row: ListingRow): SaveRequest => ({
 
 type Dialog =
   | { kind: 'create' }
-  | { kind: 'rename' | 'details' | 'preview' | 'edit'; row: ListingRow }
-  | { kind: 'share' | 'importContact'; row: ListingRow }
+  | { kind: 'rename' | 'details' | 'preview' | 'edit' | 'share'; row: ListingRow }
   | { kind: 'move' | 'delete'; rows: ListingRow[] };
 
 interface FileBrowserActionsProps {
@@ -57,7 +54,6 @@ export function FileBrowserActions({
   const [downloading, setDownloading] = useState(false);
   const menu = useContextMenu();
   const actions = useVaultActions();
-  const sharing = useSharingActions();
   const downloads = useFileDownload();
   const selection = useSelection(rows, folder);
   const failure = actions.error ?? downloads.error;
@@ -122,12 +118,10 @@ export function FileBrowserActions({
     }
     items.push(
       { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
-      { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) }
-    );
-    if (row.kind === 'folder') {
-      items.push({ label: 'share...', onSelect: () => setDialog({ kind: 'share', row }) });
-    }
-    items.push(
+      { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
+      ...(row.kind === 'folder'
+        ? [{ label: 'share...', onSelect: () => setDialog({ kind: 'share' as const, row }) }]
+        : []),
       { label: 'details', onSelect: () => setDialog({ kind: 'details', row }) },
       {
         label: 'delete',
@@ -241,27 +235,7 @@ export function FileBrowserActions({
           onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
         />
       )}
-      {dialog?.kind === 'share' && (
-        <ShareDialog
-          row={dialog.row}
-          actions={sharing}
-          onImportContact={() => setDialog({ kind: 'importContact', row: dialog.row })}
-          onClose={close}
-        />
-      )}
-      {dialog?.kind === 'importContact' && (
-        <ImportContactDialog
-          busy={sharing.busy === 'importContact'}
-          error={sharing.failure?.command === 'importContact' ? sharing.failure.message : null}
-          onClose={() => setDialog({ kind: 'share', row: dialog.row })}
-          onConfirm={(code) => {
-            const row = dialog.row;
-            void sharing.importContact(code).then((verified) => {
-              if (verified) setDialog({ kind: 'share', row });
-            });
-          }}
-        />
-      )}
+      {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'preview' && (

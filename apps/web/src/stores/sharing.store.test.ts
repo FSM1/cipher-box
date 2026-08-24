@@ -1,16 +1,18 @@
 import { toHex } from '@cipherbox/client';
 import type { ImportedContact } from '@cipherbox/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { grantsFor, sharingStore, type VerifiedContact } from './sharingStore';
+import { grantsFor, sharingStore, type VerifiedContact } from './sharing.store';
 
 const DOCS = new Uint8Array(16).fill(7);
 const PHOTOS = new Uint8Array(16).fill(9);
+const DOCS_KEY = toHex(DOCS);
+const PHOTOS_KEY = toHex(PHOTOS);
 
-function imported(seed: number, subkey = seed): ImportedContact {
+function imported(seed: number): ImportedContact {
   return {
     kind: 'contactImported',
     identityPublicKey: new Uint8Array(33).fill(seed),
-    encPublicKey: new Uint8Array(32).fill(subkey),
+    encPublicKey: new Uint8Array(32).fill(seed),
   };
 }
 
@@ -29,13 +31,11 @@ describe('contacts', () => {
     expect(sharingStore.getState().contacts).toEqual([recorded]);
   });
 
-  it('replaces the entry for an identity that re-imports a rotated subkey', () => {
+  it('holds one entry per identity however often its code is re-imported', () => {
     contact(1);
-    sharingStore.contactImported(imported(1, 2));
+    contact(1);
 
-    const { contacts } = sharingStore.getState();
-    expect(contacts).toHaveLength(1);
-    expect(contacts[0].encPublicKey).toEqual(new Uint8Array(32).fill(2));
+    expect(sharingStore.getState().contacts).toHaveLength(1);
   });
 
   it('holds a distinct entry per identity', () => {
@@ -52,8 +52,8 @@ describe('grants', () => {
     sharingStore.granted(DOCS, alice, 'write');
 
     const state = sharingStore.getState();
-    expect(grantsFor(state, DOCS)).toEqual([{ contact: alice, permission: 'write' }]);
-    expect(grantsFor(state, PHOTOS)).toEqual([]);
+    expect(grantsFor(state, DOCS_KEY)).toEqual([{ contact: alice, permission: 'write' }]);
+    expect(grantsFor(state, PHOTOS_KEY)).toEqual([]);
   });
 
   it('leaves no row for a grant that was revoked', () => {
@@ -61,7 +61,7 @@ describe('grants', () => {
     sharingStore.granted(DOCS, alice, 'write');
     sharingStore.revoked(DOCS, alice);
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
 
   it('revokes only the named recipient', () => {
@@ -71,7 +71,7 @@ describe('grants', () => {
     sharingStore.granted(DOCS, bob, 'read');
     sharingStore.revoked(DOCS, alice);
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
       { contact: bob, permission: 'read' },
     ]);
   });
@@ -83,8 +83,7 @@ describe('grants', () => {
     sharingStore.granted(DOCS, bob, 'read');
     sharingStore.downgraded(DOCS, alice);
 
-    // Same rows, same order, same recipients — only alice's permission moved.
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
       { contact: alice, permission: 'read' },
       { contact: bob, permission: 'read' },
     ]);
@@ -94,7 +93,7 @@ describe('grants', () => {
     const alice = contact(1);
     sharingStore.downgraded(DOCS, alice);
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
 
   it('changes the permission of a re-granted recipient rather than doubling the row', () => {
@@ -102,7 +101,7 @@ describe('grants', () => {
     sharingStore.granted(DOCS, alice, 'read');
     sharingStore.granted(DOCS, alice, 'write');
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
       { contact: alice, permission: 'write' },
     ]);
   });
@@ -110,15 +109,14 @@ describe('grants', () => {
   it('leaves every other scope reference-equal when one scope changes', () => {
     const alice = contact(1);
     sharingStore.granted(DOCS, alice, 'read');
-    const docs = grantsFor(sharingStore.getState(), DOCS);
+    const docs = grantsFor(sharingStore.getState(), DOCS_KEY);
     sharingStore.granted(PHOTOS, alice, 'write');
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toBe(docs);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBe(docs);
   });
 
   it('has no rows for a scope before anything is granted on it', () => {
-    expect(grantsFor(sharingStore.getState(), null)).toEqual([]);
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
 });
 
@@ -143,6 +141,6 @@ describe('session', () => {
 
     const state = sharingStore.getState();
     expect(state.contacts).toEqual([]);
-    expect(grantsFor(state, DOCS)).toEqual([]);
+    expect(grantsFor(state, DOCS_KEY)).toEqual([]);
   });
 });

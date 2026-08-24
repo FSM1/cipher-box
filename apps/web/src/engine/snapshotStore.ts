@@ -13,7 +13,6 @@
 import { EngineRequestError, toHex } from '@cipherbox/client';
 import type { EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
 import { sameNode } from '../lib/nodeId';
-import { sharingStore } from '../sharing/sharingStore';
 import { notificationStore } from '../stores/notification.store';
 
 /** A failed pull, carrying the engine's stable code so the UI can classify it. */
@@ -217,10 +216,8 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       generation += 1;
       unsubscribe();
       listeners.clear();
-      // A warning names the scope it came from, and a contact or grant row names
-      // this identity's peers; neither must outlive its engine.
+      // A warning names the scope it came from; it must not outlive its engine.
       notificationStore.clear();
-      sharingStore.clear();
     },
   };
 }

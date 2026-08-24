@@ -4,8 +4,9 @@
  *
  * Every entry is an outcome an engine command resolved with — an import
  * resolving *is* the proof its binding verified (blueprint/engine.md "Contact
- * import"), and a grant row exists only where a grant/downgrade command
- * returned. Nothing here re-checks anything and nothing is inferred.
+ * import"), and a grant row exists only where a grant command returned. The
+ * engine holds both lists durably but the facade exposes a read for neither, so
+ * this stands in until it does; a host must not read absence from it.
  *
  * Memory only, and cleared with the session that made it: these rows name an
  * identity's peers, so they must not outlive it.
@@ -18,7 +19,6 @@ import type { ImportedContact, Permission } from '@cipherbox/client';
 export interface VerifiedContact {
   readonly key: string;
   readonly identityPublicKey: Uint8Array;
-  readonly encPublicKey: Uint8Array;
 }
 
 /** One recipient's standing on one scope. */
@@ -50,15 +50,26 @@ function publish(next: SharingState): void {
   for (const listener of listeners) listener();
 }
 
-/**
- * Rewrites one scope's rows, leaving every other scope's array reference-equal
- * so a change to one shared folder does not repaint the rest.
- */
+/** Replaces the entry `matches` picks out, or appends when nothing matches. */
+function upsert<T>(list: readonly T[], matches: (item: T) => boolean, next: T): T[] {
+  return list.some(matches) ? list.map((item) => (matches(item) ? next : item)) : [...list, next];
+}
+
+/** Rewrites one scope's rows, leaving every other scope's array untouched. */
 function withScope(scope: string, rows: readonly GrantRow[]): void {
   const grants = new Map(state.grants);
   if (rows.length === 0) grants.delete(scope);
   else grants.set(scope, Object.freeze(rows));
   publish(frozen(state.contacts, grants));
+}
+
+function recordGrant(scope: Uint8Array, contact: VerifiedContact, permission: Permission): void {
+  const key = toHex(scope);
+  const rows = state.grants.get(key) ?? EMPTY;
+  withScope(
+    key,
+    upsert(rows, (row) => row.contact.key === contact.key, { contact, permission })
+  );
 }
 
 export const sharingStore = {
@@ -78,42 +89,27 @@ export const sharingStore = {
     const contact: VerifiedContact = Object.freeze({
       key: toHex(outcome.identityPublicKey),
       identityPublicKey: outcome.identityPublicKey,
-      encPublicKey: outcome.encPublicKey,
     });
-    const contacts = state.contacts.some((held) => held.key === contact.key)
-      ? state.contacts.map((held) => (held.key === contact.key ? contact : held))
-      : [...state.contacts, contact];
-    publish(frozen(contacts, state.grants));
+    publish(
+      frozen(
+        upsert(state.contacts, (held) => held.key === contact.key, contact),
+        state.grants
+      )
+    );
     return contact;
   },
 
   /** Records an accepted grant, or the new permission on a standing row. */
-  granted(scope: Uint8Array, contact: VerifiedContact, permission: Permission): void {
-    const key = toHex(scope);
-    const rows = state.grants.get(key) ?? EMPTY;
-    withScope(
-      key,
-      rows.some((row) => row.contact.key === contact.key)
-        ? rows.map((row) => (row.contact.key === contact.key ? { contact, permission } : row))
-        : [...rows, { contact, permission }]
-    );
-  },
+  granted: recordGrant,
 
   /**
    * Records an accepted downgrade as what it is — the standing row's permission
-   * changing to read, in place. A recipient with no row on this scope records
-   * nothing: a downgrade never introduces a grant.
+   * changing to read. A recipient with no row on this scope records nothing: a
+   * downgrade never introduces a grant.
    */
   downgraded(scope: Uint8Array, contact: VerifiedContact): void {
-    const key = toHex(scope);
-    const rows = state.grants.get(key) ?? EMPTY;
-    if (!rows.some((row) => row.contact.key === contact.key)) return;
-    withScope(
-      key,
-      rows.map((row) =>
-        row.contact.key === contact.key ? { contact: row.contact, permission: 'read' } : row
-      )
-    );
+    const rows = state.grants.get(toHex(scope)) ?? EMPTY;
+    if (rows.some((row) => row.contact.key === contact.key)) recordGrant(scope, contact, 'read');
   },
 
   /** Records an accepted revoke: the recipient has no standing on this scope. */
@@ -130,7 +126,12 @@ export const sharingStore = {
   },
 };
 
-/** The rows standing on `scope`, or none before the first grant lands on it. */
-export function grantsFor(current: SharingState, scope: Uint8Array | null): readonly GrantRow[] {
-  return scope === null ? EMPTY : (current.grants.get(toHex(scope)) ?? EMPTY);
+/**
+ * The rows this session recorded on the scope with this hex node id. Hex
+ * because that is how the UI already addresses a node (`lib/nodeId.ts`), so a
+ * render costs no re-encode. An empty result is "nothing recorded here", never
+ * "nothing is granted here".
+ */
+export function grantsFor(current: SharingState, scopeKey: string): readonly GrantRow[] {
+  return current.grants.get(scopeKey) ?? EMPTY;
 }

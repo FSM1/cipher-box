@@ -2,6 +2,7 @@ import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client
 import { render, renderHook, screen } from '@testing-library/react';
 import { StrictMode, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sharingStore } from '../stores/sharing.store';
 import { EngineProvider, useEngine, useLoginSecretSource, useMediaService } from './EngineProvider';
 
 // The real factory reads `navigator.serviceWorker`, which jsdom does not
@@ -91,6 +92,25 @@ describe('EngineProvider', () => {
     unmount();
     expect(disposed).toEqual(built);
     expect(subscriptions.open).toBe(0);
+  });
+
+  it("drops the session's contacts and grants when the provider unmounts", () => {
+    const { createClient } = clientLedger();
+    const { unmount } = render(
+      <EngineProvider createClient={createClient}>
+        <span />
+      </EngineProvider>
+    );
+    sharingStore.contactImported({
+      kind: 'contactImported',
+      identityPublicKey: new Uint8Array(33).fill(1),
+      encPublicKey: new Uint8Array(32).fill(1),
+    });
+
+    unmount();
+
+    // A contact names this identity's peers; it must not reach the next session.
+    expect(sharingStore.getState().contacts).toEqual([]);
   });
 
   it('leaves exactly one live client after a StrictMode double-mount', () => {

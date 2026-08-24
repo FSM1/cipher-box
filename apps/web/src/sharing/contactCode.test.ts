@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseContactCode } from './contactCode';
+import { MAX_PASTED_CHARS, parseContactCode } from './contactCode';
 
 describe('parseContactCode', () => {
   it('decodes a pasted code to the bytes the engine verifies', () => {
@@ -12,6 +12,10 @@ describe('parseContactCode', () => {
 
   it('accepts a code that was pasted in upper case', () => {
     expect(parseContactCode('00FF10')).toEqual(new Uint8Array([0x00, 0xff, 0x10]));
+  });
+
+  it('refuses a paste too long to be a code rather than decoding it', () => {
+    expect(parseContactCode('ab'.repeat(MAX_PASTED_CHARS))).toBeNull();
   });
 
   it('refuses a paste that is not a code rather than sending the engine junk', () => {

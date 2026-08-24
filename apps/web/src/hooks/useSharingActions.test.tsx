@@ -1,21 +1,22 @@
 import type { ReactNode } from 'react';
-import { EngineRequestError } from '@cipherbox/client';
+import { EngineRequestError, toHex } from '@cipherbox/client';
 import type { EngineClient, EventDescriptor } from '@cipherbox/client';
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
-import { grantsFor, sharingStore } from '../sharing/sharingStore';
-import { useSharingActions } from './useSharingActions';
+import { grantsFor, sharingStore } from '../stores/sharing.store';
+import { useSharingActions, type SharingCommand } from './useSharingActions';
 
 const DOCS = new Uint8Array(16).fill(7);
+const DOCS_KEY = toHex(DOCS);
 const IDENTITY = new Uint8Array(33).fill(1);
 const ENC = new Uint8Array(32).fill(2);
 const CODE = new Uint8Array([0xab, 0xcd]);
 
 /** The grant surface the hook drives, refusing whichever command a test names. */
-function sharingEngine(refusals: Partial<Record<string, Error>> = {}) {
+function sharingEngine(refusals: Partial<Record<SharingCommand, Error>> = {}) {
   const listeners = new Set<(event: EventDescriptor) => void>();
-  const answer = <T,>(name: string, value: T) =>
+  const answer = <T,>(name: SharingCommand, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
 
   const facade = {
@@ -64,7 +65,7 @@ describe('contact import', () => {
 
     expect(engine.facade.importContact).toHaveBeenCalledWith(CODE);
     expect(sharingStore.getState().contacts).toEqual([
-      { key: '01'.repeat(33), identityPublicKey: IDENTITY, encPublicKey: ENC },
+      { key: '01'.repeat(33), identityPublicKey: IDENTITY },
     ]);
   });
 
@@ -76,17 +77,12 @@ describe('contact import', () => {
     await expect(result.current.importContact(CODE)).resolves.toBe(false);
 
     expect(sharingStore.getState().contacts).toEqual([]);
-    await waitFor(() =>
-      expect(result.current.failure).toEqual({
-        command: 'importContact',
-        message: 'contact binding did not verify',
-      })
-    );
+    await waitFor(() => expect(result.current.error).toBe('contact binding did not verify'));
   });
 });
 
 describe('grant commands', () => {
-  const contact = { key: '01'.repeat(33), identityPublicKey: IDENTITY, encPublicKey: ENC };
+  const contact = { key: '01'.repeat(33), identityPublicKey: IDENTITY };
 
   it('lists a grant the engine accepted, naming the recipient by identity key', async () => {
     const engine = sharingEngine();
@@ -95,7 +91,9 @@ describe('grant commands', () => {
     await expect(result.current.grant(DOCS, contact, 'write')).resolves.toBe(true);
 
     expect(engine.facade.grant).toHaveBeenCalledWith(DOCS, IDENTITY, 'write');
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([{ contact, permission: 'write' }]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+      { contact, permission: 'write' },
+    ]);
   });
 
   it('lists no grant the engine refused', async () => {
@@ -104,8 +102,8 @@ describe('grant commands', () => {
 
     await expect(result.current.grant(DOCS, contact, 'read')).resolves.toBe(false);
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([]);
-    await waitFor(() => expect(result.current.failure?.command).toBe('grant'));
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
+    await waitFor(() => expect(result.current.error).toBe('recipient is the owner'));
   });
 
   it('drops the row the engine revoked', async () => {
@@ -116,7 +114,7 @@ describe('grant commands', () => {
     await expect(result.current.revoke(DOCS, contact)).resolves.toBe(true);
 
     expect(engine.facade.revoke).toHaveBeenCalledWith(DOCS, IDENTITY);
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
 
   it('keeps the row a downgrade landed on, at read', async () => {
@@ -127,7 +125,7 @@ describe('grant commands', () => {
     await expect(result.current.downgrade(DOCS, contact)).resolves.toBe(true);
 
     expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, IDENTITY);
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([{ contact, permission: 'read' }]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([{ contact, permission: 'read' }]);
   });
 
   it('keeps the write grant a refused downgrade left standing', async () => {
@@ -137,6 +135,8 @@ describe('grant commands', () => {
 
     await expect(result.current.downgrade(DOCS, contact)).resolves.toBe(false);
 
-    expect(grantsFor(sharingStore.getState(), DOCS)).toEqual([{ contact, permission: 'write' }]);
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+      { contact, permission: 'write' },
+    ]);
   });
 });

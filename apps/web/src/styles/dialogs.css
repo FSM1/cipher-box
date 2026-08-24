@@ -356,8 +356,7 @@
   overflow-wrap: anywhere;
 }
 
-.sharing-hint,
-.sharing-empty {
+.sharing-note {
   margin: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -392,27 +391,4 @@
   font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
-}
-
-.sharing-permission {
-  flex: none;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
-}
-
-.sharing-grant-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-}
-
-.sharing-field-label {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--color-text-secondary);
 }
