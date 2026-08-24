@@ -19,6 +19,8 @@
 use core::fmt;
 use core::num::NonZeroU64;
 
+use zeroize::Zeroize;
+
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed, TrustViolation};
@@ -33,6 +35,7 @@ use super::body::{
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::grant::Permission;
+use super::section::MAX_GRANT_BLOBS;
 
 // ---------------------------------------------------------------------------
 // Grant-ledger entry.
@@ -337,6 +340,36 @@ pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
 /// are not counted against that ceiling, so it is not a transitive guarantee.
 pub const MAX_DIRECT_CHILD_SCOPES: usize = 1024;
 
+/// The head-block ceiling a scope root's record must fit: the IPFS single-block
+/// ceiling, since `block/put` refuses anything larger (blueprint/api.md). Stated
+/// here because [`MAX_WRITE_BODY_BYTES`] derives from it and this codec sits
+/// below the engine that enforces it on a fetched block; `crates/engine`'s
+/// content limits pin the two values together at compile time.
+pub const MAX_HEAD_BLOCK_BYTES: usize = 2 * 1024 * 1024;
+
+/// The re-seal headroom reserved above [`MAX_WRITE_BODY_BYTES`]: the frozen
+/// worst-case bytes a re-seal adds to a head whose write-body it carries
+/// forward — the seal framing around the body, a freshly minted write history
+/// link, an ascent link the source record need not have carried, and the
+/// section and envelope framing around all three.
+pub const WRITE_BODY_RESEAL_HEADROOM_BYTES: usize = 64 * 1024;
+
+/// The frozen bound on a write-body plaintext's **total encoded size**.
+///
+/// The per-field bounds beside it narrow the byte lever a committed write
+/// grantee holds but cannot close it: `unknown` maps are preserved byte-stable
+/// under the strict-preserve law (#27 D10), so refusing a body for the size of
+/// what it preserves would refuse honest forward-compatible bodies too. The
+/// total is the one place the lever closes without a per-field treadmill.
+///
+/// The law governs field *treatment* — never strip, keep unknowns byte-stable —
+/// not total size, and a size constant every client shares refuses the same
+/// bodies everywhere, so a body an old client re-emits stays conforming by
+/// construction (blueprint/core.md "Write-body"). The reserved headroom is what
+/// makes a conforming body plus any re-seal's additions fit
+/// [`MAX_HEAD_BLOCK_BYTES`].
+pub const MAX_WRITE_BODY_BYTES: usize = MAX_HEAD_BLOCK_BYTES - WRITE_BODY_RESEAL_HEADROOM_BYTES;
+
 /// Decode a write-body plaintext (strict det-CBOR, unknown fields preserved).
 ///
 /// Scope-root-only by construction; this codec cannot enforce that — whether a
@@ -345,10 +378,13 @@ pub const MAX_DIRECT_CHILD_SCOPES: usize = 1024;
 /// The transient decoded tree copies the recipient keys, blinded tags and
 /// child-scope `ipnsName`s, so it is scrubbed on drop.
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
+    // The total, before the codec walks anything: the per-field bounds below
+    // leave the preserved-unknown maps open by construction.
+    assert_within_bound("writeBody", bytes.len(), MAX_WRITE_BODY_BYTES)?;
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
-    // Bound both writer-authored collections before the ledger walk allocates.
+    // Bound every writer-authored collection before the ledger walk allocates.
     let write_history_link = req(map, "writeHistoryLink")?.as_bytes()?;
     assert_within_bound(
         "writeHistoryLink",
@@ -363,8 +399,11 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
         MAX_DIRECT_CHILD_SCOPES,
     )?;
 
-    let mut grant_ledger = Vec::new();
-    for item in req(map, "grantLedger")?.as_array()? {
+    let raw_ledger = req(map, "grantLedger")?.as_array()?;
+    assert_within_bound("grantLedger", raw_ledger.len(), MAX_GRANT_BLOBS)?;
+
+    let mut grant_ledger = Vec::with_capacity(raw_ledger.len());
+    for item in raw_ledger {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
     assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
@@ -386,11 +425,13 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 ///
 /// The write body is sealed outside core, so this encode is its release-active
 /// fail-closed guard: a duplicate-tag ledger, a `writeHistoryLink` past
-/// [`MAX_WRITE_HISTORY_LINK_BYTES`], or a `directChildScopeIndex` past
-/// [`MAX_DIRECT_CHILD_SCOPES`] entries or carrying an `ipnsName` past
-/// [`MAX_IPNS_NAME_BYTES`], fails here with the same verdict
-/// [`decode_write_body`] raises, so it never hands back bytes its own decoder
-/// rejects. The decoder's other reject, `invalid-expiry`, needs no guard —
+/// [`MAX_WRITE_HISTORY_LINK_BYTES`], a `grantLedger` past
+/// [`MAX_GRANT_BLOBS`](super::MAX_GRANT_BLOBS) rows, a `directChildScopeIndex`
+/// past [`MAX_DIRECT_CHILD_SCOPES`] entries or carrying an `ipnsName` past
+/// [`MAX_IPNS_NAME_BYTES`], or a plaintext past [`MAX_WRITE_BODY_BYTES`], fails
+/// here with the same verdict [`decode_write_body`] raises, so it never hands
+/// back bytes its own decoder rejects. The decoder's other reject,
+/// `invalid-expiry`, needs no guard —
 /// [`GrantLedgerEntry::expires_at`] is `NonZeroU64`, so those bytes are
 /// unrepresentable rather than checked. Its key is optional, though, so each
 /// row's preserved fields must not smuggle one in. Every level's preserved list
@@ -409,6 +450,7 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         body.direct_child_scope_index.len(),
         MAX_DIRECT_CHILD_SCOPES,
     )?;
+    assert_within_bound("grantLedger", body.grant_ledger.len(), MAX_GRANT_BLOBS)?;
     assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
     assert_unknown_disjoint(&body.unknown, WRITE_BODY_KNOWN)?;
     for entry in &body.grant_ledger {
@@ -443,7 +485,14 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     merge_unknown(&mut m, &body.unknown);
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
-    encode(guard.0)
+    let mut bytes = encode(guard.0)?;
+    // The total bound, on the produced bytes — the only side that can measure
+    // them, and the same verdict `decode_write_body` raises over the same length.
+    if let Err(e) = assert_within_bound("writeBody", bytes.len(), MAX_WRITE_BODY_BYTES) {
+        bytes.zeroize();
+        return Err(e);
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -569,6 +618,97 @@ mod tests {
             ))
             .unwrap_err()
             .check(),
+            "too-many-structures"
+        );
+    }
+
+    /// Encode/decode symmetry on the ledger's row count (AGENTS.md rule 8): the
+    /// missing member of a bound set the writer-authored collections beside it
+    /// already belong to.
+    #[test]
+    fn a_grant_ledger_past_its_entry_bound_is_refused_by_both_sides() {
+        let row = |i: usize| {
+            let mut tag = [0u8; 32];
+            tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            signed_row([0x02; 33], [0x11; 32], Permission::Read, tag)
+        };
+        let at_bound = WriteBody {
+            grant_ledger: (0..MAX_GRANT_BLOBS).map(row).collect(),
+            ..sample()
+        };
+        let bytes = encode_write_body(&at_bound).expect("a ledger at the bound encodes");
+        assert_eq!(decode_write_body(&bytes).unwrap(), at_bound);
+
+        let over = WriteBody {
+            grant_ledger: (0..=MAX_GRANT_BLOBS).map(row).collect(),
+            ..sample()
+        };
+        assert_eq!(
+            encode_write_body(&over).unwrap_err().check(),
+            "too-many-structures"
+        );
+        // Empty rows keep the vector small and pin the check order: were the
+        // count bound to move after the entry walk, this would say
+        // `missing-field` instead.
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(vec![]));
+        m.insert(
+            "grantLedger",
+            Value::Array(
+                (0..=MAX_GRANT_BLOBS)
+                    .map(|_| Value::Map(Map::new()))
+                    .collect(),
+            ),
+        );
+        m.insert("writeHistoryLink", Value::Bytes(vec![]));
+        assert_eq!(
+            decode_write_body(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "too-many-structures"
+        );
+    }
+
+    /// Encode/decode symmetry on the total encoded size (AGENTS.md rule 8) — the
+    /// bound that closes the preserved-field byte lever the per-field bounds
+    /// leave open. Padding rides in a preserved unknown field, which is exactly
+    /// the shape the strict-preserve law obliges every decoder to keep.
+    #[test]
+    fn a_write_body_past_its_total_size_bound_is_refused_by_both_sides() {
+        let padded = |pad: usize| WriteBody {
+            unknown: PreservedFields::from_iter([(
+                "zzPad".to_string(),
+                Value::Bytes(vec![0xab; pad]),
+            )]),
+            ..sample()
+        };
+        let overhead = encode_write_body(&padded(0))
+            .expect("an unpadded body encodes")
+            .len();
+        // The CBOR byte-string length header widens as the pad grows, so the
+        // first estimate overshoots; step down until the encoding lands on the
+        // bound exactly.
+        let mut pad = MAX_WRITE_BODY_BYTES - overhead;
+        let bytes = loop {
+            if let Ok(b) = encode_write_body(&padded(pad)) {
+                assert_eq!(b.len(), MAX_WRITE_BODY_BYTES, "overshot the bound");
+                break b;
+            }
+            pad -= 1;
+        };
+        assert_eq!(decode_write_body(&bytes).unwrap(), padded(pad));
+
+        assert_eq!(
+            encode_write_body(&padded(pad + 1)).unwrap_err().check(),
+            "too-many-structures"
+        );
+
+        // The decoder sees only bytes, so pad the accepted encoding directly:
+        // one more byte of payload, one more byte of length header.
+        let mut one_over = bytes.clone();
+        one_over.push(0xab);
+        assert_eq!(
+            decode_write_body(&one_over).unwrap_err().check(),
             "too-many-structures"
         );
     }

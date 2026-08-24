@@ -32,6 +32,7 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
+use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
@@ -40,9 +41,9 @@ use cipherbox_core::seal::{
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
-    StructureSigInput, WriteBody, encode_write_body, open_ascent_link, open_history_link, seal,
-    seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
-    seal_owner_history_link, seal_owner_write_blob, sign_structure,
+    StructureSigInput, WriteBody, ascent_link_sig_body, encode_write_body, open_ascent_link,
+    open_history_link, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
+    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -305,6 +306,11 @@ pub enum ResealError {
     /// encryption subkey — only the owner can mint the link
     /// ([`seal_owner_history_link`]).
     OwnerKeyRequiredForWriteCut,
+    /// The re-sealed write-body's plaintext is past the codec's frozen total
+    /// bound ([`cipherbox_core::seal::MAX_WRITE_BODY_BYTES`]) — bytes this
+    /// build's own decoder always rejects. Named apart from the generic encode
+    /// fold so an operator can tell an over-budget body from an encoder fault.
+    WriteBodyTooLarge,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -353,6 +359,9 @@ impl core::fmt::Display for ResealError {
             ResealError::OwnerKeyRequiredForWriteCut => {
                 f.write_str("write-plane cut needs the owner encryption subkey to mint its link")
             }
+            ResealError::WriteBodyTooLarge => {
+                f.write_str("re-sealed write-body exceeds the codec's frozen total bound")
+            }
             ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
@@ -378,8 +387,21 @@ impl ResealError {
             ResealError::HistoryLinkNotDescending => "history-link-not-descending",
             ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
+            ResealError::WriteBodyTooLarge => "write-body-too-large",
             ResealError::Encode(_) => "structure-encode-failed",
         }
+    }
+}
+
+/// Split the write-body encode's own total-size refusal out of the generic
+/// encode fold, so the oversize verdict reaches a caller under its own name.
+fn write_body_encode_error(error: CodecError) -> ResealError {
+    match error {
+        CodecError::Malformed(Malformed::TooManyStructures {
+            collection: "writeBody",
+            ..
+        }) => ResealError::WriteBodyTooLarge,
+        other => ResealError::Encode(other),
     }
 }
 
@@ -753,7 +775,11 @@ pub fn reseal_scope_root<E: Entropy>(
             if let AscentAuthority::ParentSeed(parent_node_seed) = authority {
                 verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
             }
-            let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext);
+            let signature = sign_over(
+                STRUCT_TAG_ASCENT_LINK,
+                None,
+                &ascent_link_sig_body(&link.ascent_public, &link.enc, &link.ciphertext),
+            );
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
                 enc: link.enc,
@@ -828,7 +854,7 @@ pub fn reseal_scope_root<E: Entropy>(
             direct_child_scope_index: committed.direct_child_scope_index.to_vec(),
             unknown: PreservedFields::new(),
         };
-        let mut plaintext = encode_write_body(&wb).map_err(ResealError::Encode)?;
+        let mut plaintext = encode_write_body(&wb).map_err(write_body_encode_error)?;
         let write_seed = kdf::write_seed(seeds.write_scope_seed, &scope_id);
         let write_key = kdf::write_key(write_seed.as_bytes());
         let nonce = fresh_nonce(entropy).map_err(ResealError::Entropy)?;
@@ -907,9 +933,9 @@ mod tests {
     use crate::grants::mint_grant_row;
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
-        GrantSetEntry, encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
-        open_owner_blob, open_owner_history_link, open_owner_write_blob, sign_grant_set,
-        sign_recipient_binding, verify_structure,
+        GrantSetEntry, MAX_WRITE_BODY_BYTES, encode_grant_section, open_ascent_link,
+        open_grant_blob, open_history_link, open_owner_blob, open_owner_history_link,
+        open_owner_write_blob, sign_grant_set, sign_recipient_binding, verify_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -929,6 +955,40 @@ mod tests {
         fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
             panic!("the guard must reject before any seal draws entropy");
         }
+    }
+
+    /// The oversize refusal reaches a caller under its own name, and no other
+    /// encode fault is laundered into it — the operator signal the bound exists
+    /// to give.
+    #[test]
+    fn an_over_bound_write_body_is_named_apart_from_every_other_encode_fault() {
+        let row = |tag: [u8; 32]| {
+            GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, tag, [0x77; 64])
+        };
+        let oversize = WriteBody {
+            grant_ledger: vec![row([0x21; 32])],
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            unknown: PreservedFields::from_iter([(
+                "zzPad".to_string(),
+                cipherbox_core::codec::Value::Bytes(vec![0xab; MAX_WRITE_BODY_BYTES]),
+            )]),
+        };
+        assert_eq!(
+            write_body_encode_error(encode_write_body(&oversize).unwrap_err()),
+            ResealError::WriteBodyTooLarge
+        );
+
+        let duplicate_tag = WriteBody {
+            grant_ledger: vec![row([0x21; 32]), row([0x21; 32])],
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        assert!(matches!(
+            write_body_encode_error(encode_write_body(&duplicate_tag).unwrap_err()),
+            ResealError::Encode(_)
+        ));
     }
 
     struct Fixture {

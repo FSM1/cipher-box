@@ -23,9 +23,10 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    CarriedCut, ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
-    decode_grant_section, encode_envelope_within, encode_grant_section, grant_section_bytes,
-    has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
+    CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
+    ReadBody, Version, decode_grant_section, encode_envelope_within, encode_grant_section,
+    grant_section_bytes, has_grant_section, seal_read_body, set_grant_section,
+    verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -237,11 +238,16 @@ fn check_scope_root(
     .map_err(|_| AuthorError::InvalidGrantSection)?;
     let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
         .ok_or(AuthorError::CommitmentSignatureInvalid)?;
-    verify_grant_set(owner_identity, &section.commitment, &commitment_sig)
-        .map_err(|_| AuthorError::CommitmentSignatureInvalid)?;
-    if section.commitment.ipns_name != name.as_str().as_bytes() {
-        return Err(AuthorError::CommitmentNameMismatch);
-    }
+    verify_grant_set_bound(
+        owner_identity,
+        &section.commitment,
+        &commitment_sig,
+        name.as_str().as_bytes(),
+    )
+    .map_err(|e| match e {
+        GrantSetBindingError::Verify(_) => AuthorError::CommitmentSignatureInvalid,
+        GrantSetBindingError::ScopeMismatch => AuthorError::CommitmentNameMismatch,
+    })?;
     authenticate_section_structures(&section, envelope)
         .map_err(|_| AuthorError::SectionSignatureInvalid)?;
     Ok(())

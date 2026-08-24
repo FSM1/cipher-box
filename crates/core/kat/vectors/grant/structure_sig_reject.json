@@ -9,7 +9,10 @@
     "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
     "signature": "326a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
     "check": "structure-signature-invalid",
-    "class": "trust"
+    "class": "trust",
+    "ascentPublic": "",
+    "enc": "",
+    "ascentCiphertext": ""
   },
   {
     "name": "wrong-tag",
@@ -21,7 +24,10 @@
     "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
     "signature": "336a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
     "check": "structure-signature-invalid",
-    "class": "trust"
+    "class": "trust",
+    "ascentPublic": "",
+    "enc": "",
+    "ascentCiphertext": ""
   },
   {
     "name": "recipient-tag-transplant",
@@ -33,7 +39,10 @@
     "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
     "signature": "336a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
     "check": "structure-signature-invalid",
-    "class": "trust"
+    "class": "trust",
+    "ascentPublic": "",
+    "enc": "",
+    "ascentCiphertext": ""
   },
   {
     "name": "owner-write-blob-tag-transplant",
@@ -45,6 +54,24 @@
     "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
     "signature": "336a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
     "check": "structure-signature-invalid",
-    "class": "trust"
+    "class": "trust",
+    "ascentPublic": "",
+    "enc": "",
+    "ascentCiphertext": ""
+  },
+  {
+    "name": "ascent-public-swapped",
+    "verifierPk": "00d05a1d1ea251396d557afbd4588b3c6d99dbeb972fed10a32562ea26dcdcfa",
+    "scopeId": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 5,
+    "structTag": 5,
+    "recipientTag": "",
+    "ciphertextHash": "5f41630542341a543fc1cb06e94bf80ef23d7f21c16e338356669b58954d7acd",
+    "signature": "d68100c0f2ca8622982398849fd0462d0a9a6b5aedd3ba83e4a6138c66ac660dd0d41b4f8c9fdb6bc9fc7016493dbb1ba0aeeea7a2e6ebbd137f8d67d82c900c",
+    "check": "structure-signature-invalid",
+    "class": "trust",
+    "ascentPublic": "33202f87ce4ff20cbcd0f2e48c8c7f263d11a3609c673b8c7eae56653769c12f",
+    "enc": "9fd7ad6dcff4298dd3f96d5b1b2af910a0535b1488d7f8fabb349a982880b615",
+    "ascentCiphertext": "031f6aff73d50079a8f594f2e803aa5a41ed0fc69a7d0e38d65edcc9456ddb258660ce5e6d335a5edcda4aa7ce7ad061892d31e5cdb25500534c8d7163a1468c40699b2f6db0d6"
   }
 ]

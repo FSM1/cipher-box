@@ -41,8 +41,8 @@ pub use envelope::{
     grant_section_bytes, has_grant_section, open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{
-    AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
-    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, decode_ascent_link,
+    AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
+    HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission, decode_ascent_link,
     decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
     decode_override_seed_payload, decode_owner_write_blob_payload, encode_ascent_link,
     encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
@@ -50,7 +50,7 @@ pub use grant::{
     open_grant_blob, open_history_link, open_owner_blob, open_owner_history_link,
     open_owner_write_blob, seal_ascent_link, seal_ascent_link_to, seal_grant_blob,
     seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
-    sign_grant_set, verify_grant_set,
+    sign_grant_set, verify_grant_set, verify_grant_set_bound,
 };
 pub use op_record::{
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, decode_op_record_header, op_record_aad,
@@ -69,9 +69,13 @@ pub use settings_record::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, SettingsRecordHeader, open_settings_record,
     seal_settings_record, settings_record_aad,
 };
-pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
+pub use structure::{
+    StructureSigInput, ascent_link_sig_body, sign_structure, structure_sig_preimage,
+    verify_structure,
+};
 pub use write_body::{
-    ChildScopeRef, GrantLedgerEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_HISTORY_LINK_BYTES,
+    ChildScopeRef, GrantLedgerEntry, MAX_DIRECT_CHILD_SCOPES, MAX_HEAD_BLOCK_BYTES,
+    MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, WRITE_BODY_RESEAL_HEADROOM_BYTES,
     WriteBody, decode_write_body, encode_recipient_binding, encode_write_body,
     sign_recipient_binding, verify_recipient_binding,
 };

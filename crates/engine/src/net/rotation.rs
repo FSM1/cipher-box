@@ -2125,6 +2125,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::HistoryLinkNotDescending
         | ResealError::HistoryLinkNotContiguous
         | ResealError::OwnerKeyRequiredForWriteCut
+        | ResealError::WriteBodyTooLarge
         | ResealError::Encode(_) => WritePublishError::Rejected,
     }
 }
@@ -6660,6 +6661,7 @@ mod tests {
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
+            ResealError::WriteBodyTooLarge,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -6682,6 +6684,7 @@ mod tests {
                 | ResealError::HistoryLinkNotDescending
                 | ResealError::HistoryLinkNotContiguous
                 | ResealError::OwnerKeyRequiredForWriteCut
+                | ResealError::WriteBodyTooLarge
                 | ResealError::Encode(_) => (
                     WritePublishError::Rejected,
                     "deterministic on inputs the wave already gated; retrying never converges",

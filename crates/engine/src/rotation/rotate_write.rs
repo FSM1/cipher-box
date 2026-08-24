@@ -61,7 +61,7 @@ use zeroize::Zeroizing;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
-use cipherbox_core::seal::{GrantSetCommitment, verify_grant_set};
+use cipherbox_core::seal::{GrantSetBindingError, GrantSetCommitment, verify_grant_set_bound};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
@@ -509,17 +509,16 @@ where
     //    identity — the same gate the read-revoke trigger enforces.
     let current_sig =
         EcdsaSignature::from_compact(plan.commitment_sig).ok_or(WriteRotateError::NotOwner)?;
-    verify_grant_set(
+    verify_grant_set_bound(
         &plan.owner_identity_signer.verifying_key(),
         plan.commitment,
         &current_sig,
+        plan.current_root_name.as_str().as_bytes(),
     )
-    .map_err(|_| WriteRotateError::NotOwner)?;
-
-    // 1a) bind commitment to the rotated scope — see CommitmentScopeMismatch
-    if plan.commitment.ipns_name != plan.current_root_name.as_str().as_bytes() {
-        return Err(WriteRotateError::CommitmentScopeMismatch);
-    }
+    .map_err(|e| match e {
+        GrantSetBindingError::Verify(_) => WriteRotateError::NotOwner,
+        GrantSetBindingError::ScopeMismatch => WriteRotateError::CommitmentScopeMismatch,
+    })?;
 
     // 2) Fail-closed BEFORE minting: a saturating bump at u64::MAX would republish
     //    fresh key material under the same write epoch (a key-regression violation),

@@ -35,6 +35,17 @@ const _: () = assert!(
     "a production sealed leaf must fit the IPFS block ceiling"
 );
 
+/// The codec derives its write-body bound from a restated copy of this ceiling
+/// (`cipherbox_core::seal::MAX_HEAD_BLOCK_BYTES`), because it sits below this
+/// crate. Compile-time, so the two cannot drift apart into a bound that reserves
+/// no re-seal headroom at all (AGENTS.md rule 8).
+const _: () = assert!(
+    cipherbox_core::seal::MAX_WRITE_BODY_BYTES
+        + cipherbox_core::seal::WRITE_BODY_RESEAL_HEADROOM_BYTES
+        <= MAX_RESOLVED_RECORD_BYTES,
+    "the write-body bound must reserve its re-seal headroom under the block ceiling"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

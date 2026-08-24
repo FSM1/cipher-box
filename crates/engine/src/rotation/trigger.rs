@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    GrantLedgerEntry, GrantSetCommitment, Permission, sign_grant_set, verify_grant_set,
+    GrantLedgerEntry, GrantSetBindingError, GrantSetCommitment, Permission, sign_grant_set,
+    verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 
@@ -283,17 +284,16 @@ impl RevokeError {
 fn authorize_cut(plan: &GrantCutPlan<'_>) -> Result<(), RevokeError> {
     let current_sig =
         EcdsaSignature::from_compact(plan.commitment_sig).ok_or(RevokeError::UnauthorizedSigner)?;
-    verify_grant_set(
+    verify_grant_set_bound(
         &plan.owner_signer.verifying_key(),
         plan.commitment,
         &current_sig,
+        plan.scope_root_name.as_str().as_bytes(),
     )
-    .map_err(|_| RevokeError::UnauthorizedSigner)?;
-
-    if plan.commitment.ipns_name != plan.scope_root_name.as_str().as_bytes() {
-        return Err(RevokeError::CommitmentScopeMismatch);
-    }
-    Ok(())
+    .map_err(|e| match e {
+        GrantSetBindingError::Verify(_) => RevokeError::UnauthorizedSigner,
+        GrantSetBindingError::ScopeMismatch => RevokeError::CommitmentScopeMismatch,
+    })
 }
 
 /// The permission the **owner** committed under `tag`, or [`RevokeError::NotGranted`].

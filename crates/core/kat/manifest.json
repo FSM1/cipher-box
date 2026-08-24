@@ -297,13 +297,16 @@
     "ascentLinkStructTag": 5,
     "historyLinkStructTag": 6,
     "writeHistoryLinkStructTag": 14,
+    "writeBodyMaxBytes": 2031616,
+    "writeBodyResealHeadroomBytes": 65536,
+    "headBlockMaxBytes": 2097152,
     "writeBodyAccept": {
       "file": "vectors/grant/write_body_accept.json",
       "count": 4
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 11,
+      "count": 12,
       "checks": [
         "duplicate-grant-tag",
         "too-many-structures",
@@ -395,11 +398,11 @@
     },
     "structureSigAccept": {
       "file": "vectors/grant/structure_sig_accept.json",
-      "count": 3
+      "count": 4
     },
     "structureSigReject": {
       "file": "vectors/grant/structure_sig_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
         "structure-signature-invalid"
       ]

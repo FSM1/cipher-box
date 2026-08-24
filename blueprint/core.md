@@ -155,8 +155,27 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   decode and encode at 1024 entries, each entry's opaque `ipnsName` at the name
   codec's own ceiling (`too-many-structures`) — unbounded, a committed writer
   grows it until the head block the revoking rotation re-seals it into no longer
-  fits the block ceiling every read enforces. Interior nodes publish no
-  write-body at all.
+  fits the block ceiling every read enforces. The ledger's row count is bounded
+  the same way, at `MAX_GRANT_BLOBS` (1024), the ceiling its own commitment
+  already carries. Interior nodes publish no write-body at all.
+  Those per-field bounds narrow the byte lever but cannot close it: the
+  preserved unknown maps at every level are the one thing a decoder must keep
+  byte-stable, so refusing a body for the size of what it preserves would refuse
+  honest forward-compatible bodies too. What closes it is a **total encoded-size
+  bound**, `MAX_WRITE_BODY_BYTES` = the head-block ceiling (2 MiB) minus a frozen
+  64 KiB re-seal headroom — the worst case a re-seal adds to a body it carries
+  forward (seal framing, a freshly minted write history link, an ascent link the
+  source record need not have carried, and the section/envelope framing around
+  them), so a conforming body plus any re-seal's additions fits the ceiling by
+  definition. Decode and encode refuse an over-bound body with the same
+  `too-many-structures` verdict, release-active on the encode side; the value is
+  frozen in the KAT manifest (`grant.writeBodyMaxBytes`) rather than in a
+  multi-megabyte reject vector. This does not weaken the strict-preserve rule:
+  that law governs field **treatment** — never strip, keep unknowns byte-stable —
+  not total size, and a size constant every client shares refuses the same bodies
+  everywhere, so a body an old client re-emits stays conforming by construction.
+  A re-seal that would author an over-bound body refuses under its own name
+  (`write-body-too-large`) rather than the generic encode fold.
   The write-plane history link departs from the read plane's ratchet
   construction and carries its own struct tag, `write-history-link` (`0x0e`): it
   is **HPKE auth-mode sealed by the owner to the owner**
@@ -237,8 +256,15 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   capability to ancestor read-only readers).
 - **Structure signatures** (FSM1/cipher-box-next#39 D2/D3): the rotator's pseudonym Ed25519
   signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
-H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
-  link, history links, and the write-body. Verification is per-structure and
+H(signed bytes)}` — covering grant blobs, owner blob, owner-write-blob, ascent
+  link, history links, and the write-body. The signed bytes are the structure's
+  `ciphertext`, with one exception: an **ascent link** signs over the det-CBOR
+  binding `{ascentPublic, ciphertext, enc}`, so its plaintext public half is
+  covered too. Outside the signature that field is authenticated by possession of
+  `writeScopeSeed` alone — a holder could republish the root with `ascentPublic`
+  swapped for a key it holds, leaving every ciphertext, signature and commitment
+  byte-identical, and the next honest scope-exit rotation would seal a freshly
+  minted override seed to the planted key. Verification is per-structure and
   pure; the whole-record fail-closed policy is the engine's gate stage.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the

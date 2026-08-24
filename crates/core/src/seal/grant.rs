@@ -903,6 +903,52 @@ pub fn verify_grant_set(
     }
 }
 
+/// Why [`verify_grant_set_bound`] refused. The two halves stay distinct so each
+/// consumer can keep naming them apart in its own error enum; both fold into
+/// [`TrustViolation::CommitmentInvalid`] for a consumer that does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrantSetBindingError {
+    /// [`verify_grant_set`]'s own verdict: the commitment has no canonical
+    /// preimage, or the owner identity did not attest this tag/pseudonym set.
+    Verify(CodecError),
+    /// The owner attested the set, but bound it to a different scope root's
+    /// `ipnsName` than the one presented.
+    ScopeMismatch,
+}
+
+impl From<GrantSetBindingError> for CodecError {
+    fn from(e: GrantSetBindingError) -> Self {
+        match e {
+            GrantSetBindingError::Verify(inner) => inner,
+            GrantSetBindingError::ScopeMismatch => TrustViolation::CommitmentInvalid.into(),
+        }
+    }
+}
+
+/// Verify a grant-set commitment's owner signature **and** its binding to
+/// `scope_root_name`, the `ipnsName` the commitment is being presented under.
+///
+/// The commitment's own `ipnsName` is inside the signed preimage, so an
+/// owner-authentic commitment for another scope root would otherwise pass a bare
+/// [`verify_grant_set`] — every consumer that holds an independent name must run
+/// both halves, and this is the one definition of that pair.
+///
+/// The binding is not folded into [`verify_grant_set`]: a consumer holding a
+/// scope id rather than a name has no independent value to bind against, and
+/// takes `commitment.ipns_name` as its authority instead.
+pub fn verify_grant_set_bound(
+    verifier: &EcdsaVerifier,
+    c: &GrantSetCommitment,
+    sig: &EcdsaSignature,
+    scope_root_name: &[u8],
+) -> Result<(), GrantSetBindingError> {
+    verify_grant_set(verifier, c, sig).map_err(GrantSetBindingError::Verify)?;
+    if c.ipns_name != scope_root_name {
+        return Err(GrantSetBindingError::ScopeMismatch);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1344,6 +1390,57 @@ mod tests {
                 .check(),
             "commitment-invalid"
         );
+    }
+
+    /// The binding half is what separates the bound form from the unbound one: an
+    /// owner-authentic commitment for another scope root passes `verify_grant_set`
+    /// and must not pass here.
+    #[test]
+    fn the_bound_verify_refuses_a_commitment_bound_to_another_scope_root() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"scope-root-ipns".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32])],
+            unknown: PreservedFields::new(),
+        };
+        let sig = sign_grant_set(&owner, &c).expect("signs");
+        let verifier = owner.verifying_key();
+
+        assert!(verify_grant_set_bound(&verifier, &c, &sig, &c.ipns_name).is_ok());
+
+        assert!(
+            verify_grant_set(&verifier, &c, &sig).is_ok(),
+            "the unbound form is name-blind by design"
+        );
+        assert_eq!(
+            verify_grant_set_bound(&verifier, &c, &sig, b"another-scope-root"),
+            Err(GrantSetBindingError::ScopeMismatch)
+        );
+        assert_eq!(
+            CodecError::from(GrantSetBindingError::ScopeMismatch).check(),
+            "commitment-invalid"
+        );
+    }
+
+    /// A forged signature reaches the caller as the verify half, never the
+    /// binding half, even when the name matches.
+    #[test]
+    fn the_bound_verify_keeps_the_signature_verdict_distinct_from_the_binding() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"scope-root-ipns".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32])],
+            unknown: PreservedFields::new(),
+        };
+        let mut other = c.clone();
+        other.entries[0].permission = Permission::Write;
+        let sig_over_other = sign_grant_set(&owner, &other).expect("signs");
+        let err = verify_grant_set_bound(&owner.verifying_key(), &c, &sig_over_other, &c.ipns_name)
+            .unwrap_err();
+        assert!(matches!(err, GrantSetBindingError::Verify(_)));
+        assert_eq!(CodecError::from(err).check(), "commitment-invalid");
     }
 
     #[test]

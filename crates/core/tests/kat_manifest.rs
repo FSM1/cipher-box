@@ -27,23 +27,24 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, GrantLedgerEntry, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind,
-    Permission, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
-    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link,
-    decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
-    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_section, encode_grant_set_commitment,
-    encode_override_seed_payload, encode_read_body, encode_recipient_binding, encode_write_body,
-    open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
-    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
-    open_settings_record, seal_content_key, seal_op_record, seal_owner_history_link,
-    seal_owner_local, seal_settings_record, structure_sig_preimage, verify_grant_set,
-    verify_recipient_binding, verify_structure,
+    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, GrantLedgerEntry,
+    MAX_HEAD_BLOCK_BYTES, MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind, Permission,
+    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    StructureSigInput, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad,
+    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
+    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
+    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
+    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
+    encode_recipient_binding, encode_write_body, open_ascent_link, open_content_key,
+    open_grant_blob, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
+    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
+    seal_owner_history_link, seal_owner_local, seal_settings_record, structure_sig_preimage,
+    verify_grant_set, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -659,6 +660,9 @@ struct GrantManifest {
     ascent_link_struct_tag: u8,
     history_link_struct_tag: u8,
     write_history_link_struct_tag: u8,
+    write_body_max_bytes: usize,
+    write_body_reseal_headroom_bytes: usize,
+    head_block_max_bytes: usize,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
@@ -797,6 +801,9 @@ struct StructureSigAcceptVector {
     ciphertext_hash: String,
     preimage: String,
     signature: String,
+    ascent_public: String,
+    enc: String,
+    ascent_ciphertext: String,
 }
 
 #[derive(Deserialize)]
@@ -812,6 +819,9 @@ struct StructureSigRejectVector {
     signature: String,
     check: String,
     class: String,
+    ascent_public: String,
+    enc: String,
+    ascent_ciphertext: String,
 }
 
 #[derive(Deserialize)]
@@ -3379,6 +3389,27 @@ fn grant_struct_tags_are_frozen() {
     assert_eq!(STRUCT_TAG_OWNER_WRITE_BLOB, 9);
 }
 
+/// The write-body's total encoded-size bound is a frozen wire number a
+/// cross-language implementation must refuse at, so the manifest carries the
+/// value rather than a multi-megabyte reject vector.
+#[test]
+fn the_write_body_size_bound_is_frozen_in_the_manifest() {
+    let m = manifest();
+    assert_eq!(m.grant.write_body_max_bytes, MAX_WRITE_BODY_BYTES);
+    assert_eq!(
+        m.grant.write_body_reseal_headroom_bytes,
+        WRITE_BODY_RESEAL_HEADROOM_BYTES
+    );
+    assert_eq!(m.grant.head_block_max_bytes, MAX_HEAD_BLOCK_BYTES);
+    assert_eq!(
+        m.grant.write_body_max_bytes + m.grant.write_body_reseal_headroom_bytes,
+        m.grant.head_block_max_bytes,
+        "the bound is the ceiling minus the reserved re-seal headroom"
+    );
+    // Anti-vacuity: a bound at the ceiling would reserve nothing.
+    assert!(m.grant.write_body_reseal_headroom_bytes > 0);
+}
+
 #[test]
 fn write_body_accept_vectors_decode_and_round_trip() {
     let m = manifest();
@@ -4653,10 +4684,26 @@ fn structure_sig_accept_vectors_verify() {
         "structure-sig accept family must not be empty"
     );
     let mut saw_recipient_tag = false;
+    let mut saw_ascent_binding = false;
     for v in &vectors {
         let scope_id = unhex_n::<16>(&v.name, &v.scope_id);
         let ciphertext = unhex(&v.name, &v.ciphertext);
-        // H(ciphertext) is the frozen BLAKE3 digest.
+        if !v.ascent_public.is_empty() {
+            // An ascent link signs over `{ascentPublic, ciphertext, enc}`, so the
+            // signed bytes must reproduce from the three fields beside them.
+            saw_ascent_binding = true;
+            assert_eq!(
+                hex::encode(ascent_link_sig_body(
+                    &unhex32(&v.name, &v.ascent_public),
+                    &unhex32(&v.name, &v.enc),
+                    &unhex(&v.name, &v.ascent_ciphertext),
+                )),
+                v.ciphertext,
+                "structure-sig accept {}: ascent binding drift",
+                v.name
+            );
+        }
+        // H(signed bytes) is the frozen BLAKE3 digest.
         assert_eq!(
             hex::encode(hash(&ciphertext)),
             v.ciphertext_hash,
@@ -4701,6 +4748,10 @@ fn structure_sig_accept_vectors_verify() {
         saw_recipient_tag,
         "a grant-blob structure signature must carry a recipient tag"
     );
+    assert!(
+        saw_ascent_binding,
+        "an ascent-link structure signature must bind its plaintext public half"
+    );
 }
 
 #[test]
@@ -4726,13 +4777,31 @@ fn structure_sig_reject_vectors_fail_closed() {
     );
     // Anti-vacuity: the forgery + two transplant cases are all present.
     let names: BTreeSet<&str> = vectors.iter().map(|v| v.name.as_str()).collect();
-    for required in ["bad-signature", "wrong-tag", "recipient-tag-transplant"] {
+    for required in [
+        "bad-signature",
+        "wrong-tag",
+        "recipient-tag-transplant",
+        "ascent-public-swapped",
+    ] {
         assert!(
             names.contains(required),
             "structure-sig reject must cover {required}"
         );
     }
     for v in &vectors {
+        if !v.ascent_public.is_empty() {
+            // The swapped public half is what the verify-side hash covers.
+            assert_eq!(
+                hex::encode(hash(&ascent_link_sig_body(
+                    &unhex32(&v.name, &v.ascent_public),
+                    &unhex32(&v.name, &v.enc),
+                    &unhex(&v.name, &v.ascent_ciphertext),
+                ))),
+                v.ciphertext_hash,
+                "structure-sig reject {}: ascent binding drift",
+                v.name
+            );
+        }
         // Rebuild the verify-side input directly (the frozen ciphertext hash and
         // the transplanted tag/recipient-tag).
         let input = StructureSigInput {
