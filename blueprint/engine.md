@@ -816,8 +816,11 @@ already happened below the facade — hosts render, they never decide.
 
 - **Migration-window closure** — how long the old scope-root name lingers
   serving the tombstone before retire. FSM1/cipher-box-next#38 fixed the channel architecture but
-  not the window; proposed as a sync-timing-profile constant, to settle with
-  the testing-strategy blueprint's e2e work.
+  not the window. It has landed as the sync-timing-profile constant
+  `migration_window`, carrying a placeholder; two halves remain — its measured
+  value, from the testing-strategy blueprint's cross-client latency measurement
+  job, and a durable record of the re-point publish instant for
+  `root_retire_ready` to measure the window from.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
   WebSocket hints or desktop PubSub), whose handler forces a pass through
   `Command::ManualRefresh` (FSM1/cipher-box-next#33 D1);
