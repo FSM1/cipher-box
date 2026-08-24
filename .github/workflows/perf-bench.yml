@@ -1,0 +1,94 @@
+# The dispatch tier's per-stage profiling harness (blueprint/testing.md).
+# Never a PR gate: a shared runner's timings are too noisy to fail a merge on,
+# and the numbers exist to attribute time to a pipeline stage, not to police a
+# diff. The benches run wholly against the engine's in-memory seam fakes and
+# virtual clock, so this job stands up no stack. That they still compile is
+# enforced on every PR by CI's `cargo clippy --workspace --all-targets`.
+name: Perf Benches
+
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: 'Which pipeline stages to profile'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - core
+          - engine
+      filter:
+        description: 'Benchmark-name filter, empty runs every stage'
+        required: false
+        default: ''
+      baseline:
+        description: 'Save the run under this baseline name for later comparison'
+        required: false
+        default: ''
+
+permissions: {}
+
+jobs:
+  bench:
+    name: 'Perf Benches: ${{ inputs.crate }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    env:
+      CRATE: ${{ inputs.crate }}
+      FILTER: ${{ inputs.filter }}
+      BASELINE: ${{ inputs.baseline }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Its own key, not the `linux-cargo-` one CI's cargo jobs own: those
+          # hold a dev/test-profile `target/`, `cargo bench` builds under the
+          # release-derived bench profile, and sharing a primary key means this
+          # job restores nothing reusable and then never saves what it built.
+          key: perf-bench-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            perf-bench-cargo-
+
+      - name: Run the benches
+        run: |
+          set -euo pipefail
+          packages=()
+          case "$CRATE" in
+            core) packages=(-p cipherbox-core) ;;
+            engine) packages=(-p cipherbox-engine) ;;
+            both) packages=(-p cipherbox-core -p cipherbox-engine) ;;
+            *) echo "::error::unknown crate selection: $CRATE"; exit 1 ;;
+          esac
+          args=()
+          if [ -n "$BASELINE" ]; then
+            args+=(--save-baseline "$BASELINE")
+          fi
+          if [ -n "$FILTER" ]; then
+            args+=("$FILTER")
+          fi
+          # `--benches` scopes the run to the bench targets; without it cargo
+          # would also run each crate's unit tests under the bench profile.
+          cargo bench "${packages[@]}" --benches -- "${args[@]}"
+
+      # Criterion's own estimates.json per benchmark: the recorded number each
+      # stage's measurement is later cited from.
+      - name: Upload the criterion estimates
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-bench-${{ inputs.crate }}
+          path: target/criterion/**
+          retention-days: 30
+          if-no-files-found: warn

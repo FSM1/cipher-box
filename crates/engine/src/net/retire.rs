@@ -414,12 +414,15 @@ where
     SendOutcome::Retired
 }
 
-/// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
-/// the migration window that bounds how long the old root lingers serving the
-/// tombstone is an open edge (blueprint/engine.md "Open edges: Migration-window
-/// closure"; #38 fixed the channel architecture but not the window). Until it
-/// lands the root never auto-retires, so a revokee or a lagging reader can
-/// always chase the tombstone to the new root.
+/// Whether the old scope-root name may be retired yet. **Stubbed to `false`**,
+/// and two things must land before it stops being: a durable record of when the
+/// re-point published — there is none, so the window has no instant to measure
+/// from — and a measured value for the window itself, whose slot
+/// ([`SyncTimingProfile::migration_window`](crate::profile::SyncTimingProfile::migration_window))
+/// still carries a placeholder. Retirement is irreversible, so until both the
+/// root never auto-retires and a revokee or lagging reader can always chase the
+/// tombstone to the new root (blueprint/engine.md "Open edges:
+/// Migration-window closure").
 pub fn root_retire_ready() -> bool {
     false
 }
@@ -951,7 +954,7 @@ mod tests {
     fn root_never_auto_retires_pending_the_migration_window() {
         assert!(
             !root_retire_ready(),
-            "the old root lingers until the migration-window constant lands"
+            "the old root lingers until a durable re-point instant lands"
         );
     }
 }

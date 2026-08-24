@@ -28,6 +28,10 @@ cipherbox-core = { path = "crates/core" }
 cipherbox-desktop-seams = { path = "crates/desktop-seams" }
 cipherbox-engine = { path = "crates/engine" }
 base64 = "0.22"
+# The dispatch-tier profiling harness only. default-features are stripped to
+# keep plotters/rayon out of the dev graph — the numbers are read from
+# criterion's own estimates, never from generated HTML.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 futures-channel = "0.3"
 futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }

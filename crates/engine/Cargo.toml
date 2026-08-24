@@ -36,3 +36,19 @@ cipherbox-core.workspace = true
 # Same reason: `RecordSeal` takes a zeroizing ephemeral scalar, so a test that
 # stages an op directly needs the type addressable from `tests/`.
 zeroize.workspace = true
+
+# Per-stage profiling, run only from the dispatch-tier Perf Benches workflow.
+# `cargo clippy/check --all-targets` still compiles it, so the bench cannot rot
+# unnoticed; `test = false` keeps a local `--all-targets` test run from
+# executing criterion in its test mode.
+[[bench]]
+name = "pipeline"
+harness = false
+test = false
+
+# Scoped away from wasm the way core's is: criterion has no wasm build, and
+# cargo `--extern`s every dev-dependency into every test unit whether or not it
+# is used, so an unscoped one would break the day this crate gains a wasm test
+# leg.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+criterion.workspace = true

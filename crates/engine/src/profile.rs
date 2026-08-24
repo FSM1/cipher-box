@@ -44,6 +44,12 @@ pub struct SyncTimingProfile {
     ///
     /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
     pub sweep_cadence: Duration,
+    /// How long the old scope-root name lingers registered, serving the
+    /// `movedTo` tombstone, before it may be retired (CONTEXT.md "Root
+    /// linger"). Bounds how far behind a reader may be and still chase the
+    /// move; it is the ceiling on the name-registry rows one rotating scope
+    /// accretes.
+    pub migration_window: Duration,
     /// Ceiling on the vault settings load. A settings record that will not
     /// resolve must never block cold start, so once this elapses the load
     /// yields the device's last-known-good settings, or the documented defaults
@@ -54,10 +60,14 @@ pub struct SyncTimingProfile {
 impl SyncTimingProfile {
     /// Shipped policy: TTL 1 minute, 30 s poll (#33 D3).
     ///
-    /// `escalation_window`, `pointer_consult_interval` and `sweep_cadence`
-    /// are placeholders pending the measurement process fixed in
-    /// blueprint/testing.md ("The profile is where measured constants land");
-    /// each lands as a profile-constant change with its measurement linked.
+    /// `escalation_window`, `pointer_consult_interval`, `sweep_cadence` and
+    /// `migration_window` are placeholders pending the measurement process
+    /// fixed in blueprint/testing.md ("The profile is where measured constants
+    /// land"); each lands as a profile-constant change with its measurement
+    /// linked. `migration_window`'s figure awaits blueprint/testing.md's
+    /// cross-client latency measurement job — until then it is deliberately
+    /// generous, because a window cut short retires a name lagging readers
+    /// still chase.
     pub const PRODUCTION: Self = Self {
         record_ttl: Duration::from_secs(60),
         poll_cadence: Duration::from_secs(30),
@@ -65,6 +75,7 @@ impl SyncTimingProfile {
         escalation_window: Duration::from_secs(600),
         pointer_consult_interval: Duration::from_secs(30),
         sweep_cadence: Duration::from_secs(900),
+        migration_window: Duration::from_secs(7 * 24 * 60 * 60),
         settings_load_budget: Duration::from_secs(10),
     };
 
@@ -77,6 +88,7 @@ impl SyncTimingProfile {
         escalation_window: Duration::from_secs(5),
         pointer_consult_interval: Duration::from_secs(1),
         sweep_cadence: Duration::from_secs(2),
+        migration_window: Duration::from_secs(5),
         settings_load_budget: Duration::from_secs(1),
     };
 }
@@ -129,6 +141,17 @@ mod tests {
     }
 
     #[test]
+    fn the_migration_window_outlives_a_published_record() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.migration_window > profile.record_ttl,
+                "retiring the tombstone inside the record TTL strands readers \
+                 holding a cached record that still names the old root"
+            );
+        }
+    }
+
+    #[test]
     fn every_duration_is_nonzero_in_both_profiles() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             assert!(
@@ -140,6 +163,7 @@ mod tests {
             assert!(!profile.escalation_window.is_zero());
             assert!(!profile.pointer_consult_interval.is_zero());
             assert!(!profile.sweep_cadence.is_zero());
+            assert!(!profile.migration_window.is_zero());
             assert!(
                 !profile.settings_load_budget.is_zero(),
                 "a zero budget would time out every settings load"
