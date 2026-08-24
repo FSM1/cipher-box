@@ -2,7 +2,7 @@
 //! policy"): the free bytes a non-privileged user has on the volume the engine
 //! data dir sits on. The split itself is [`StoragePolicy::measured`]'s.
 
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::path::Path;
 
 use cipherbox_engine::{StoragePlatform, StoragePolicy};
@@ -22,20 +22,23 @@ pub fn measured_storage_policy(data_dir: &Path) -> StoragePolicy {
 /// Free bytes on the volume holding `path`, climbing past a path that does not
 /// exist yet — a directory is created inside its nearest existing ancestor, so
 /// that ancestor names the volume the split applies to.
-///
-/// Only a not-found climbs. A path that exists but will not measure is
-/// unmeasured, never its parent's volume: reporting the root filesystem's free
-/// space for an unreadable mount is exactly the fabricated figure the policy
-/// refuses to invent.
 fn volume_free_bytes(path: &Path) -> Option<u64> {
     for ancestor in path.ancestors() {
         match fs4::available_space(ancestor) {
             Ok(free_bytes) => return Some(free_bytes),
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) if climbs_past(&error) => continue,
             Err(_) => return None,
         }
     }
     None
+}
+
+/// Whether a failed measurement means "nothing is there yet", the one refusal a
+/// climb to the parent answers. Any other refusal is a volume this host cannot
+/// measure, and climbing past it would answer with a different volume's free
+/// space — the fabricated figure the policy refuses to invent.
+fn climbs_past(error: &io::Error) -> bool {
+    error.kind() == ErrorKind::NotFound
 }
 
 #[cfg(test)]
@@ -87,22 +90,27 @@ mod tests {
         );
     }
 
-    /// The climb is for a directory that does not exist yet. A path that does
-    /// exist and still will not measure must not be answered with some other
-    /// volume's free space — that is the fabricated figure the policy refuses.
+    /// The climb exists for a directory that is not there yet. Every other
+    /// refusal stops it: answering with the parent volume's free space would be
+    /// the fabricated figure the policy refuses to invent.
+    ///
+    /// Driven off the classification rather than a contrived path, because
+    /// which errno a host raises for an unmeasurable volume is the host's
+    /// business and differs across the three desktop targets.
     #[test]
-    fn a_path_that_exists_but_will_not_measure_never_reports_another_volume() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let file = dir.path().join("not-a-directory");
-        std::fs::write(&file, b"x").expect("the file writes");
-        // A component under a regular file exists on no volume, and statvfs
-        // answers ENOTDIR rather than ENOENT.
-        let under_a_file = file.join("child");
+    fn only_a_path_that_is_not_there_yet_climbs_to_its_parent() {
+        assert!(climbs_past(&io::Error::from(ErrorKind::NotFound)));
 
-        assert_eq!(
-            volume_free_bytes(&under_a_file),
-            None,
-            "a refusal that is not a missing directory stops the climb"
-        );
+        for refusal in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::NotADirectory,
+            ErrorKind::InvalidInput,
+            ErrorKind::Other,
+        ] {
+            assert!(
+                !climbs_past(&io::Error::from(refusal)),
+                "{refusal:?} is a volume that will not measure, not a missing one"
+            );
+        }
     }
 }
