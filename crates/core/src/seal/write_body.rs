@@ -19,10 +19,8 @@
 use core::fmt;
 use core::num::NonZeroU64;
 
-use zeroize::Zeroize;
-
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
-use crate::codec::{Map, RedactedBytes, Value, decode, encode};
+use crate::codec::{Map, RedactedBytes, Value, decode, encode, encoded_len, head_len};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
 use crate::suite::ecdsa::{
@@ -34,6 +32,7 @@ use super::body::{
     PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
+use super::envelope::MAX_BLOCK_BYTES;
 use super::grant::Permission;
 use super::section::MAX_GRANT_BLOBS;
 
@@ -340,18 +339,15 @@ pub const MAX_WRITE_HISTORY_LINK_BYTES: usize = 512;
 /// are not counted against that ceiling, so it is not a transitive guarantee.
 pub const MAX_DIRECT_CHILD_SCOPES: usize = 1024;
 
-/// The head-block ceiling a scope root's record must fit: the IPFS single-block
-/// ceiling, since `block/put` refuses anything larger (blueprint/api.md). Stated
-/// here because [`MAX_WRITE_BODY_BYTES`] derives from it and this codec sits
-/// below the engine that enforces it on a fetched block; `crates/engine`'s
-/// content limits pin the two values together at compile time.
-pub const MAX_HEAD_BLOCK_BYTES: usize = 2 * 1024 * 1024;
-
 /// The re-seal headroom reserved above [`MAX_WRITE_BODY_BYTES`]: the frozen
-/// worst-case bytes a re-seal adds to a head whose write-body it carries
-/// forward — the seal framing around the body, a freshly minted write history
-/// link, an ascent link the source record need not have carried, and the
-/// section and envelope framing around all three.
+/// bytes a re-seal adds around a write-body it carries forward — the symmetric
+/// seal framing, the section entry, and the envelope framing.
+///
+/// It reserves nothing for the grant section's own contents, which are bounded
+/// far above it ([`MAX_GRANT_BLOBS`](super::MAX_GRANT_BLOBS) blobs and
+/// [`MAX_HISTORY_LINKS`](super::MAX_HISTORY_LINKS) links), so this bound
+/// narrows the head-size lever rather than closing it; the whole-record ceiling
+/// stays the engine's `HeadTooLarge` backstop.
 pub const WRITE_BODY_RESEAL_HEADROOM_BYTES: usize = 64 * 1024;
 
 /// The frozen bound on a write-body plaintext's **total encoded size**.
@@ -365,10 +361,44 @@ pub const WRITE_BODY_RESEAL_HEADROOM_BYTES: usize = 64 * 1024;
 /// The law governs field *treatment* — never strip, keep unknowns byte-stable —
 /// not total size, and a size constant every client shares refuses the same
 /// bodies everywhere, so a body an old client re-emits stays conforming by
-/// construction (blueprint/core.md "Write-body"). The reserved headroom is what
-/// makes a conforming body plus any re-seal's additions fit
-/// [`MAX_HEAD_BLOCK_BYTES`].
-pub const MAX_WRITE_BODY_BYTES: usize = MAX_HEAD_BLOCK_BYTES - WRITE_BODY_RESEAL_HEADROOM_BYTES;
+/// construction (blueprint/core.md "Write-body").
+pub const MAX_WRITE_BODY_BYTES: usize = MAX_BLOCK_BYTES - WRITE_BODY_RESEAL_HEADROOM_BYTES;
+
+/// The encoded bytes a `writeHistoryLink` of `link_len` occupies: its det-CBOR
+/// byte-string head plus its payload.
+fn link_field_len(link_len: usize) -> usize {
+    head_len(link_len as u64) + link_len
+}
+
+/// A body's encoded length charged with a **maximal** `writeHistoryLink` in
+/// place of the one it carries, so the measure is invariant under the one field
+/// a re-seal replaces.
+///
+/// That invariance is what makes "this body decodes" imply "this body still
+/// encodes after a cut swaps its link". Without it a committed write-grantee
+/// pads a body to exactly the bound with an empty link, and the freshly minted
+/// link of the rotation that revokes them pushes the re-encode over — a
+/// permanent refusal at a size the attacker chose.
+fn charged_len(encoded_len: usize, link_len: usize) -> usize {
+    encoded_len - link_field_len(link_len) + link_field_len(MAX_WRITE_HISTORY_LINK_BYTES)
+}
+
+/// The collection label [`MAX_WRITE_BODY_BYTES`]'s refusal reports. Private to
+/// core; consumers that must tell it from the per-field bounds it shares
+/// `too-many-structures` with go through [`is_write_body_over_bound`].
+const WRITE_BODY_SIZE_CHECK: &str = "writeBody";
+
+/// True when `e` is the write-body's total-size refusal rather than one of the
+/// per-field bounds that raise the same check name.
+pub fn is_write_body_over_bound(e: &CodecError) -> bool {
+    matches!(
+        e,
+        CodecError::Malformed(Malformed::TooManyStructures {
+            collection: WRITE_BODY_SIZE_CHECK,
+            ..
+        })
+    )
+}
 
 /// Decode a write-body plaintext (strict det-CBOR, unknown fields preserved).
 ///
@@ -378,9 +408,10 @@ pub const MAX_WRITE_BODY_BYTES: usize = MAX_HEAD_BLOCK_BYTES - WRITE_BODY_RESEAL
 /// The transient decoded tree copies the recipient keys, blinded tags and
 /// child-scope `ipnsName`s, so it is scrubbed on drop.
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
-    // The total, before the codec walks anything: the per-field bounds below
-    // leave the preserved-unknown maps open by construction.
-    assert_within_bound("writeBody", bytes.len(), MAX_WRITE_BODY_BYTES)?;
+    // The raw length before the codec walks anything: the per-field bounds below
+    // leave the preserved-unknown maps open by construction, and this caps the
+    // walk itself. The charged total follows once the link's length is known.
+    assert_within_bound(WRITE_BODY_SIZE_CHECK, bytes.len(), MAX_WRITE_BODY_BYTES)?;
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
@@ -390,6 +421,11 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
         "writeHistoryLink",
         write_history_link.len(),
         MAX_WRITE_HISTORY_LINK_BYTES,
+    )?;
+    assert_within_bound(
+        WRITE_BODY_SIZE_CHECK,
+        charged_len(bytes.len(), write_history_link.len()),
+        MAX_WRITE_BODY_BYTES,
     )?;
     let write_history_link = write_history_link.to_vec();
     let raw_children = req(map, "directChildScopeIndex")?.as_array()?;
@@ -485,14 +521,14 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     merge_unknown(&mut m, &body.unknown);
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
-    let mut bytes = encode(guard.0)?;
-    // The total bound, on the produced bytes — the only side that can measure
-    // them, and the same verdict `decode_write_body` raises over the same length.
-    if let Err(e) = assert_within_bound("writeBody", bytes.len(), MAX_WRITE_BODY_BYTES) {
-        bytes.zeroize();
-        return Err(e);
-    }
-    Ok(bytes)
+    // Measured rather than encoded first: an over-bound body never materializes
+    // the plaintext buffer it would only be refused and wiped for.
+    assert_within_bound(
+        WRITE_BODY_SIZE_CHECK,
+        charged_len(encoded_len(guard.0)?, body.write_history_link.len()),
+        MAX_WRITE_BODY_BYTES,
+    )?;
+    encode(guard.0)
 }
 
 #[cfg(test)]
@@ -682,19 +718,18 @@ mod tests {
             )]),
             ..sample()
         };
-        let overhead = encode_write_body(&padded(0))
+        // Step down to the largest accepted pad: the CBOR byte-string head
+        // widens as the pad grows, so the first estimate overshoots by that
+        // growth and nothing below it can.
+        let base = encode_write_body(&padded(0))
             .expect("an unpadded body encodes")
             .len();
-        // The CBOR byte-string length header widens as the pad grows, so the
-        // first estimate overshoots; step down until the encoding lands on the
-        // bound exactly.
-        let mut pad = MAX_WRITE_BODY_BYTES - overhead;
-        let bytes = loop {
-            if let Ok(b) = encode_write_body(&padded(pad)) {
-                assert_eq!(b.len(), MAX_WRITE_BODY_BYTES, "overshot the bound");
-                break b;
+        let mut pad = MAX_WRITE_BODY_BYTES - charged_len(base, sample().write_history_link.len());
+        let mut bytes = loop {
+            match encode_write_body(&padded(pad)) {
+                Ok(b) => break b,
+                Err(_) => pad -= 1,
             }
-            pad -= 1;
         };
         assert_eq!(decode_write_body(&bytes).unwrap(), padded(pad));
 
@@ -703,14 +738,67 @@ mod tests {
             "too-many-structures"
         );
 
-        // The decoder sees only bytes, so pad the accepted encoding directly:
-        // one more byte of payload, one more byte of length header.
-        let mut one_over = bytes.clone();
-        one_over.push(0xab);
+        // The decoder measures the same charged length. Hand-built bytes, since
+        // the encoder refuses to produce them: the raw length is under the bound
+        // and the charge for an empty link carries it over.
+        let raw = |pad: usize| {
+            let mut m = Map::new();
+            m.insert("directChildScopeIndex", Value::Array(vec![]));
+            m.insert("grantLedger", Value::Array(vec![]));
+            m.insert("writeHistoryLink", Value::Bytes(vec![]));
+            m.insert("zzPad", Value::Bytes(vec![0xab; pad]));
+            encode(&Value::Map(m)).unwrap()
+        };
+        let over_charged = raw(MAX_WRITE_BODY_BYTES - raw(0).len() - 100);
+        assert!(
+            over_charged.len() <= MAX_WRITE_BODY_BYTES,
+            "raw length is under"
+        );
+        assert!(charged_len(over_charged.len(), 0) > MAX_WRITE_BODY_BYTES);
         assert_eq!(
-            decode_write_body(&one_over).unwrap_err().check(),
+            decode_write_body(&over_charged).unwrap_err().check(),
             "too-many-structures"
         );
+
+        // And the raw length gate refuses before the codec walks anything.
+        bytes.resize(MAX_WRITE_BODY_BYTES + 1, 0xab);
+        assert_eq!(
+            decode_write_body(&bytes).unwrap_err().check(),
+            "too-many-structures"
+        );
+    }
+
+    /// The bound charges `writeHistoryLink` at its ceiling whatever it actually
+    /// carries, so a body a decoder accepts still encodes once a write cut swaps
+    /// its link for a freshly minted one. Without that, a committed writer pads
+    /// a body to the bound with an empty link and wedges the rotation that
+    /// revokes them.
+    #[test]
+    fn a_body_at_the_bound_still_encodes_after_a_cut_swaps_its_history_link() {
+        let padded = |pad: usize, link: Vec<u8>| WriteBody {
+            write_history_link: link,
+            unknown: PreservedFields::from_iter([(
+                "zzPad".to_string(),
+                Value::Bytes(vec![0xab; pad]),
+            )]),
+            ..sample()
+        };
+        let base = encode_write_body(&padded(0, Vec::new()))
+            .expect("an unpadded body encodes")
+            .len();
+        let mut pad = MAX_WRITE_BODY_BYTES - charged_len(base, 0);
+        while encode_write_body(&padded(pad, Vec::new())).is_err() {
+            pad -= 1;
+        }
+        let bytes = encode_write_body(&padded(pad, Vec::new())).expect("at the bound");
+        let carried = decode_write_body(&bytes).expect("a body at the bound decodes");
+
+        let cut = WriteBody {
+            write_history_link: vec![0xcd; MAX_WRITE_HISTORY_LINK_BYTES],
+            ..carried
+        };
+        let resealed = encode_write_body(&cut).expect("the swapped link still fits");
+        assert!(decode_write_body(&resealed).is_ok());
     }
 
     fn raw_child(ipns_name: Vec<u8>) -> Value {

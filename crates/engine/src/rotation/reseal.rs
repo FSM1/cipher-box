@@ -32,7 +32,7 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
-use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
@@ -41,7 +41,7 @@ use cipherbox_core::seal::{
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
-    StructureSigInput, WriteBody, ascent_link_sig_body, encode_write_body, open_ascent_link,
+    StructureSigInput, WriteBody, encode_write_body, is_write_body_over_bound, open_ascent_link,
     open_history_link, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
     seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
@@ -81,15 +81,12 @@ pub enum AscentAuthority<'a> {
     /// The public half the record being replaced already publishes — all a
     /// holder with no ancestor seed has to seal to.
     ///
-    /// No structure signature covers `ascentPublic` (blueprint/core.md
-    /// "Structure signatures"), and this arm cannot reopen what it seals, so the
-    /// fresh seed reaches the ancestor only if that public half is the one the
-    /// ancestor's own descent re-derives. A holder of the scope's write seed can
-    /// therefore redirect the *next* re-seal on this arm; the ancestor's next
-    /// read rejects the whole record on the ascent mismatch, so it is detected
-    /// rather than prevented. Closing it needs `ascentPublic` inside the
-    /// structure-signature preimage — a core wire change, not landed. Not a
-    /// residual of this arm alone: nothing else re-seals without the seed.
+    /// The carried half is inside the ascent link's own structure signature
+    /// (blueprint/core.md "Structure signatures"), so a bare `writeScopeSeed`
+    /// holder cannot plant one — the gate refuses a swap it cannot sign for.
+    /// The residual is a **committed** writer planting and signing its own key,
+    /// which stays attributable and which an owner cut overwrites: that arm
+    /// derives the public from the parent seed rather than carrying it.
     CarriedPublic(&'a [u8; 32]),
 }
 
@@ -396,12 +393,10 @@ impl ResealError {
 /// Split the write-body encode's own total-size refusal out of the generic
 /// encode fold, so the oversize verdict reaches a caller under its own name.
 fn write_body_encode_error(error: CodecError) -> ResealError {
-    match error {
-        CodecError::Malformed(Malformed::TooManyStructures {
-            collection: "writeBody",
-            ..
-        }) => ResealError::WriteBodyTooLarge,
-        other => ResealError::Encode(other),
+    if is_write_body_over_bound(&error) {
+        ResealError::WriteBodyTooLarge
+    } else {
+        ResealError::Encode(error)
     }
 }
 
@@ -775,11 +770,7 @@ pub fn reseal_scope_root<E: Entropy>(
             if let AscentAuthority::ParentSeed(parent_node_seed) = authority {
                 verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
             }
-            let signature = sign_over(
-                STRUCT_TAG_ASCENT_LINK,
-                None,
-                &ascent_link_sig_body(&link.ascent_public, &link.enc, &link.ciphertext),
-            );
+            let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.sig_body());
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
                 enc: link.enc,

@@ -14,9 +14,9 @@ use cipherbox_core::seal::{
     ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
     SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
-    ascent_link_sig_body, encode_envelope, encode_grant_section, encode_write_body, seal,
-    seal_ascent_link, seal_grant_blob, seal_owner_blob, seal_owner_write_blob, seal_read_body,
-    set_grant_section, sign_grant_set, sign_structure,
+    encode_envelope, encode_grant_section, encode_write_body, seal, seal_ascent_link,
+    seal_grant_blob, seal_owner_blob, seal_owner_write_blob, seal_read_body, set_grant_section,
+    sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -198,10 +198,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         )
         .unwrap();
         SignedAscentLink {
-            signature: sign(
-                STRUCT_TAG_ASCENT_LINK,
-                &ascent_link_sig_body(&link.ascent_public, &link.enc, &link.ciphertext),
-            ),
+            signature: sign(STRUCT_TAG_ASCENT_LINK, &link.sig_body()),
             ascent_public: link.ascent_public,
             enc: link.enc,
             ciphertext: link.ciphertext,

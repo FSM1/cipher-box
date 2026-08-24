@@ -299,7 +299,6 @@
     "writeHistoryLinkStructTag": 14,
     "writeBodyMaxBytes": 2031616,
     "writeBodyResealHeadroomBytes": 65536,
-    "headBlockMaxBytes": 2097152,
     "writeBodyAccept": {
       "file": "vectors/grant/write_body_accept.json",
       "count": 4

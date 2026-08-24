@@ -21,9 +21,8 @@ use cipherbox_core::seal::{
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
     SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
-    WriteBody, ascent_link_sig_body, encode_write_body, open_grant_blob, seal, seal_ascent_link,
-    seal_grant_blob, seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set,
-    sign_structure,
+    WriteBody, encode_write_body, open_grant_blob, seal, seal_ascent_link, seal_grant_blob,
+    seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -386,7 +385,7 @@ impl Fixture {
             self.epoch,
             STRUCT_TAG_ASCENT_LINK,
             None,
-            &ascent_link_sig_body(&link.ascent_public, &link.enc, &link.ciphertext),
+            &link.sig_body(),
         );
         SignedAscentLink {
             ascent_public: link.ascent_public,

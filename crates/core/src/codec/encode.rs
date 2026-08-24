@@ -102,7 +102,9 @@ pub(super) fn text_len(t: &str) -> usize {
 }
 
 /// The byte length of a shortest-form head for `arg` (mirrors [`write_head`]).
-pub(super) fn head_len(arg: u64) -> usize {
+/// The det-CBOR head width for a length/value argument — how many bytes precede
+/// a byte string's payload.
+pub(crate) fn head_len(arg: u64) -> usize {
     match arg {
         0..=23 => 1,
         24..=0xff => 2,

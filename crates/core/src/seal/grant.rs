@@ -495,6 +495,14 @@ pub struct AscentLink {
 
 const ASCENT_LINK_KNOWN: &[&str] = &["ascentPublic", "ciphertext", "enc"];
 
+impl AscentLink {
+    /// The bytes this link's structure signature is taken over
+    /// ([`super::ascent_link_sig_body`]).
+    pub fn sig_body(&self) -> Vec<u8> {
+        super::ascent_link_sig_body(&self.ascent_public, &self.enc, &self.ciphertext)
+    }
+}
+
 /// Decode an ascent-link container (strict det-CBOR, unknown fields preserved).
 pub fn decode_ascent_link(bytes: &[u8]) -> Result<AscentLink, CodecError> {
     let value = decode(bytes)?;
@@ -926,27 +934,25 @@ impl From<GrantSetBindingError> for CodecError {
 }
 
 /// Verify a grant-set commitment's owner signature **and** its binding to
-/// `scope_root_name`, the `ipnsName` the commitment is being presented under.
+/// `scope_root_name`, the `ipnsName` the commitment is being presented under —
+/// the pair every consumer holding an independent name must run, since an
+/// owner-authentic commitment for another scope root passes a bare
+/// [`verify_grant_set`].
 ///
-/// The commitment's own `ipnsName` is inside the signed preimage, so an
-/// owner-authentic commitment for another scope root would otherwise pass a bare
-/// [`verify_grant_set`] — every consumer that holds an independent name must run
-/// both halves, and this is the one definition of that pair.
-///
-/// The binding is not folded into [`verify_grant_set`]: a consumer holding a
-/// scope id rather than a name has no independent value to bind against, and
-/// takes `commitment.ipns_name` as its authority instead.
+/// The binding runs first: it is a slice compare over public bytes, while the
+/// verify re-encodes the whole commitment and does an ECDSA verify, so an
+/// attacker-supplied wrong-scope record costs a memcmp rather than a signature
+/// check.
 pub fn verify_grant_set_bound(
     verifier: &EcdsaVerifier,
     c: &GrantSetCommitment,
     sig: &EcdsaSignature,
     scope_root_name: &[u8],
 ) -> Result<(), GrantSetBindingError> {
-    verify_grant_set(verifier, c, sig).map_err(GrantSetBindingError::Verify)?;
     if c.ipns_name != scope_root_name {
         return Err(GrantSetBindingError::ScopeMismatch);
     }
-    Ok(())
+    verify_grant_set(verifier, c, sig).map_err(GrantSetBindingError::Verify)
 }
 
 #[cfg(test)]

@@ -35,8 +35,8 @@ use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
     ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
-    HistoryLinkPayload, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_HEAD_BLOCK_BYTES,
-    MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    HistoryLinkPayload, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_WRITE_BODY_BYTES,
+    MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
     OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
     OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields, ReadBody,
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
@@ -525,7 +525,6 @@ struct GrantSection {
     /// re-seal headroom reserved between it and the head-block ceiling.
     write_body_max_bytes: usize,
     write_body_reseal_headroom_bytes: usize,
-    head_block_max_bytes: usize,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
@@ -676,18 +675,24 @@ struct StructureSigAcceptVector {
     struct_tag: u8,
     recipient_tag: String,
     /// The bytes the signature covers — the structure's ciphertext, except for
-    /// an ascent link, where it is the `{ascentPublic, ciphertext, enc}` binding
-    /// the three fields below reproduce.
-    ciphertext: String,
+    /// an ascent link, where `ascentBinding` reproduces it.
+    signed_bytes: String,
+    /// The preimage's `ciphertextHash` field: `H(signedBytes)`.
     ciphertext_hash: String,
     preimage: String,
     signature: String,
-    /// Ascent links only; empty otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ascent_binding: Option<AscentBinding>,
+}
+
+/// The three fields an ascent link's signed body is built from, so a consumer
+/// reproduces the binding rather than trusting the signed bytes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AscentBinding {
     ascent_public: String,
-    /// Ascent links only; empty otherwise.
     enc: String,
-    /// Ascent links only; empty otherwise.
-    ascent_ciphertext: String,
+    ciphertext: String,
 }
 
 /// A structure-signature reject vector: the verify-side context and signature;
@@ -706,12 +711,8 @@ struct StructureSigRejectVector {
     signature: String,
     check: String,
     class: String,
-    /// Ascent links only; empty otherwise.
-    ascent_public: String,
-    /// Ascent links only; empty otherwise.
-    enc: String,
-    /// Ascent links only; empty otherwise.
-    ascent_ciphertext: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ascent_binding: Option<AscentBinding>,
 }
 
 /// A grant-set commitment accept vector: the owner identity key, the frozen
@@ -2453,7 +2454,6 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         write_history_link_struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
         write_body_max_bytes: MAX_WRITE_BODY_BYTES,
         write_body_reseal_headroom_bytes: WRITE_BODY_RESEAL_HEADROOM_BYTES,
-        head_block_max_bytes: MAX_HEAD_BLOCK_BYTES,
         write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
         write_body_reject: reject("write_body_reject", &g.write_body_reject),
         recipient_binding_accept: file_count(
@@ -6171,13 +6171,11 @@ fn build_structure_sig_accept() -> Vec<StructureSigAcceptVector> {
             epoch: 5,
             struct_tag,
             recipient_tag: recipient_tag.map(|t| hexstr(&t)).unwrap_or_default(),
-            ciphertext: hexstr(ciphertext),
+            signed_bytes: hexstr(ciphertext),
             ciphertext_hash: hexstr(&hash(ciphertext)),
             preimage: hexstr(&preimage),
             signature: hexstr(&sig.to_bytes()),
-            ascent_public: String::new(),
-            enc: String::new(),
-            ascent_ciphertext: String::new(),
+            ascent_binding: None,
         });
     }
 
@@ -6185,9 +6183,8 @@ fn build_structure_sig_accept() -> Vec<StructureSigAcceptVector> {
     // rather than the bare ciphertext, so the plaintext public half a re-sealer
     // addresses the seed to is attributable to a committed writer.
     let link = ascent_sig_fixture();
-    let signed_body = ascent_link_sig_body(&link.ascent_public, &link.enc, &link.ciphertext);
-    let input =
-        StructureSigInput::over_ciphertext(scope_id, 5, STRUCT_TAG_ASCENT_LINK, None, &signed_body);
+    let signed_body = link.sig_body();
+    let input = ascent_sig_input(scope_id, &signed_body);
     let preimage = structure_sig_preimage(&input);
     let sig = sign_structure(&signer, &input);
     assert!(
@@ -6202,15 +6199,23 @@ fn build_structure_sig_accept() -> Vec<StructureSigAcceptVector> {
         epoch: 5,
         struct_tag: STRUCT_TAG_ASCENT_LINK,
         recipient_tag: String::new(),
-        ciphertext: hexstr(&signed_body),
+        signed_bytes: hexstr(&signed_body),
         ciphertext_hash: hexstr(&hash(&signed_body)),
         preimage: hexstr(&preimage),
         signature: hexstr(&sig.to_bytes()),
-        ascent_public: hexstr(&link.ascent_public),
-        enc: hexstr(&link.enc),
-        ascent_ciphertext: hexstr(&link.ciphertext),
+        ascent_binding: Some(AscentBinding {
+            ascent_public: hexstr(&link.ascent_public),
+            enc: hexstr(&link.enc),
+            ciphertext: hexstr(&link.ciphertext),
+        }),
     });
     out
+}
+
+/// The signed input for an ascent link at the structure-signature fixtures'
+/// scope and epoch.
+fn ascent_sig_input(scope_id: [u8; 16], signed_body: &[u8]) -> StructureSigInput {
+    StructureSigInput::over_ciphertext(scope_id, 5, STRUCT_TAG_ASCENT_LINK, None, signed_body)
 }
 
 /// The frozen ascent link the structure-signature vectors bind — sealed to a
@@ -6300,9 +6305,7 @@ fn build_structure_sig_reject() -> Vec<StructureSigRejectVector> {
             signature: hexstr(&sig.to_bytes()),
             check: "structure-signature-invalid".to_string(),
             class: "trust".to_string(),
-            ascent_public: String::new(),
-            enc: String::new(),
-            ascent_ciphertext: String::new(),
+            ascent_binding: None,
         });
     }
 
@@ -6352,9 +6355,11 @@ fn build_structure_sig_reject() -> Vec<StructureSigRejectVector> {
         signature: hexstr(&honest_sig.to_bytes()),
         check: "structure-signature-invalid".to_string(),
         class: "trust".to_string(),
-        ascent_public: hexstr(&planted),
-        enc: hexstr(&link.enc),
-        ascent_ciphertext: hexstr(&link.ciphertext),
+        ascent_binding: Some(AscentBinding {
+            ascent_public: hexstr(&planted),
+            enc: hexstr(&link.enc),
+            ciphertext: hexstr(&link.ciphertext),
+        }),
     });
     out
 }

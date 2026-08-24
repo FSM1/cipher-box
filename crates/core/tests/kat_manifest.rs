@@ -28,7 +28,7 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, GrantLedgerEntry,
-    MAX_HEAD_BLOCK_BYTES, MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    MAX_BLOCK_BYTES, MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
     OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind, Permission,
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
@@ -662,7 +662,6 @@ struct GrantManifest {
     write_history_link_struct_tag: u8,
     write_body_max_bytes: usize,
     write_body_reseal_headroom_bytes: usize,
-    head_block_max_bytes: usize,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
@@ -797,13 +796,20 @@ struct StructureSigAcceptVector {
     epoch: u64,
     struct_tag: u8,
     recipient_tag: String,
-    ciphertext: String,
+    signed_bytes: String,
     ciphertext_hash: String,
     preimage: String,
     signature: String,
+    #[serde(default)]
+    ascent_binding: Option<AscentBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AscentBinding {
     ascent_public: String,
     enc: String,
-    ascent_ciphertext: String,
+    ciphertext: String,
 }
 
 #[derive(Deserialize)]
@@ -819,9 +825,8 @@ struct StructureSigRejectVector {
     signature: String,
     check: String,
     class: String,
-    ascent_public: String,
-    enc: String,
-    ascent_ciphertext: String,
+    #[serde(default)]
+    ascent_binding: Option<AscentBinding>,
 }
 
 #[derive(Deserialize)]
@@ -3400,14 +3405,11 @@ fn the_write_body_size_bound_is_frozen_in_the_manifest() {
         m.grant.write_body_reseal_headroom_bytes,
         WRITE_BODY_RESEAL_HEADROOM_BYTES
     );
-    assert_eq!(m.grant.head_block_max_bytes, MAX_HEAD_BLOCK_BYTES);
     assert_eq!(
-        m.grant.write_body_max_bytes + m.grant.write_body_reseal_headroom_bytes,
-        m.grant.head_block_max_bytes,
-        "the bound is the ceiling minus the reserved re-seal headroom"
+        MAX_WRITE_BODY_BYTES + WRITE_BODY_RESEAL_HEADROOM_BYTES,
+        MAX_BLOCK_BYTES,
+        "the bound is the block ceiling minus the reserved re-seal headroom"
     );
-    // Anti-vacuity: a bound at the ceiling would reserve nothing.
-    assert!(m.grant.write_body_reseal_headroom_bytes > 0);
 }
 
 #[test]
@@ -4687,25 +4689,23 @@ fn structure_sig_accept_vectors_verify() {
     let mut saw_ascent_binding = false;
     for v in &vectors {
         let scope_id = unhex_n::<16>(&v.name, &v.scope_id);
-        let ciphertext = unhex(&v.name, &v.ciphertext);
-        if !v.ascent_public.is_empty() {
-            // An ascent link signs over `{ascentPublic, ciphertext, enc}`, so the
-            // signed bytes must reproduce from the three fields beside them.
+        let signed_bytes = unhex(&v.name, &v.signed_bytes);
+        if let Some(b) = &v.ascent_binding {
             saw_ascent_binding = true;
             assert_eq!(
                 hex::encode(ascent_link_sig_body(
-                    &unhex32(&v.name, &v.ascent_public),
-                    &unhex32(&v.name, &v.enc),
-                    &unhex(&v.name, &v.ascent_ciphertext),
+                    &unhex32(&v.name, &b.ascent_public),
+                    &unhex32(&v.name, &b.enc),
+                    &unhex(&v.name, &b.ciphertext),
                 )),
-                v.ciphertext,
+                v.signed_bytes,
                 "structure-sig accept {}: ascent binding drift",
                 v.name
             );
         }
         // H(signed bytes) is the frozen BLAKE3 digest.
         assert_eq!(
-            hex::encode(hash(&ciphertext)),
+            hex::encode(hash(&signed_bytes)),
             v.ciphertext_hash,
             "structure-sig accept {}: ciphertext hash",
             v.name
@@ -4717,7 +4717,7 @@ fn structure_sig_accept_vectors_verify() {
             v.epoch,
             v.struct_tag,
             recipient_tag,
-            &ciphertext,
+            &signed_bytes,
         );
         // The preimage is frozen.
         assert_eq!(
@@ -4788,14 +4788,16 @@ fn structure_sig_reject_vectors_fail_closed() {
             "structure-sig reject must cover {required}"
         );
     }
+    let mut saw_ascent_binding = false;
     for v in &vectors {
-        if !v.ascent_public.is_empty() {
+        if let Some(b) = &v.ascent_binding {
             // The swapped public half is what the verify-side hash covers.
+            saw_ascent_binding = true;
             assert_eq!(
                 hex::encode(hash(&ascent_link_sig_body(
-                    &unhex32(&v.name, &v.ascent_public),
-                    &unhex32(&v.name, &v.enc),
-                    &unhex(&v.name, &v.ascent_ciphertext),
+                    &unhex32(&v.name, &b.ascent_public),
+                    &unhex32(&v.name, &b.enc),
+                    &unhex(&v.name, &b.ciphertext),
                 ))),
                 v.ciphertext_hash,
                 "structure-sig reject {}: ascent binding drift",
@@ -4829,6 +4831,10 @@ fn structure_sig_reject_vectors_fail_closed() {
             v.name
         );
     }
+    assert!(
+        saw_ascent_binding,
+        "the ascent-public swap must carry its binding fields"
+    );
 }
 
 #[test]

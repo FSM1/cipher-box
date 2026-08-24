@@ -41,27 +41,28 @@ pub struct StructureSigInput {
     pub struct_tag: u8,
     /// The recipient's blinded tag — grant blobs only.
     pub recipient_tag: Option<[u8; SECRET_LEN]>,
-    /// `H(ciphertext)`: the BLAKE3 digest of the structure's sealed bytes.
+    /// The BLAKE3 digest of the structure's signed bytes.
     pub ciphertext_hash: [u8; SECRET_LEN],
 }
 
 impl StructureSigInput {
-    /// Build the input over a structure's `ciphertext`, hashing it with the
-    /// frozen BLAKE3 `H` so a caller can never sign a preimage over a differently
+    /// Build the input over a structure's signed bytes — its `ciphertext`, or
+    /// [`ascent_link_sig_body`] for an ascent link — hashing them with the frozen
+    /// BLAKE3 `H` so a caller can never sign a preimage over a differently
     /// computed digest.
     pub fn over_ciphertext(
         scope_id: [u8; 16],
         epoch: u64,
         struct_tag: u8,
         recipient_tag: Option<[u8; SECRET_LEN]>,
-        ciphertext: &[u8],
+        signed_bytes: &[u8],
     ) -> Self {
         Self {
             scope_id,
             epoch,
             struct_tag,
             recipient_tag,
-            ciphertext_hash: hash(ciphertext),
+            ciphertext_hash: hash(signed_bytes),
         }
     }
 }
@@ -93,6 +94,9 @@ pub fn structure_sig_preimage(input: &StructureSigInput) -> Vec<u8> {
 /// ciphertext, structure signature and commitment byte-identical, and the next
 /// honest scope-exit rotation would seal a freshly minted seed to the planted
 /// key (blueprint/core.md "Structure signatures").
+///
+/// Any field added to the published link must be added here too, or it lands
+/// outside the signature exactly as `ascentPublic` did.
 pub fn ascent_link_sig_body(
     ascent_public: &[u8; ENC_LEN],
     enc: &[u8; ENC_LEN],

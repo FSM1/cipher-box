@@ -4998,9 +4998,9 @@ mod tests {
 
     #[test]
     fn a_grantee_cut_refuses_a_root_whose_ascent_link_was_stripped() {
-        // `ascentPublic` and the link's presence are covered by no structure
-        // signature, so anyone holding the write scope seed can drop the link.
-        // Re-publishing without one would sever the owner's descent for good.
+        // The link's *presence* is covered by no structure signature, so anyone
+        // holding the write scope seed can drop it. Re-publishing without one
+        // would sever the owner's descent for good.
         let world = plain_world(Permission::Write);
         let mut stripped = world.root.grant_section.clone();
         stripped.ascent_link = None;

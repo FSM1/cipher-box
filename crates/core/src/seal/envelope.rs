@@ -110,6 +110,13 @@ const WRITE_SEALED_KEY: &str = "writeSealed";
 /// pad, which is the wedge the cut exists to deny.
 const UNCUTTABLE: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
 
+/// The IPFS single-block ceiling every published block must fit: `block/put`
+/// refuses anything larger (blueprint/api.md), so a bigger record is authorable
+/// and unpinnable. The canonical value for [`encode_envelope_within`]'s `limit`,
+/// and the ceiling [`super::MAX_WRITE_BODY_BYTES`] reserves its re-seal headroom
+/// under; `crates/engine`'s content limits alias it rather than restate it.
+pub const MAX_BLOCK_BYTES: usize = 2 * 1024 * 1024;
+
 /// What an [`encode_envelope_within`] cut destroyed: the carried keys it
 /// dropped, in the order it dropped them. Empty when nothing was cut.
 ///

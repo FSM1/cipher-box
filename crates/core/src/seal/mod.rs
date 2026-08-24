@@ -37,8 +37,9 @@ pub use content_key::{
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, content_key_aad, open_content_key, seal_content_key,
 };
 pub use envelope::{
-    CarriedCut, Envelope, decode_envelope, encode_envelope, encode_envelope_within,
-    grant_section_bytes, has_grant_section, open_read_body, seal_read_body, set_grant_section,
+    CarriedCut, Envelope, MAX_BLOCK_BYTES, decode_envelope, encode_envelope,
+    encode_envelope_within, grant_section_bytes, has_grant_section, open_read_body, seal_read_body,
+    set_grant_section,
 };
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
@@ -74,10 +75,10 @@ pub use structure::{
     verify_structure,
 };
 pub use write_body::{
-    ChildScopeRef, GrantLedgerEntry, MAX_DIRECT_CHILD_SCOPES, MAX_HEAD_BLOCK_BYTES,
-    MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, WRITE_BODY_RESEAL_HEADROOM_BYTES,
-    WriteBody, decode_write_body, encode_recipient_binding, encode_write_body,
-    sign_recipient_binding, verify_recipient_binding,
+    ChildScopeRef, GrantLedgerEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_BODY_BYTES,
+    MAX_WRITE_HISTORY_LINK_BYTES, WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, decode_write_body,
+    encode_recipient_binding, encode_write_body, is_write_body_over_bound, sign_recipient_binding,
+    verify_recipient_binding,
 };
 
 use crate::error::{CodecError, Malformed, TrustViolation};

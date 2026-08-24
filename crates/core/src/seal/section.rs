@@ -160,7 +160,7 @@ impl SignedOwnerWriteBlob {
 }
 
 /// The ascent link as published: the plaintext ascent public half, the HPKE
-/// `enc`/`ciphertext`, and the structure signature over `H(ciphertext)`.
+/// `enc`/`ciphertext`, and the structure signature over [`Self::sig_body`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedAscentLink {
     /// The plaintext ascent X25519 public key (the derive-and-verify anchor).
@@ -169,13 +169,22 @@ pub struct SignedAscentLink {
     pub enc: [u8; ENC_LEN],
     /// The HPKE ciphertext (`ciphertext || tag`).
     pub ciphertext: Vec<u8>,
-    /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
+    /// The 64-byte Ed25519 structure signature over `H(`[`Self::sig_body`]`)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
 }
 
 const ASCENT_LINK_KNOWN: &[&str] = &["ascentPublic", "ciphertext", "enc", "sig"];
+
+impl SignedAscentLink {
+    /// The bytes this link's structure signature is taken over
+    /// ([`super::ascent_link_sig_body`]) — the ascent link alone signs over more
+    /// than its ciphertext.
+    pub fn sig_body(&self) -> Vec<u8> {
+        super::ascent_link_sig_body(&self.ascent_public, &self.enc, &self.ciphertext)
+    }
+}
 
 impl SignedAscentLink {
     fn from_value(v: &Value) -> Result<Self, CodecError> {
