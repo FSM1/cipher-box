@@ -4393,7 +4393,10 @@ mod tests {
         T: RecordTransport + Clone + 'static,
     {
         let pseudonym = OwnerSeeds.writer_pseudonym(&SCOPE);
-        let owner_enc_pub = owner_enc().public();
+        // The one production wiring (`net/cut.rs`) is owner-held, and the cascade
+        // reads each re-key's published seed back through this subkey.
+        let owner_enc_secret = owner_enc();
+        let owner_enc_pub = owner_enc_secret.public();
         let pointer_read_key = OwnerSeeds.pointer_read_key(&SCOPE);
         let mut entropy = SeededEntropy::new(entropy_seed);
         let net = harness.net_under(ascent_seed, index);
@@ -4409,7 +4412,7 @@ mod tests {
                     scope_id: SCOPE,
                     ipns_name: root.name.as_str().as_bytes(),
                     owner_enc_pub: &owner_enc_pub,
-                    owner_enc_secret: None,
+                    owner_enc_secret: Some(&owner_enc_secret),
                     ascent: None,
                     owes_ascent_link: false,
                     pseudonym_signer: &pseudonym,

@@ -885,10 +885,13 @@ pub fn reseal_scope_root<E: Entropy>(
 /// [`ResealSeeds`], never from the payload under test, so the ascent arm cannot
 /// drift from the seed and epoch the rest of the section is minted at.
 ///
-/// The mirror stops one axis short of the gate's: seal and open derive the
-/// ascent keypair from the single `parent_node_seed` this re-seal was handed, so
-/// a caller that threads the wrong ancestor seed passes here and is caught only
-/// by a reader, which derives its own from cached state.
+/// The mirror covers the seed and epoch, not the ancestor: seal and open derive
+/// the ascent keypair from the single `parent_node_seed` this re-seal was handed,
+/// so authenticating that seed is the caller's. The threading site that mints
+/// descendant roots does it by recovering each parent's seed from the record it
+/// publishes (`rotation/cascade.rs::published_seed`); a rotator anchored at one
+/// root reads it from the parent its own walk gated
+/// (`net/rotation.rs::RotationAncestry`).
 ///
 /// The gate compares the read key the recovered seed derives; comparing the seed
 /// is the same predicate one derivation earlier.
