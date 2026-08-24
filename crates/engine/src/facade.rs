@@ -5061,13 +5061,13 @@ where {
         }
     }
 
-    /// Refuse to serve `version` when the queue has staged a different one.
+    /// Refuse to serve `version` when the queue has staged a different one: the
+    /// read-side half of the pairing rule
+    /// [`rendered_version_cid`](Self::rendered_version_cid) states.
     ///
-    /// A read's consumer pairs the bytes it serves with the length the rendered
-    /// view reports, and the overlay takes that length from the staged version.
-    /// Serving any other version under it publishes that version's bytes — the
-    /// truncation-resurrection defect, as a silent success. Availability, not
-    /// trust: the drain publishes the staged version and the read lands.
+    /// Availability, not trust — the drain publishes the staged version and the
+    /// read lands. Judged on the staged cid alone, so a refusal costs no
+    /// resolve.
     async fn refuse_unpaired_version(
         &self,
         node: NodeId,
