@@ -354,7 +354,7 @@ async fn start_engine(
     // staged bytes actually land on.
     let storage_policy = session
         .config
-        .storage_policy
+        .pinned_storage_policy
         .unwrap_or_else(|| measured_storage_policy(&account_dir));
 
     let (mut engine, events) = Engine::new(

@@ -5,8 +5,9 @@
 //! It is a projection, not a second brain. Reads render the facade's snapshot
 //! (with the pending-op overlay already applied) and never wait on the
 //! network; mutations become facade intent ops. No keys, no publish
-//! machinery, no freshness policy — those decisions all happened below the
-//! facade.
+//! machinery, and no freshness policy of its own — the staleness threshold and
+//! the focus window live below the facade, and the projection only reports
+//! which folder an operation had in view.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -264,7 +265,6 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let stale = self.engine.note_focus_access(folder);
         self.refresh_hint = folder.filter(|_| stale);
     }
-
 
     /// Resolve a name under a directory.
     pub async fn lookup(&mut self, parent: u64, name: &str) -> Result<Attributes, VfsError> {

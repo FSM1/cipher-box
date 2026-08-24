@@ -1,10 +1,6 @@
 //! The desktop leg of the measured storage policy (CONTEXT.md "Storage
-//! policy"; blueprint/engine.md "Host seams").
-//!
-//! Web measures origin headroom through `navigator.storage.estimate()`;
-//! desktop measures the free bytes a non-privileged user has on the volume its
-//! engine data dir sits on. Both hand one figure to
-//! [`StoragePolicy::measured`], which owns the split.
+//! policy"): the free bytes a non-privileged user has on the volume the engine
+//! data dir sits on. The split itself is [`StoragePolicy::measured`]'s.
 
 use std::io::ErrorKind;
 use std::path::Path;

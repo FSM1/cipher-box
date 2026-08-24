@@ -56,18 +56,13 @@ pub struct HostCapabilities {
     pub push_invalidation: bool,
     /// Whether the kernel caches attributes for this mount at all. A mount that
     /// suppressed the cache — the `noattrcache` the FUSE-T SMB backend requires
-    /// (blueprint/desktop.md "Freshness") — says `false`, and gets no attribute
-    /// lifetime to hand back, because there is nothing to time out. It still
-    /// gets pushed every attribute invalidation: a kernel cache the mount
-    /// cannot see is not a reason to stop reporting.
+    /// (blueprint/desktop.md "Freshness") — says `false`.
     pub attribute_cache: bool,
 }
 
 /// The kernel-facing cache lifetimes for one mount, derived from what its
-/// adapter declared. Never zero for a cache the kernel actually keeps — v1's
-/// dir-TTL-0 workaround was the symptom of a mount that could not invalidate,
-/// and a suppressed attribute cache is the opposite of that: a deliberate,
-/// measured mount option rather than a lifetime shortened to nothing.
+/// adapter declared. Never zero for a cache the kernel keeps — v1's dir-TTL-0
+/// workaround was the symptom of a mount that could not invalidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheTtls {
     /// How long a name→inode binding may be cached.

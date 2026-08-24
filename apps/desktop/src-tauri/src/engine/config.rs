@@ -54,7 +54,7 @@ pub struct EngineConfig {
     /// The staging/cache split this build pins, if it pins one. `None` leaves
     /// the split to a measurement of the data-dir volume at seam assembly,
     /// which is the only place that path is known.
-    pub storage_policy: Option<StoragePolicy>,
+    pub pinned_storage_policy: Option<StoragePolicy>,
 }
 
 impl EngineConfig {
@@ -99,7 +99,7 @@ impl EngineConfig {
             // CI pins a budget small enough to exhaust in a test; every other
             // build measures its own data volume
             // (`measured_storage_policy`).
-            storage_policy: if ci { Some(StoragePolicy::CI) } else { None },
+            pinned_storage_policy: if ci { Some(StoragePolicy::CI) } else { None },
         })
     }
 }
@@ -199,7 +199,7 @@ mod tests {
             .expect("a configured build parses");
             assert_eq!(config.profile, SyncTimingProfile::PRODUCTION);
             assert_eq!(
-                config.storage_policy, None,
+                config.pinned_storage_policy, None,
                 "a shipped build measures its own volume rather than pinning a budget"
             );
         }
@@ -210,6 +210,6 @@ mod tests {
         })
         .expect("a configured build parses");
         assert_eq!(ci.profile, SyncTimingProfile::CI);
-        assert_eq!(ci.storage_policy, Some(StoragePolicy::CI));
+        assert_eq!(ci.pinned_storage_policy, Some(StoragePolicy::CI));
     }
 }

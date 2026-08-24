@@ -90,28 +90,38 @@ fn mount_with(adapter: RecordingAdapter) -> Core {
 
 /// A started engine over fresh in-memory seams, with its rendered root id.
 fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
-    let (engine, root, _staging) = started_engine_with_staging();
-    (engine, root)
+    let started = started_engine_over_queue(&[]);
+    (started.engine, started.root)
 }
 
 /// A started engine plus a handle on its durable op queue, for tests that
 /// inject a staging outage.
 fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
-    started_engine_over_queue(&[])
+    let started = started_engine_over_queue(&[]);
+    (started.engine, started.root, started.staging)
+}
+
+/// Everything one cold start hands a test: the engine, what it rendered, and
+/// the seams a test drives it through.
+struct Started {
+    engine: Engine<FakeSeamTypes>,
+    root: NodeId,
+    staging: InMemoryStagingStore,
+    clock: VirtualScheduler,
+    events: EventStream,
 }
 
 /// A started engine whose durable queue already held `entries` when cold start
 /// read it — the only way to put a record there that this build cannot decode.
-fn started_engine_over_queue(
-    entries: &[&[u8]],
-) -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
+fn started_engine_over_queue(entries: &[&[u8]]) -> Started {
     let world = FakeWorld::new();
+    let clock = world.scheduler.clone();
     let device = world.device(b"alice-pk");
     let staging = device.staging_store.clone();
     for entry in entries {
         block_on(staging.enqueue_op(entry)).expect("the queue takes the bytes");
     }
-    let (mut engine, _events) = Engine::new(
+    let (mut engine, events) = Engine::new(
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
@@ -122,7 +132,13 @@ fn started_engine_over_queue(
     );
     block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
     let root = block_on(engine.view()).expect("view").root();
-    (engine, root, staging)
+    Started {
+        engine,
+        root,
+        staging,
+        clock,
+        events,
+    }
 }
 
 /// Seed a child by issuing a facade command directly, which is how a name the
@@ -185,28 +201,15 @@ fn mount_clocked(
     adapter: RecordingAdapter,
     root_children: &[(&str, NodeKind)],
 ) -> (Core, NodeId, VirtualScheduler, EventStream) {
-    let world = FakeWorld::new();
-    let clock = world.scheduler.clone();
-    let device = world.device(b"alice-pk");
-    let (mut engine, events) = Engine::new(
-        device.seam_set(),
-        Box::new(SeededEntropy::new(42)),
-        SyncTimingProfile::CI,
-        ContentProfile::CI,
-        StoragePolicy::CI,
-        ApiBaseUrl::offline(),
-        GatewayConfig::disabled(),
-    );
-    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
-    let root = block_on(engine.view()).expect("view").root();
+    let mut started = started_engine_over_queue(&[]);
     for (name, kind) in root_children {
-        seed_child(&mut engine, root, name, *kind);
+        seed_child(&mut started.engine, started.root, name, *kind);
     }
     (
-        OperationCore::new(engine, adapter, CacheBudget::CI, spill_area()),
-        root,
-        clock,
-        events,
+        OperationCore::new(started.engine, adapter, CacheBudget::CI, spill_area()),
+        started.root,
+        started.clock,
+        started.events,
     )
 }
 
@@ -1557,8 +1560,8 @@ fn a_write_the_backlog_cannot_hold_surfaces_a_different_cause() {
 
 #[test]
 fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
-    let (engine, _root, _staging) = started_engine_over_queue(&[b"not an op record"]);
-    let mut core = mount_over(engine);
+    let started = started_engine_over_queue(&[b"not an op record"]);
+    let mut core = mount_over(started.engine);
 
     let status = block_on(core.status()).expect("the status reads");
 
@@ -1773,11 +1776,9 @@ mod published {
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle = block_on(engine.begin_write(
-            WriteTarget::Version { node },
-            plaintext.len() as u64,
-        ))
-        .expect("the second device's write opens");
+        let handle =
+            block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
+                .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
         }

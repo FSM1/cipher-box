@@ -33,11 +33,14 @@ pub struct SyncTimingProfile {
     /// long while other resolves succeed raises the stronger warning
     /// (#33 D7).
     pub escalation_window: Duration,
-    /// Focus horizon: how long a folder keeps counting as "open" after the
-    /// last host operation on it. Desktop derives its focus window from the
-    /// FUSE op stream where web derives it from navigation, so a Finder window
-    /// left idle has to stop riding the poll tick on its own
-    /// (blueprint/desktop.md "Freshness").
+    /// Focus horizon: how long a folder keeps counting as "open" after the last
+    /// host operation on it. Desktop derives its focus window from the FUSE op
+    /// stream where web derives it from navigation, so an idle Finder window has
+    /// to stop riding the poll tick on its own (blueprint/desktop.md
+    /// "Freshness"). Longer than [`stale_after`], or an on-access refresh could
+    /// never come due inside the window.
+    ///
+    /// [`stale_after`]: SyncTimingProfile::stale_after
     pub focus_horizon: Duration,
     /// Scope-pointer consult interval — polled, not fallback (#38 D4);
     /// bounds the read-only-survivor residual.
@@ -160,11 +163,15 @@ mod tests {
     }
 
     #[test]
-    fn a_focus_window_outlives_at_least_one_poll_cycle() {
+    fn a_focus_window_outlives_a_poll_cycle_and_the_staleness_threshold() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             assert!(
                 profile.focus_horizon > profile.poll_cadence,
                 "a window that expired before its own tick could never be polled"
+            );
+            assert!(
+                profile.focus_horizon > profile.stale_after,
+                "a window that closed first would make an on-access refresh unreachable"
             );
         }
     }
