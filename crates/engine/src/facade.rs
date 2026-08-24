@@ -1563,6 +1563,9 @@ fn parsed_scope_name(ipns_name: &[u8]) -> Result<IpnsName, EngineError> {
 struct OwnerScope {
     scope: ChildScopeRef,
     parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+    /// Whether the parent's owner-signed index names this scope root at this
+    /// name — see [`OwnerScope::resolve_error`].
+    vouched: bool,
 }
 
 /// What an action does when the parent's owner-signed index does not vouch for
@@ -1585,6 +1588,21 @@ impl OwnerScope {
     fn ancestry(&self) -> RotationAncestry {
         RotationAncestry::default()
             .under_parent_node_seed(self.scope.scope_id, self.parent_node_seed.as_deref())
+    }
+
+    /// How a failed resolve of this scope root classifies.
+    ///
+    /// A rejection at a name nothing vouched for is the caller's target error,
+    /// not an abuse event: every node of a scope publishes at a derived name, so
+    /// a node that is no scope root answers there with an ordinary record the
+    /// gate rightly refuses. Reporting that as a trust violation would put a
+    /// plain input mistake on the channel a host must treat as attributable
+    /// (AGENTS.md rule 6).
+    fn resolve_error(&self, check: &'static str, failure: ResolveFailure) -> EngineError {
+        match failure {
+            ResolveFailure::Rejected if !self.vouched => EngineError::UnsupportedTarget { check },
+            other => EngineError::from_resolve_failure(other),
+        }
     }
 }
 
@@ -3474,6 +3492,7 @@ where {
             return Ok(OwnerScope {
                 scope: self.vault_root_scope()?,
                 parent_node_seed: None,
+                vouched: true,
             });
         }
         if !self.snapshot.borrow().contains(node) {
@@ -3490,6 +3509,7 @@ where {
             .iter()
             .find(|child| child.scope_id == node.0)
             .cloned();
+        let vouched = indexed.is_some();
         let scope = match (indexed, unindexed) {
             (Some(child), _) => child,
             (None, UnindexedScope::Refuse) => {
@@ -3508,6 +3528,7 @@ where {
                 *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
             )),
             scope,
+            vouched,
         })
     }
 
@@ -3735,7 +3756,7 @@ where {
             .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
             .resolve_anchored(&target.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| target.resolve_error(check, e))?;
         let tag = select(&target, &current).await?;
 
         let plan = GrantCutPlan {
@@ -4079,20 +4100,15 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
+        let check = "prune-target-is-not-a-scope-root";
         let target = self
-            .owner_scope(
-                node,
-                api,
-                owner_keys(),
-                "prune-target-is-not-a-scope-root",
-                UnindexedScope::Derive,
-            )
+            .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
             .await?;
         let current = self
             .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
             .resolve_anchored(&target.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
+            .map_err(|e| target.resolve_error(check, e))?;
 
         let committed: BTreeSet<[u8; 32]> = current
             .commitment

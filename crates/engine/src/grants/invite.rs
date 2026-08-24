@@ -11,7 +11,10 @@
 //! [`reseal_scope_root`](crate::rotation::reseal_scope_root) wraps — an invite is
 //! byte-shaped like a personal grantee's and an observer learns only blob count.
 //! (The sealed write-body is longer by a row that carries a deadline; that
-//! ciphertext length is the residual observable.)
+//! ciphertext length is the residual observable.) Parity is per record, not per
+//! transaction: a link mints its scope exactly as a personal grant does but
+//! posts no share pointer, so "a scope root registered with no mailbox post
+//! behind it" still tells the API which folders were shared by link.
 //!
 //! The invite secret is the whole capability — it rides the link's URL fragment,
 //! so the link is honestly bearer and multi-claim. Its deadline lives on

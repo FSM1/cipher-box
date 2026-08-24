@@ -942,6 +942,33 @@ fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() 
     );
 }
 
+/// Every node of a scope publishes at a derived name, so a folder that is no
+/// scope root answers there with an ordinary record the gate refuses. That is
+/// the caller naming the wrong node, not an abuse event — and the difference is
+/// what a host alarms on.
+#[test]
+fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks, Vec::new());
+    let alice = world.device(b"alice");
+    record_links(&alice, &[invite_link_at_root(0x4e).link]);
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink { node: folder })),
+        Err(EngineError::UnsupportedTarget {
+            check: "revoke-link-target-is-not-a-scope-root"
+        }),
+    );
+    assert_eq!(
+        recorded_links(&alice).len(),
+        1,
+        "a refused revoke forgets nothing"
+    );
+}
+
 /// A tag the owner does not record as a link belongs to some grantee, so a
 /// revoke that could reach it would cut an ordinary grant. It publishes nothing
 /// instead.

@@ -71,6 +71,12 @@ const INVITE_RECORDS_V: u64 = 2;
 /// The frozen bound on recorded links, enforced release-active in both codec
 /// directions (AGENTS.md rule 8). One record per live link across every scope
 /// the owner has invited to; it bounds reader CPU and the staging budget alike.
+///
+/// A record whose scope root never published spends a slot that nothing can
+/// reclaim on its own: no record resolves at that name for a prune to read a
+/// commitment out of, and dropping one on an unresolvable name is the fail-open
+/// the prune exists to avoid. A later mint at the same node publishes a
+/// commitment that supersedes it, and the prune reclaims it then.
 pub const MAX_INVITE_RECORDS: usize = 1024;
 
 /// The frozen bound on spent-claim records, on the same rule as
