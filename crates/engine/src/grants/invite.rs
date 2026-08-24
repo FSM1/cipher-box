@@ -228,37 +228,6 @@ impl EphemeralInvitee {
     }
 }
 
-/// What a minted link hands out, as the host must present it.
-///
-/// Every invite link is bearer — the fragment secret is the whole capability —
-/// so what a host must not get wrong is what *ending* one costs, and that is
-/// what this names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkCapability {
-    /// A read link: cutting its tag from the owner-signed set and rotating the
-    /// read plane ends it.
-    Read,
-    /// A write link: the blob hands the fragment holder an extractable subtree
-    /// signing key, so it stays usable until `rotate_scope_write` runs. Pruning
-    /// the ledger revokes nothing (blueprint/engine.md "Invites").
-    BearerWrite,
-}
-
-impl LinkCapability {
-    /// The capability a link at `permission` hands out.
-    pub fn of(permission: Permission) -> Self {
-        match permission {
-            Permission::Read => Self::Read,
-            Permission::Write => Self::BearerWrite,
-        }
-    }
-
-    /// Whether the link hands out an extractable subtree signing key.
-    pub fn is_bearer_write(&self) -> bool {
-        matches!(self, Self::BearerWrite)
-    }
-}
-
 /// One invite link as the owner recorded it at mint — **owner-local state, never
 /// network bytes**.
 ///
@@ -291,8 +260,6 @@ pub struct MintedInvite {
     /// The owner-local record [`convert_invite_claim`] and
     /// [`locate_invite_link`] act on. Persist it with the link.
     pub link: RecordedInvite,
-    /// What the link hands out.
-    pub capability: LinkCapability,
 }
 
 /// Mint an invite link over the scope root at `scope_id`.
@@ -336,7 +303,6 @@ pub fn mint_invite_grant(
             expires_at,
         },
         row,
-        capability: LinkCapability::of(permission),
     })
 }
 
@@ -1717,12 +1683,6 @@ mod tests {
     fn a_link_is_located_only_when_recorded_and_still_committed() {
         let read = link(0x71, Permission::Read, None);
         let write = link(0x72, Permission::Write, None);
-        assert!(
-            write.capability.is_bearer_write(),
-            "a write link hands out an extractable subtree signing key",
-        );
-        assert!(!read.capability.is_bearer_write());
-
         let keys = Owner::new();
         let owner = keys.authority();
         let (commitment, sig, ledger) = committed(&[read.row.clone(), write.row.clone()]);
