@@ -3804,8 +3804,9 @@ where {
         // The recipient's own received-shares codec hard-rejects a longer label,
         // so a pointer carrying one is an item they can never store and never
         // ack — it would redeliver until its TTL. Refuse it here, where the name
-        // is still the owner's to change (AGENTS.md rule 8).
-        if display_name.len() > MAX_DISPLAY_NAME_BYTES {
+        // is still the owner's to change (AGENTS.md rule 8). A bearer link
+        // carries no pointer, so the bound is not its to answer for.
+        if matches!(share, ScopeShare::Contact(_)) && display_name.len() > MAX_DISPLAY_NAME_BYTES {
             return Err(EngineError::MalformedInput {
                 check: "grant-display-name-too-long",
             });
@@ -3831,9 +3832,9 @@ where {
             .await
             .map_err(EngineError::from_resolve_failure)?;
 
-        // The share pointer is sealed under the parent record's envelope version
-        // and opened under the one this build authors, so a divergence would mint
-        // a grant whose pointer no accept can open.
+        // The minted scope root and any share pointer naming it are authored at
+        // the parent record's envelope version and opened under the one this
+        // build authors, so a divergence would mint a grant nothing can open.
         if current.v != ENVELOPE_V {
             return Err(EngineError::UnsupportedTarget {
                 check: checks.envelope_version,
