@@ -1893,7 +1893,8 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// (`RotateScopeWritePlan::payload_version`).
     pub payload_version: u64,
     /// The root name the wave is moving off. It lingers serving the tombstone, so
-    /// [`WriteWaveNet::retire`] refuses a batch naming it.
+    /// [`WriteWaveNet::retire`] refuses a batch naming it. A resumed pass reads
+    /// its own moved root instead ([`WaveAnchor`]).
     pub current_root_name: &'a IpnsName,
     /// The session's vault-anchor scope, which
     /// [`floor::repoint_regression`] needs to scope its read-epoch stage. Unlike
@@ -1907,6 +1908,41 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The subtree index the enumeration builds as it descends
     /// ([`WaveSubtree`]). One rotation pass per net.
     pub subtree: WaveSubtree,
+    /// The moved root a resume enumerates from, when this pass is one
+    /// ([`WaveAnchor`]). One rotation pass per net.
+    pub anchor: WaveAnchor,
+}
+
+/// The root name this pass enumerates from, with the owner-vouched write epoch
+/// it publishes at: the moved root of a wave
+/// [`WriteSubtreeResolver::recover_wave`] picked up, or — unset — the pre-wave
+/// root [`WriteWaveNet::current_root_name`] names.
+///
+/// The orchestrator sets it only after checking that the recovered write scope
+/// seed derives the name ([`WriteSubtreeResolver::resume_at`]), so the anchor is
+/// never a name this scope's own wave did not mint.
+#[derive(Default)]
+pub struct WaveAnchor {
+    inner: RefCell<Option<(IpnsName, u64)>>,
+}
+
+impl WaveAnchor {
+    fn root_name(&self) -> Option<IpnsName> {
+        self.inner.borrow().as_ref().map(|(name, _)| name.clone())
+    }
+
+    /// The write epoch this pass reads `name`'s write plane at, when `name` is
+    /// the moved root a resume anchored it to.
+    fn write_epoch_at(&self, name: &IpnsName) -> Option<u64> {
+        match self.inner.borrow().as_ref() {
+            Some((anchored, epoch)) if anchored == name => Some(*epoch),
+            _ => None,
+        }
+    }
+
+    fn set(&self, root_name: &IpnsName, write_epoch: u64) {
+        *self.inner.borrow_mut() = Some((root_name.clone(), write_epoch));
+    }
 }
 
 /// What this pass's own gated reads discovered: the write scope's node index —
@@ -2225,11 +2261,30 @@ where
             return Err(WritePublishError::Rejected);
         }
         let read_scope_seed = gated.read_scope_seed;
-        let write_scope_seed = gated.write_scope_seed.ok_or(WritePublishError::NotLanded)?;
-        let write_epoch = floor::write_epoch_floor(self.floors, &self.scope_id)
-            .await
-            .map_err(|_| WritePublishError::NotLanded)?
-            .ok_or(WritePublishError::NotLanded)?;
+        // A resume leaves the durable write-epoch floor where the pre-wave root
+        // can still be read ([`WriteWaveNet::recover_wave`]), so the moved root's
+        // write plane opens at the epoch the owner signed into the re-point
+        // instead ([`WaveAnchor`]).
+        let (write_scope_seed, write_epoch) = match self.anchor.write_epoch_at(name) {
+            Some(epoch) => {
+                let owb = gated
+                    .section
+                    .owner_write_blob
+                    .as_ref()
+                    .ok_or(WritePublishError::NotLanded)?;
+                let seed = open_write_scope_seed_at(self.owner_enc_secret, &envelope, owb, epoch)
+                    .ok_or(WritePublishError::NotLanded)?;
+                (Zeroizing::new(*seed), epoch)
+            }
+            None => {
+                let seed = gated.write_scope_seed.ok_or(WritePublishError::NotLanded)?;
+                let epoch = floor::write_epoch_floor(self.floors, &self.scope_id)
+                    .await
+                    .map_err(|_| WritePublishError::NotLanded)?
+                    .ok_or(WritePublishError::NotLanded)?;
+                (seed, epoch)
+            }
+        };
         let write_body = open_write_body(
             &envelope,
             &gated.section,
@@ -2725,7 +2780,9 @@ where
     async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
         let is_root = *node_id == self.scope_id;
         let current_name = if is_root {
-            self.current_root_name.clone()
+            self.anchor
+                .root_name()
+                .unwrap_or_else(|| self.current_root_name.clone())
         } else {
             self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?
         };
@@ -2828,6 +2885,10 @@ where
             root_name: repoint.current_root,
             write_epoch: repoint.write_epoch,
         }))
+    }
+
+    fn resume_at(&self, root_name: &IpnsName, write_epoch: u64) {
+        self.anchor.set(root_name, write_epoch);
     }
 }
 
@@ -5341,6 +5402,7 @@ mod tests {
             authorized_commitment: plan,
             gated_root: GatedWaveRoot::default(),
             subtree: WaveSubtree::default(),
+            anchor: WaveAnchor::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
             payload_version: 1,
             current_root_name: current_root,
@@ -7488,6 +7550,64 @@ mod tests {
             derive_write_name(recovered.write_scope_seed.as_bytes(), &SCOPE),
             recovered.root_name,
             "the recovered pair satisfies the check rotate_scope_write imposes"
+        );
+    }
+
+    #[test]
+    fn a_resumed_pass_enumerates_its_own_moved_root() {
+        // The pre-wave root lingers serving the pre-rotation read epoch, so a
+        // resumed pass that enumerated it would judge its retire on evidence its
+        // moved copies no longer carry. The anchor points the enumeration at the
+        // root the resume recovered instead.
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let outcome = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(64);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes")
+        };
+
+        let lingering = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        assert_eq!(
+            block_on(lingering.resolve_node(&SCOPE))
+                .expect("the lingering root still resolves")
+                .current_name,
+            staged.root.name,
+            "an unanchored pass reads the root the plan names"
+        );
+
+        let resumed = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        resumed.resume_at(&outcome.new_root_name, outcome.new_write_epoch);
+        let root = block_on(resumed.resolve_node(&SCOPE)).expect("the moved root resolves");
+        assert_eq!(root.current_name, outcome.new_root_name);
+        assert_eq!(
+            block_on(resumed.resolve_node(&MID))
+                .expect("the moved interior resolves")
+                .current_name,
+            derive_write_name(&SeededEntropy::first_draw(64), &MID),
+            "the walk descends the moved root's rewritten child refs"
         );
     }
 

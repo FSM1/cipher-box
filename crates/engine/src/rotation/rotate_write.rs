@@ -172,6 +172,25 @@ pub trait WriteSubtreeResolver {
     /// The whole of the crash-recovery seam (#26 D8): entropy versus a published
     /// record, never an in-memory checkpoint a crash would have taken with it.
     async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure>;
+
+    /// Anchor the enumeration at `root_name`, published at `write_epoch` — the
+    /// moved root of the wave [`Self::recover_wave`] handed back, once the seed
+    /// that derives it has been checked
+    /// ([`WriteRotateError::ResumedSeedNotAtItsRoot`]).
+    ///
+    /// A resumed pass must read its own moved copies: the pre-wave root lingers
+    /// serving the pre-rotation read epoch, so a read rotation adopted mid-wave
+    /// leaves that record below the live floor while the moved copies the sweep
+    /// re-keyed sit above it. Enumerating through the lingering name therefore
+    /// re-derives the stale evidence the retire already refused on, and the wave
+    /// cannot converge.
+    ///
+    /// `write_epoch` is the owner-vouched epoch the moved root's write plane is
+    /// sealed at. It travels with the name because a resume leaves the durable
+    /// write-epoch floor where the pre-wave root can still be read
+    /// ([`Self::recover_wave`]), so the floor alone opens nothing at the moved
+    /// root.
+    fn resume_at(&self, root_name: &IpnsName, write_epoch: u64);
 }
 
 /// The write edge of the name wave: CAS republish, batch retire, and the
@@ -552,6 +571,9 @@ where
             if derive_write_name(&seed, &scope_id) != wave.root_name {
                 return Err(WriteRotateError::ResumedSeedNotAtItsRoot);
             }
+            // Only now: the anchor is a name the enumeration reads and re-signs
+            // under, so it takes the checked root, never the recovered one.
+            resolver.resume_at(&wave.root_name, wave.write_epoch);
             seed
         }
         None => fresh_seed(entropy).map_err(WriteRotateError::Entropy)?,
@@ -770,7 +792,7 @@ mod tests {
     use super::*;
     use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{PreservedFields, sign_grant_set};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
     use std::rc::Rc;
 
@@ -850,12 +872,37 @@ mod tests {
     }
 
     /// A fake subtree resolver over a fixed `node_id -> children` map.
+    ///
+    /// Unanchored it serves the pre-wave names. Anchored at a moved root
+    /// ([`WriteSubtreeResolver::resume_at`]) it serves every node at its
+    /// post-rotation name, as a walk down the flipped pointer reads them.
     struct FakeResolver {
         nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
         state: WaveState,
         /// Overrides the published-state recovery, so a test can hand back a pair
         /// whose seed and root name disagree.
         recovery: Option<PublishedRoot>,
+        anchor: RefCell<Option<IpnsName>>,
+        /// A read rotation has raised the read-epoch floor past the pre-wave
+        /// records, so the adoption gate refuses them — only the swept moved
+        /// copies an anchored pass reads still resolve.
+        below_floor: Cell<bool>,
+    }
+
+    impl FakeResolver {
+        fn recovered(&self) -> Option<PublishedRoot> {
+            self.recovery
+                .clone()
+                .or_else(|| self.state.published_root.borrow().clone())
+        }
+
+        /// The seed the anchored moved root publishes — what names every node
+        /// below it, once a resume has pointed this pass at that root.
+        fn anchored_seed(&self) -> Option<[u8; SECRET_LEN]> {
+            let anchor = self.anchor.borrow().clone()?;
+            let (name, seed, _) = self.recovered()?;
+            (name == anchor).then_some(seed)
+        }
     }
 
     impl WriteSubtreeResolver for FakeResolver {
@@ -865,9 +912,14 @@ mod tests {
                 .get(node_id)
                 .ok_or(ResolveFailure::Unavailable)?
                 .clone();
+            let current_name = match self.anchored_seed() {
+                Some(seed) => derive_write_name(&seed, node_id),
+                None if self.below_floor.get() => return Err(ResolveFailure::Rejected),
+                None => old_name_of(node_id),
+            };
             Ok(WriteScopeNode {
                 node_id: *node_id,
-                current_name: old_name_of(node_id),
+                current_name,
                 child_node_ids: children,
             })
         }
@@ -878,33 +930,9 @@ mod tests {
                 None => recover_from(&self.state),
             }
         }
-    }
 
-    /// A resolver modelling a resume AFTER the pointer already flipped: every node
-    /// reports its NEW (post-rotation) name as current, as a resolver walking the
-    /// flipped pointer would. Retiring any of these would orphan a live descendant.
-    struct PostFlipResolver {
-        nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
-        seed: [u8; 32],
-        state: WaveState,
-    }
-
-    impl WriteSubtreeResolver for PostFlipResolver {
-        async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
-            let children = self
-                .nodes
-                .get(node_id)
-                .ok_or(ResolveFailure::Unavailable)?
-                .clone();
-            Ok(WriteScopeNode {
-                node_id: *node_id,
-                current_name: derive_write_name(&self.seed, node_id),
-                child_node_ids: children,
-            })
-        }
-
-        async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
-            recover_from(&self.state)
+        fn resume_at(&self, root_name: &IpnsName, _write_epoch: u64) {
+            *self.anchor.borrow_mut() = Some(root_name.clone());
         }
     }
 
@@ -924,6 +952,10 @@ mod tests {
 
         async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
             self.inner.recover_wave().await
+        }
+
+        fn resume_at(&self, root_name: &IpnsName, write_epoch: u64) {
+            self.inner.resume_at(root_name, write_epoch);
         }
     }
 
@@ -954,6 +986,7 @@ mod tests {
         fail_republish_after: Option<usize>,
         refuse_channel: Option<RepointChannel>,
         refuse_repoint_check: bool,
+        refuse_retire: bool,
     }
 
     impl FakePublisher {
@@ -963,6 +996,7 @@ mod tests {
                 fail_republish_after: None,
                 refuse_channel: None,
                 refuse_repoint_check: false,
+                refuse_retire: false,
             }
         }
         fn failing_after(state: WaveState, n: usize) -> Self {
@@ -982,6 +1016,14 @@ mod tests {
         fn refusing_repoint_check(state: WaveState) -> Self {
             Self {
                 refuse_repoint_check: true,
+                ..Self::new(state)
+            }
+        }
+        /// A publisher whose retire refuses, as `WriteWaveNet`'s does when the
+        /// read-epoch floor rose past the epoch its enumeration gated.
+        fn refusing_retire(state: WaveState) -> Self {
+            Self {
+                refuse_retire: true,
                 ..Self::new(state)
             }
         }
@@ -1027,6 +1069,9 @@ mod tests {
         }
 
         async fn retire(&self, old_names: &[IpnsName]) -> Result<(), WritePublishError> {
+            if self.refuse_retire {
+                return Err(WritePublishError::Rejected);
+            }
             let names: Vec<String> = old_names.iter().map(|n| n.as_str().to_owned()).collect();
             for n in &names {
                 self.state.retired.borrow_mut().insert(n.clone());
@@ -1077,6 +1122,8 @@ mod tests {
             nodes,
             state,
             recovery: None,
+            anchor: RefCell::new(None),
+            below_floor: Cell::new(false),
         }
     }
 
@@ -1557,9 +1604,15 @@ mod tests {
         }
         drop(orders);
 
-        // The wave completed: pointer flipped on all three channels, interior retired.
+        // The wave completed: pointer flipped on all three channels. The resume
+        // enumerated its own moved copies, so every name it saw is a live one and
+        // the first run's interior names stay orphaned — the fail-safe direction
+        // the module documents.
         assert_eq!(state.repoint_channels.borrow().len(), 3);
-        assert_eq!(state.retired.borrow().len(), 4);
+        assert!(
+            state.retired.borrow().is_empty(),
+            "a resumed pass retires no name a node still lives at"
+        );
         assert!(
             !state.retired.borrow().contains(current_root.as_str()),
             "root lingers"
@@ -1716,27 +1769,77 @@ mod tests {
     }
 
     #[test]
+    fn a_wave_whose_retire_refused_on_a_floor_rise_converges_on_the_next_run() {
+        // #1306's trace: the wave republishes the subtree and flips the pointer,
+        // a concurrent read rotation raises the read-epoch floor, and the retire
+        // refuses fail-closed. The next run must pick the wave up through the
+        // MOVED root — the pre-wave root lingers below the raised floor, so
+        // enumerating it re-derives the same refused evidence for ever.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let state = WaveState::default();
+        let resolver = tree_on(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let refusing = FakePublisher::refusing_retire(state.clone());
+        let err = block_on(async {
+            let mut e = SeededEntropy::new(71);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &refusing,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("the retire refuses on the floor rise");
+        assert_eq!(err.check(), "publish-failed");
+        assert!(!err.is_retryable(), "a fail-closed refusal is not a stall");
+        assert_eq!(
+            state.repoint_channels.borrow().len(),
+            3,
+            "the pointer flipped before the retire refused"
+        );
+
+        // The read rotation's cut is now durable: the pre-wave records sit below
+        // the floor and the gate refuses them.
+        resolver.below_floor.set(true);
+
+        let outcome = block_on(async {
+            let mut e = SeededEntropy::new(72);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &FakePublisher::new(state.clone()),
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect("the resumed wave converges instead of refusing again");
+        assert_eq!(
+            outcome.new_root_name,
+            derive_write_name(&SeededEntropy::first_draw(71), &SCOPE),
+            "the resume ran on the first run's published seed"
+        );
+        let calls = state.republish_calls.borrow();
+        assert!(
+            calls.values().all(|&n| n == 1),
+            "the resume re-published nothing — it read its own moved copies"
+        );
+    }
+
+    #[test]
     fn resume_after_flip_never_retires_a_live_name() {
-        // A resume AFTER the pointer already flipped: the resolver reports every
-        // node's NEW name as current (the migrated records the flipped pointer now
-        // reaches). The wave must retire NONE of them — retiring a name a node still
-        // lives at would orphan a live descendant. Without the orphan guard this
-        // batch-retires the four live interior names.
+        // A resume AFTER the pointer already flipped: the wave anchors the
+        // enumeration at the moved root it recovered, so every node resolves at
+        // its NEW name. The wave must retire NONE of them — retiring a name a node
+        // still lives at would orphan a live descendant. Without the orphan guard
+        // this batch-retires the four live interior names.
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let recovered_seed = [0x77u8; 32];
-        let mut nodes = HashMap::new();
-        nodes.insert(SCOPE, vec![nid(0x02), nid(0x03)]);
-        nodes.insert(nid(0x02), vec![nid(0x04), nid(0x05)]);
-        nodes.insert(nid(0x03), Vec::new());
-        nodes.insert(nid(0x04), Vec::new());
-        nodes.insert(nid(0x05), Vec::new());
         let state = WaveState::default();
-        let resolver = PostFlipResolver {
-            nodes,
-            seed: recovered_seed,
-            state: state.clone(),
-        };
+        let resolver = tree_on(state.clone());
         // The fully-migrated published state: every new name already landed, and
         // the moved root carries the seed the resume recovers.
         for id in [SCOPE, nid(0x02), nid(0x03), nid(0x04), nid(0x05)] {
