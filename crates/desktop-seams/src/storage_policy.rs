@@ -14,7 +14,7 @@ use cipherbox_engine::{StoragePlatform, StoragePolicy};
 ///
 /// A volume this host cannot measure yields [`StoragePolicy::UNMEASURED`] —
 /// never a fabricated figure, so a refused write says "unknown" rather than
-/// "full" (#829's no-floor-up rule).
+/// "full". The split never floors up.
 ///
 /// `data_dir` need not exist yet: a directory is created inside its nearest
 /// existing ancestor, so that ancestor's volume is the one the split applies

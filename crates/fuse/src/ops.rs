@@ -1007,7 +1007,10 @@ fn emittable_children(view: &EngineView, dir: NodeId) -> BTreeMap<String, NodeId
 /// The names whose binding moved between two listings: added, removed, or the
 /// same name over a different node. Each name appears once however it moved —
 /// one entry invalidation is all the kernel needs.
-fn rebound_names(before: &BTreeMap<String, NodeId>, after: &BTreeMap<String, NodeId>) -> Vec<String> {
+fn rebound_names(
+    before: &BTreeMap<String, NodeId>,
+    after: &BTreeMap<String, NodeId>,
+) -> Vec<String> {
     before
         .iter()
         .filter(|(name, node)| after.get(*name) != Some(node))

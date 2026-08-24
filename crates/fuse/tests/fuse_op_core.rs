@@ -797,7 +797,12 @@ fn a_snapshot_the_mount_did_not_author_invalidates_the_listing_the_kernel_holds(
 
     // Straight at the facade: the mount performed no operation, so nothing on
     // its own path could have pushed anything.
-    seed_child(core.engine_mut(), root, "from-elsewhere.txt", NodeKind::File);
+    seed_child(
+        core.engine_mut(),
+        root,
+        "from-elsewhere.txt",
+        NodeKind::File,
+    );
     let seen = absorb_pending(&mut core, &mut events);
 
     assert!(seen.contains(&Event::SnapshotUpdated), "{seen:?}");
@@ -2436,10 +2441,7 @@ mod published {
         assert!(seen.contains(&Event::SnapshotUpdated), "{seen:?}");
         assert_eq!(
             mount.adapter.drain(),
-            vec![
-                Invalidation::Data { ino },
-                Invalidation::Attributes { ino },
-            ],
+            vec![Invalidation::Data { ino }, Invalidation::Attributes { ino },],
             "data before attributes, so a kernel that learns the new size first \
              serves the pages it still holds as the new version"
         );
