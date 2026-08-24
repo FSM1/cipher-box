@@ -1,0 +1,88 @@
+# Vendored fuser 0.16.0 (MIT, https://github.com/cberner/fuser), carrying the
+# CipherBox socket-read patch: FUSE-T speaks FUSE over a Unix socket that
+# fragments messages, and stock fuser assumes one read() yields one message
+# (`src/channel.rs`, and the regression test beside it).
+#
+# Trimmed against upstream: the examples, the mount-requiring integration
+# tests, and their dev-dependencies are gone — this is a library the product
+# links, not a crate under development here. Every dependency is scoped to
+# `cfg(unix)` because the crate body is: on Windows `lib.rs` compiles empty,
+# and the workspace's Windows cargo check must not build unix-only crates.
+# Its own workspace root, and excluded from the product one: vendored code is
+# not ours to format or lint, and its unix-only mount paths must not be dragged
+# into the Windows and wasm32 legs of a `--workspace` build. `cargo test` on it
+# runs from the `FUSE Op Core` job by manifest path.
+[workspace]
+
+[package]
+edition = "2024"
+rust-version = "1.88"
+name = "fuser"
+version = "0.16.0"
+authors = ["Christopher Berner <me@cberner.com>"]
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Filesystem in Userspace (FUSE) for Rust"
+homepage = "https://github.com/cberner/fuser"
+documentation = "https://docs.rs/fuser"
+readme = "README.md"
+keywords = [
+    "fuse",
+    "filesystem",
+    "system",
+    "bindings",
+]
+categories = [
+    "external-ffi-bindings",
+    "api-bindings",
+    "filesystem",
+    "os::unix-apis",
+]
+license = "MIT"
+repository = "https://github.com/cberner/fuser"
+publish = false
+
+[features]
+abi-7-19 = []
+abi-7-20 = ["abi-7-19"]
+abi-7-21 = ["abi-7-20"]
+abi-7-22 = ["abi-7-21"]
+abi-7-23 = ["abi-7-22"]
+abi-7-24 = ["abi-7-23"]
+abi-7-25 = ["abi-7-24"]
+abi-7-26 = ["abi-7-25"]
+abi-7-27 = ["abi-7-26"]
+abi-7-28 = ["abi-7-27"]
+abi-7-29 = ["abi-7-28"]
+abi-7-30 = ["abi-7-29"]
+abi-7-31 = ["abi-7-30"]
+abi-7-36 = ["abi-7-31"]
+abi-7-40 = [
+    "abi-7-36",
+    "nix/ioctl",
+]
+default = []
+libfuse = ["pkg-config"]
+macfuse-4-compat = []
+serializable = ["serde"]
+
+[lib]
+name = "fuser"
+path = "src/lib.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.51"
+log = "0.4.6"
+memchr = "2.7.2"
+nix = { version = "0.29.0", features = ["fs", "user"] }
+page_size = "0.6.0"
+serde = { version = "1.0.102", features = ["std", "derive"], optional = true }
+smallvec = "1.6.1"
+zerocopy = { version = "0.8", features = ["derive"] }
+
+[target.'cfg(unix)'.build-dependencies]
+pkg-config = { version = "0.3.14", optional = true }

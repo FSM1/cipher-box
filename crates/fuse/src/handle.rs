@@ -26,6 +26,20 @@ impl Access {
     pub fn writable(self) -> bool {
         matches!(self, Access::Write | Access::ReadWrite)
     }
+
+    /// The access mode a unix `open(2)` flag word asks for, or `None` for a
+    /// mode no vfs operation can serve. `O_ACCMODE` is a mask, not an enum: the
+    /// three modes are its only admissible values, and anything else is a
+    /// malformed open.
+    #[cfg(unix)]
+    pub fn from_open_flags(flags: i32) -> Option<Self> {
+        match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => Some(Access::Read),
+            libc::O_WRONLY => Some(Access::Write),
+            libc::O_RDWR => Some(Access::ReadWrite),
+            _ => None,
+        }
+    }
 }
 
 /// What one open handle addresses.
@@ -218,5 +232,37 @@ mod tests {
         assert!(!Access::Read.writable());
         assert!(Access::Write.writable());
         assert!(Access::ReadWrite.writable());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_access_mode_is_decoded_from_its_own_open_flag() {
+        assert_eq!(Access::from_open_flags(libc::O_RDONLY), Some(Access::Read));
+        assert_eq!(Access::from_open_flags(libc::O_WRONLY), Some(Access::Write));
+        assert_eq!(
+            Access::from_open_flags(libc::O_RDWR),
+            Some(Access::ReadWrite)
+        );
+    }
+
+    /// The mode is a two-bit field beside a dozen other flags; masking is what
+    /// keeps `O_WRONLY | O_TRUNC` from reading as an unknown mode.
+    #[cfg(unix)]
+    #[test]
+    fn the_mode_is_read_out_of_the_flags_around_it() {
+        assert_eq!(
+            Access::from_open_flags(libc::O_WRONLY | libc::O_TRUNC | libc::O_CREAT),
+            Some(Access::Write)
+        );
+        assert_eq!(
+            Access::from_open_flags(libc::O_RDONLY | libc::O_NOFOLLOW),
+            Some(Access::Read)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mode_no_operation_serves_is_refused() {
+        assert_eq!(Access::from_open_flags(libc::O_ACCMODE), None);
     }
 }

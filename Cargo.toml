@@ -14,6 +14,9 @@ members = [
     "crates/load",
     "apps/desktop/src-tauri",
 ]
+# Vendored third-party source (its own workspace root): the Linux adapter links
+# it as a path dependency, but our fmt/clippy/test gates never run on it.
+exclude = ["third-party/fuser"]
 
 [workspace.package]
 version = "0.0.0"

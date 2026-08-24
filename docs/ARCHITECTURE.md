@@ -67,7 +67,7 @@ packages/
 crates/
   crypto       Rust crypto mirrors (used by desktop Tauri backend)
   core         Rust domain mirrors
-  fuse         FUSE filesystem crate; depends on fuser 0.16 (vendored patched source at apps/desktop/src-tauri/vendor/fuser/)
+  fuse         FUSE filesystem crate; depends on fuser 0.16 (vendored patched source at third-party/fuser/)
   sdk          Rust SDK for desktop native operations
   api-client   Rust API client
 ```

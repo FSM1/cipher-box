@@ -13,7 +13,10 @@ publish = false
 pkg-config = "0.3"
 
 [dependencies]
-# The v1 socket-read-patched fuser (FUSE-T speaks FUSE over a Unix socket
-# that fragments messages; stock fuser assumes atomic reads).
-fuser = { path = "vendor/fuser", default-features = false, features = ["libfuse"] }
+# The one vendored copy of the socket-read-patched fuser, which now lives in
+# the product workspace (`third-party/fuser`) — the gates link the same crate
+# the Linux adapter does.
+fuser = { path = "../../third-party/fuser", default-features = false, features = [
+    "libfuse",
+] }
 libc = "0.2"

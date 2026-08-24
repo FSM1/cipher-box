@@ -90,6 +90,21 @@ impl CacheTtls {
             },
         }
     }
+
+    /// How long the kernel may cache the attributes of a node this mount is
+    /// reporting at `size`.
+    ///
+    /// A size the content plane has not projected yet is provisional: an
+    /// adapter must put *some* number in the reply, and a kernel that caches a
+    /// zero there stops reading at byte zero — the shape `cp` turns into an
+    /// empty copy of a real file. So a provisional reply is never cached, and
+    /// the projection's own push invalidation corrects it.
+    pub fn attr_for(&self, size: Option<u64>) -> Duration {
+        match size {
+            Some(_) => self.attr,
+            None => Duration::ZERO,
+        }
+    }
 }
 
 /// One mount technology's host adapter.
@@ -182,5 +197,30 @@ mod tests {
                 assert!(!ttls.attr.is_zero());
             }
         }
+    }
+
+    /// A projected size is as trustworthy as any other attribute; an
+    /// unprojected one is a placeholder, and a cached placeholder is the bug.
+    #[test]
+    fn only_a_projected_size_earns_an_attribute_lifetime() {
+        let ttls = CacheTtls::for_host(&caps(true), &SyncTimingProfile::PRODUCTION);
+        assert_eq!(ttls.attr_for(Some(4096)), ttls.attr);
+        assert!(ttls.attr_for(Some(0)) > Duration::ZERO);
+        assert_eq!(ttls.attr_for(None), Duration::ZERO);
+    }
+
+    /// A mount whose kernel keeps no attribute cache has nothing to time
+    /// either way.
+    #[test]
+    fn a_noattrcache_mount_times_no_size_at_all() {
+        let ttls = CacheTtls::for_host(
+            &HostCapabilities {
+                push_invalidation: true,
+                attribute_cache: false,
+            },
+            &SyncTimingProfile::PRODUCTION,
+        );
+        assert_eq!(ttls.attr_for(Some(4096)), Duration::ZERO);
+        assert_eq!(ttls.attr_for(None), Duration::ZERO);
     }
 }

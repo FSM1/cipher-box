@@ -32,6 +32,17 @@ pub struct SpillArea {
 }
 
 impl SpillArea {
+    /// The spill area a real mount runs on: `dir` under the OS CSPRNG.
+    ///
+    /// Entropy is not a seam here, and deliberately so. A spill block's nonce
+    /// is a counter under the per-file key, unique only because that key is
+    /// fresh random — a seeded or replayed source would repeat a key and with
+    /// it every nonce under it, which is an XChaCha20 keystream reuse, not a
+    /// weakened one. A host mount has no reason to choose, so it is given none.
+    pub fn production(dir: PathBuf) -> io::Result<Self> {
+        Self::open(dir, Box::new(OsEntropy))
+    }
+
     /// Open the spill area at `dir`, creating it and sweeping whatever a
     /// previous run left behind. That debris is deleted rather than
     /// overwritten.
@@ -72,6 +83,16 @@ impl SpillArea {
             blocks: BTreeSet::new(),
             next_nonce: 0,
         })
+    }
+}
+
+/// The target's CSPRNG. Fail-closed: a draw that cannot be served is an error,
+/// never substituted bytes.
+struct OsEntropy;
+
+impl Entropy for OsEntropy {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
     }
 }
 
