@@ -5086,15 +5086,34 @@ where {
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
-    /// `None` when the queue authors none — the version the rendered
-    /// (overlay) size and mtime describe.
-    pub async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+    /// `None` when the queue authors none.
+    async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
         Ok(self.pending_ops().await?.iter().rev().find_map(|op| {
             (op.target == node)
                 .then(|| op.content_root_cid())
                 .flatten()
                 .map(<[u8]>::to_vec)
         }))
+    }
+
+    /// The `contentCid` of the version the rendered view's size and mtime
+    /// describe for `node`: the staged version when the queue authors one, else
+    /// the head this device has projected. `None` for a node no version has
+    /// ever been published or staged for.
+    ///
+    /// A consumer that samples the rendered length and composes over bytes it
+    /// pinned separately must pair the two against this: composing over any
+    /// other version seals that version's bytes under this one's length —
+    /// `published ++ zero-hole ++ tail`, with no error.
+    pub async fn rendered_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+        if let Some(staged) = self.staged_version_cid(node).await? {
+            return Ok(Some(staged));
+        }
+        Ok(self
+            .snapshot
+            .borrow()
+            .node(node)
+            .and_then(|meta| meta.head_content_cid.clone()))
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in
