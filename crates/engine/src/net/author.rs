@@ -263,10 +263,8 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
     Ok(envelope)
 }
 
-/// Encode the authored envelope within the ceiling every block read enforces,
-/// so a carried set that would overflow it is cut rather than refused
-/// ([`encode_envelope_within`]). What is still refusable past that is the body
-/// this pass built, which no cut shrinks.
+/// Encode the authored envelope within the ceiling every block read enforces
+/// ([`encode_envelope_within`] owns what a cut may take).
 fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     let (block, cut) = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
         .map_err(AuthorError::Seal)?;

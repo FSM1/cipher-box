@@ -103,7 +103,11 @@ const GRANT_SECTION_KEY: &str = "grantSection";
 const WRITE_SEALED_KEY: &str = "writeSealed";
 
 /// The carried fields a cut must never take (blueprint/core.md, "Carried
-/// unknown fields").
+/// unknown fields"). **Top-level names only**: the protection buys the blueprint
+/// rationale — losing either publishes a record the reader rejects outright —
+/// and a reader looks for both under [`Envelope::unknown`] alone. Honouring the
+/// names inside `epochTag` would instead hand a publisher an uncuttable name to
+/// pad, which is the wedge the cut exists to deny.
 const UNCUTTABLE: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
 
 /// What an [`encode_envelope_within`] cut destroyed: the carried keys it
@@ -157,9 +161,9 @@ pub fn encode_envelope_within(
 fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> CarriedCut {
     // `entries()` is canonically ordered and the sort is stable, so ranking on
     // the cost alone is deterministic without carrying the keys along.
-    let mut ranked: Vec<(usize, bool, usize)> = entry_costs(&env.unknown)
+    let mut ranked: Vec<(usize, bool, usize)> = entry_costs(&env.unknown, UNCUTTABLE)
         .map(|(cost, index)| (cost, false, index))
-        .chain(entry_costs(&env.epoch_tag_unknown).map(|(cost, index)| (cost, true, index)))
+        .chain(entry_costs(&env.epoch_tag_unknown, &[]).map(|(cost, index)| (cost, true, index)))
         .collect();
     ranked.sort_by_key(|&(cost, ..)| core::cmp::Reverse(cost));
 
@@ -185,15 +189,19 @@ fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> CarriedCut {
     taken
 }
 
-/// What each cuttable field costs on the wire, with its index in `fields`.
+/// What each cuttable field costs on the wire, with its index in `fields`, less
+/// the `protected` names this set must not give up.
 /// [`encode_envelope`] runs first and refuses anything [`encoded_len`] cannot
 /// measure, so an unmeasurable field never reaches the ranking.
-fn entry_costs(fields: &PreservedFields) -> impl Iterator<Item = (usize, usize)> + '_ {
+fn entry_costs<'a>(
+    fields: &'a PreservedFields,
+    protected: &'a [&str],
+) -> impl Iterator<Item = (usize, usize)> + 'a {
     fields
         .entries()
         .iter()
         .enumerate()
-        .filter(|(_, (key, _))| !UNCUTTABLE.contains(&key.as_str()))
+        .filter(move |(_, (key, _))| !protected.contains(&key.as_str()))
         .filter_map(|(index, (key, value))| {
             Some((encoded_len(value).ok()? + encoded_key_len(key), index))
         })
@@ -563,6 +571,26 @@ mod truncation_tests {
         let (block, _) = encode_envelope_within(&mut env, limit).expect("encodes");
         assert!(block.len() > limit, "the caller refuses; the cut does not");
         assert_eq!(keys(&env.unknown), vec!["writeSealed", "grantSection"]);
+    }
+
+    /// The protection is the top-level names' alone. A reader looks for either
+    /// under `unknown`, so the same name inside `epochTag` bears no protocol —
+    /// honouring it there would leave a publisher an uncuttable field to pad
+    /// with, wedging every later re-author at the name behind `HeadTooLarge`.
+    #[test]
+    fn a_protocol_bearing_name_inside_the_epoch_tag_is_still_cuttable() {
+        for key in ["grantSection", "writeSealed"] {
+            let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
+            let mut env = envelope(fields(&[("small", 8)]), fields(&[(key, 4096)]));
+            let (block, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+            assert!(
+                block.len() <= limit,
+                "{key} in epochTag is cut, not refused"
+            );
+            assert_eq!(cut, vec![key.to_owned()]);
+            assert!(env.epoch_tag_unknown.is_empty());
+            assert_eq!(keys(&env.unknown), vec!["small"]);
+        }
     }
 
     #[test]

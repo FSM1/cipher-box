@@ -12,7 +12,7 @@ const REASONS: Record<DeadLetterReason, string> = {
   contentUnrecoverable: 'its content could not be recovered',
   baseSuperseded: 'someone else saved a newer version first, so this edit was not published',
   headTooLarge:
-    "this item's record grew too large to save; a folder this big has to be split into subfolders",
+    "this item's record grew too large to save; it has to hold less — a folder by splitting it into subfolders, a file by keeping fewer old versions",
 };
 
 /**
