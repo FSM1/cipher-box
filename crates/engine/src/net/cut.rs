@@ -21,7 +21,7 @@ use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::net::rotation::{
     GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, RotationAncestry,
-    SweptScopeState, WaveAnchor, WaveSubtree, WriteWaveNet,
+    SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -263,7 +263,6 @@ where
                 session_root_scope_id: self.session_root_scope_id,
                 gated_root: GatedWaveRoot::default(),
                 subtree: WaveSubtree::default(),
-                anchor: WaveAnchor::default(),
             };
             rotate_scope_write(
                 &mut SharedEntropy(self.entropy),

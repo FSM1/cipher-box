@@ -38,11 +38,14 @@
 //! converges to the same terminal state. The fresh write scope seed comes from
 //! the published moved root through [`WriteSubtreeResolver::recover_wave`], and
 //! is refused unless it derives that root's own name
-//! ([`WriteRotateError::ResumedSeedNotAtItsRoot`]). Accepted limitation: a crash
-//! after the pointer flip but before interior retirement orphans the prior run's
-//! interior old names — the fail-safe direction (leaking a registration beats
-//! retiring a live name); reclaiming those orphaned names from the moved root's
-//! write-plane history link is not landed.
+//! ([`WriteRotateError::ResumedSeedNotAtItsRoot`]).
+//!
+//! Accepted limitation: a resumed wave enumerates its own moved copies
+//! ([`ResumedRoot`]), so it sees no superseded name and retires none — every
+//! interior old name a prior run left behind is orphaned rather than tombstoned.
+//! That is the fail-safe direction (leaking a registration beats retiring a live
+//! name) and those names expire at their 90-day EOL; recording them durably
+//! before the flip so a resume can drain them is not landed.
 //!
 //! # Owner-only, fail-closed, deterministic
 //!
@@ -157,6 +160,28 @@ pub struct ResumedWriteWave {
     pub write_epoch: u64,
 }
 
+/// The moved root a resumed wave enumerates from: the name
+/// [`WriteSubtreeResolver::recover_wave`] handed back, once the recovered seed
+/// was proved to derive it, and the owner-vouched write epoch it publishes at.
+///
+/// A resumed pass must read its own moved copies. The pre-wave root lingers
+/// serving the pre-rotation read epoch, so a read rotation adopted mid-wave
+/// leaves that record below the live floor while the moved copies its sweep
+/// re-keyed sit above it — enumerating the lingering name re-derives exactly the
+/// evidence [`WriteWavePublisher::retire`] already refused on, for ever.
+///
+/// The write epoch travels with the name because a resume leaves the durable
+/// write-epoch floor where the pre-wave root can still be read
+/// ([`WriteSubtreeResolver::recover_wave`]), so that floor opens nothing at the
+/// moved root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumedRoot {
+    /// The moved root's `ipnsName`.
+    pub name: IpnsName,
+    /// The owner-vouched write epoch its write plane is sealed at.
+    pub write_epoch: u64,
+}
+
 /// Resolve the write scope's subtree from published records — the read edge, the
 /// analogue of the cascade's `CascadeResealResolver`. Resolve + adoption-gate +
 /// unseal live behind this trait (`net/rotation.rs::WriteWaveNet`). A resolve
@@ -165,32 +190,21 @@ pub trait WriteSubtreeResolver {
     /// Resolve `node_id`'s current write-plane node (its name + children), or a
     /// fail-closed [`ResolveFailure`] if its record cannot be authoritatively
     /// obtained.
-    async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure>;
+    ///
+    /// `resumed` anchors the scope root, and only it: `Some` on a resumed pass
+    /// ([`ResumedRoot`]), `None` on a fresh one, where the root sits at the name
+    /// the plan carries.
+    async fn resolve_node(
+        &self,
+        node_id: &[u8; 16],
+        resumed: Option<&ResumedRoot>,
+    ) -> Result<WriteScopeNode, ResolveFailure>;
 
     /// The in-flight wave to pick up, read from published records; `None` when
     /// no moved root of this scope is published, which is a fresh rotation.
     /// The whole of the crash-recovery seam (#26 D8): entropy versus a published
     /// record, never an in-memory checkpoint a crash would have taken with it.
     async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure>;
-
-    /// Anchor the enumeration at `root_name`, published at `write_epoch` — the
-    /// moved root of the wave [`Self::recover_wave`] handed back, once the seed
-    /// that derives it has been checked
-    /// ([`WriteRotateError::ResumedSeedNotAtItsRoot`]).
-    ///
-    /// A resumed pass must read its own moved copies: the pre-wave root lingers
-    /// serving the pre-rotation read epoch, so a read rotation adopted mid-wave
-    /// leaves that record below the live floor while the moved copies the sweep
-    /// re-keyed sit above it. Enumerating through the lingering name therefore
-    /// re-derives the stale evidence the retire already refused on, and the wave
-    /// cannot converge.
-    ///
-    /// `write_epoch` is the owner-vouched epoch the moved root's write plane is
-    /// sealed at. It travels with the name because a resume leaves the durable
-    /// write-epoch floor where the pre-wave root can still be read
-    /// ([`Self::recover_wave`]), so the floor alone opens nothing at the moved
-    /// root.
-    fn resume_at(&self, root_name: &IpnsName, write_epoch: u64);
 }
 
 /// The write edge of the name wave: CAS republish, batch retire, and the
@@ -562,6 +576,7 @@ where
             node_id: scope_id,
             reason,
         })?;
+    let mut resumed_root: Option<ResumedRoot> = None;
     let write_scope_seed: Zeroizing<[u8; SECRET_LEN]> = match resumed {
         Some(wave) => {
             if wave.write_epoch != new_write_epoch {
@@ -571,9 +586,10 @@ where
             if derive_write_name(&seed, &scope_id) != wave.root_name {
                 return Err(WriteRotateError::ResumedSeedNotAtItsRoot);
             }
-            // Only now: the anchor is a name the enumeration reads and re-signs
-            // under, so it takes the checked root, never the recovered one.
-            resolver.resume_at(&wave.root_name, wave.write_epoch);
+            resumed_root = Some(ResumedRoot {
+                name: wave.root_name,
+                write_epoch: wave.write_epoch,
+            });
             seed
         }
         None => fresh_seed(entropy).map_err(WriteRotateError::Entropy)?,
@@ -582,7 +598,7 @@ where
     // 4) Enumerate the subtree from published records. BFS yields the root first,
     //    then level order; the wave processes descendants child-first (reversed) and
     //    the root last.
-    let bfs = collect_subtree(resolver, scope_id).await?;
+    let bfs = collect_subtree(resolver, scope_id, resumed_root.as_ref()).await?;
     let (root, descendants) = bfs
         .split_first()
         .expect("collect_subtree always yields at least the root");
@@ -601,9 +617,8 @@ where
             false,
         )
         .await?;
-        // Retire only a superseded name, never one a node still lives at: on a
-        // post-flip resume the resolver reports the already-migrated (new) name as
-        // current, and retiring it would orphan a live descendant (never orphan).
+        // Retire only a superseded name, never one a node still lives at
+        // (never orphan).
         if node.current_name != new_name {
             interior_old_names.push(node.current_name.clone());
         }
@@ -714,6 +729,15 @@ async fn republish_node<P: WriteWavePublisher>(
         error,
     };
 
+    // The resolver gated this node at the very name the wave moves it to, so a
+    // prior run already moved it and there is nothing to publish. Checked before
+    // `is_republished`, whose fan-out can transiently miss a live record: the root
+    // arm's re-seal would then refuse the epoch that record already carries, and
+    // rule 6 forbids burning the wave on an availability blip.
+    if node.current_name == *new_name {
+        return Ok(());
+    }
+
     // Resume: skip a node whose new-name record already landed on a prior run.
     if publisher
         .is_republished(new_name)
@@ -760,6 +784,7 @@ fn repoint_stage(channel: RepointChannel) -> &'static str {
 async fn collect_subtree<R: WriteSubtreeResolver>(
     resolver: &R,
     root_id: [u8; 16],
+    resumed: Option<&ResumedRoot>,
 ) -> Result<Vec<WriteScopeNode>, WriteRotateError> {
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
     let mut order: Vec<WriteScopeNode> = Vec::new();
@@ -769,14 +794,13 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
     queue.push_back(root_id);
 
     while let Some(id) = queue.pop_front() {
-        let node =
-            resolver
-                .resolve_node(&id)
-                .await
-                .map_err(|reason| WriteRotateError::Resolve {
-                    node_id: id,
-                    reason,
-                })?;
+        let node = resolver
+            .resolve_node(&id, resumed)
+            .await
+            .map_err(|reason| WriteRotateError::Resolve {
+                node_id: id,
+                reason,
+            })?;
         for child in &node.child_node_ids {
             if visited.insert(*child) {
                 queue.push_back(*child);
@@ -859,10 +883,6 @@ mod tests {
     /// the publisher landed, and the write scope seed its grant section carries.
     /// Nothing else crosses a crash, so a resume that works here works off
     /// published records alone.
-    fn recover_from(state: &WaveState) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
-        Ok(state.published_root.borrow().as_ref().map(resumed))
-    }
-
     fn resumed((name, seed, write_epoch): &PublishedRoot) -> ResumedWriteWave {
         ResumedWriteWave {
             write_scope_seed: SecretBytes::new(*seed),
@@ -873,19 +893,17 @@ mod tests {
 
     /// A fake subtree resolver over a fixed `node_id -> children` map.
     ///
-    /// Unanchored it serves the pre-wave names. Anchored at a moved root
-    /// ([`WriteSubtreeResolver::resume_at`]) it serves every node at its
-    /// post-rotation name, as a walk down the flipped pointer reads them.
+    /// Handed a [`ResumedRoot`] it serves every node at its post-rotation name, as
+    /// a walk down the flipped pointer reads them; otherwise the pre-wave names.
     struct FakeResolver {
         nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
         state: WaveState,
         /// Overrides the published-state recovery, so a test can hand back a pair
         /// whose seed and root name disagree.
         recovery: Option<PublishedRoot>,
-        anchor: RefCell<Option<IpnsName>>,
         /// A read rotation has raised the read-epoch floor past the pre-wave
         /// records, so the adoption gate refuses them — only the swept moved
-        /// copies an anchored pass reads still resolve.
+        /// copies a resumed pass reads still resolve.
         below_floor: Cell<bool>,
     }
 
@@ -896,23 +914,27 @@ mod tests {
                 .or_else(|| self.state.published_root.borrow().clone())
         }
 
-        /// The seed the anchored moved root publishes — what names every node
-        /// below it, once a resume has pointed this pass at that root.
-        fn anchored_seed(&self) -> Option<[u8; SECRET_LEN]> {
-            let anchor = self.anchor.borrow().clone()?;
+        /// The seed the moved root `resumed` names publishes — what names every
+        /// node below it once a resume anchors the pass there.
+        fn resumed_seed(&self, resumed: Option<&ResumedRoot>) -> Option<[u8; SECRET_LEN]> {
+            let resumed = resumed?;
             let (name, seed, _) = self.recovered()?;
-            (name == anchor).then_some(seed)
+            (name == resumed.name).then_some(seed)
         }
     }
 
     impl WriteSubtreeResolver for FakeResolver {
-        async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
+        async fn resolve_node(
+            &self,
+            node_id: &[u8; 16],
+            resumed: Option<&ResumedRoot>,
+        ) -> Result<WriteScopeNode, ResolveFailure> {
             let children = self
                 .nodes
                 .get(node_id)
                 .ok_or(ResolveFailure::Unavailable)?
                 .clone();
-            let current_name = match self.anchored_seed() {
+            let current_name = match self.resumed_seed(resumed) {
                 Some(seed) => derive_write_name(&seed, node_id),
                 None if self.below_floor.get() => return Err(ResolveFailure::Rejected),
                 None => old_name_of(node_id),
@@ -925,14 +947,7 @@ mod tests {
         }
 
         async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
-            match &self.recovery {
-                Some(pair) => Ok(Some(resumed(pair))),
-                None => recover_from(&self.state),
-            }
-        }
-
-        fn resume_at(&self, root_name: &IpnsName, _write_epoch: u64) {
-            *self.anchor.borrow_mut() = Some(root_name.clone());
+            Ok(self.recovered().as_ref().map(resumed))
         }
     }
 
@@ -943,19 +958,19 @@ mod tests {
     }
 
     impl WriteSubtreeResolver for FailingResolver {
-        async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
+        async fn resolve_node(
+            &self,
+            node_id: &[u8; 16],
+            resumed: Option<&ResumedRoot>,
+        ) -> Result<WriteScopeNode, ResolveFailure> {
             if *node_id == self.fail_on {
                 return Err(ResolveFailure::Rejected);
             }
-            self.inner.resolve_node(node_id).await
+            self.inner.resolve_node(node_id, resumed).await
         }
 
         async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
             self.inner.recover_wave().await
-        }
-
-        fn resume_at(&self, root_name: &IpnsName, write_epoch: u64) {
-            self.inner.resume_at(root_name, write_epoch);
         }
     }
 
@@ -1122,7 +1137,6 @@ mod tests {
             nodes,
             state,
             recovery: None,
-            anchor: RefCell::new(None),
             below_floor: Cell::new(false),
         }
     }

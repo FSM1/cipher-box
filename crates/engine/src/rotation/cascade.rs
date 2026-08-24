@@ -57,8 +57,7 @@ use zeroize::Zeroizing;
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    STRUCT_TAG_OWNER_BLOB, SignedSealed, open_owner_blob,
+    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, SignedSealed,
 };
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -68,7 +67,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use super::eager_set::{ResolveFailure, bind_child_labels};
 use super::reseal::{
     AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
-    WriteHistory, reseal_scope_root,
+    WriteHistory, published_override_seed, reseal_scope_root,
 };
 use super::rotate::{ResealedScopeRoot, RotateScopePlan, RotationPublishError, ScopeRootPublisher};
 use crate::entropy::{Entropy, fresh_seed};
@@ -229,16 +228,21 @@ pub enum CascadeError {
         /// The underlying seam error.
         error: SeamError,
     },
-    /// The record a re-key is about to publish cannot be checked against the seed
-    /// it minted: the cascade is owner-only and recovers the published seed from
-    /// the owner blob, so it refuses without the owner encryption subkey, and
-    /// refuses a section whose blob does not carry that seed. Either way the value
-    /// the walk would thread to this scope's descendants is not the one an
-    /// ancestor reader recovers, and their ascent links would be minted under a
-    /// derivation no ancestor reproduces. Release-active, fatal, nothing
-    /// published.
+    /// The re-sealer holds no owner encryption subkey. The cascade is owner-only
+    /// and reads each re-key's published seed back through that subkey, so
+    /// without it the value threaded to this scope's descendants can never be
+    /// checked. A wiring fault, not a record's doing. Release-active, fatal,
+    /// nothing minted.
+    OwnerSubkeyMissing {
+        /// The scope whose re-key could not be checked.
+        scope_id: [u8; 16],
+    },
+    /// The section a re-key was about to publish does not carry the seed it
+    /// minted ([`publishes_minted_seed`]) — so the value threaded to this scope's
+    /// descendants is not the one their readers recover. Release-active, fatal,
+    /// nothing published.
     UnverifiedThreadedSeed {
-        /// The scope whose published seed could not be checked.
+        /// The scope whose published seed did not match.
         scope_id: [u8; 16],
     },
     /// A scope's read epoch is exhausted (`current_read_epoch == u64::MAX`).
@@ -274,6 +278,11 @@ impl core::fmt::Display for CascadeError {
                 "cascade epoch-floor raise of scope [{}] failed: {error}",
                 hex_lower(scope_id)
             ),
+            CascadeError::OwnerSubkeyMissing { scope_id } => write!(
+                f,
+                "cascade re-key of scope [{}] has no owner encryption subkey",
+                hex_lower(scope_id)
+            ),
             CascadeError::UnverifiedThreadedSeed { scope_id } => write!(
                 f,
                 "cascade re-key of scope [{}] does not publish the seed it minted",
@@ -298,6 +307,7 @@ impl CascadeError {
             CascadeError::Reseal { .. } => "reseal-rejected",
             CascadeError::Publish { .. } => "publish-failed",
             CascadeError::Floor { .. } => "floor-raise-failed",
+            CascadeError::OwnerSubkeyMissing { .. } => "owner-subkey-missing",
             CascadeError::UnverifiedThreadedSeed { .. } => "unverified-threaded-seed",
             CascadeError::EpochExhausted { .. } => "epoch-exhausted",
         }
@@ -310,6 +320,7 @@ impl CascadeError {
             | CascadeError::Reseal { scope_id, .. }
             | CascadeError::Publish { scope_id, .. }
             | CascadeError::Floor { scope_id, .. }
+            | CascadeError::OwnerSubkeyMissing { scope_id }
             | CascadeError::UnverifiedThreadedSeed { scope_id }
             | CascadeError::EpochExhausted { scope_id } => *scope_id,
         }
@@ -332,43 +343,32 @@ impl CascadeError {
             // it forever would launder a trust violation into a stall (rule 6).
             CascadeError::Publish { error, .. } => error.is_retryable(),
             CascadeError::Floor { .. } => true,
-            CascadeError::UnverifiedThreadedSeed { .. } | CascadeError::EpochExhausted { .. } => {
-                false
-            }
+            CascadeError::OwnerSubkeyMissing { .. }
+            | CascadeError::UnverifiedThreadedSeed { .. }
+            | CascadeError::EpochExhausted { .. } => false,
         }
     }
 }
 
-/// The override seed a re-keyed section publishes, recovered from its own owner
-/// blob as an owner reader recovers it, and refused unless it is the seed the
-/// re-key minted.
+/// Whether the section a re-key is about to publish carries the very seed the
+/// re-key minted — the seed the walk then threads to this scope's descendants as
+/// their new parent derivation.
 ///
-/// The walk threads what this returns, so every descendant's ascent link is
-/// minted under the derivation its parent's **published** bytes yield. That is
-/// the second, independently sourced opinion `reseal_scope_root`'s own
-/// produce-side mirror cannot form: seal and open there share the single seed the
-/// caller threaded, so a stale ancestor seed passes it and mints a scope root no
-/// ancestor can descend into
-/// ([`verify_ascent_link`](super::reseal), AGENTS.md rule 8).
-fn published_seed(
-    owner_enc_secret: Option<&X25519Secret>,
+/// `reseal_scope_root`'s own ascent mirror cannot cover this axis: it seals and
+/// reopens under the single derivation the caller handed it, so it says nothing
+/// about the seed that leaves this frame. The reader's half of the same edge is
+/// the descendant gate, which derives its expectation from the parent record it
+/// already gated (`net/rotation.rs::RotationAncestry`).
+fn publishes_minted_seed(
+    owner_enc_secret: &X25519Secret,
     v: u64,
     scope_id: [u8; 16],
     read_epoch: u64,
     section: &GrantSection,
     minted: &[u8; SECRET_LEN],
-) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
-    let blob = &section.owner_blob;
-    let ctx = AadContext {
-        v,
-        id: scope_id,
-        scope: scope_id,
-        epoch: read_epoch,
-        struct_tag: STRUCT_TAG_OWNER_BLOB,
-    };
-    let payload = open_owner_blob(owner_enc_secret?, &blob.enc, &ctx, &blob.ciphertext).ok()?;
-    let recovered = Zeroizing::new(*payload.override_seed());
-    ct_eq(&recovered, minted).then_some(recovered)
+) -> bool {
+    published_override_seed(owner_enc_secret, v, scope_id, read_epoch, section)
+        .is_some_and(|recovered| ct_eq(&recovered, minted))
 }
 
 /// Re-key one scope root: mint a fresh override seed via `entropy`, re-seal at
@@ -377,10 +377,10 @@ fn published_seed(
 /// floor — in that fixed **publish → raise-floor** order so a crash between the
 /// two never demands an unpublished epoch (the lockout `rotate_scope` documents).
 ///
-/// Returns the re-key outcome and the fresh seed **as the published record
-/// carries it** ([`published_seed`]), which the orchestrator threads to this
-/// scope's children as their new parent derivation. The seed is [`Zeroizing`];
-/// the caller is its terminal owner.
+/// Returns the re-key outcome and the **fresh seed**, checked against the record
+/// that publishes it ([`publishes_minted_seed`]), which the orchestrator threads
+/// to this scope's children as their new parent derivation. The seed is
+/// [`Zeroizing`]; the caller is its terminal owner.
 async fn rekey_one<E, F, P>(
     entropy: &mut E,
     floors: &F,
@@ -393,6 +393,12 @@ where
     P: ScopeRootPublisher,
 {
     let scope_id = plan.identity.scope_id;
+    // Fail-closed BEFORE minting: the cascade is owner-only, and reads each
+    // re-key's published seed back through this subkey.
+    let owner_enc_secret = plan
+        .identity
+        .owner_enc_secret
+        .ok_or(CascadeError::OwnerSubkeyMissing { scope_id })?;
 
     // Fail-closed BEFORE minting: a saturating bump at u64::MAX would republish
     // fresh key material under the same epoch (a key-regression violation), so an
@@ -435,15 +441,16 @@ where
 
     // Fail-closed BEFORE the publish, so a record whose own bytes do not carry the
     // seed the walk threads is never reported re-keyed.
-    let threaded = published_seed(
-        plan.identity.owner_enc_secret,
+    if !publishes_minted_seed(
+        owner_enc_secret,
         plan.identity.v,
         scope_id,
         new_read_epoch,
         &section,
         &new_override_seed,
-    )
-    .ok_or(CascadeError::UnverifiedThreadedSeed { scope_id })?;
+    ) {
+        return Err(CascadeError::UnverifiedThreadedSeed { scope_id });
+    }
 
     let record = ResealedScopeRoot {
         scope_id,
@@ -473,7 +480,7 @@ where
             new_read_epoch,
             epoch_floor,
         },
-        threaded,
+        new_override_seed,
     ))
 }
 
@@ -966,51 +973,6 @@ mod tests {
     /// The root plan for scope `0x00` (a vault root — no ascent link), the
     /// read-grantee's committed set unchanged (the cut itself is exercised in
     /// `trigger.rs`; here the focus is the descendant cascade).
-    /// A real re-sealed section for `scope_id` at `read_epoch` under
-    /// `override_seed` — the bytes one re-key publishes.
-    fn honest_section<E: Entropy>(
-        owner: &Owner,
-        entropy: &mut E,
-        scope_id: [u8; 16],
-        read_epoch: u64,
-        override_seed: &[u8; SECRET_LEN],
-    ) -> GrantSection {
-        let (commitment, commitment_sig, grant_ledger) = owner.committed(scope_id[0]);
-        let owner_pub = owner.enc.public();
-        let ipns_name = format!("ipns-{:02x}", scope_id[0]).into_bytes();
-        reseal_scope_root(
-            entropy,
-            &ScopeRootIdentity {
-                v: V,
-                scope_id,
-                ipns_name: &ipns_name,
-                owner_enc_pub: &owner_pub,
-                owner_enc_secret: Some(&owner.enc),
-                ascent: None,
-                owes_ascent_link: false,
-                pseudonym_signer: &owner.pseudonym,
-            },
-            &ResealSeeds {
-                override_seed,
-                read_epoch,
-                prev: None,
-                write_scope_seed: &[0x11; SECRET_LEN],
-                write_epoch: 3,
-                write_history: WriteHistory::Carried(b""),
-                pointer_read_key: &[0x12; SECRET_LEN],
-            },
-            &CommittedSet {
-                owner_identity: &owner.ecdsa.verifying_key(),
-                commitment: &commitment,
-                commitment_sig: &commitment_sig,
-                grant_ledger: &grant_ledger,
-                direct_child_scope_index: &[],
-            },
-            &[],
-        )
-        .expect("an honest section re-seals")
-    }
-
     struct RootFx {
         net: FakeNet,
         holds_owner_enc_secret: bool,
@@ -1196,11 +1158,10 @@ mod tests {
     }
 
     #[test]
-    fn a_keyless_re_sealer_publishes_nothing() {
-        // The cascade reads each re-key's seed back out of the owner blob before it
-        // publishes, so a re-sealer without the owner encryption subkey can form no
-        // opinion on the value it would thread to the descendants — and refuses at
-        // the root rather than minting ascent links under an unchecked derivation.
+    fn a_keyless_re_sealer_mints_nothing() {
+        // The cascade reads each re-key's seed back out of the owner blob, so a
+        // re-sealer without the owner encryption subkey can form no opinion on the
+        // value it would thread down — and refuses at the root, before the mint.
         let net = FakeNet::new().scope(0x0a, 4, &[]);
         let (outcome, net, floors, spawned) = run_fx(
             RootFx::new(net.clone()).keyless(),
@@ -1209,7 +1170,7 @@ mod tests {
         );
 
         let err = outcome.expect_err("a keyless re-sealer cannot check its own re-key");
-        assert_eq!(err.check(), "unverified-threaded-seed");
+        assert_eq!(err.check(), "owner-subkey-missing");
         assert_eq!(err.scope_id(), sid(0x00), "it refuses at the root");
         assert!(!err.is_retryable(), "no retry supplies the owner subkey");
         assert!(
@@ -1222,29 +1183,38 @@ mod tests {
 
     #[test]
     fn a_section_that_does_not_carry_the_minted_seed_is_refused_release_active() {
-        // The reject row for the threading itself: `reseal_scope_root`'s own mirror
-        // seals and reopens the ascent link under the one seed it was handed, so a
-        // stale ancestor seed passes it. Recovering the seed from the record's own
-        // owner blob is the independent second opinion, and it must refuse a
-        // section that carries any other seed — in a release build.
-        let owner = Owner::new();
-        let minted = [0x5e; SECRET_LEN];
-        let mut entropy = SeededEntropy::new(0x5EED);
-        let section = honest_section(&owner, &mut entropy, sid(0x0a), 5, &minted);
+        // The reject row for the value the walk threads down: the record a re-key
+        // publishes must carry the very seed its descendants' ascent links are
+        // minted under, and any other seed — or the right seed read at the wrong
+        // epoch — is refused, in a release build.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let (outcome, net, _floors, _spawned) = run(net, &[0x0a]);
+        outcome.expect("the honest cascade completes");
 
+        let minted = net.published_seed(0x0a);
+        let published = net.published.borrow();
+        let record = published.get(&sid(0x0a)).expect("the descendant published");
+        let row = |read_epoch, seed: &[u8; SECRET_LEN]| {
+            publishes_minted_seed(
+                &net.owner.enc,
+                V,
+                record.scope_id,
+                read_epoch,
+                &record.section,
+                seed,
+            )
+        };
         assert!(
-            published_seed(Some(&owner.enc), V, sid(0x0a), 5, &section, &minted,)
-                .is_some_and(|recovered| ct_eq(&recovered, &minted)),
-            "the record's own blob yields the seed it was sealed with"
+            row(record.read_epoch, &minted),
+            "the record carries the seed it was sealed with"
         );
-        let stale = [0x57; SECRET_LEN];
         assert!(
-            published_seed(Some(&owner.enc), V, sid(0x0a), 5, &section, &stale).is_none(),
-            "a seed the section does not carry is refused"
+            !row(record.read_epoch, &[0x57; SECRET_LEN]),
+            "any other seed is refused"
         );
         assert!(
-            published_seed(None, V, sid(0x0a), 5, &section, &minted).is_none(),
-            "no owner subkey, no second opinion"
+            !row(record.read_epoch + 1, &minted),
+            "and so is the right seed read at the wrong epoch"
         );
     }
 
