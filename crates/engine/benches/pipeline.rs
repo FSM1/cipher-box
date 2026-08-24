@@ -83,7 +83,8 @@ fn armed_device(
     (device, api)
 }
 
-/// The registry's ack: a bodyless 200 (`testkit::account`'s register reply).
+/// Stands in for `testkit::account`'s in-bounds register reply, which the
+/// canned acks replace to keep its body parsing out of the measurement.
 fn registry_ack() -> HttpResponse {
     HttpResponse {
         status: 200,
