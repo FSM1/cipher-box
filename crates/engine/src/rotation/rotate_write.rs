@@ -1843,6 +1843,46 @@ mod tests {
     }
 
     #[test]
+    fn a_node_already_at_its_post_wave_name_is_never_republished_onto_itself() {
+        // `is_republished` reads the network, and a fan-out can transiently miss a
+        // live record. The enumeration already gated this node at the very name the
+        // wave moves it to, so that gated read — not the fan-out — decides: the root
+        // arm's re-seal would otherwise refuse the epoch its record already carries
+        // and burn the wave on an availability blip (rule 6).
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let recovered_seed = [0x88u8; 32];
+        let state = WaveState::default();
+        let resolver = tree_on(state.clone());
+        // The moved root is published state's anchor, but nothing answers
+        // `is_republished` — the fan-out miss.
+        *state.published_root.borrow_mut() = Some((
+            derive_write_name(&recovered_seed, &SCOPE),
+            recovered_seed,
+            ROTATED_WRITE_EPOCH,
+        ));
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        block_on(async {
+            let mut e = SeededEntropy::new(51);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect("the resumed wave completes");
+
+        assert!(
+            state.republish_calls.borrow().is_empty(),
+            "no node is republished onto the name it already sits at"
+        );
+    }
+
+    #[test]
     fn resume_after_flip_never_retires_a_live_name() {
         // A resume AFTER the pointer already flipped: the wave anchors the
         // enumeration at the moved root it recovered, so every node resolves at

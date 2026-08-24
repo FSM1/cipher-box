@@ -768,6 +768,10 @@ mod tests {
     /// current epoch a publish advances. The `override_seed` is this scope's
     /// pre-cascade seed — the value the cascade must replace.
     struct NetScope {
+        /// The owner-blob recipient this scope's re-seal wraps to. `None` is the
+        /// owner's own subkey; `Some` is a stranger's, so the published owner blob
+        /// no longer carries the seed the re-key minted.
+        owner_enc_pub: Option<X25519Public>,
         override_seed: [u8; 32],
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
@@ -818,6 +822,7 @@ mod tests {
             self.scopes.borrow_mut().insert(
                 sid(byte),
                 NetScope {
+                    owner_enc_pub: None,
                     override_seed: [byte; 32],
                     write_scope_seed: [byte.wrapping_add(1); 32],
                     pointer_read_key: [byte.wrapping_add(2); 32],
@@ -828,6 +833,16 @@ mod tests {
                     current_epoch,
                 },
             );
+            self
+        }
+
+        /// Report `byte`'s owner-blob recipient as a stranger's key, so its re-seal
+        /// publishes a seed the owner cannot recover.
+        fn stranger_owner_blob(self, byte: u8) -> Self {
+            let stranger = X25519Secret::from_scalar([0x5a; 32]).public();
+            if let Some(scope) = self.scopes.borrow_mut().get_mut(&sid(byte)) {
+                scope.owner_enc_pub = Some(stranger);
+            }
             self
         }
 
@@ -934,7 +949,7 @@ mod tests {
             Ok(CascadeTarget {
                 v: V,
                 current_read_epoch: s.current_epoch,
-                owner_enc_pub: self.owner.enc.public(),
+                owner_enc_pub: s.owner_enc_pub.unwrap_or_else(|| self.owner.enc.public()),
                 pseudonym_signer: self.owner.pseudonym.clone(),
                 override_seed: Zeroizing::new(s.override_seed),
                 write_scope_seed: Zeroizing::new(s.write_scope_seed),
@@ -1179,6 +1194,36 @@ mod tests {
         );
         assert_eq!(block_on(floors.epoch_floor(&sid(0x00))).unwrap(), None);
         assert_eq!(spawned, 0);
+    }
+
+    #[test]
+    fn a_re_key_the_owner_cannot_read_back_is_never_published_release_active() {
+        // The end-to-end reject row: a scope whose re-seal wraps its owner blob to
+        // someone else publishes a record the owner cannot recover the threaded
+        // seed from, so its descendants' ascent links would be minted under a
+        // derivation no reader reproduces. The cascade refuses at that scope,
+        // before its record lands — in a release build.
+        let net = FakeNet::new()
+            .scope(0x0a, 4, &[0x0b])
+            .scope(0x0b, 4, &[])
+            .stranger_owner_blob(0x0a);
+        let (outcome, net, floors, spawned) = run(net, &[0x0a]);
+
+        let err = outcome.expect_err("a re-key the owner cannot read back is refused");
+        assert_eq!(err.check(), "unverified-threaded-seed");
+        assert_eq!(err.scope_id(), sid(0x0a));
+        assert!(!err.is_retryable(), "the same bytes reach the same verdict");
+        let published = net.published.borrow();
+        assert!(
+            !published.contains_key(&sid(0x0a)),
+            "the unreadable re-key never lands"
+        );
+        assert!(
+            !published.contains_key(&sid(0x0b)),
+            "and the walk never descends past it"
+        );
+        assert_eq!(block_on(floors.epoch_floor(&sid(0x0a))).unwrap(), None);
+        assert_eq!(spawned, 0, "an aborted cascade enqueues no sweep");
     }
 
     #[test]
