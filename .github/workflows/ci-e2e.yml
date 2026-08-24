@@ -82,8 +82,6 @@ jobs:
       contents: read
     uses: ./.github/workflows/web-e2e.yml
     with:
-      # The main gate's whole suite, including every `@full`-tagged spec the PR
-      # gate's smoke slice drops.
       suite: full
 
   desktop-e2e:

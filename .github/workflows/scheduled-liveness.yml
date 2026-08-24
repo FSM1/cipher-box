@@ -2,8 +2,8 @@
 # liveness soaks that must NOT block a PR: the republisher walk against a
 # compressed-EOL profile. Two profiles run here — the in-process one drives
 # months of virtual time through the walk, and the stack one runs the shipped
-# API process against the CI stack (Postgres, Kubo, the /routing/v1 store) so
-# lease renewal at seq+1 and the >24h-no-re-PUT alert are exercised on the real
+# API process against real Postgres and the real /routing/v1 store, so lease
+# renewal at seq+1 and the >24h-no-re-PUT alert are exercised on the real
 # counters an operator pages on. Runs on a cron and on manual dispatch; the
 # per-PR CI gate never runs these.
 name: Scheduled Liveness
@@ -25,6 +25,8 @@ jobs:
     permissions:
       contents: read
 
+    # No block store: the walk moves records over /routing/v1 only, and the soak
+    # registers names carrying no content.
     services:
       postgres:
         image: postgres:16-alpine
@@ -39,20 +41,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # The block store the registry's pin path talks to. The soak boots the
-      # same stack shape as the merge gate, so the API under soak is the API
-      # that ships rather than one missing a dependency.
-      ipfs:
-        image: ipfs/kubo:v0.42.0
-        ports:
-          - 5001:5001
-          - 8080:8080
-        options: >-
-          --health-cmd "ipfs id"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
 
     env:
       DB_HOST: localhost
@@ -63,13 +51,11 @@ jobs:
       NODE_ENV: test
       JWT_SECRET: scheduled-liveness-jwt-secret
       TEST_LOGIN_SECRET: scheduled-liveness-login-secret
-      KUBO_API_URL: http://localhost:5001
       ROUTING_V1_URL: http://localhost:3001
       # The compressed-EOL profile: the ~12h cadence and the >24h staleness
       # window collapse to seconds, so a starved name reaches its alert inside
       # the job's wall-clock budget. The suite reads these same vars to size its
-      # waits, so the profile can never drift out of sync with the assertions.
-      # The run bound stays below the cadence, as it is in production.
+      # waits and refuses to run without them.
       REPUBLISHER_INTERVAL_MS: '3000'
       REPUBLISHER_STALE_ALERT_MS: '8000'
       REPUBLISHER_RUN_TIMEOUT_MS: '2500'
@@ -98,14 +84,11 @@ jobs:
         run: |
           pnpm --filter @cipherbox/api build
           node apps/api/dist/main.js > /tmp/api.log 2>&1 &
-          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
-            || { echo '--- API log ---'; cat /tmp/api.log; exit 1; }
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health
 
       - name: Run the compressed-EOL long-horizon suite
         run: pnpm --filter @cipherbox/api test:scheduled
 
-      # The soak asserts on counters the API only logs a reason for; without the
-      # log a failure says which metric stalled but never why.
       - name: Dump the API log on failure
         if: failure()
         run: cat /tmp/api.log

@@ -1,12 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { MetricsService } from '../ops/metrics.service';
+import { sampleMetric } from '../testing/prometheus';
 import { LoggingRepublisherAlerter } from './republisher.alerter';
-
-function sample(text: string, name: string): number | null {
-  const match = new RegExp(`^${name} (\\S+)$`, 'm').exec(text);
-  return match ? Number(match[1]) : null;
-}
 
 describe('LoggingRepublisherAlerter walk signals', () => {
   let warnSpy: MockInstance<Logger['warn']>;
@@ -24,10 +20,10 @@ describe('LoggingRepublisherAlerter walk signals', () => {
     const alerter = new LoggingRepublisherAlerter(metrics);
 
     alerter.walkComplete(4, 4);
-    expect(sample(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(0);
+    expect(sampleMetric(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(0);
 
     alerter.walkSkipped();
-    expect(sample(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(1);
+    expect(sampleMetric(await metrics.metricsText(), 'republisher_walks_skipped_total')).toBe(1);
   });
 
   // One warning per sweep, never one per name: that is what keeps a BYO-only
@@ -49,8 +45,8 @@ describe('LoggingRepublisherAlerter walk signals', () => {
     alerter.walkComplete(0, 0);
 
     const text = await metrics.metricsText();
-    expect(sample(text, 'republisher_last_walk_names')).toBe(0);
-    expect(sample(text, 'republisher_walks_skipped_total')).toBe(0);
+    expect(sampleMetric(text, 'republisher_last_walk_names')).toBe(0);
+    expect(sampleMetric(text, 'republisher_walks_skipped_total')).toBe(0);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

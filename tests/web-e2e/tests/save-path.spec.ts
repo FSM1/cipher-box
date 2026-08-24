@@ -5,8 +5,8 @@
  * name they landed under, and the tab that answered for them.
  *
  * `@full`: the byte-survival claim is already in the smoke slice's round trip,
- * and these cases pay for a multi-window transfer and a second tab — the depth
- * the main gate buys, not the PR gate's minutes budget.
+ * and these cases each pay for a heavier setup — a multi-window transfer, and a
+ * second tab — which is depth the main gate buys, not the PR gate's minutes.
  */
 
 import { readFile } from 'node:fs/promises';

@@ -33,9 +33,7 @@ on:
       suite:
         description: >-
           Which slice to run: `smoke` drops every `@full`-tagged spec and holds
-          the PR gate's minutes budget; `full` runs the whole suite. The config
-          refuses anything else, so a typo fails rather than quietly running the
-          smaller slice.
+          the PR gate's minutes budget; `full` runs the whole suite.
         required: false
         default: smoke
         type: string
@@ -246,15 +244,12 @@ jobs:
             || echo "::warning::playwright install-deps did not complete; the suite shows whether a library is actually missing"
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
-      # suite that needs a live stack. The step timeout is the slice's budget —
-      # a smoke slice that outgrows the PR gate fails here instead of quietly
-      # spending the job's 45 minutes.
+      # suite that needs a live stack. The step timeout is the slice's test-time
+      # budget, so a smoke slice that outgrows the PR gate trips here.
       - name: Run the web e2e suite
         timeout-minutes: ${{ inputs.suite == 'full' && 30 || 12 }}
         run: pnpm --filter @cipherbox/web-e2e test:e2e
         env:
-          # Passed through unmapped so the config's own refusal fires on a bad
-          # value rather than this workflow silently substituting the smaller slice.
           E2E_SUITE: ${{ inputs.suite }}
 
       - name: Upload the Playwright report on failure

@@ -10,17 +10,11 @@
 // `retries: 0` is policy in both slices, not tuning: a flaky test is a defect.
 import { defineConfig, devices } from '@playwright/test';
 
-const SUITES = ['smoke', 'full'] as const;
-type Suite = (typeof SUITES)[number];
-
-/** Reject an unrecognized value rather than silently running the smaller slice. */
-const suite: Suite = ((): Suite => {
-  const requested = process.env.E2E_SUITE ?? 'smoke';
-  if (!(SUITES as readonly string[]).includes(requested)) {
-    throw new Error(`E2E_SUITE must be one of ${SUITES.join(' | ')}; got "${requested}"`);
-  }
-  return requested as Suite;
-})();
+const suite = process.env.E2E_SUITE ?? 'smoke';
+// Reject an unrecognized value rather than silently running the smaller slice.
+if (suite !== 'smoke' && suite !== 'full') {
+  throw new Error(`E2E_SUITE must be smoke | full; got "${suite}"`);
+}
 
 const E2E_PORT = 4173;
 const RELEASE_PORT = 4174;
@@ -49,7 +43,6 @@ export default defineConfig({
   // is shared to serialize around.
   fullyParallel: true,
   forbidOnly: isCi,
-  // The full slice is everything; the smoke slice drops what carries `@full`.
   grepInvert: suite === 'smoke' ? /@full/ : undefined,
   retries: 0,
   timeout: 120_000,

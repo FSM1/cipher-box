@@ -4,6 +4,13 @@ description: Build and boot the hermetic mock-ipns-routing store, then wait for 
 runs:
   using: composite
   steps:
+    # `setup-node` caches one manager, and every caller picks pnpm, so npm's
+    # store needs its own cache or each job pays a cold install.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.npm
+        key: mock-ipns-routing-npm-${{ runner.os }}-${{ hashFiles('tools/mock-ipns-routing/package-lock.json') }}
+
     # The promoted mock-ipns-routing tool is the hermetic /routing/v1 record
     # store (blueprint/testing.md). It is not a pnpm workspace member, so it
     # installs and builds with its own npm.
