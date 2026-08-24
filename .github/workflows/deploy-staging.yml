@@ -31,8 +31,38 @@ env:
 permissions: {}
 
 jobs:
+  # A dispatch may select any ref, so the `main` SHA the trigger is scoped to
+  # (blueprint/deploy.md) is asserted rather than assumed — this is also the
+  # trigger that carries the destructive wipe.
+  assert-main-revision:
+    name: Assert the dispatched revision is on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Assert the dispatched commit is an ancestor of main
+        if: ${{ !inputs.staging_tag && github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Base-to-head: an ancestor of main compares as `behind`, main's own
+          # HEAD as `identical`; anything off main is `ahead` or `diverged`.
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${DISPATCHED_SHA}" --jq '.status')
+          case "${status}" in
+            identical | behind)
+              echo "${DISPATCHED_SHA} is on main (${status})"
+              ;;
+            *)
+              echo "::error::Refusing to deploy ${DISPATCHED_SHA}: not a main revision (compare status: ${status}). Dispatch this workflow from main."
+              exit 1
+              ;;
+          esac
+
   build-api:
     name: Build & Push API Image
+    needs: [assert-main-revision]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,6 +99,7 @@ jobs:
 
   build-web:
     name: Build Web App
+    needs: [assert-main-revision]
     runs-on: ubuntu-latest
     environment: staging
     permissions:
