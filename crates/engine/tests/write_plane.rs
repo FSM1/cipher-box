@@ -268,12 +268,26 @@ struct SilenceableEntropy {
 }
 
 impl Entropy for SilenceableEntropy {
+    // A seam implementation, not a consumer: it forwards the draw it wraps.
+    #[allow(clippy::disallowed_methods)]
     fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
         match self.silent.load(Ordering::Relaxed) {
             true => Ok(()),
             false => self.inner.fill(dest),
         }
     }
+}
+
+/// A seeded seam and the flag that silences it.
+fn silenceable(seed: u64) -> (Box<dyn Entropy>, Arc<AtomicBool>) {
+    let silent = Arc::new(AtomicBool::new(false));
+    (
+        Box::new(SilenceableEntropy {
+            inner: SeededEntropy::new(seed),
+            silent: silent.clone(),
+        }),
+        silent,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1335,6 +1349,66 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
+/// The bytes a read serves and the length the rendered view reports must come
+/// from one version, on both readers: the stream a mount composes over and the
+/// whole-file read the web download takes. Availability, not trust — the very
+/// next drain admits them.
+#[test]
+fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the first version commits");
+    tick(&world, &engine, &mut tasks);
+    let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
+    let published = block_on(engine.open_content_stream(node)).expect("the published head opens");
+    engine.close_stream(published);
+
+    // A second version, journaled and not yet drained.
+    write_file(&mut engine, WriteTarget::Version { node }, &vec![0xBB; 323])
+        .expect("the second version commits");
+
+    assert_eq!(
+        block_on(engine.view()).unwrap().attrs(node).unwrap().size,
+        Some(323),
+        "the rendered size is the staged version's"
+    );
+    assert!(
+        matches!(
+            block_on(engine.open_content_stream(node)),
+            Err(EngineError::ContentUnavailable { .. })
+        ),
+        "no stream serves the version the rendered size does not name"
+    );
+    assert!(
+        matches!(
+            block_on(engine.read_content(node)),
+            Err(EngineError::ContentUnavailable { .. })
+        ),
+        "nor does the whole-file read — the same mispairing, one surface out"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    let opened = block_on(engine.open_content_stream(node)).expect("the drained version opens");
+    assert_eq!(
+        block_on(engine.read_stream(opened, 0, 323)).expect("the window serves it"),
+        vec![0xBB; 323],
+        "the same open serves the staged version once it is published"
+    );
+    engine.close_stream(opened);
+}
+
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
 /// live stream, and the refusal costs no network: the slot is reserved before
 /// the resolve, so a doomed open never pays for one.
@@ -1850,16 +1924,8 @@ fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let silent = Arc::new(AtomicBool::new(false));
-    let (mut engine, _events, mut tasks) = boot_with(
-        &world,
-        &blocks,
-        &alice,
-        Box::new(SilenceableEntropy {
-            inner: SeededEntropy::new(42),
-            silent: silent.clone(),
-        }),
-    );
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, mut tasks) = boot_with(&world, &blocks, &alice, entropy);
 
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -1880,6 +1946,66 @@ fn a_seam_that_draws_a_silent_nonce_publishes_no_record() {
             .len(),
         1,
         "the op keeps its place for a later draw"
+    );
+}
+
+/// Every queued op's record is sealed under a fresh HPKE ephemeral scalar. A
+/// seam reporting success having written nothing would clamp to one X25519
+/// scalar, so every op record would share one AEAD key and one base nonce — on
+/// the records carrying each version's only copy of its content key.
+#[test]
+fn a_seam_that_draws_a_silent_record_ephemeral_queues_no_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, _tasks) = boot_with(&world, &blocks, &alice, entropy);
+
+    silent.store(true, Ordering::Relaxed);
+    let refused = block_on(engine.command(Command::Rename {
+        node: ROOT,
+        new_name: "renamed".into(),
+    }));
+
+    assert!(
+        matches!(&refused, Err(EngineError::Entropy { message }) if message.contains("ephemeral")),
+        "a rename seals no record under an ephemeral the seam never wrote: {refused:?}"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "nothing reaches the durable queue"
+    );
+}
+
+/// A node id is minted from the seam too. Two nodes minted under a silent seam
+/// would share one id16, and so one node seed, one read key, and one IPNS
+/// keypair — the id is also an AAD field, so their bodies would transplant.
+#[test]
+fn a_seam_that_draws_a_silent_node_id_creates_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (entropy, silent) = silenceable(42);
+    let (mut engine, _events, _tasks) = boot_with(&world, &blocks, &alice, entropy);
+
+    silent.store(true, Ordering::Relaxed);
+    let refused = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }));
+
+    assert!(
+        matches!(&refused, Err(EngineError::Entropy { message }) if message.contains("node id")),
+        "the create refuses rather than minting a predictable id: {refused:?}"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "no node is rendered for a create that never minted an id"
     );
 }
 

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_engine::Entropy;
+use cipherbox_engine::entropy::{EntropyError, fresh_bytes, fresh_seed};
 use zeroize::Zeroizing;
 
 use crate::error::VfsError;
@@ -56,12 +57,11 @@ impl SpillArea {
                 message: "a spill needs a non-zero block size".to_owned(),
             });
         }
-        let mut key = Zeroizing::new([0u8; KEY_LEN]);
-        self.fill(key.as_mut_slice())?;
+        let key = fresh_seed(self.entropy.as_mut()).map_err(spill_entropy)?;
         // Named from entropy, not a counter: two areas over one dir would mint
         // the same counter and each would then unlink the other's live spill.
-        let mut suffix = [0u8; 8];
-        self.fill(&mut suffix)?;
+        let suffix: [u8; 8] =
+            fresh_bytes(self.entropy.as_mut(), "spill name suffix").map_err(spill_entropy)?;
         let path = self.dir.join(format!("spill.{}", hex(&suffix)));
         let file = open_private(&path).map_err(spill_io)?;
         Ok(SpillFile {
@@ -73,11 +73,12 @@ impl SpillArea {
             next_nonce: 0,
         })
     }
+}
 
-    fn fill(&mut self, dest: &mut [u8]) -> Result<(), VfsError> {
-        self.entropy.fill(dest).map_err(|error| VfsError::Internal {
-            message: error.message().to_owned(),
-        })
+/// A draw the engine's fail-closed helpers refused.
+fn spill_entropy(error: EntropyError) -> VfsError {
+    VfsError::Internal {
+        message: error.message().to_owned(),
     }
 }
 
@@ -276,7 +277,7 @@ fn restrict_dir(_dir: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use cipherbox_engine::testkit::SeededEntropy;
+    use cipherbox_engine::testkit::{SeededEntropy, SilentEntropy};
 
     use super::*;
 
@@ -290,6 +291,24 @@ mod tests {
 
     fn area(dir: &Path) -> SpillArea {
         SpillArea::open(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
+    }
+
+    /// A seam reporting success having written nothing would seal every spill
+    /// under one known key and give every spill file one name, so two areas over
+    /// one dir would unlink each other's live spill.
+    #[test]
+    fn a_silent_seam_mints_no_spill() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut area =
+            SpillArea::open(dir.path().to_path_buf(), Box::new(SilentEntropy)).expect("spill area");
+        assert!(
+            matches!(area.create(8), Err(VfsError::Internal { message }) if message.contains("all-zero")),
+            "the refusal is the entropy guard, not any internal error"
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "no spill file is left behind"
+        );
     }
 
     #[test]

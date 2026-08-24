@@ -7,11 +7,12 @@
 
 use core::time::Duration;
 
+use cipherbox_core::codec::RedactedText;
 use cipherbox_engine::SyncTimingProfile;
 
 /// What the core tells an adapter has changed, so the kernel's cache for it
 /// stops being trusted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Invalidation {
     /// The node's content bytes changed.
     Data {
@@ -30,6 +31,20 @@ pub enum Invalidation {
         /// The entry's name.
         name: String,
     },
+}
+
+impl core::fmt::Debug for Invalidation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Data { ino } => f.debug_struct("Data").field("ino", ino).finish(),
+            Self::Attributes { ino } => f.debug_struct("Attributes").field("ino", ino).finish(),
+            Self::Entry { parent, name } => f
+                .debug_struct("Entry")
+                .field("parent", parent)
+                .field("name", &RedactedText::of(name))
+                .finish(),
+        }
+    }
 }
 
 /// What a mount technology can do for the core.
@@ -85,6 +100,25 @@ pub trait HostAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The entry invalidation is the value nearest a host log line, and it
+    /// carries a filename.
+    #[test]
+    fn debug_renders_no_entry_name() {
+        let rendered = format!(
+            "{:?}",
+            Invalidation::Entry {
+                parent: 1,
+                name: "secret-name.txt".to_owned(),
+            }
+        );
+        assert!(
+            !rendered.contains("secret-name.txt"),
+            "a filename never renders: {rendered}"
+        );
+        assert!(rendered.contains("Entry"), "the shape survives: {rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+    }
 
     #[test]
     fn a_push_capable_mount_may_cache_up_to_the_staleness_threshold() {

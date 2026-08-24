@@ -1380,6 +1380,9 @@ mod published {
         adapter: RecordingAdapter,
         device: FakeDevice,
         world: FakeWorld,
+        /// The account's shared content plane, so a second device of the same
+        /// account can be stood up over it.
+        blocks: Blocks,
         ino: u64,
         node: NodeId,
         /// The engine's spawned loops, kept so a test can drain a write it
@@ -1425,6 +1428,7 @@ mod published {
             adapter,
             device,
             world,
+            blocks,
             ino: published.ino,
             node: published.node,
             tasks,
@@ -1446,6 +1450,30 @@ mod published {
             block_on(engine.commit_write(handle)).expect("the write commits");
         }
         advance_and_pump(mount);
+    }
+
+    /// Publish a new version of `CLIP` from a second device of the same
+    /// account. The mount's own engine stages nothing, so only a resolve can
+    /// tell it the head moved.
+    fn publish_from_another_device(mount: &mut Mount, plaintext: &[u8]) {
+        let node = mount.node;
+        let device = mount.world.device(b"alice-second-device");
+        serve_http(&device, &mount.blocks, 1_000);
+        let mut engine = engine_on(&device);
+        block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
+            .expect("the second device adopts the same owner root");
+        let mut tasks = mount.world.scheduler.take_spawned_tasks();
+        poll_tasks_until_parked(&mut tasks);
+
+        let handle =
+            block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
+                .expect("the second device's write opens");
+        for slice in plaintext.chunks(7) {
+            block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
+        }
+        block_on(engine.commit_write(handle)).expect("the write commits");
+        mount.world.scheduler.advance(engine.profile().poll_cadence);
+        poll_tasks_until_parked(&mut tasks);
     }
 
     /// Let the engine drain and publish what the mount just journaled.
@@ -1814,6 +1842,160 @@ mod published {
         let read = block_on(mount.core.read(reader, 0, expected.len() as u32))
             .expect("the published patch reads back");
         assert_eq!(read, expected);
+    }
+
+    /// Composing over the published head under the staged length would seal
+    /// `published ++ zero-hole ++ tail` — no byte of the staged version, and no
+    /// error. The write refuses until the drain publishes what it composes over.
+    #[test]
+    fn an_append_over_a_staged_version_never_publishes_the_previous_versions_bytes() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+
+        // A whole-file rewrite, wider than the published version, journaled but
+        // deliberately not drained.
+        let staged = vec![0xBB; 323];
+        let writer =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        // A second handle sees the staged length and appends an unaligned tail.
+        let appender =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file reopens");
+        let appended = block_on(mount.core.write(appender, staged.len() as u64, b"TAIL"));
+        assert!(
+            matches!(appended, Err(VfsError::Unavailable { .. })),
+            "the append refuses while the version it would compose over is unpublished: \
+             {appended:?}"
+        );
+        let _ = block_on(mount.core.release(appender));
+        advance_and_pump(&mut mount);
+
+        let reader = opened(&mut mount);
+        let read = block_on(mount.core.read(reader, 0, staged.len() as u32))
+            .expect("the staged version publishes");
+        assert_eq!(
+            read, staged,
+            "the published version is the staged one, whole — never the previous \
+             version's bytes under the staged version's length"
+        );
+    }
+
+    /// The same mispairing through a handle that bound its stream *before* the
+    /// staging: it is never re-opened, so nothing re-consults the engine.
+    #[test]
+    fn an_append_on_a_handle_bound_before_the_staging_publishes_no_stale_bytes() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+
+        // The reader binds its stream to the published version first.
+        let reader =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
+
+        let staged = vec![0xBB; 323];
+        let writer =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens twice");
+        block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        let appended = block_on(mount.core.write(reader, staged.len() as u64, b"TAIL"));
+        assert!(
+            matches!(appended, Err(VfsError::Unavailable { .. })),
+            "the append refuses rather than composing over the version it bound: {appended:?}"
+        );
+        let _ = block_on(mount.core.release(reader));
+        advance_and_pump(&mut mount);
+
+        let after = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(after, 0, staged.len() as u32)).expect("the staged version"),
+            staged,
+            "the published version is the staged one, whole"
+        );
+    }
+
+    /// A refusal while a version is staged is availability, not a verdict: the
+    /// same handle appends once the drain publishes what it composes over.
+    #[test]
+    fn an_append_refused_over_a_staged_version_lands_after_the_drain() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+
+        let reader =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
+
+        let staged = vec![0xBB; 323];
+        let writer =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens twice");
+        block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        let refused = block_on(mount.core.write(reader, staged.len() as u64, b"TAIL"));
+        assert!(
+            matches!(refused, Err(VfsError::Unavailable { .. })),
+            "the append refuses while the staged version is unpublished: {refused:?}"
+        );
+        advance_and_pump(&mut mount);
+
+        block_on(mount.core.write(reader, staged.len() as u64, b"TAIL"))
+            .expect("the retry composes over the version the drain published");
+        block_on(mount.core.release(reader)).expect("the release commits");
+        advance_and_pump(&mut mount);
+
+        let mut expected = staged.clone();
+        expected.extend_from_slice(b"TAIL");
+        let after = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(after, 0, expected.len() as u32)).expect("the append reads"),
+            expected,
+            "the retry appends onto the staged version, not the one the handle bound"
+        );
+    }
+
+    /// The rendered length also moves when *another device* publishes: the
+    /// projection repaints size and head `contentCid` together off one verified
+    /// read body, with nothing ever staged locally. A handle bound to the older
+    /// version must re-pin rather than compose its writes over what it holds —
+    /// otherwise the append seals `old ++ zero-hole ++ tail` under the new
+    /// version's length, with no error.
+    #[test]
+    fn an_append_on_a_handle_bound_before_another_device_published_seals_no_stale_bytes() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+
+        // The reader binds its stream to the version the mount came up on.
+        let reader =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+        block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
+
+        let remote = vec![0xBB; 323];
+        publish_from_another_device(&mut mount, &remote);
+
+        // A fresh open resolves the newer head and repaints the rendered length.
+        let fresh = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(fresh, 0, 8)).expect("the newer version reads"),
+            remote[..8],
+            "the fresh open serves what the other device published"
+        );
+        block_on(mount.core.release(fresh)).expect("the fresh handle closes");
+
+        block_on(mount.core.write(reader, remote.len() as u64, b"TAIL"))
+            .expect("nothing is unavailable: the handle only needs re-pinning");
+        block_on(mount.core.release(reader)).expect("the release commits");
+        advance_and_pump(&mut mount);
+
+        let mut expected = remote.clone();
+        expected.extend_from_slice(b"TAIL");
+        let after = opened(&mut mount);
+        assert_eq!(
+            block_on(mount.core.read(after, 0, expected.len() as u32)).expect("the append reads"),
+            expected,
+            "the append composes over the version the length came from"
+        );
     }
 
     #[test]

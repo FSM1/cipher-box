@@ -639,7 +639,7 @@ mod tests {
     use crate::facade::LoginSecret;
     use crate::owner_keys::OwnerSessionKeys;
     use crate::testkit::fakes::InMemoryFloorStore;
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentAtWidth, block_on};
 
     const SECRET: [u8; 32] = [0x11; 32];
     /// The all-zero bootstrap anchor `Engine::start` binds its cold-start scope to.
@@ -1559,22 +1559,15 @@ mod tests {
     /// their ciphertexts apart.
     #[test]
     fn a_seam_that_zeroes_only_the_nonce_mints_nothing() {
-        struct NonceSilent(SeededEntropy);
-        impl Entropy for NonceSilent {
-            fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-                if dest.len() == cipherbox_core::suite::aead::NONCE_LEN {
-                    return Ok(());
-                }
-                self.0.fill(dest)
-            }
-        }
-
         let session = session();
         let net = Network::default();
         let publisher = FakePublisher::new(&net);
         let pointer_signer = session.vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX);
         let err = block_on(provision_vault(
-            &RefCell::new(NonceSilent(SeededEntropy::new(7))),
+            &RefCell::new(SilentAtWidth::new(
+                7,
+                cipherbox_core::suite::aead::NONCE_LEN,
+            )),
             &OwnerSessionKeys::new(&session),
             &publisher,
             &net,

@@ -449,7 +449,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let committed = self.commit(handle).await;
         let open = self.handles.close(handle).ok_or(VfsError::BadHandle)?;
         self.pending.remove(&handle);
-        self.release_stream(open);
+        self.release_stream(open.stream);
         committed
     }
 
@@ -458,7 +458,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// spill — unopenable ciphertext and no half-formed op.
     pub fn unmount(&mut self) {
         for open in self.handles.drain() {
-            self.release_stream(open);
+            self.release_stream(open.stream);
         }
         self.pending.clear();
         self.cache.clear();
@@ -471,8 +471,33 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if self.pending.contains_key(&handle) {
             return Ok(());
         }
+        self.repin_stream(handle, node).await?;
         let len = self.base_len(handle, node).await?;
         self.pending.insert(handle, Pending::over(len));
+        Ok(())
+    }
+
+    /// Re-bind a handle whose pinned stream is not the version the rendered
+    /// length describes ([`Engine::rendered_version_cid`]) — a stream is bound
+    /// once and never re-opened, so a version the queue staged or another device
+    /// published moves the length out from under it.
+    ///
+    /// Re-opening is what pairs them again: it resolves the newer head, or
+    /// refuses while the queue still owes the version the length came from —
+    /// availability, so the next drain admits the write.
+    async fn repin_stream(&mut self, handle: HandleId, node: NodeId) -> Result<(), VfsError> {
+        let Some(pinned) = self.handles.get(handle).ok_or(VfsError::BadHandle)?.stream else {
+            return Ok(());
+        };
+        let Some(rendered) = self.engine.rendered_version_cid(node).await? else {
+            return Ok(());
+        };
+        if self.engine.stream_version_cid(pinned) == Some(rendered) {
+            return Ok(());
+        }
+        self.handles.detach_stream(handle);
+        self.release_stream(Some(pinned));
+        self.stream_for(handle).await?;
         Ok(())
     }
 
@@ -699,8 +724,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(stream)
     }
 
-    fn release_stream(&mut self, open: OpenFile) {
-        if let Some(stream) = open.stream {
+    /// Release a stream a handle held, wiping the plaintext it cached.
+    fn release_stream(&mut self, stream: Option<StreamHandle>) {
+        if let Some(stream) = stream {
             self.engine.close_stream(stream);
             self.cache.forget_stream(stream);
         }

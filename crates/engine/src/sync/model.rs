@@ -13,14 +13,16 @@
 //! well-formed snapshot holds at most one link per child; a dual-link crash
 //! residue holds two, resolved by [`crate::sync::rebase::observed_repair`].
 
+use core::fmt;
 use std::collections::BTreeMap;
 
+use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::facade::{NodeId, NodeKind};
 
 /// One node's metadata in the working tree.
-#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct NodeMeta {
     /// Location-independent node id.
     #[zeroize(skip)]
@@ -58,6 +60,25 @@ pub struct NodeMeta {
     /// `ChildRef`; `None` for nodes not yet in gate-passing state.
     #[zeroize(skip)]
     pub ipns_name: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for NodeMeta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeMeta")
+            .field("id", &self.id)
+            .field("name", &RedactedText::of(&self.name))
+            .field("kind", &self.kind)
+            .field("record_sequence", &self.record_sequence)
+            .field("content_version", &self.content_version)
+            .field("head_content_cid", &self.head_content_cid)
+            .field("size", &self.size)
+            .field("mtime", &self.mtime)
+            .field(
+                "ipns_name",
+                &self.ipns_name.as_deref().map(RedactedBytes::of),
+            )
+            .finish()
+    }
 }
 
 impl NodeMeta {
@@ -385,6 +406,27 @@ mod tests {
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
+    }
+
+    /// A node's name and its live `ipnsName` are decoded user content; the
+    /// rendering keeps the shape and withholds both.
+    #[test]
+    fn debug_renders_no_name_and_no_ipns_name() {
+        let mut meta = NodeMeta::new(id(1), "secret-name.txt", NodeKind::File);
+        meta.ipns_name = Some(b"k51qzi5uqu5dksecretname".to_vec());
+        let rendered = format!("{meta:?}");
+
+        assert!(
+            !rendered.contains("secret-name.txt"),
+            "a filename never renders: {rendered}"
+        );
+        let unredacted = format!("{:?}", meta.ipns_name.as_ref().expect("set above"));
+        assert!(
+            !rendered.contains(&unredacted),
+            "the ipnsName bytes never render: {rendered}"
+        );
+        assert!(rendered.contains("NodeMeta"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     #[test]

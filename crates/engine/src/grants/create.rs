@@ -38,7 +38,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use core::fmt;
 use zeroize::Zeroizing;
 
-use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_seed};
+use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::mint_grant_row;
@@ -538,10 +538,8 @@ where
     // public (`kdf::blinded_tag`) and ships in the clear in every scope root's
     // grant section, so deriving from it would rebuild that edge — and the
     // granted folder — from a cached record.
-    let mut idempotency_bytes = [0u8; 16];
-    entropy
-        .fill(&mut idempotency_bytes)
-        .map_err(CreateGrantError::Entropy)?;
+    let idempotency_bytes: [u8; 16] =
+        fresh_bytes(entropy, "grant idempotency key").map_err(CreateGrantError::Entropy)?;
     let idempotency_key = format!("grant-{}", hex_lower(&idempotency_bytes));
     post_sealed(
         mailbox,
@@ -575,7 +573,7 @@ mod tests {
         SweptChild, SweptNode, SweptScope,
     };
     use crate::testkit::fakes::InMemoryMailboxHub;
-    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+    use crate::testkit::{SeededEntropy, SilentAtWidth, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob, sign_recipient_binding,
@@ -1175,6 +1173,38 @@ mod tests {
         };
         let published = net.published.borrow().clone();
         (outcome, published, hub)
+    }
+
+    /// The API keeps `sha256(senderPublicKey : idempotencyKey)`, so an
+    /// idempotency key an observer can recompute hands it back the sender to
+    /// recipient edge. A seam that writes nothing makes every key that constant.
+    #[test]
+    fn a_silent_seam_delivers_no_grant_pointer() {
+        // The idempotency key is the only 16-byte draw on this path, so
+        // silencing that width reaches it past the guarded draws before it.
+        let (outcome, _published, hub) = run_for(
+            SilentAtWidth::new(9, 16),
+            &[],
+            FakeNet::new(Ok(())),
+            &[],
+            &recipient_enc(),
+        );
+
+        // Name the draw: without it the assertion holds for a refusal from any
+        // earlier draw on the same path.
+        let refused = outcome.expect_err("the zero draw is refused");
+        assert!(
+            matches!(&refused, CreateGrantError::Entropy(e)
+                if e.message().contains("grant idempotency key")),
+            "the refusal is the idempotency draw, not an earlier one: {refused:?}"
+        );
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        assert!(
+            block_on(poll_verified(&recip_box, &recipient_enc(), V))
+                .unwrap()
+                .is_empty(),
+            "nothing is posted under a key the API could recompute",
+        );
     }
 
     #[test]

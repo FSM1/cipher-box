@@ -86,6 +86,12 @@ impl HandleTable {
         }
     }
 
+    /// Unbind a handle's stream, handing back what the caller must release. The
+    /// handle's next read binds a fresh one.
+    pub fn detach_stream(&mut self, id: HandleId) -> Option<StreamHandle> {
+        self.open.get_mut(&id).and_then(|open| open.stream.take())
+    }
+
     /// Close a handle, reporting whether it was open.
     pub fn close(&mut self, id: HandleId) -> Option<OpenFile> {
         self.open.remove(&id)
@@ -137,6 +143,25 @@ mod tests {
         assert!(
             !table.attach_stream(id, StreamHandle(10)),
             "a closed handle cannot take a stream nothing would ever release"
+        );
+    }
+
+    #[test]
+    fn detaching_hands_back_the_stream_and_leaves_the_handle_open() {
+        let mut table = HandleTable::new();
+        let id = table.open(node(1), Access::ReadWrite);
+        assert_eq!(table.detach_stream(id), None, "nothing is bound yet");
+
+        table.attach_stream(id, StreamHandle(9));
+        assert_eq!(table.detach_stream(id), Some(StreamHandle(9)));
+        assert_eq!(
+            table.get(id).and_then(|open| open.stream),
+            None,
+            "a detached handle holds no stream a later release could double-free"
+        );
+        assert!(
+            table.attach_stream(id, StreamHandle(10)),
+            "the handle is still open and takes a fresh stream"
         );
     }
 

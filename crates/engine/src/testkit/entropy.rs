@@ -1,5 +1,8 @@
 //! Seeded, deterministic entropy for tests.
 
+// The seam's test implementation, so it draws where every consumer must not.
+#![allow(clippy::disallowed_methods)]
+
 use crate::entropy::{Entropy, EntropyError};
 
 /// Deterministic entropy from a 64-bit seed (SplitMix64 stream).
@@ -55,6 +58,33 @@ pub struct SilentEntropy;
 impl Entropy for SilentEntropy {
     fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
         Ok(())
+    }
+}
+
+/// A seeded seam that goes silent for draws of one width. **Test-only.** It
+/// reaches a guarded draw past the draws before it, which a wholly silent seam
+/// would refuse first.
+pub struct SilentAtWidth {
+    inner: SeededEntropy,
+    width: usize,
+}
+
+impl SilentAtWidth {
+    /// A seeded source that writes nothing for every `width`-byte draw.
+    pub fn new(seed: u64, width: usize) -> Self {
+        Self {
+            inner: SeededEntropy::new(seed),
+            width,
+        }
+    }
+}
+
+impl Entropy for SilentAtWidth {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        match dest.len() == self.width {
+            true => Ok(()),
+            false => self.inner.fill(dest),
+        }
     }
 }
 

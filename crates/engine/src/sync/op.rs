@@ -12,8 +12,10 @@
 //! ([`StagedContent`]), while the sealed blocks sit in the staging store behind
 //! the storage policy's budget ([`crate::sync::staging`]).
 
+use core::fmt;
 use core::num::NonZeroU64;
 
+use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -49,7 +51,7 @@ pub struct Op {
 /// One value because the parts must not drift: the root names sealed blocks
 /// whose byte count is not the plaintext's, and the key is a KDF non-edge that
 /// nothing can re-derive if it is separated from the version it opens.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedContent {
     /// DAG root CID of the staged content — simultaneously the root block's
     /// staging key and the published version's `contentCid`.
@@ -66,6 +68,20 @@ pub struct StagedContent {
     /// The scope epoch bound into the key blob's AAD. Carried because the blob
     /// is opened at drain time, when the live scope epoch may have moved on.
     pub epoch: u64,
+}
+
+impl fmt::Debug for StagedContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StagedContent")
+            .field("root_cid", &self.root_cid)
+            .field("plaintext_size", &self.plaintext_size)
+            .field(
+                "sealed_content_key",
+                &RedactedBytes::of(&self.sealed_content_key),
+            )
+            .field("epoch", &self.epoch)
+            .finish()
+    }
 }
 
 /// The destination node a [`OpKind::Move`] replaces, with the sequence
@@ -127,7 +143,7 @@ pub enum ScopeCrossing {
 /// Wipes on drop, but only over the names: a content address rides the op
 /// record's own clear header and a sealed content key is already ciphertext,
 /// so wiping either would cost a pass over every render's copy to hide nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub enum OpKind {
     /// Create a node under a parent.
     Create {
@@ -220,6 +236,63 @@ pub enum OpKind {
         #[zeroize(skip)]
         keep_latest: NonZeroU64,
     },
+}
+
+impl fmt::Debug for OpKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Create { parent, name, node } => f
+                .debug_struct("Create")
+                .field("parent", parent)
+                .field("name", &RedactedText::of(name))
+                .field("node", node)
+                .finish(),
+            Self::Delete { target_sequence } => f
+                .debug_struct("Delete")
+                .field("target_sequence", target_sequence)
+                .finish(),
+            Self::Rename { new_name } => f
+                .debug_struct("Rename")
+                .field("new_name", &RedactedText::of(new_name))
+                .finish(),
+            Self::Relink {
+                from_parent,
+                new_parent,
+                crossing,
+            } => f
+                .debug_struct("Relink")
+                .field("from_parent", from_parent)
+                .field("new_parent", new_parent)
+                .field("crossing", crossing)
+                .finish(),
+            Self::Move {
+                from_parent,
+                new_parent,
+                new_name,
+                replacing,
+                crossing,
+            } => f
+                .debug_struct("Move")
+                .field("from_parent", from_parent)
+                .field("new_parent", new_parent)
+                .field("new_name", &RedactedText::of(new_name))
+                .field("replacing", replacing)
+                .field("crossing", crossing)
+                .finish(),
+            Self::UpdateContent {
+                content,
+                base_version_cid,
+            } => f
+                .debug_struct("UpdateContent")
+                .field("content", content)
+                .field("base_version_cid", base_version_cid)
+                .finish(),
+            Self::Prune { keep_latest } => f
+                .debug_struct("Prune")
+                .field("keep_latest", keep_latest)
+                .finish(),
+        }
+    }
 }
 
 impl Op {
@@ -456,6 +529,54 @@ mod tests {
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
+    }
+
+    /// These are public engine types and a wasm panic format reaches the
+    /// browser console, so every name and the sealed key render as a length.
+    #[test]
+    fn debug_renders_no_name_and_no_sealed_key() {
+        let content = staged(b"root-cid", 9);
+        let unredacted_key = format!("{:?}", content.sealed_content_key);
+        let ops = [
+            Op::create(
+                id(1),
+                id(0),
+                "secret-name.txt",
+                NewNode::File {
+                    content: Some(content.clone()),
+                },
+                1,
+                at(0),
+            ),
+            Op::rename(id(1), "secret-name.txt", 1, at(0)),
+            Op::move_node(
+                id(1),
+                id(0),
+                id(2),
+                "secret-name.txt",
+                None,
+                1,
+                at(0),
+                ScopeCrossing::Intra,
+            ),
+            Op::update_content(id(1), content, None, 1, at(0)),
+        ];
+
+        for op in ops {
+            let rendered = format!("{op:?}");
+            assert!(
+                !rendered.contains("secret-name.txt"),
+                "a filename never renders: {rendered}"
+            );
+            assert!(
+                !rendered.contains(&unredacted_key),
+                "a sealed content key never renders: {rendered}"
+            );
+            assert!(
+                rendered.contains("redacted"),
+                "the withheld field is visible as a redaction: {rendered}"
+            );
+        }
     }
 
     fn at(ms: u64) -> UnixMillis {
