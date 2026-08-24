@@ -1298,11 +1298,6 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     assert_eq!(adopted.sequence, 1);
 }
 
-/// A `writeScopeSeed` holder can re-publish a scope root with `ascentPublic`
-/// swapped and every ciphertext, structure signature and commitment left
-/// byte-identical — unless the field is inside the ascent link's own signed
-/// bytes. Stage 3 refuses it on both reader arms, so the swap is never
-/// attributable to an honest writer's pseudonym.
 #[test]
 fn a_swapped_ascent_public_fails_stage_three_on_both_reader_arms() {
     let fx = Fixture::new();
