@@ -187,6 +187,10 @@ pub trait WriteSubtreeResolver {
 ///   skips already-done nodes without any in-memory checkpoint.
 /// - **`republish` registers the name it PUTs**, first and fail-closed
 ///   (`net/publish.rs`, #28 D5) — the never-orphan ordering law.
+/// - **the root republish runs off the enumeration's own read** — the moved root
+///   is owner-signed over a `directChildScopeIndex` only
+///   [`WriteSubtreeResolver::resolve_node`] proves the boundaries of, so an
+///   implementor MUST refuse a root it never enumerated, not re-read one.
 pub trait WriteWavePublisher {
     /// Whether a record is already published at `new_name` — the resume query,
     /// answered from published state only (no in-memory carry across a crash).

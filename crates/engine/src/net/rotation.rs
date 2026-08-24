@@ -2846,17 +2846,20 @@ where
     async fn republish(&self, node: &RepublishedNode) -> Result<(), WritePublishError> {
         let source = match self.gated_root.take(&node.current_name) {
             Some(parked) => parked,
+            // A root re-read here would carry a `directChildScopeIndex` no
+            // [`WriteWaveNet::record_scope_boundary`] proved, and the owner signs
+            // that index into the moved root: an entry naming an ordinary
+            // in-scope node carves it out of every future wave and leaves it live
+            // at a name the revoked write scope seed still derives. Only the
+            // enumeration's boundary-proved read may author a moved root.
+            None if node.is_root => return Err(WritePublishError::Rejected),
             None => {
                 let record_bytes = fanout_get_verify(self.transport, &node.current_name)
                     .await
                     .map(|(_, bytes)| bytes)
                     .ok_or(WritePublishError::NotLanded)?;
-                if node.is_root {
-                    self.root_source(&node.current_name, &record_bytes).await?
-                } else {
-                    self.interior_source(node.node_id, &node.current_name, &record_bytes)
-                        .await?
-                }
+                self.interior_source(node.node_id, &node.current_name, &record_bytes)
+                    .await?
             }
         };
         // The interior path re-opens its own record at the floor, so only the
@@ -5347,6 +5350,14 @@ mod tests {
         }
     }
 
+    /// Run the enumeration's gated root read — the boundary-proved read a root
+    /// republish runs off, which the wave always performs before it publishes.
+    fn enumerate_root<T: RecordTransport + Clone, F: FloorStore, E: Entropy>(
+        net: &Wave<'_, T, F, E>,
+    ) {
+        block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
+    }
+
     /// The pre-wave root name: derived from the write scope seed the fixtures
     /// publish under.
     fn old_root_name() -> IpnsName {
@@ -5585,6 +5596,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
 
         // Child-first, root last — exactly the wave's own order.
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
@@ -5637,6 +5649,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         block_on(net.republish(&leaf)).expect("leaf");
         let moved = order(SCOPE, &root.name, one_child(leaf_id, &leaf.new_name), true);
@@ -5799,6 +5812,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -5836,6 +5850,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let leaf = order(leaf_id, &leaf_old, BTreeMap::new(), false);
         block_on(net.republish(&leaf)).expect("leaf");
         let mid = order(mid_id, &mid_old, one_child(leaf_id, &leaf.new_name), false);
@@ -5874,6 +5889,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -5938,6 +5954,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -5992,6 +6009,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the root moves");
 
@@ -6093,6 +6111,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         block_on(net.republish(&moved)).expect("the wave lands");
         (root, moved)
@@ -6560,6 +6579,7 @@ mod tests {
         let root = staged_childless_root(&harness);
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
 
         // A root order the publisher refuses *after* the gated read: no fresh
         // write scope seed means the section cannot be re-minted.
@@ -6580,6 +6600,34 @@ mod tests {
                 .ipns_name,
             moved.new_name.as_str().as_bytes()
         );
+    }
+
+    #[test]
+    fn a_root_republish_without_the_boundary_proved_read_is_refused_fail_closed() {
+        // The moved root carries an owner-signed `directChildScopeIndex`, and only
+        // the enumeration proves each entry is a real descendant scope root
+        // (`record_scope_boundary`). A root re-read here would sign an unproven
+        // index, carving an ordinary in-scope node out of every future wave.
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+            "no parked read means no proved boundary"
+        );
+        assert!(
+            !published_at(&harness, &moved.new_name),
+            "nothing is signed at the new name"
+        );
+
+        // The same order lands once the enumeration has proved the boundary.
+        enumerate_root(&net);
+        block_on(net.republish(&moved)).expect("the enumerated root republishes");
+        assert!(published_at(&harness, &moved.new_name));
     }
 
     #[test]
