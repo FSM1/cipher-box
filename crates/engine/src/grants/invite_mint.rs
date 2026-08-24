@@ -10,7 +10,7 @@
 //! Recording before publishing is the ack-after-durable rule the accept flow
 //! already follows ([`ConvertedClaim::record`](super::ConvertedClaim::record)):
 //! a committed entry no record names is authority no
-//! [`revoke_invite_link`](super::revoke_invite_link) call can cut
+//! [`locate_invite_link`](super::locate_invite_link) call can name
 //! (`invite_store.rs` header), while a record whose row never published is
 //! inert — conversion refuses it as uncommitted.
 
@@ -184,7 +184,7 @@ mod tests {
 
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{
-        ChildScopeRef, GrantSetCommitment, PreservedFields, ReadBody, sign_grant_set,
+        ChildScopeRef, GrantSetCommitment, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -220,6 +220,17 @@ mod tests {
 
     fn owner_pseudonym() -> Ed25519Signer {
         Ed25519Signer::from_seed([0x22; 32])
+    }
+
+    /// The parent scope's retained read-plane history — every epoch its owner
+    /// has cut. A carried link passes through a re-seal verbatim, so opaque
+    /// bytes are enough to prove the invite's own scope inherits none of it.
+    fn parent_history() -> Vec<SignedSealed> {
+        vec![SignedSealed {
+            sealed: vec![0xa5; 48],
+            signature: [0xb6; 64],
+            unknown: PreservedFields::new(),
+        }]
     }
 
     /// The invite scope's ipnsName, derived exactly as the mint does.
@@ -401,6 +412,7 @@ mod tests {
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
             };
+            let history = parent_history();
             let override_seed = Zeroizing::new(OVERRIDE_SEED);
             let pointer_read_key = Zeroizing::new(POINTER_READ_KEY);
             let write_scope_seed = Zeroizing::new(WRITE_SCOPE_SEED);
@@ -428,7 +440,7 @@ mod tests {
                 commitment_sig: &self.parent_commitment_sig,
                 grant_ledger: &[],
                 current_child_index: &[],
-                carried_history_links: &[],
+                carried_history_links: &history,
             };
             block_on(mint_invite_link(
                 &mut crate::entropy::SharedEntropy(&self.entropy),
@@ -516,7 +528,7 @@ mod tests {
         assert_eq!(scope_root.read_epoch, 1);
         assert!(
             scope_root.section.history_links.is_empty(),
-            "no epoch predates the link",
+            "no epoch predates the link, so the parent's retained history stays behind",
         );
     }
 
@@ -574,7 +586,7 @@ mod tests {
     }
 
     /// The record lands first, so a publish that fails leaves an inert record
-    /// rather than a committed entry no `revoke_invite_link` call can name.
+    /// rather than a committed entry no `locate_invite_link` call can name.
     #[test]
     fn a_publish_that_fails_hands_out_no_capability() {
         let mut f = Fixture::new();

@@ -289,7 +289,7 @@ pub struct MintedInvite {
     /// The link's blinded tag, commitment entry and ledger row.
     pub row: GrantRow,
     /// The owner-local record [`convert_invite_claim`] and
-    /// [`revoke_invite_link`] act on. Persist it with the link.
+    /// [`locate_invite_link`] act on. Persist it with the link.
     pub link: RecordedInvite,
     /// What the link hands out.
     pub capability: LinkCapability,

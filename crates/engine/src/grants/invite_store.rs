@@ -3,7 +3,7 @@
 //! or revoked in the next, and what keeps a claim single-use.
 //!
 //! [`convert_invite_claim`](super::convert_invite_claim) and
-//! [`revoke_invite_link`](super::revoke_invite_link) both take a
+//! [`locate_invite_link`](super::locate_invite_link) both read a
 //! [`RecordedInvite`] back as input, and nothing in a resolved record marks a
 //! row as an invite, so this store is the owner's authority over its own links
 //! rather than a cache of published state. The spent-claim half
@@ -24,7 +24,7 @@
 //! generation: a host replaying an earlier sealed set restores a deadline the
 //! owner has since shortened, and dropping the stored key entirely reads as an
 //! owner who minted nothing — leaving a live commitment entry no
-//! [`revoke_invite_link`](super::revoke_invite_link) call can name, since the
+//! [`locate_invite_link`](super::locate_invite_link) call can name, since the
 //! cut is derived from the record rather than looked up by tag. The
 //! owner-signed commitment caps both: conversion reads the permission there and
 //! treats absence as revocation, and honours the published deadline as a
