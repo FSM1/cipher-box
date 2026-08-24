@@ -1349,11 +1349,12 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
-/// The bytes a stream serves and the length the rendered view reports must come
-/// from one version. Availability, not trust: the very next drain admits the
-/// open.
+/// The bytes a read serves and the length the rendered view reports must come
+/// from one version, on both readers: the stream a mount composes over and the
+/// whole-file read the web download takes. Availability, not trust — the very
+/// next drain admits them.
 #[test]
-fn a_stream_refuses_to_pin_a_version_the_rendered_size_does_not_name() {
+fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -1389,6 +1390,13 @@ fn a_stream_refuses_to_pin_a_version_the_rendered_size_does_not_name() {
             Err(EngineError::ContentUnavailable { .. })
         ),
         "no stream serves the version the rendered size does not name"
+    );
+    assert!(
+        matches!(
+            block_on(engine.read_content(node)),
+            Err(EngineError::ContentUnavailable { .. })
+        ),
+        "nor does the whole-file read — the same mispairing, one surface out"
     );
 
     tick(&world, &engine, &mut tasks);
