@@ -835,6 +835,10 @@ where
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
     ) -> Result<(), RotationPublishError> {
+        // `check_publishable`'s floor read must still hold when this function
+        // signs the record ([`floor::WriteEpochLease`]).
+        let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
+            .ok_or(RotationPublishError::NotPublished)?;
         self.check_publishable(record).await?;
 
         let node_seed = kdf::node_seed(override_seed, &record.scope_id);
@@ -1548,6 +1552,7 @@ impl<T, H: Http, C: CredentialStore, F, Sch, E> SweepResolver
 where
     T: RecordTransport,
     F: FloorStore,
+    Sch: Scheduler,
 {
     async fn resolve_scope(
         &self,
@@ -1640,6 +1645,11 @@ where
             &block,
         )
         .map_err(|_| SweepResolveFailure::Rejected)?;
+        // Floor law item 3: an owner-vouched write epoch raises the durable
+        // floor on sight (#38 D4).
+        floor::advance_write_epoch_on_sight(self.floors, scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| SweepResolveFailure::Unavailable)?;
         Ok(Some(repoint.current_root.as_str().as_bytes().to_vec()))
     }
 
@@ -2578,6 +2588,14 @@ where
             carried_unknown: unknown,
             carried_epoch_tag_unknown: epoch_tag_unknown,
         };
+        // Only the root arm re-seals a write plane, so only it needs the floor
+        // held still ([`floor::WriteEpochLease`]).
+        let _write_lease = root
+            .as_ref()
+            .map(|_| {
+                floor::acquire_write_epoch_lease(&self.scope_id).ok_or(WritePublishError::NotLanded)
+            })
+            .transpose()?;
         let head = match root {
             Some(plane) => {
                 let fresh = node
@@ -2926,6 +2944,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::cell::Cell;
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
@@ -3217,12 +3236,29 @@ mod tests {
         }
 
         fn net_rooted(&self, ancestry: RotationAncestry) -> Net<'_, T> {
+            self.net_rooted_with_floors(ancestry, &self.floors)
+        }
+
+        /// [`Harness::net_rooted`] over an arbitrary floor store.
+        fn net_rooted_with_floors<'a, F: FloorStore>(
+            &'a self,
+            ancestry: RotationAncestry,
+            floors: &'a F,
+        ) -> OwnerRotationNet<
+            'a,
+            T,
+            ScriptedHttp,
+            InMemoryCredentialStore,
+            F,
+            VirtualScheduler,
+            SeededEntropy,
+        > {
             OwnerRotationNet {
                 transport: &self.transport,
                 api: &self.api,
                 gateway: &self.gateway,
                 http: &self.http,
-                floors: &self.floors,
+                floors,
                 scheduler: &self.world.scheduler,
                 profile: &self.profile,
                 entropy: &self.entropy,
@@ -5279,12 +5315,31 @@ mod tests {
         current_root: &'a IpnsName,
         plan: &'a GrantSetCommitment,
     ) -> Wave<'a, T> {
+        wave_with_floors(harness, owner, current_root, plan, &harness.floors)
+    }
+
+    /// [`wave`] over an arbitrary floor store.
+    fn wave_with_floors<'a, T: RecordTransport + Clone, F: FloorStore>(
+        harness: &'a Harness<T>,
+        owner: &'a EcdsaSigner,
+        current_root: &'a IpnsName,
+        plan: &'a GrantSetCommitment,
+        floors: &'a F,
+    ) -> WriteWaveNet<
+        'a,
+        T,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        F,
+        VirtualScheduler,
+        SeededEntropy,
+    > {
         WriteWaveNet {
             transport: &harness.transport,
             api: &harness.api,
             gateway: &harness.gateway,
             http: &harness.http,
-            floors: &harness.floors,
+            floors,
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
             entropy: &harness.entropy,
@@ -6213,6 +6268,132 @@ mod tests {
         assert!(
             !published_at(&harness, &moved.new_name),
             "nothing is published, so the revokee never receives a re-minted blob",
+        );
+    }
+
+    /// A floor store that fires a scope-pointer consult from *inside* a publish
+    /// window: the sighting lands on the publish guard's own write-epoch floor
+    /// read, not before the publish like
+    /// [`a_write_floor_rise_before_the_root_republish_refuses_the_seal`].
+    ///
+    /// The sighting goes through [`floor::advance_write_epoch_on_sight`], the
+    /// one door a consult uses, so the write-epoch lease is what decides whether
+    /// it lands. It runs against the wrapped store rather than `self`, which
+    /// keeps the interposition non-recursive.
+    struct ConsultingFloors {
+        inner: InMemoryFloorStore,
+        /// Write-epoch floor reads still to pass before the consult fires.
+        countdown: Cell<usize>,
+        sighting: Cell<Option<u64>>,
+        fired: Cell<bool>,
+    }
+
+    impl ConsultingFloors {
+        fn wrapping(inner: &InMemoryFloorStore) -> Self {
+            Self {
+                inner: inner.clone(),
+                countdown: Cell::new(0),
+                sighting: Cell::new(None),
+                fired: Cell::new(false),
+            }
+        }
+
+        /// Sight `write_epoch` on the `nth` write-epoch floor read from now —
+        /// the read belonging to the guard under test.
+        fn sight_on_write_read(&self, nth: usize, write_epoch: u64) {
+            self.countdown.set(nth);
+            self.sighting.set(Some(write_epoch));
+        }
+    }
+
+    impl FloorStore for ConsultingFloors {
+        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            if key.ends_with(b"/write-epoch") && self.countdown.get() > 0 {
+                self.countdown.set(self.countdown.get() - 1);
+                if self.countdown.get() == 0
+                    && let Some(write_epoch) = self.sighting.take()
+                {
+                    self.fired.set(true);
+                    floor::advance_write_epoch_on_sight(&self.inner, &SCOPE, write_epoch).await?;
+                }
+            }
+            self.inner.epoch_floor(key).await
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            self.inner.raise_sequence_floor(ipns_name, sequence).await
+        }
+    }
+
+    /// The wave arm of the guard/publish window ([`floor::WriteEpochLease`]).
+    #[test]
+    fn a_consult_inside_the_wave_publish_window_cannot_move_the_floor() {
+        let harness = Harness::plain();
+        let root = staged_childless_root(&harness);
+        let owner = owner_identity();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        let net = wave_with_floors(
+            &harness,
+            &owner,
+            &root.name,
+            &root.grant_section.commitment,
+            &floors,
+        );
+        block_on(net.resolve_node(&SCOPE)).expect("the enumeration gates and parks the root");
+
+        // Armed only now: the parked root is what the publish carries forward,
+        // and the next write-epoch read is `publish_moved`'s own guard.
+        floors.sight_on_write_read(1, OWNER_ROOT_EPOCH + 1);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        assert!(
+            floors.fired.get(),
+            "the consult must reach the guard's read"
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).unwrap(),
+            Some(OWNER_ROOT_EPOCH),
+            "the deferred sighting left the floor the publish was authorized against",
+        );
+        assert!(published_at(&harness, &moved.new_name));
+    }
+
+    /// The owner arm of the same window, at `check_publishable`.
+    #[test]
+    fn a_consult_inside_the_owner_publish_window_cannot_move_the_floor() {
+        let (harness, _root, cut) = staged_cut();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        // The gated read the publish runs first reads the write-epoch floor to
+        // recover the write scope seed; the guard's own read is the one after.
+        floors.sight_on_write_read(2, OWNER_ROOT_EPOCH + 1);
+
+        block_on(
+            harness
+                .net_rooted_with_floors(
+                    RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, &[]),
+                    &floors,
+                )
+                .publish_scope_root(&cut),
+        )
+        .expect("the cut lands");
+
+        assert!(
+            floors.fired.get(),
+            "the consult must reach the guard's read"
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).unwrap(),
+            Some(OWNER_ROOT_EPOCH),
+            "the deferred sighting left the floor the publish was authorized against",
         );
     }
 
