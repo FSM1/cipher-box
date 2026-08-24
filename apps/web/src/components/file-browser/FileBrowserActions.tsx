@@ -9,6 +9,7 @@ import { toHex } from '@cipherbox/client';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useFileDownload, type SaveRequest } from '../../hooks/useFileDownload';
 import { useVaultActions, type BatchOutcome } from '../../hooks/useVaultActions';
+import { ShareDialog } from '../sharing/ShareDialog';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
 import { useSelection } from '../../vault/selection';
@@ -30,7 +31,7 @@ const saveRequest = (row: ListingRow): SaveRequest => ({
 
 type Dialog =
   | { kind: 'create' }
-  | { kind: 'rename' | 'details' | 'preview' | 'edit'; row: ListingRow }
+  | { kind: 'rename' | 'details' | 'preview' | 'edit' | 'share'; row: ListingRow }
   | { kind: 'move' | 'delete'; rows: ListingRow[] };
 
 interface FileBrowserActionsProps {
@@ -118,6 +119,9 @@ export function FileBrowserActions({
     items.push(
       { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
       { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
+      ...(row.kind === 'folder'
+        ? [{ label: 'share...', onSelect: () => setDialog({ kind: 'share' as const, row }) }]
+        : []),
       { label: 'details', onSelect: () => setDialog({ kind: 'details', row }) },
       {
         label: 'delete',
@@ -231,6 +235,7 @@ export function FileBrowserActions({
           onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
         />
       )}
+      {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'preview' && (

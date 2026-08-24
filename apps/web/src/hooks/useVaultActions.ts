@@ -5,10 +5,9 @@
  * (blueprint/web-client.md "UI state law").
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import type { EngineFacade } from '@cipherbox/client';
-import { errorMessage } from '../lib/errorMessage';
-import { useEngine } from '../providers/EngineProvider';
+import { useCommandRunner } from './useCommandRunner';
 
 /** Which command is in flight, or `null` when the browser is idle. */
 export type VaultCommand = 'create' | 'rename' | 'relink' | 'delete';
@@ -35,37 +34,7 @@ export interface VaultActions {
 }
 
 export function useVaultActions(): VaultActions {
-  const client = useEngine();
-  const [busy, setBusy] = useState<VaultCommand | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = useCallback(
-    async (command: VaultCommand, dispatch: () => Promise<unknown>): Promise<boolean> => {
-      setBusy(command);
-      setError(null);
-      try {
-        await dispatch();
-        return true;
-      } catch (failure: unknown) {
-        setError(errorMessage(failure));
-        return false;
-      } finally {
-        setBusy(null);
-      }
-    },
-    []
-  );
-
-  const dispatchOrFail = useCallback(
-    (command: VaultCommand, dispatch: (facade: EngineFacade) => Promise<unknown>) => {
-      if (client === null) {
-        setError('the engine is not ready yet');
-        return Promise.resolve(false);
-      }
-      return run(command, () => dispatch(client.facade));
-    },
-    [client, run]
-  );
+  const { busy, error, run } = useCommandRunner<VaultCommand>();
 
   /**
    * Dispatches one command per node in listing order, attempting every node
@@ -79,7 +48,7 @@ export function useVaultActions(): VaultActions {
       dispatch: (facade: EngineFacade, node: Uint8Array) => Promise<unknown>
     ): Promise<BatchOutcome> => {
       const accepted: Uint8Array[] = [];
-      const ok = await dispatchOrFail(command, async (facade) => {
+      const ok = await run(command, async (facade) => {
         const refusals: unknown[] = [];
         for (const node of nodes) {
           try {
@@ -93,19 +62,19 @@ export function useVaultActions(): VaultActions {
       });
       return { ok, accepted };
     },
-    [dispatchOrFail]
+    [run]
   );
 
   return {
     busy,
     error,
     createFolder: useCallback(
-      (parent, name) => dispatchOrFail('create', (facade) => facade.create(parent, name, 'folder')),
-      [dispatchOrFail]
+      (parent, name) => run('create', (facade) => facade.create(parent, name, 'folder')),
+      [run]
     ),
     rename: useCallback(
-      (node, newName) => dispatchOrFail('rename', (facade) => facade.rename(node, newName)),
-      [dispatchOrFail]
+      (node, newName) => run('rename', (facade) => facade.rename(node, newName)),
+      [run]
     ),
     move: useCallback(
       (nodes, newParent) =>

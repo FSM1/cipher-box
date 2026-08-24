@@ -345,3 +345,50 @@
   color: var(--color-text-primary);
   border: var(--border-thickness) solid var(--color-border-dim);
 }
+
+/* ==========================================================================
+   Sharing
+   ========================================================================== */
+
+.sharing-code-field {
+  min-height: 96px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+.sharing-note {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.sharing-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.sharing-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.sharing-row:last-child {
+  border-bottom: none;
+}
+
+.sharing-key {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
