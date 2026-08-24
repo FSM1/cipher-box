@@ -24,6 +24,7 @@ const MAIN_WINDOW: &str = "main";
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(engine::EngineHost::default())
         .invoke_handler(tauri::generate_handler![
             oauth::collect_google_id_token,
