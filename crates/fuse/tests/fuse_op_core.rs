@@ -162,6 +162,11 @@ fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -
     mount_clocked(adapter, root_children).0
 }
 
+/// Throw away everything the engine has emitted so far.
+fn drain_events(events: &mut EventStream) {
+    while events.try_next().is_some() {}
+}
+
 /// Feed the mount everything the engine has emitted, the way the host's
 /// event-stream task does, and report what came through.
 fn absorb_pending(core: &mut Core, events: &mut EventStream) -> Vec<Event> {
@@ -755,32 +760,30 @@ fn a_stale_hit_answers_from_the_render_without_yielding() {
     );
 }
 
+/// The op stream is the desktop focus trigger: a folder the kernel touched is
+/// the open folder, and the engine's tick refreshes it. Closing a window the
+/// stream stopped feeding is the tick's own job (`focus_window_expired`) — an
+/// operation that never arrives cannot close anything.
 #[test]
-fn fuse_traffic_puts_a_folder_in_the_focus_set_until_the_horizon_closes_it() {
-    let (mut core, root, clock, _events) = mount_clocked(
+fn fuse_traffic_puts_a_folder_in_the_focus_set() {
+    let (mut core, root, _clock, _events) = mount_clocked(
         RecordingAdapter::push_capable(),
-        &[("notes.txt", NodeKind::File)],
+        &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
     );
-    let file = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    assert_eq!(core.engine_mut().focus_folder(), None);
+
+    let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
     assert_eq!(
         core.engine_mut().focus_folder(),
         Some(root),
-        "traffic on a folder is what makes it open"
+        "a lookup puts the folder it searched in view"
     );
 
-    clock.advance(SyncTimingProfile::CI.focus_horizon);
-    block_on(core.getattr(file.ino)).expect("getattr");
+    block_on(core.readdir(sub.ino)).expect("readdir");
     assert_eq!(
         core.engine_mut().focus_folder(),
-        None,
-        "a folder nobody has looked at for a horizon stops riding the tick"
-    );
-
-    block_on(core.readdir(ROOT_INO)).expect("readdir");
-    assert_eq!(
-        core.engine_mut().focus_folder(),
-        Some(root),
-        "fresh traffic reopens the window"
+        Some(sub.node),
+        "the window follows the op stream into the folder it descends into"
     );
 }
 
@@ -793,7 +796,7 @@ fn a_snapshot_the_mount_did_not_author_invalidates_the_listing_the_kernel_holds(
     let (mut core, root, _clock, mut events) = mount_clocked(adapter.clone(), &[]);
     block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
     adapter.drain();
-    while events.try_next().is_some() {}
+    drain_events(&mut events);
 
     // Straight at the facade: the mount performed no operation, so nothing on
     // its own path could have pushed anything.
@@ -826,13 +829,46 @@ fn a_snapshot_that_moved_nothing_the_kernel_holds_invalidates_nothing() {
     let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
     block_on(core.readdir(sub.ino)).expect("the kernel takes the listing");
     adapter.drain();
-    while events.try_next().is_some() {}
+    drain_events(&mut events);
 
     block_on(core.absorb_event(&Event::SnapshotUpdated)).expect("the mount absorbs");
 
     assert!(
         adapter.drain().is_empty(),
         "the kernel is only told about state that actually moved"
+    );
+}
+
+/// An invalidation does not oblige the kernel to come back — a read on an open
+/// fd is answered from its page cache — so a mount that forgot what it just
+/// invalidated would measure the next change against nothing. Uninvalidated
+/// cached data never revalidates, which is the failure this whole path exists
+/// to prevent.
+#[test]
+fn a_second_change_with_no_kernel_callback_in_between_is_still_pushed() {
+    let adapter = RecordingAdapter::push_capable();
+    let (mut core, root, _clock, mut events) = mount_clocked(adapter.clone(), &[]);
+    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    adapter.drain();
+    drain_events(&mut events);
+
+    seed_child(core.engine_mut(), root, "first.txt", NodeKind::File);
+    absorb_pending(&mut core, &mut events);
+    assert!(adapter.drain().contains(&Invalidation::Entry {
+        parent: ROOT_INO,
+        name: "first.txt".to_owned(),
+    }));
+
+    // No readdir in between: nothing re-seeds the mount's baseline.
+    seed_child(core.engine_mut(), root, "second.txt", NodeKind::File);
+    absorb_pending(&mut core, &mut events);
+
+    assert!(
+        adapter.drain().contains(&Invalidation::Entry {
+            parent: ROOT_INO,
+            name: "second.txt".to_owned(),
+        }),
+        "the repaint measures against the state it last computed, not against nothing"
     );
 }
 
@@ -846,7 +882,7 @@ fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
     let original = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
     block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
     adapter.drain();
-    while events.try_next().is_some() {}
+    drain_events(&mut events);
 
     block_on(core.engine_mut().command(Command::Delete {
         node: original.node,
@@ -1729,7 +1765,6 @@ mod published {
     /// tell it the head moved.
     fn publish_from_another_device(mount: &mut Mount, plaintext: &[u8]) {
         let node = mount.node;
-        let target = WriteTarget::Version { node };
         let device = mount.world.device(b"alice-second-device");
         serve_http(&device, &mount.blocks, 1_000);
         let (mut engine, _events) = engine_on(&device);
@@ -1738,8 +1773,11 @@ mod published {
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle = block_on(engine.begin_write(target, plaintext.len() as u64))
-            .expect("the second device's write opens");
+        let handle = block_on(engine.begin_write(
+            WriteTarget::Version { node },
+            plaintext.len() as u64,
+        ))
+        .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
         }
@@ -2431,7 +2469,7 @@ mod published {
         let ino = mount.ino;
         block_on(mount.core.getattr(ino)).expect("the kernel takes the attributes");
         mount.adapter.drain();
-        while mount.events.try_next().is_some() {}
+        drain_events(&mut mount.events);
 
         // Straight at the engine the mount projects — the shell writing while
         // the mount is up, which the mount itself performs no operation for.
@@ -2463,7 +2501,7 @@ mod published {
         let ino = mount.ino;
         block_on(mount.core.getattr(ino)).expect("the kernel takes the attributes");
         mount.adapter.drain();
-        while mount.events.try_next().is_some() {}
+        drain_events(&mut mount.events);
 
         assert_eq!(
             mount.core.cache_ttls().entry,

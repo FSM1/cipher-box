@@ -103,8 +103,8 @@ use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, on_access_refresh_due,
-    resolve_mode, run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, focus_window_expired,
+    on_access_refresh_due, resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2151,11 +2151,16 @@ pub struct Engine<T: SeamTypes> {
     /// staleness threshold renders state already held instead of re-probing the
     /// record plane (blueprint/engine.md: refresh on access past the threshold).
     focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
-    /// When a host operation last put the focus window's folder in view, for
-    /// hosts that derive focus from an operation stream rather than navigation
-    /// ([`note_focus_access`](Self::note_focus_access)). `None` when no window
-    /// is open.
-    focus_touched: Cell<Option<UnixMillis>>,
+    /// When a host operation last put the focus window's folder in view
+    /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
+    /// loop, which is what closes a window the operation stream stopped
+    /// feeding. `None` when no window is open.
+    focus_touched: Rc<Cell<Option<UnixMillis>>>,
+    /// The folder the FUSE-op TTL check last fired a hint for, and when. One
+    /// slot: the check only ever asks about the folder in view, and a hint is
+    /// not the refresh stamp a completed pass earns
+    /// ([`focus_refreshed`](Self::focus_refreshed)).
+    focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2266,7 +2271,8 @@ impl<T: SeamTypes> Engine<T> {
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
-                focus_touched: Cell::new(None),
+                focus_touched: Rc::new(Cell::new(None)),
+                focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -2932,6 +2938,7 @@ where {
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let focus = self.focus.clone();
+        let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -3046,6 +3053,14 @@ where {
                         }
                     }
                     let read_seed = cached_seed(&scope_read_seeds, &root_id);
+                    // A host that derives focus from an operation stream cannot
+                    // close its own window: a stream that stops arriving produces
+                    // no call to close it with. The tick has the timer, so the
+                    // tick closes it.
+                    if focus_window_expired(scheduler.now(), focus_touched.get(), &profile) {
+                        focus.borrow_mut().open_folder = None;
+                        focus_touched.set(None);
+                    }
                     // The focus window's folders below the root — the read leg for a
                     // subtree this device did not author. It runs before the drain,
                     // so the queue rebases onto the deepest state this pass
@@ -5170,40 +5185,37 @@ where {
 
     /// Note that a host filesystem operation put `folder` in view, and report
     /// whether its state is past the staleness threshold — the desktop
-    /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness").
-    ///
-    /// Desktop derives the focus window from the operation stream where web
-    /// derives it from navigation ([`Command::SetFocus`]): the folder in view
-    /// becomes the open folder, and an operation stream that has gone quiet
-    /// past the profile's focus horizon closes the window rather than leaving
-    /// the poll tick on a folder nobody is looking at. `None` is an operation
-    /// with no folder in view — it only ages the window.
+    /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
+    /// operation with no folder in view.
     ///
     /// Nothing resolves here: a kernel callback never waits on the record plane
     /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
-    /// refresh hint, and the next tick is what acts on it, over the window this
-    /// call just set. The hint stamps the folder as attempted, so a burst of
-    /// callbacks over one folder costs one hint rather than one per callback —
-    /// the damper [`refresh_focus_on_access`](Self::refresh_focus_on_access)
-    /// applies to navigation.
+    /// refresh hint, and the tick is what acts on it, over the window this call
+    /// set. The hint is recorded so a burst of callbacks over one folder costs
+    /// one hint rather than one per callback.
     pub fn note_focus_access(&self, folder: Option<NodeId>) -> bool {
-        let now = self.seams.scheduler.now();
         let Some(folder) = folder else {
-            if self.focus_gone_quiet(now) {
-                self.focus.borrow_mut().open_folder = None;
-                self.focus_touched.set(None);
-            }
             return false;
         };
+        let now = self.seams.scheduler.now();
         self.focus.borrow_mut().open_folder = Some(folder);
         self.focus_touched.set(Some(now));
-        let stale = self
+        // A pass that resolved the folder and a hint already filed for it both
+        // answer this access; the later of the two is what it is measured from.
+        let hinted = self
+            .focus_hinted
+            .get()
+            .filter(|(hinted, _)| *hinted == folder)
+            .map(|(_, at)| at);
+        let last = self
             .focus_refreshed
             .borrow()
             .get(&folder)
-            .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile));
+            .copied()
+            .max(hinted);
+        let stale = last.is_none_or(|last| on_access_refresh_due(now, last, &self.profile));
         if stale {
-            self.focus_refreshed.borrow_mut().insert(folder, now);
+            self.focus_hinted.set(Some((folder, now)));
         }
         stale
     }
@@ -5211,14 +5223,6 @@ where {
     /// The folder the focus window currently holds open.
     pub fn focus_folder(&self) -> Option<NodeId> {
         self.focus.borrow().open_folder
-    }
-
-    /// Whether the operation stream driving the focus window has been quiet
-    /// longer than the profile's focus horizon.
-    fn focus_gone_quiet(&self, now: UnixMillis) -> bool {
-        self.focus_touched.get().is_some_and(|last| {
-            now.0.saturating_sub(last.0) >= crate::sync::duration_millis(self.profile.focus_horizon)
-        })
     }
 
     /// The sync timing profile this engine runs under.
@@ -8697,40 +8701,30 @@ mod focus_access_tests {
     }
 
     #[test]
-    fn an_operation_with_no_folder_in_view_keeps_the_window_open_inside_the_horizon() {
+    fn an_operation_with_no_folder_in_view_neither_hints_nor_moves_the_window() {
         let (engine, clock) = engine();
         engine.note_focus_access(Some(FOLDER));
 
-        clock.advance(SyncTimingProfile::CI.focus_horizon / 2);
-        assert!(
-            !engine.note_focus_access(None),
-            "a folderless operation is never itself a stale hit"
-        );
-        assert_eq!(engine.focus_folder(), Some(FOLDER));
-    }
-
-    #[test]
-    fn an_operation_stream_quiet_past_the_focus_horizon_closes_the_window() {
-        let (engine, clock) = engine();
-        engine.note_focus_access(Some(FOLDER));
-
-        clock.advance(SyncTimingProfile::CI.focus_horizon);
-        engine.note_focus_access(None);
+        clock.advance(SyncTimingProfile::CI.focus_horizon * 2);
+        assert!(!engine.note_focus_access(None));
         assert_eq!(
             engine.focus_folder(),
-            None,
-            "a folder nobody has looked at for a horizon stops riding the tick"
+            Some(FOLDER),
+            "closing a quiet window is the tick's job, not an operation's"
         );
     }
 
+    /// The hint damper is the FUSE-op check's own; it must not stand in for the
+    /// stamp a completed refresh pass earns, which the on-access navigation leg
+    /// reads to decide whether to resolve.
     #[test]
-    fn traffic_reopens_a_window_the_horizon_closed() {
-        let (engine, clock) = engine();
-        engine.note_focus_access(Some(FOLDER));
-        clock.advance(SyncTimingProfile::CI.focus_horizon);
-        engine.note_focus_access(None);
-
+    fn a_hint_never_stamps_a_refresh_no_pass_ran() {
+        let (engine, _clock) = engine();
         assert!(engine.note_focus_access(Some(FOLDER)));
-        assert_eq!(engine.focus_folder(), Some(FOLDER));
+
+        assert!(
+            engine.focus_refreshed.borrow().is_empty(),
+            "a hint is a request for a pass, never the record of one"
+        );
     }
 }

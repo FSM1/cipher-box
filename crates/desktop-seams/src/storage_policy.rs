@@ -6,6 +6,7 @@
 //! engine data dir sits on. Both hand one figure to
 //! [`StoragePolicy::measured`], which owns the split.
 
+use std::io::ErrorKind;
 use std::path::Path;
 
 use cipherbox_engine::{StoragePlatform, StoragePolicy};
@@ -14,11 +15,7 @@ use cipherbox_engine::{StoragePlatform, StoragePolicy};
 ///
 /// A volume this host cannot measure yields [`StoragePolicy::UNMEASURED`] —
 /// never a fabricated figure, so a refused write says "unknown" rather than
-/// "full". The split never floors up.
-///
-/// `data_dir` need not exist yet: a directory is created inside its nearest
-/// existing ancestor, so that ancestor's volume is the one the split applies
-/// to.
+/// "full".
 pub fn measured_storage_policy(data_dir: &Path) -> StoragePolicy {
     match volume_free_bytes(data_dir) {
         Some(free_bytes) => StoragePolicy::measured(StoragePlatform::DESKTOP, free_bytes),
@@ -26,10 +23,23 @@ pub fn measured_storage_policy(data_dir: &Path) -> StoragePolicy {
     }
 }
 
-/// Free bytes on the volume holding the nearest ancestor of `path` that exists.
+/// Free bytes on the volume holding `path`, climbing past a path that does not
+/// exist yet — a directory is created inside its nearest existing ancestor, so
+/// that ancestor names the volume the split applies to.
+///
+/// Only a not-found climbs. A path that exists but will not measure is
+/// unmeasured, never its parent's volume: reporting the root filesystem's free
+/// space for an unreadable mount is exactly the fabricated figure the policy
+/// refuses to invent.
 fn volume_free_bytes(path: &Path) -> Option<u64> {
-    path.ancestors()
-        .find_map(|ancestor| fs4::available_space(ancestor).ok())
+    for ancestor in path.ancestors() {
+        match fs4::available_space(ancestor) {
+            Ok(free_bytes) => return Some(free_bytes),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -78,6 +88,25 @@ mod tests {
             policy.headroom,
             Headroom::Unmeasured,
             "an unmeasurable volume must stay distinguishable from a full one"
+        );
+    }
+
+    /// The climb is for a directory that does not exist yet. A path that does
+    /// exist and still will not measure must not be answered with some other
+    /// volume's free space — that is the fabricated figure the policy refuses.
+    #[test]
+    fn a_path_that_exists_but_will_not_measure_never_reports_another_volume() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let file = dir.path().join("not-a-directory");
+        std::fs::write(&file, b"x").expect("the file writes");
+        // A component under a regular file exists on no volume, and statvfs
+        // answers ENOTDIR rather than ENOENT.
+        let under_a_file = file.join("child");
+
+        assert_eq!(
+            volume_free_bytes(&under_a_file),
+            None,
+            "a refusal that is not a missing directory stops the climb"
         );
     }
 }

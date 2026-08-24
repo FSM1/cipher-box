@@ -92,6 +92,18 @@ struct Served {
     content_version: Option<u64>,
 }
 
+impl Served {
+    /// `meta` as the kernel sees it, at the size the pending-op overlay
+    /// projects.
+    fn of(meta: &NodeAttrs, size: Option<u64>) -> Self {
+        Self {
+            size,
+            mtime_millis: meta.mtime,
+            content_version: meta.content_version,
+        }
+    }
+}
+
 /// How a block-fetching path uses the chunk cache: a path that will come back
 /// to these bytes retains and promotes them; a one-shot pass reads through,
 /// leaving neither the budget nor the recency order spent on blocks it will
@@ -184,54 +196,56 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// A background reconcile lands a new snapshot without any operation of the
     /// kernel's having asked for one, so nothing on the callback path would ever
     /// tell it that the entries and pages it holds stopped being the truth — the
-    /// event stream is what does (blueprint/desktop.md "Freshness"). The host
-    /// drives this from the task holding the stream; no kernel callback reaches
-    /// it.
+    /// event stream is what does (blueprint/desktop.md "Freshness").
     pub async fn absorb_event(&mut self, event: &Event) -> Result<(), VfsError> {
-        if *event != Event::SnapshotUpdated {
+        if *event != Event::SnapshotUpdated || (self.served.is_empty() && self.listed.is_empty()) {
             return Ok(());
         }
         self.repaint().await
     }
 
     /// Invalidate everything the new render moved out from under what this
-    /// mount last served, and forget it: the kernel holds it no longer, so the
-    /// next callback for it re-reads through the adapter.
+    /// mount last served, and take the new state as the baseline.
+    ///
+    /// Replaced rather than dropped: an invalidation does not oblige the kernel
+    /// to come back — a `read` on an open fd is answered from its page cache —
+    /// so a mount that forgot the node it just invalidated would measure the
+    /// *next* change against nothing and push nothing for it.
     async fn repaint(&mut self) -> Result<(), VfsError> {
         let view = self.render().await?;
 
         let mut moved = Vec::new();
         for (node, served) in &self.served {
             let Some(meta) = view.attrs(*node) else {
-                moved.push((*node, false));
                 continue;
             };
-            let fresh = self.serving(&meta, self.pending_len(*node).or(meta.size));
+            let fresh = Served::of(&meta, self.pending_len(*node).or(meta.size));
             if fresh != *served {
-                moved.push((*node, fresh.content_version != served.content_version));
+                moved.push((*node, fresh));
             }
         }
-        for (node, content_moved) in moved {
-            self.served.remove(&node);
+        for (node, fresh) in moved {
+            let content_moved = self
+                .served
+                .insert(node, fresh.clone())
+                .is_some_and(|last| last.content_version != fresh.content_version);
             let ino = self.inodes.ino_for(node);
-            // Data before attributes, as a commit does: a kernel that learns
-            // the new size first serves the pages it still holds as the new
-            // version.
             if content_moved {
-                self.adapter.invalidate(Invalidation::Data { ino });
+                self.content_changed(ino);
+            } else {
+                self.adapter.invalidate(Invalidation::Attributes { ino });
             }
-            self.adapter.invalidate(Invalidation::Attributes { ino });
         }
 
         let mut relisted = Vec::new();
         for (dir, listed) in &self.listed {
-            let fresh = emittable_children(&view, *dir);
+            let fresh = listing_of(&emittable_children(&view, *dir));
             if fresh != *listed {
-                relisted.push((*dir, rebound_names(listed, &fresh)));
+                relisted.push((*dir, rebound_names(listed, &fresh), fresh));
             }
         }
-        for (dir, names) in relisted {
-            self.listed.remove(&dir);
+        for (dir, names, fresh) in relisted {
+            self.listed.insert(dir, fresh);
             let parent = self.inodes.ino_for(dir);
             for name in names {
                 self.entry_changed(parent, &name);
@@ -241,27 +255,16 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// The **FUSE-op TTL check**: put the folder this operation has in view into
-    /// the engine's focus window, and record the refresh hint a folder past the
-    /// staleness threshold fires (blueprint/desktop.md "Freshness"). Synchronous
-    /// and network-free — the hint rides the next tick, and the operation
-    /// answers from the render it already has (the never-block law).
+    /// the engine's focus window, and record the hint a folder past the
+    /// staleness threshold fires (blueprint/desktop.md "Freshness"). The
+    /// thresholds and the window are the engine's; this only reports which
+    /// folder the operation was about, and answers from the render it already
+    /// has (the never-block law).
     fn ttl_check(&mut self, folder: Option<NodeId>) {
-        self.refresh_hint = self
-            .engine
-            .note_focus_access(folder)
-            .then_some(folder)
-            .flatten();
+        let stale = self.engine.note_focus_access(folder);
+        self.refresh_hint = folder.filter(|_| stale);
     }
 
-    /// What a node's attributes look like to the kernel, at the size the
-    /// pending-op overlay projects.
-    fn serving(&self, meta: &NodeAttrs, size: Option<u64>) -> Served {
-        Served {
-            size,
-            mtime_millis: meta.mtime,
-            content_version: meta.content_version,
-        }
-    }
 
     /// Resolve a name under a directory.
     pub async fn lookup(&mut self, parent: u64, name: &str) -> Result<Attributes, VfsError> {
@@ -294,21 +297,16 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let node = self.directory(&view, ino)?;
         self.ttl_check(Some(node));
-        let children = view.children(node);
-        let mut entries = Vec::with_capacity(children.len());
-        let mut listed = BTreeMap::new();
-        for child in children {
-            if is_platform_junk(&child.name) || !is_emittable(&child.name) {
-                continue;
-            }
-            listed.insert(child.name.clone(), child.id);
-            entries.push(DirEntry {
+        let children = emittable_children(&view, node);
+        self.listed.insert(node, listing_of(&children));
+        let entries = children
+            .into_iter()
+            .map(|child| DirEntry {
                 ino: self.inodes.ino_for(child.id),
                 name: child.name,
                 kind: child.kind,
-            });
-        }
-        self.listed.insert(node, listed);
+            })
+            .collect();
         Ok(entries)
     }
 
@@ -694,10 +692,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         let ino = self.inodes.ino_for(open.node);
         // Nothing re-binds this inode, so the pages this commit replaced would
-        // stay live. Data before attributes: a kernel that learns the new size
-        // first serves those pages as the new version.
-        self.adapter.invalidate(Invalidation::Data { ino });
-        self.adapter.invalidate(Invalidation::Attributes { ino });
+        // stay live.
+        self.content_changed(ino);
         Ok(())
     }
 
@@ -888,6 +884,14 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
+    /// Report a node whose bytes and attributes both moved. Data first: a
+    /// kernel that learned the new size first would serve the pages it still
+    /// holds as the new version.
+    fn content_changed(&self, ino: u64) {
+        self.adapter.invalidate(Invalidation::Data { ino });
+        self.adapter.invalidate(Invalidation::Attributes { ino });
+    }
+
     fn entry_changed(&self, parent: u64, name: &str) {
         self.adapter.invalidate(Invalidation::Entry {
             parent,
@@ -911,7 +915,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
 
     fn attributes(&mut self, meta: &NodeAttrs) -> Attributes {
         let size = self.pending_len(meta.id).or(meta.size);
-        self.served.insert(meta.id, self.serving(meta, size));
+        self.served.insert(meta.id, Served::of(meta, size));
         Attributes {
             ino: self.inodes.ino_for(meta.id),
             node: meta.id,
@@ -994,13 +998,22 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 }
 
-/// The entries of `dir` a listing would emit, by name. A directory the render
-/// no longer holds emits nothing, which is itself the change.
-fn emittable_children(view: &EngineView, dir: NodeId) -> BTreeMap<String, NodeId> {
+/// The children of `dir` a listing emits — the one place that rule is written,
+/// so what `readdir` hands the kernel and what a repaint compares against
+/// cannot drift apart. A directory the render no longer holds emits nothing,
+/// which is itself the change.
+fn emittable_children(view: &EngineView, dir: NodeId) -> Vec<NodeAttrs> {
     view.children(dir)
         .into_iter()
         .filter(|child| !is_platform_junk(&child.name) && is_emittable(&child.name))
-        .map(|child| (child.name, child.id))
+        .collect()
+}
+
+/// A listing keyed by the name the kernel caches it under.
+fn listing_of(children: &[NodeAttrs]) -> BTreeMap<String, NodeId> {
+    children
+        .iter()
+        .map(|child| (child.name.clone(), child.id))
         .collect()
 }
 
