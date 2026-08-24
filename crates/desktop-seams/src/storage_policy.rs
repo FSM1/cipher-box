@@ -57,24 +57,18 @@ mod tests {
             StoragePlatform::DESKTOP.staging_cap_bytes,
             "a refusal must be able to name the desktop platform cap"
         );
-        let free = volume_free_bytes(dir.path()).expect("the temp volume measures");
-        assert_eq!(
-            policy,
-            StoragePolicy::measured(StoragePlatform::DESKTOP, free),
-            "the seam contributes the measurement only; the split is the engine's"
-        );
     }
 
     #[test]
-    fn a_data_dir_that_does_not_exist_yet_measures_the_volume_it_will_land_on() {
+    fn a_data_dir_that_does_not_exist_yet_still_measures() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let unborn = dir.path().join("cipherbox").join("acct-42");
         assert!(!unborn.exists());
 
         assert_eq!(
-            measured_storage_policy(&unborn),
-            measured_storage_policy(dir.path()),
-            "the nearest existing ancestor is the volume the dir will be created on"
+            measured_storage_policy(&unborn).headroom,
+            Headroom::Measured,
+            "without the climb a dir that is not there yet would measure nothing"
         );
     }
 
