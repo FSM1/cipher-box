@@ -117,6 +117,17 @@ describe('grant commands', () => {
     expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
 
+  it('keeps the row a refused revoke left standing', async () => {
+    const engine = sharingEngine({ revoke: new EngineRequestError('the publish was refused') });
+    const { result } = mount(engine.client);
+    await result.current.grant(DOCS, contact, 'read');
+
+    await expect(result.current.revoke(DOCS, contact)).resolves.toBe(false);
+
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([{ contact, permission: 'read' }]);
+    await waitFor(() => expect(result.current.error).toBe('the publish was refused'));
+  });
+
   it('keeps the row a downgrade landed on, at read', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);

@@ -1,7 +1,6 @@
 /**
- * The dispatch every engine-command hook shares: which command is in flight,
- * the last refusal in the engine's own words, and one call that reports whether
- * the engine took it.
+ * The one dispatch every engine-command hook shares, so a refusal reaches the
+ * UI in the engine's own words rather than one the UI invented.
  */
 
 import { useCallback, useState } from 'react';
