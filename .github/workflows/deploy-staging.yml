@@ -1,7 +1,6 @@
-# Partially edited for v2 (blueprint/deploy.md): the tee-worker image build,
-# redis, and SendGrid plumbing are gone with the v1 layout. The full v2 edit
-# (gateway forward_auth wiring, volume-wipe cutover support) lands with the
-# staging cutover; until then WIP v2 deploys go via workflow_dispatch.
+# Edited for v2 (blueprint/deploy.md). SendGrid stays, reached through the API's
+# MAIL_PROVIDER seam. The gateway forward_auth wiring is the one v2 edit still
+# outstanding.
 name: Deploy Staging
 
 on:
@@ -13,17 +12,57 @@ on:
       staging_tag:
         required: true
         type: string
+  # Before the first v2 release exists, WIP v2 deploys run from a dispatch
+  # against a main SHA with no tag (blueprint/deploy.md).
+  workflow_dispatch:
+    inputs:
+      wipe_volumes:
+        description: 'DESTRUCTIVE: drop the postgres and ipfs volumes before deploying (the cutover redeploy)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
-  # Resolve tag: workflow_call passes it as input, push trigger uses ref_name
-  DEPLOY_TAG: ${{ inputs.staging_tag || github.ref_name }}
+  # A dispatch has no tag, so it ships the dispatched commit. Every value this
+  # can take is also a valid checkout ref.
+  DEPLOY_TAG: ${{ inputs.staging_tag || (github.event_name == 'workflow_dispatch' && github.sha) || github.ref_name }}
 
 permissions: {}
 
 jobs:
+  # A dispatch may select any ref, so the `main` SHA the trigger is scoped to
+  # (blueprint/deploy.md) is asserted rather than assumed — this is also the
+  # trigger that carries the destructive wipe.
+  assert-main-revision:
+    name: Assert the dispatched revision is on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Assert the dispatched commit is an ancestor of main
+        if: ${{ !inputs.staging_tag && github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCHED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Base-to-head: an ancestor of main compares as `behind`, main's own
+          # HEAD as `identical`; anything off main is `ahead` or `diverged`.
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${DISPATCHED_SHA}" --jq '.status')
+          case "${status}" in
+            identical | behind)
+              echo "${DISPATCHED_SHA} is on main (${status})"
+              ;;
+            *)
+              echo "::error::Refusing to deploy ${DISPATCHED_SHA}: not a main revision (compare status: ${status}). Dispatch this workflow from main."
+              exit 1
+              ;;
+          esac
+
   build-api:
     name: Build & Push API Image
+    needs: [assert-main-revision]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
+          ref: ${{ env.DEPLOY_TAG }}
 
       - name: Set lowercase image name
         run: echo "API_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-api" >> "$GITHUB_ENV"
@@ -60,6 +99,7 @@ jobs:
 
   build-web:
     name: Build Web App
+    needs: [assert-main-revision]
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -67,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
+          ref: ${{ env.DEPLOY_TAG }}
 
       # apps/web compiles crates/wasm into the engine artifact it bundles.
       - uses: ./.github/actions/wasm-bindgen-cli
@@ -110,257 +150,6 @@ jobs:
           path: apps/web/dist/
           retention-days: 1
 
-  create-desktop-release:
-    name: Create Desktop Release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ inputs.staging_tag || github.ref_name }}"
-          BODY="Staging build for ${TAG}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click \"More info\" > \"Run anyway\"), and Linux (AppImage/deb)."
-          # Create the release if it doesn't exist yet; ignore error if it does.
-          # Not marked as prerelease — staging is the production environment and
-          # /releases/latest/ must resolve to these builds for the Tauri auto-updater.
-          gh release create "$TAG" \
-            --repo "${{ github.repository }}" \
-            --title "CipherBox Desktop ${TAG}" \
-            --notes "$BODY" \
-            2>/dev/null || true
-
-  build-desktop:
-    name: Build Desktop App (macOS)
-    needs: [create-desktop-release]
-    runs-on: macos-latest
-    environment: staging
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
-
-      - name: Install FUSE-T
-        run: |
-          brew install --cask fuse-t
-          sudo mkdir -p /usr/local/lib/pkgconfig
-          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
-
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.API_URL }}
-          VITE_ENVIRONMENT: staging
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
-          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
-          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          tagName: ${{ inputs.staging_tag || github.ref_name }}
-          releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
-          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch) and Windows (unsigned - click "More info" > "Run anyway").'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
-
-  build-desktop-windows:
-    name: Build Desktop App (Windows)
-    needs: [create-desktop-release]
-    runs-on: windows-latest
-    environment: staging
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
-
-      - name: Install WinFsp
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          # Use Join-Path to produce proper Windows backslash paths —
-          # msiexec.exe treats '/' as a flag prefix, so forward slashes in
-          # the file path cause "package could not be opened" errors.
-          $resourceDir = Join-Path "${{ github.workspace }}" "apps\desktop\src-tauri\resources"
-          $out = Join-Path $resourceDir "winfsp-2.1.25156.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          New-Item -ItemType Directory -Force -Path $resourceDir
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
-          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
-          # winfsp-sys build.rs reads HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir
-          # to find headers/libs. The MSI doesn't reliably write this key on CI runners.
-          $installDir = "C:\Program Files (x86)\WinFsp"
-          if (!(Test-Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp")) {
-            New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Force | Out-Null
-          }
-          New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -Value $installDir -PropertyType String -Force | Out-Null
-          # Verify registry key was written correctly
-          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction Stop
-          if (-not $regVal.InstallDir -or $regVal.InstallDir -ne $installDir) {
-            throw "WinFsp InstallDir registry mismatch: expected '$installDir', got '$($regVal.InstallDir)'"
-          }
-          Write-Host "WinFsp InstallDir registry: $($regVal.InstallDir)"
-          if (!(Test-Path "$installDir\lib")) { throw "WinFsp lib directory not found at $installDir\lib" }
-          if (!(Test-Path "$installDir\inc")) { throw "WinFsp inc directory not found at $installDir\inc" }
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: windows-cargo-
-
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.API_URL }}
-          VITE_ENVIRONMENT: staging
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
-          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
-          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          tagName: ${{ inputs.staging_tag || github.ref_name }}
-          releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
-          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
-          args: -- --no-default-features --features winfsp
-
-  build-desktop-linux:
-    name: Build Desktop App (Linux)
-    needs: [create-desktop-release]
-    runs-on: ubuntu-22.04
-    environment: staging
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libxdo-dev \
-            libfuse3-dev \
-            pkg-config \
-            build-essential
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: linux-cargo-
-
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
-          VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.API_URL }}
-          VITE_ENVIRONMENT: staging
-          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-          VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
-          GRAFANA_FARO_API_KEY: ${{ secrets.GRAFANA_FARO_API_KEY }}
-          GRAFANA_STACK_ID: ${{ vars.GRAFANA_STACK_ID }}
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          tagName: ${{ inputs.staging_tag || github.ref_name }}
-          releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
-          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click "More info" > "Run anyway"), and Linux (AppImage/deb).'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
-          args: -- --no-default-features --features fuse
-
   deploy-vps:
     name: Deploy to Staging VPS
     needs: [build-api, build-web]
@@ -372,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
+          ref: ${{ env.DEPLOY_TAG }}
 
       - name: Download web dist artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -498,6 +287,37 @@ jobs:
           strip_components: 1
           rm: true
 
+      # The cutover redeploy (blueprint/deploy.md). `wipe_volumes` is declared
+      # under `workflow_dispatch` alone, so no other trigger can set it — a
+      # `workflow_call` caller may only pass the inputs that trigger declares,
+      # and `github.event_name` is the *caller's* event on that path, which
+      # makes it useless as a second gate here. Caddy's volumes are left alone:
+      # they hold the issued TLS certificates.
+      - name: Wipe the staging data volumes
+        if: inputs.wipe_volumes
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
+          script: |
+            set -euo pipefail
+            cd /opt/cipherbox/docker
+            docker compose -f docker-compose.staging.yml down
+            # `down --volumes` would take Caddy's with it, so select the two
+            # declared names out of this project by compose's own labels.
+            for declared in postgres_staging ipfs_staging; do
+              vols=$(docker volume ls -q \
+                --filter "label=com.docker.compose.project=cipherbox-staging" \
+                --filter "label=com.docker.compose.volume=${declared}")
+              if [ -n "${vols}" ]; then
+                echo "${vols}" | xargs docker volume rm
+              else
+                echo "no ${declared} volume to remove"
+              fi
+            done
+
       - name: Deploy services
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
@@ -545,7 +365,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
+          ref: ${{ env.DEPLOY_TAG }}
 
       - name: Wait for Grafana Cloud readiness
         env:
