@@ -49,6 +49,9 @@ keyring = { version = "3", features = [
 ] }
 # Tokio backs the Scheduler seam (timers, background tasks, wall clock).
 tokio = { version = "1", features = ["rt", "time"] }
+# Free bytes on the data-dir volume, for the measured storage policy. Pure
+# Rust over rustix/windows-sys — no libc, no C toolchain.
+fs4 = { version = "1", default-features = false }
 
 [dev-dependencies]
 # Self dev-dependency enables `test-support` for this crate's own tests

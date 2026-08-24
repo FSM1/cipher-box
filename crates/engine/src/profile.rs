@@ -33,6 +33,15 @@ pub struct SyncTimingProfile {
     /// long while other resolves succeed raises the stronger warning
     /// (#33 D7).
     pub escalation_window: Duration,
+    /// Focus horizon: how long a folder keeps counting as "open" after the last
+    /// host operation on it. Desktop derives its focus window from the FUSE op
+    /// stream where web derives it from navigation, so an idle Finder window has
+    /// to stop riding the poll tick on its own (blueprint/desktop.md
+    /// "Freshness"). Longer than [`stale_after`], or an on-access refresh could
+    /// never come due inside the window.
+    ///
+    /// [`stale_after`]: SyncTimingProfile::stale_after
+    pub focus_horizon: Duration,
     /// Scope-pointer consult interval — polled, not fallback (#38 D4);
     /// bounds the read-only-survivor residual.
     pub pointer_consult_interval: Duration,
@@ -60,19 +69,20 @@ pub struct SyncTimingProfile {
 impl SyncTimingProfile {
     /// Shipped policy: TTL 1 minute, 30 s poll (#33 D3).
     ///
-    /// `escalation_window`, `pointer_consult_interval`, `sweep_cadence` and
-    /// `migration_window` are placeholders pending the measurement process
-    /// fixed in blueprint/testing.md ("The profile is where measured constants
-    /// land"); each lands as a profile-constant change with its measurement
-    /// linked. `migration_window`'s figure awaits blueprint/testing.md's
-    /// cross-client latency measurement job — until then it is deliberately
-    /// generous, because a window cut short retires a name lagging readers
-    /// still chase.
+    /// `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
+    /// `sweep_cadence` and `migration_window` are placeholders pending the
+    /// measurement process fixed in blueprint/testing.md ("The profile is where
+    /// measured constants land"); each lands as a profile-constant change with
+    /// its measurement linked. `migration_window`'s figure awaits
+    /// blueprint/testing.md's cross-client latency measurement job — until then
+    /// it is deliberately generous, because a window cut short retires a name
+    /// lagging readers still chase.
     pub const PRODUCTION: Self = Self {
         record_ttl: Duration::from_secs(60),
         poll_cadence: Duration::from_secs(30),
         stale_after: Duration::from_secs(90),
         escalation_window: Duration::from_secs(600),
+        focus_horizon: Duration::from_secs(120),
         pointer_consult_interval: Duration::from_secs(30),
         sweep_cadence: Duration::from_secs(900),
         migration_window: Duration::from_secs(7 * 24 * 60 * 60),
@@ -86,6 +96,7 @@ impl SyncTimingProfile {
         poll_cadence: Duration::from_secs(1),
         stale_after: Duration::from_secs(3),
         escalation_window: Duration::from_secs(5),
+        focus_horizon: Duration::from_secs(4),
         pointer_consult_interval: Duration::from_secs(1),
         sweep_cadence: Duration::from_secs(2),
         migration_window: Duration::from_secs(5),
@@ -152,6 +163,20 @@ mod tests {
     }
 
     #[test]
+    fn a_focus_window_outlives_a_poll_cycle_and_the_staleness_threshold() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.focus_horizon > profile.poll_cadence,
+                "a window that expired before its own tick could never be polled"
+            );
+            assert!(
+                profile.focus_horizon > profile.stale_after,
+                "a window that closed first would make an on-access refresh unreachable"
+            );
+        }
+    }
+
+    #[test]
     fn every_duration_is_nonzero_in_both_profiles() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             assert!(
@@ -161,6 +186,7 @@ mod tests {
             assert!(!profile.poll_cadence.is_zero());
             assert!(!profile.stale_after.is_zero());
             assert!(!profile.escalation_window.is_zero());
+            assert!(!profile.focus_horizon.is_zero());
             assert!(!profile.pointer_consult_interval.is_zero());
             assert!(!profile.sweep_cadence.is_zero());
             assert!(!profile.migration_window.is_zero());

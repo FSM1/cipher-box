@@ -103,8 +103,8 @@ use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, resolve_mode,
-    run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, focus_window_expired,
+    on_access_refresh_due, resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2151,6 +2151,16 @@ pub struct Engine<T: SeamTypes> {
     /// staleness threshold renders state already held instead of re-probing the
     /// record plane (blueprint/engine.md: refresh on access past the threshold).
     focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// When a host operation last put the focus window's folder in view
+    /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
+    /// loop, which is what closes a window the operation stream stopped
+    /// feeding. `None` when no window is open.
+    focus_touched: Rc<Cell<Option<UnixMillis>>>,
+    /// The folder the FUSE-op TTL check last fired a hint for, and when. One
+    /// slot: the check only ever asks about the folder in view, and a hint is
+    /// not the refresh stamp a completed pass earns
+    /// ([`focus_refreshed`](Self::focus_refreshed)).
+    focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2261,6 +2271,8 @@ impl<T: SeamTypes> Engine<T> {
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
+                focus_touched: Rc::new(Cell::new(None)),
+                focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -2926,6 +2938,7 @@ where {
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let focus = self.focus.clone();
+        let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -3040,6 +3053,14 @@ where {
                         }
                     }
                     let read_seed = cached_seed(&scope_read_seeds, &root_id);
+                    // A host that derives focus from an operation stream cannot
+                    // close its own window: a stream that stops arriving produces
+                    // no call to close it with. The tick has the timer, so the
+                    // tick closes it.
+                    if focus_window_expired(scheduler.now(), focus_touched.get(), &profile) {
+                        focus.borrow_mut().open_folder = None;
+                        focus_touched.set(None);
+                    }
                     // The focus window's folders below the root — the read leg for a
                     // subtree this device did not author. It runs before the drain,
                     // so the queue rebases onto the deepest state this pass
@@ -5160,6 +5181,48 @@ where {
             owner_enc_secret,
             ephemeral_scalar,
         })
+    }
+
+    /// Note that a host filesystem operation put `folder` in view, and report
+    /// whether its state is past the staleness threshold — the desktop
+    /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
+    /// operation with no folder in view.
+    ///
+    /// Nothing resolves here: a kernel callback never waits on the record plane
+    /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
+    /// refresh hint, and the tick is what acts on it, over the window this call
+    /// set. The hint is recorded so a burst of callbacks over one folder costs
+    /// one hint rather than one per callback.
+    pub fn note_focus_access(&self, folder: Option<NodeId>) -> bool {
+        let Some(folder) = folder else {
+            return false;
+        };
+        let now = self.seams.scheduler.now();
+        self.focus.borrow_mut().open_folder = Some(folder);
+        self.focus_touched.set(Some(now));
+        // A pass that resolved the folder and a hint already filed for it both
+        // answer this access; the later of the two is what it is measured from.
+        let hinted = self
+            .focus_hinted
+            .get()
+            .filter(|(hinted, _)| *hinted == folder)
+            .map(|(_, at)| at);
+        let last = self
+            .focus_refreshed
+            .borrow()
+            .get(&folder)
+            .copied()
+            .max(hinted);
+        let stale = last.is_none_or(|last| on_access_refresh_due(now, last, &self.profile));
+        if stale {
+            self.focus_hinted.set(Some((folder, now)));
+        }
+        stale
+    }
+
+    /// The folder the focus window currently holds open.
+    pub fn focus_folder(&self) -> Option<NodeId> {
+        self.focus.borrow().open_folder
     }
 
     /// The sync timing profile this engine runs under.
@@ -8569,5 +8632,99 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// The FUSE-op TTL check and the operation-stream focus window
+/// (blueprint/desktop.md "Freshness"). Driven at the facade because the focus
+/// window and its refresh stamps are engine state; `fuse-op-core` covers what
+/// the mount does with the answer.
+#[cfg(test)]
+mod focus_access_tests {
+    use super::*;
+    use crate::testkit::fakes::VirtualScheduler;
+    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy};
+
+    const FOLDER: NodeId = NodeId([3; 16]);
+    const OTHER: NodeId = NodeId([4; 16]);
+
+    fn engine() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice-pk");
+        let scheduler = world.scheduler.clone();
+        let (engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        (engine, scheduler)
+    }
+
+    #[test]
+    fn a_folder_this_device_has_never_refreshed_is_stale() {
+        let (engine, _clock) = engine();
+        assert!(engine.note_focus_access(Some(FOLDER)));
+    }
+
+    #[test]
+    fn a_second_access_inside_the_threshold_fires_no_second_hint() {
+        let (engine, clock) = engine();
+        assert!(engine.note_focus_access(Some(FOLDER)));
+
+        clock.advance(SyncTimingProfile::CI.stale_after / 2);
+        assert!(
+            !engine.note_focus_access(Some(FOLDER)),
+            "the hint already filed covers this access"
+        );
+
+        clock.advance(SyncTimingProfile::CI.stale_after);
+        assert!(
+            engine.note_focus_access(Some(FOLDER)),
+            "past the threshold the folder is stale again"
+        );
+    }
+
+    #[test]
+    fn the_folder_in_view_becomes_the_open_folder() {
+        let (engine, _clock) = engine();
+        assert_eq!(engine.focus_folder(), None);
+
+        engine.note_focus_access(Some(FOLDER));
+        assert_eq!(engine.focus_folder(), Some(FOLDER));
+
+        engine.note_focus_access(Some(OTHER));
+        assert_eq!(engine.focus_folder(), Some(OTHER));
+    }
+
+    #[test]
+    fn an_operation_with_no_folder_in_view_neither_hints_nor_moves_the_window() {
+        let (engine, clock) = engine();
+        engine.note_focus_access(Some(FOLDER));
+
+        clock.advance(SyncTimingProfile::CI.focus_horizon * 2);
+        assert!(!engine.note_focus_access(None));
+        assert_eq!(
+            engine.focus_folder(),
+            Some(FOLDER),
+            "closing a quiet window is the tick's job, not an operation's"
+        );
+    }
+
+    /// The hint damper is the FUSE-op check's own; it must not stand in for the
+    /// stamp a completed refresh pass earns, which the on-access navigation leg
+    /// reads to decide whether to resolve.
+    #[test]
+    fn a_hint_never_stamps_a_refresh_no_pass_ran() {
+        let (engine, _clock) = engine();
+        assert!(engine.note_focus_access(Some(FOLDER)));
+
+        assert!(
+            engine.focus_refreshed.borrow().is_empty(),
+            "a hint is a request for a pass, never the record of one"
+        );
     }
 }

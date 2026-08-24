@@ -122,6 +122,22 @@ pub fn focus_folders_due(
         .collect()
 }
 
+/// Whether an operation-stream focus window has gone quiet past the profile's
+/// focus horizon, so the folder it holds stops counting as open. `None` is a
+/// window nothing has touched, which nothing has to close.
+///
+/// A window is closed by the tick, not by the host that opened it: an operation
+/// stream that stops arriving produces no call to close it with.
+pub fn focus_window_expired(
+    now: UnixMillis,
+    touched: Option<UnixMillis>,
+    profile: &SyncTimingProfile,
+) -> bool {
+    touched.is_some_and(|last| {
+        now.0.saturating_sub(last.0) >= crate::sync::duration_millis(profile.focus_horizon)
+    })
+}
+
 /// Whether a cached folder outside the focus window is due for an on-access
 /// refresh: it was last refreshed longer ago than the staleness threshold. No
 /// background churn — this fires only when the folder is actually accessed.
@@ -196,6 +212,37 @@ pub(crate) async fn run_tick_loop<Sch>(
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn a_window_closes_only_once_the_horizon_has_fully_elapsed() {
+        let profile = SyncTimingProfile::CI;
+        let horizon = crate::sync::duration_millis(profile.focus_horizon);
+        let touched = UnixMillis(1_000);
+
+        assert!(
+            !focus_window_expired(UnixMillis(1_000), Some(touched), &profile),
+            "traffic that just arrived holds the window open"
+        );
+        assert!(!focus_window_expired(
+            UnixMillis(1_000 + horizon - 1),
+            Some(touched),
+            &profile
+        ));
+        assert!(focus_window_expired(
+            UnixMillis(1_000 + horizon),
+            Some(touched),
+            &profile
+        ));
+    }
+
+    #[test]
+    fn a_window_nothing_ever_touched_needs_no_closing() {
+        assert!(!focus_window_expired(
+            UnixMillis(u64::MAX),
+            None,
+            &SyncTimingProfile::CI
+        ));
+    }
 
     use crate::facade::NodeKind;
     use crate::sync::model::NodeMeta;

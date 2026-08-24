@@ -54,16 +54,21 @@ pub struct HostCapabilities {
     /// that cannot must say so: the core then falls back to short cache TTLs
     /// for that mount, because nothing else would ever revalidate.
     pub push_invalidation: bool,
+    /// Whether the kernel caches attributes for this mount at all. A mount that
+    /// suppressed the cache — the `noattrcache` the FUSE-T SMB backend requires
+    /// (blueprint/desktop.md "Freshness") — says `false`.
+    pub attribute_cache: bool,
 }
 
 /// The kernel-facing cache lifetimes for one mount, derived from what its
-/// adapter declared. Never zero — v1's dir-TTL-0 workaround was the symptom of
-/// a mount that could not invalidate.
+/// adapter declared. Never zero for a cache the kernel keeps — v1's dir-TTL-0
+/// workaround was the symptom of a mount that could not invalidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheTtls {
     /// How long a name→inode binding may be cached.
     pub entry: Duration,
-    /// How long attributes may be cached.
+    /// How long attributes may be cached; zero for a mount whose kernel keeps
+    /// no attribute cache to begin with (`noattrcache`).
     pub attr: Duration,
 }
 
@@ -78,7 +83,11 @@ impl CacheTtls {
         };
         Self {
             entry: ttl,
-            attr: ttl,
+            attr: if capabilities.attribute_cache {
+                ttl
+            } else {
+                Duration::ZERO
+            },
         }
     }
 }
@@ -120,15 +129,17 @@ mod tests {
         assert!(rendered.contains("redacted"), "{rendered}");
     }
 
+    fn caps(push_invalidation: bool) -> HostCapabilities {
+        HostCapabilities {
+            push_invalidation,
+            attribute_cache: true,
+        }
+    }
+
     #[test]
     fn a_push_capable_mount_may_cache_up_to_the_staleness_threshold() {
         let profile = SyncTimingProfile::PRODUCTION;
-        let ttls = CacheTtls::for_host(
-            &HostCapabilities {
-                push_invalidation: true,
-            },
-            &profile,
-        );
+        let ttls = CacheTtls::for_host(&caps(true), &profile);
         assert_eq!(ttls.entry, profile.stale_after);
         assert_eq!(ttls.attr, profile.stale_after);
     }
@@ -136,27 +147,37 @@ mod tests {
     #[test]
     fn a_mount_without_push_falls_back_to_a_shorter_ttl() {
         let profile = SyncTimingProfile::PRODUCTION;
-        let with_push = CacheTtls::for_host(
-            &HostCapabilities {
-                push_invalidation: true,
-            },
-            &profile,
-        );
-        let without_push = CacheTtls::for_host(
-            &HostCapabilities {
-                push_invalidation: false,
-            },
-            &profile,
-        );
+        let with_push = CacheTtls::for_host(&caps(true), &profile);
+        let without_push = CacheTtls::for_host(&caps(false), &profile);
         assert!(without_push.entry < with_push.entry);
         assert!(without_push.attr < with_push.attr);
     }
 
     #[test]
-    fn every_configuration_yields_a_nonzero_ttl() {
+    fn a_noattrcache_mount_hands_back_no_attribute_lifetime() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             for push_invalidation in [true, false] {
-                let ttls = CacheTtls::for_host(&HostCapabilities { push_invalidation }, &profile);
+                let ttls = CacheTtls::for_host(
+                    &HostCapabilities {
+                        push_invalidation,
+                        attribute_cache: false,
+                    },
+                    &profile,
+                );
+                assert!(ttls.attr.is_zero(), "there is no attribute cache to time");
+                assert!(
+                    !ttls.entry.is_zero(),
+                    "name lookups are still cached; only attributes are suppressed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_kept_cache_yields_a_nonzero_ttl() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            for push_invalidation in [true, false] {
+                let ttls = CacheTtls::for_host(&caps(push_invalidation), &profile);
                 assert!(!ttls.entry.is_zero());
                 assert!(!ttls.attr.is_zero());
             }
