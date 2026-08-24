@@ -25,7 +25,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
-use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir};
+use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir, measured_storage_policy};
 use cipherbox_engine::facade::{Engine, Event, EventStream, LoginSecret};
 use cipherbox_engine::seams::CredentialStore;
 use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
@@ -350,6 +350,12 @@ async fn start_engine(
     let seams = seams::seam_set(&session.config, &account_dir, &session.keyring_service)
         .map_err(|error| error.to_string())?;
     let credentials = seams.credential_store.clone();
+    // After the stores have opened: the split is measured on the volume the
+    // staged bytes actually land on.
+    let storage_policy = session
+        .config
+        .storage_policy
+        .unwrap_or_else(|| measured_storage_policy(&account_dir));
 
     let (mut engine, events) = Engine::new(
         seams,
@@ -358,7 +364,7 @@ async fn start_engine(
         // The framing is frozen and pins the wire format, so every host writes
         // the shipped profile.
         ContentProfile::PRODUCTION,
-        session.config.storage_policy,
+        storage_policy,
         session.config.api_base_url.clone(),
         session.config.gateway.clone(),
     );

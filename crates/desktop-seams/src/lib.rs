@@ -20,6 +20,10 @@
 //! - [`ReqwestHttp`], [`ReqwestRecordTransport`] — `reqwest` over rustls.
 //! - [`TokioScheduler`] — timers, background tasks, wall clock on Tokio.
 //!
+//! Alongside them, [`measured_storage_policy`] is the desktop leg of the
+//! host-to-engine storage measurement: not a seam trait, a construction-time
+//! figure the shell hands [`cipherbox_engine::Engine::new`].
+//!
 //! `Mailbox` is not implemented here: it is a transport over the API's mailbox
 //! routes with nothing desktop-specific about it, so the shell supplies it —
 //! today with a seam that refuses, the routes being bearer-authenticated and no
@@ -43,6 +47,7 @@ mod record_transport;
 mod scheduler;
 mod snapshot_cache;
 mod staging_store;
+mod storage_policy;
 
 pub use credential_store::KeyringCredentialStore;
 pub use floor_store::FileFloorStore;
@@ -52,6 +57,7 @@ pub use record_transport::ReqwestRecordTransport;
 pub use scheduler::TokioScheduler;
 pub use snapshot_cache::FileSnapshotCache;
 pub use staging_store::FileStagingStore;
+pub use storage_policy::measured_storage_policy;
 
 #[cfg(feature = "test-support")]
 pub use credential_store::FileCredentialStore;
