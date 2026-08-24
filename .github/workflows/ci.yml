@@ -104,6 +104,36 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+      # The updater refuses any release its configured key did not sign, so a
+      # pubkey that drifts from the CI signing secret ships an app that can
+      # never update again. This is checked here rather than in Desktop Build
+      # because a key rotation touches no path filter — and because the
+      # signing key has no business in a job that runs the desktop crate's
+      # build scripts.
+      - name: Assert the updater pubkey matches the signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is unavailable to this run, so the updater key is unverifiable"
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          WORK=$(mktemp -d)
+          # Tauri wraps both the public key and the signature file in base64;
+          # minisign wants the unwrapped bytes.
+          jq -er '.plugins.updater.pubkey' apps/desktop/src-tauri/tauri.conf.json \
+            | base64 -d > "${WORK}/updater.pub"
+          echo 'cipherbox updater key check' > "${WORK}/payload"
+          # `exec`, not the package's `tauri` script: that wrapper appends a
+          # `--config` the `signer` subcommand rejects.
+          pnpm --filter @cipherbox/desktop exec tauri signer sign "${WORK}/payload"
+          base64 -d < "${WORK}/payload.sig" > "${WORK}/payload.minisig"
+          minisign -V -p "${WORK}/updater.pub" -m "${WORK}/payload" -x "${WORK}/payload.minisig"
+
   tracker-refs:
     name: Tracker Refs
     runs-on: ubuntu-latest
@@ -965,8 +995,7 @@ jobs:
             libssl-dev \
             libxdo-dev \
             pkg-config \
-            build-essential \
-            minisign
+            build-essential
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -986,31 +1015,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      # The updater refuses any release its configured key did not sign, so a
-      # pubkey that drifts from the CI signing secret ships an app that can
-      # never update again. Sign with the secret and verify with the configured
-      # key rather than trusting that the two were once the same.
-      - name: Assert the updater pubkey matches the signing key
-        if: runner.os == 'Linux'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is unavailable to this run, so the updater key is unverifiable"
-            exit 1
-          fi
-          WORK=$(mktemp -d)
-          # Tauri wraps both the public key and the signature file in base64;
-          # minisign wants the unwrapped bytes.
-          jq -er '.plugins.updater.pubkey' apps/desktop/src-tauri/tauri.conf.json \
-            | base64 -d > "${WORK}/updater.pub"
-          echo 'cipherbox updater key check' > "${WORK}/payload"
-          pnpm --filter @cipherbox/desktop exec tauri signer sign "${WORK}/payload"
-          base64 -d < "${WORK}/payload.sig" > "${WORK}/payload.minisig"
-          minisign -V -p "${WORK}/updater.pub" -m "${WORK}/payload" -x "${WORK}/payload.minisig"
 
       - name: Cargo fmt (desktop shell)
         run: cargo fmt -p cipherbox-desktop --check

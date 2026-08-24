@@ -1,8 +1,6 @@
-# Edited for v2 (blueprint/deploy.md): the tee-worker image build and redis are
-# gone with the v1 layout, desktop artifacts are built by the release workflow
-# on the product tag, and SendGrid survives behind the API's MAIL_PROVIDER seam
-# (MAIL_FROM_ADDRESS replaces the v1 SENDGRID_FROM_EMAIL). The gateway
-# forward_auth wiring is the one v2 edit still outstanding.
+# Edited for v2 (blueprint/deploy.md). SendGrid stays, reached through the API's
+# MAIL_PROVIDER seam. The gateway forward_auth wiring is the one v2 edit still
+# outstanding.
 name: Deploy Staging
 
 on:
@@ -26,9 +24,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Resolve tag: workflow_call passes it as input, the push trigger uses the tag
-  # name, and a dispatch has no tag — it ships the dispatched commit, so the
-  # image tag is that SHA. Every value here is also a valid checkout ref.
+  # A dispatch has no tag, so it ships the dispatched commit. Every value this
+  # can take is also a valid checkout ref.
   DEPLOY_TAG: ${{ inputs.staging_tag || (github.event_name == 'workflow_dispatch' && github.sha) || github.ref_name }}
 
 permissions: {}
@@ -259,13 +256,14 @@ jobs:
           strip_components: 1
           rm: true
 
-      # The cutover redeploy (blueprint/deploy.md): stop the stack, drop the
-      # data volumes, and let "Deploy services" below bring it up fresh. Gated
-      # on an input that exists only on `workflow_dispatch`, so a tag push or a
-      # `workflow_call` cannot reach it however its inputs are shaped. Caddy's
-      # volumes survive — they hold the issued TLS certificates.
+      # The cutover redeploy (blueprint/deploy.md). `wipe_volumes` is declared
+      # under `workflow_dispatch` alone, so no other trigger can set it — a
+      # `workflow_call` caller may only pass the inputs that trigger declares,
+      # and `github.event_name` is the *caller's* event on that path, which
+      # makes it useless as a second gate here. Caddy's volumes are left alone:
+      # they hold the issued TLS certificates.
       - name: Wipe the staging data volumes
-        if: github.event_name == 'workflow_dispatch' && inputs.wipe_volumes
+        if: inputs.wipe_volumes
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ vars.HOST }}
@@ -276,16 +274,17 @@ jobs:
             set -euo pipefail
             cd /opt/cipherbox/docker
             docker compose -f docker-compose.staging.yml down
-            # Match on compose's own label rather than the project-prefixed
-            # volume name, so a project rename cannot turn this into a silent
-            # no-op that leaves the old data in place.
+            # `down --volumes` would take Caddy's with it, so select the two
+            # declared names out of this project by compose's own labels.
             for declared in postgres_staging ipfs_staging; do
-              vols=$(docker volume ls -q --filter "label=com.docker.compose.volume=${declared}")
-              if [ -z "${vols}" ]; then
-                echo "::error::no volume labelled ${declared} — refusing a wipe that would remove nothing"
-                exit 1
+              vols=$(docker volume ls -q \
+                --filter "label=com.docker.compose.project=cipherbox-staging" \
+                --filter "label=com.docker.compose.volume=${declared}")
+              if [ -n "${vols}" ]; then
+                echo "${vols}" | xargs docker volume rm
+              else
+                echo "no ${declared} volume to remove"
               fi
-              echo "${vols}" | xargs docker volume rm
             done
 
       - name: Deploy services
