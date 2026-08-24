@@ -366,18 +366,24 @@ pub async fn cold_seed_checked<F: FloorStore>(
 /// durable floor is a no-op that reports the stored floor. Returns the
 /// resulting floor.
 ///
-/// **Defers while a [`WriteEpochLease`] is held**, returning the durable floor
-/// untouched and without waiting — so the value returned is the floor in force,
-/// not the sighted epoch. The sighting is dropped rather than queued; a floor
-/// only ever moves up, so re-sighting the same pointer re-derives it.
+/// **Takes the [`WriteEpochLease`] for the raise**, and defers when the scope is
+/// already leased — returning the durable floor untouched and without waiting,
+/// so the value returned is the floor in force, not the sighted epoch. The
+/// sighting is dropped rather than queued; a floor only ever moves up, so
+/// re-sighting the same pointer re-derives it.
+///
+/// The lease is held *across* the raise, not merely tested before it: the host
+/// store is asynchronous, and a publish that took the lease while a raise was
+/// still in flight would guard against the pre-raise floor and sign below the
+/// one that lands — the brick [`WriteEpochLease`] exists to prevent.
 pub async fn advance_write_epoch_on_sight<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
     write_epoch: u64,
 ) -> SeamResult<u64> {
-    if write_epoch_lease_held(scope_id) {
+    let Some(_lease) = acquire_write_epoch_lease(scope_id) else {
         return Ok(write_epoch_floor(floors, scope_id).await?.unwrap_or(0));
-    }
+    };
     floors
         .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
         .await
@@ -386,29 +392,21 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
 /// Exclusion over one scope's write-epoch floor, held across a root publish so
 /// the floor the publish guard read is still true when the record is signed.
 ///
-/// The floor is monotonic and `recover_write_scope_seed`
-/// (`crate::net::adopter`) binds it into the owner-write-blob's AAD, so a root
-/// signed at a write epoch a concurrent advance has already passed is
-/// permanently unopenable — a signed record cannot be unpublished, so the guard
-/// must hold for the publish, not merely at the instant it is evaluated
-/// (AGENTS.md rule 8).
+/// `recover_write_scope_seed` (`crate::net::adopter`) binds that floor into the
+/// owner-write-blob's AAD, so a root signed below a floor a concurrent advance
+/// has already raised is permanently unopenable, and a signed record cannot be
+/// unpublished (AGENTS.md rule 8).
 ///
 /// Exclusion, deliberately not a pre-advance: raising the floor to the wave's
 /// target before publishing would turn a retryable publish failure into a
 /// permanent local write-plane lockout, since nothing can lower a floor again.
 ///
-/// **Held until dropped, with no expiry.** A deadline would have to outlast the
-/// publish's whole fan-out — the head-block upload, the register, and the
-/// record signature that `crate::net::publish` performs last — and a lease that
-/// lapsed anywhere in that window would re-open the race while the record is
-/// still unsigned, which is the same permanent brick. The publish is already
-/// bounded by the API client's transfer and control timeouts, and the guard
-/// releases on drop, so a lease outlives its publish only if the future is
-/// neither polled nor dropped. That costs this session's rotations for the
-/// scope; a deadline that can expire early costs the write plane for good.
+/// Held until dropped, with no expiry: a lease that lapsed before the publish
+/// reached its signature would re-open that same permanent brick, while an
+/// over-held lease costs only this session's rotations for the scope.
 ///
-/// [`cold_seed`] raises the same floor without consulting the lease: it is the
-/// boot anchor, and holding it back would leave a session unable to seed.
+/// [`cold_seed`] raises the same floor without taking the lease: it is the boot
+/// anchor, and holding it back would leave a session unable to seed.
 #[derive(Debug)]
 pub(crate) struct WriteEpochLease {
     scope_id: [u8; 16],
@@ -426,8 +424,8 @@ thread_local! {
 }
 
 /// Hold `scope_id`'s write-epoch floor still, or `None` when the scope is
-/// already leased — two concurrent publishes on one scope are serialized by
-/// refusal, never raced.
+/// already leased — a publish and a sighting raise on one scope are serialized
+/// by refusal, never raced.
 pub(crate) fn acquire_write_epoch_lease(scope_id: &[u8; 16]) -> Option<WriteEpochLease> {
     WRITE_EPOCH_LEASES.with(|leases| {
         leases
@@ -438,11 +436,6 @@ pub(crate) fn acquire_write_epoch_lease(scope_id: &[u8; 16]) -> Option<WriteEpoc
                 _not_send: PhantomData,
             })
     })
-}
-
-/// Whether a lease currently holds this scope's write-epoch floor still.
-fn write_epoch_lease_held(scope_id: &[u8; 16]) -> bool {
-    WRITE_EPOCH_LEASES.with(|leases| leases.borrow().contains(scope_id))
 }
 
 impl Drop for WriteEpochLease {
@@ -456,6 +449,8 @@ impl Drop for WriteEpochLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryFloorStore;
 
@@ -817,7 +812,6 @@ mod tests {
                 .await
                 .unwrap();
             let lease = acquire_write_epoch_lease(&SCOPE).expect("leases");
-            assert!(write_epoch_lease_held(&SCOPE));
 
             // However many sightings arrive, the floor stays where the guard read it.
             for sighted in [9, 11, 20] {
@@ -828,7 +822,56 @@ mod tests {
             assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(4));
 
             drop(lease);
-            assert!(!write_epoch_lease_held(&SCOPE));
+            assert!(
+                acquire_write_epoch_lease(&SCOPE).is_some(),
+                "the drop is what frees the scope"
+            );
         });
+    }
+
+    /// A floor store that reports whether the scope was leasable at the instant
+    /// the raise was executing.
+    #[derive(Default)]
+    struct LeaseProbeFloorStore {
+        inner: InMemoryFloorStore,
+        leasable_mid_raise: Cell<bool>,
+    }
+
+    impl FloorStore for LeaseProbeFloorStore {
+        async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.epoch_floor(scope_id).await
+        }
+
+        async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.leasable_mid_raise
+                .set(acquire_write_epoch_lease(&SCOPE).is_some());
+            self.inner.raise_epoch_floor(scope_id, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            self.inner.raise_sequence_floor(ipns_name, sequence).await
+        }
+    }
+
+    /// The lease covers the raise itself, not just the moment before it. A host
+    /// store is asynchronous, so a publish that could take the lease while the
+    /// raise is in flight would guard against the pre-raise floor and sign a
+    /// root the landed floor leaves unopenable.
+    #[test]
+    fn a_sighting_holds_the_lease_across_the_raise() {
+        let floors = LeaseProbeFloorStore::default();
+        block_on(async {
+            advance_write_epoch_on_sight(&floors, &SCOPE, 9)
+                .await
+                .unwrap();
+        });
+        assert!(
+            !floors.leasable_mid_raise.get(),
+            "a publish must not take the lease while a sighting raise is in flight"
+        );
     }
 }
