@@ -35,7 +35,7 @@ use cipherbox_core::seal::{
     STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
     STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
-    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput,
+    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput, UNCUTTABLE_KEYS,
     WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad, decode_ascent_link,
     decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
     decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
@@ -860,6 +860,7 @@ struct SealManifest {
     read_body_struct_tag: u8,
     critical_key_prefix: String,
     critical_carried_max_bytes: usize,
+    uncuttable_keys: Vec<String>,
     seal: FileCount,
     open_reject: RejectSection,
     read_body_accept: FileCount,
@@ -3444,6 +3445,9 @@ fn the_critical_carried_budget_is_frozen_in_the_manifest() {
         m.seal.critical_carried_max_bytes,
         MAX_CRITICAL_CARRIED_BYTES
     );
+    // Frozen beside the prefix: honouring the marker alone would cut these and
+    // publish a record every reader rejects.
+    assert_eq!(m.seal.uncuttable_keys, UNCUTTABLE_KEYS);
 }
 
 #[test]

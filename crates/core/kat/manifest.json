@@ -192,6 +192,10 @@
     "readBodyStructTag": 1,
     "criticalKeyPrefix": "!",
     "criticalCarriedMaxBytes": 16384,
+    "uncuttableKeys": [
+      "grantSection",
+      "writeSealed"
+    ],
     "seal": {
       "file": "vectors/seal/seal.json",
       "count": 3
@@ -226,7 +230,7 @@
     },
     "envelopeReject": {
       "file": "vectors/seal/envelope_reject.json",
-      "count": 5,
+      "count": 6,
       "checks": [
         "too-many-structures",
         "unexpected-type",

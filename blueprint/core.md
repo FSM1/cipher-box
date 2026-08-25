@@ -153,13 +153,20 @@ node UUID.
   can. The canonical map-key comparator is length-first over the encoded key, so
   a one-byte prefix perturbs no ordering semantics, and the marker is honoured
   inside `epochTag` as well as at top level. `grantSection` and `writeSealed`
-  stay uncuttable under their own names, grandfathered from before the marker.
+  stay uncuttable under their own **reserved names**, from before the marker;
+  those names are frozen in the manifest beside the prefix
+  (`seal.uncuttableKeys`), since honouring the marker alone would cut them and
+  publish a record every reader rejects.
+  A critical field must be **kind-uniform** — present, or absent, independently
+  of whether the node is a file or a folder. Its key name is plaintext on an
+  envelope whose whole purpose is kind-uniformity, so a kind-correlated marker
+  would hand the untrusted server the one bit the envelope exists to withhold.
   The marker ships with a frozen **critical-bytes budget**,
   `MAX_CRITICAL_CARRIED_BYTES` = 16 KiB, over the encoded cost of every marked
   field plus `writeSealed`, at both levels. Without it a hostile publisher marks
-  padding critical and wedges the name permanently — strictly worse than the
-  refusal the cut replaced, since no rotation clears an uncuttable field. Decode
-  and encode refuse an over-budget envelope with the same `too-many-structures`
+  padding critical and wedges the name for good — strictly worse than the refusal
+  the cut replaced, since no rotation clears an uncuttable field. Decode and
+  encode refuse an over-budget envelope with the same `too-many-structures`
   verdict, release-active on the encode side. `grantSection` is the budget's one
   exclusion, and only because it carries its own `MAX_GRANT_SECTION_BYTES`: a
   budget large enough to hold a grant section would be no budget at all. The
@@ -167,6 +174,11 @@ node UUID.
   critical set cannot make a maximal write-body's re-seal unencodable. The value
   is frozen in the KAT manifest (`seal.criticalCarriedMaxBytes`, beside
   `seal.criticalKeyPrefix`).
+  What the budget bounds is the **size** of that wedge, not its permanence: a
+  publisher who fills the budget exactly still claims it for as long as the name
+  lives, because a marked field is carried verbatim by every later re-author and
+  only a fresh node id sheds it. Whether a re-author may drop a marked field it
+  has never seen adopted is open, and has to be settled before a `!` field ships.
 - **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
@@ -268,9 +280,16 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   the framing of the envelope the section rides in — which is what the 48 KiB
   headroom reserves, and what the critical-bytes budget above draws from. Like
   the write-body's, this bound narrows the head-size lever rather than closing
-  it: the section's own maxima and the write-body's are not jointly reachable
-  inside one block, so the whole-record ceiling stays the engine's `HeadTooLarge`
-  backstop.
+  it, so the whole-record ceiling stays the engine's `HeadTooLarge` backstop.
+  The bound is therefore also a **joint ceiling**, and deliberately so: a section
+  carrying a write-body at `MAX_WRITE_BODY_BYTES` has about 16 KiB left for
+  everything else, which is roughly 51 grant blobs or 70 history links — far
+  under the 1024 and 256 the per-collection bounds allow. Those maxima were never
+  jointly reachable inside one block; what changes is that the section codec now
+  refuses the combination outright instead of minting a head that no later write
+  at that root could fit. Honest use is nowhere near it: producers prune history
+  links to a far smaller retained window, and a body only approaches its bound
+  through preserved unknowns.
 - **History-link retention**: a link minted at epoch `e` is sealed under **its
   own** epoch's structure key and carries the _preceding_ epoch's seed, so the
   ratchet is a **contiguous chain** walkable only backward, one epoch per step.

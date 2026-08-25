@@ -2879,7 +2879,9 @@ fn classify_author(error: AuthorError) -> Halt {
         | AuthorError::CommitmentNameMismatch
         | AuthorError::CommitmentSignatureInvalid
         | AuthorError::SectionSignatureInvalid => Halt::UploadAttempt,
-        AuthorError::HeadTooLarge { .. } => Halt::HeadOversized,
+        // Charged on the same terms as an over-length head: re-authoring the
+        // same section repeats it verbatim, so an uncharged retry would spin.
+        AuthorError::HeadTooLarge { .. } | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
         AuthorError::Seal(_) => Halt::Unclassified,
     }
 }
