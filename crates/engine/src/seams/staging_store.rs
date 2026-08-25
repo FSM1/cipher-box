@@ -66,5 +66,10 @@ pub trait StagingStore {
     /// The id progression is **not** reset: ids stay strictly increasing and
     /// unreused across a clear, exactly as across a drain and reopen — the
     /// engine reads id order as evidence about the queue.
+    ///
+    /// The queue goes **before** the staged bytes, for the same reason removal
+    /// ordering is a correctness property above: interrupted the other way
+    /// round, the store is left holding ops that name bytes already gone, while
+    /// this order can only orphan bytes that orphan GC reclaims.
     async fn clear(&self) -> SeamResult<()>;
 }

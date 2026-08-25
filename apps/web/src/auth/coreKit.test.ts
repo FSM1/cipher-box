@@ -282,7 +282,15 @@ describe('the Core Kit store', () => {
 describe('forgetting this device with the account', () => {
   const DEVICE_FACTOR = 'cd'.repeat(32);
 
+  /** An account carrying a recovery phrase, so a dropped factor is not the last. */
+  const enrolled = (): void => {
+    sdk.shareDescriptions = {
+      pub: [JSON.stringify({ module: FactorKeyTypeShareDescription.SeedPhrase })],
+    };
+  };
+
   it('drops the factor this device holds, and syncs the removal', async () => {
+    enrolled();
     sdk.deviceFactor = DEVICE_FACTOR;
 
     await session().forgetDevice();
@@ -292,7 +300,21 @@ describe('forgetting this device with the account', () => {
     expect(sdk.commits).toBe(1);
   });
 
+  /**
+   * The local erase destroys the only copy of this factor, so dropping it from
+   * an account with no phrase behind it is a permanent lockout, not a cleanup.
+   */
+  it("leaves the factor standing when it is the account's last way in", async () => {
+    sdk.shareDescriptions = {};
+    sdk.deviceFactor = DEVICE_FACTOR;
+
+    await session().forgetDevice();
+
+    expect(sdk.deleted).toEqual([]);
+  });
+
   it('asks the account for nothing when this device holds no factor', async () => {
+    enrolled();
     sdk.deviceFactor = undefined;
 
     await session().forgetDevice();
@@ -306,6 +328,7 @@ describe('forgetting this device with the account', () => {
    * degraded outcome, never a failed forget.
    */
   it('does not fail the forget when the account cannot be reached', async () => {
+    enrolled();
     sdk.deviceFactor = DEVICE_FACTOR;
     sdk.deleteFactorError = REFUSED;
 

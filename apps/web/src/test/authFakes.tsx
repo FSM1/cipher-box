@@ -40,8 +40,6 @@ export interface EngineCalls {
   siwe: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
   logouts: number;
-  /** Durable-seam erases the engine was asked for ("forget this device"). */
-  forgets: number;
 }
 
 /**
@@ -50,13 +48,12 @@ export interface EngineCalls {
  * engine, exactly as `EngineClient` publishes it.
  */
 export function fakeEngineClient(
-  overrides: Partial<Record<'start' | 'logout' | 'forgetDevice', () => Promise<void>>> = {}
+  overrides: Partial<Record<'start' | 'logout', () => Promise<void>>> = {}
 ) {
   const calls: EngineCalls = {
     started: [],
     secrets: [],
     logouts: 0,
-    forgets: 0,
     siwe: [],
     siweChallenges: 0,
   };
@@ -98,10 +95,7 @@ export function fakeEngineClient(
           holds(null);
         }
       },
-      forgetDevice() {
-        calls.forgets += 1;
-        return overrides.forgetDevice?.() ?? Promise.resolve();
-      },
+      forgetDevice: () => Promise.resolve(),
       subscribe: () => () => undefined,
       snapshot: () => new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
@@ -121,8 +115,6 @@ export interface CoreKitCalls {
   logouts: number;
   phrases: string[];
   enrollments: number;
-  /** Best-effort factor drops the session was asked for. */
-  forgets: number;
 }
 
 export function fakeCoreKitSession(
@@ -139,14 +131,7 @@ export function fakeCoreKitSession(
     enrollWarning?: string;
   } = {}
 ) {
-  const calls: CoreKitCalls = {
-    logins: [],
-    exports: 0,
-    logouts: 0,
-    phrases: [],
-    enrollments: 0,
-    forgets: 0,
-  };
+  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0, phrases: [], enrollments: 0 };
   let loggedIn = options.loggedIn ?? false;
   // Both read off the redeemed credential, as the real session does: a bare
   // restore knows neither, and a wallet login carries no address.
@@ -184,10 +169,7 @@ export function fakeCoreKitSession(
       loggedIn = false;
       return Promise.resolve();
     },
-    forgetDevice() {
-      calls.forgets += 1;
-      return Promise.resolve();
-    },
+    forgetDevice: () => Promise.resolve(),
     _UNSAFE_exportTssKey() {
       calls.exports += 1;
       return Promise.resolve(SECRET_HEX);

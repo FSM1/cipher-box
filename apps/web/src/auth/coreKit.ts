@@ -211,11 +211,17 @@ class Web3AuthSession implements WebCoreKitSession {
    */
   private async useStoredDeviceFactor(): Promise<void> {
     try {
-      const stored = await this.coreKit.getDeviceFactor();
-      if (stored) await this.coreKit.inputFactorKey(new BN(stored, 'hex'));
+      const factorKey = await this.storedDeviceFactor();
+      if (factorKey) await this.coreKit.inputFactorKey(factorKey);
     } catch {
       // No usable factor here is the recovery path, not a failure.
     }
+  }
+
+  /** This device's stored factor as a scalar; `null` when it holds none. */
+  private async storedDeviceFactor(): Promise<BN | null> {
+    const stored = await this.coreKit.getDeviceFactor();
+    return stored ? new BN(stored, 'hex') : null;
   }
 
   /** This device's own factor, so the next sign-in on it needs no phrase. */
@@ -278,22 +284,21 @@ class Web3AuthSession implements WebCoreKitSession {
     }
   }
 
-  /**
-   * Drops this device's factor from the account's factor set. Best-effort by
-   * decision: it needs a live session and the network, and a forget has to
-   * complete offline — so nothing here may fail the local erase the logout
-   * beside it performs. A factor this call could not remove opens nothing once
-   * the store holding it is gone.
-   */
   async forgetDevice(): Promise<void> {
+    // Refused rather than risked: the erase beside this call destroys the only
+    // copy of this factor, so dropping it from an account that carries no
+    // recovery phrase would take the member's last route in with it. A factor
+    // left listed opens nothing once the local store is gone.
+    if (!this.hasRecoveryPhrase()) return;
     try {
-      const stored = await this.coreKit.getDeviceFactor();
-      if (!stored) return;
-      const factorKey = new BN(stored, 'hex');
+      const factorKey = await this.storedDeviceFactor();
+      if (!factorKey) return;
       await this.coreKit.deleteFactor(Point.fromScalar(factorKey, factorKeyCurve), factorKey);
+      // Manual sync: an uncommitted removal leaves the factor live.
       await this.coreKit.commitChanges();
     } catch {
-      // Offline, or an account this session cannot re-sync: the erase stands.
+      // Offline, or an account this session cannot re-sync. Best-effort by
+      // decision (`CoreKitSession.forgetDevice`): the local erase stands.
     }
   }
 

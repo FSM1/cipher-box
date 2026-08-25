@@ -44,6 +44,16 @@ export class StagingIoError extends Error {
   }
 }
 
+/**
+ * Every name directly in `dir`, collected before the caller removes any of
+ * them: removing during the walk mutates what it iterates.
+ */
+async function namesIn(dir: FileSystemDirectoryHandle): Promise<string[]> {
+  const names: string[] = [];
+  for await (const name of dir.keys()) names.push(name);
+  return names;
+}
+
 /** Removes `name` from `dir`, treating an already-absent entry as success. */
 async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Promise<void> {
   try {
@@ -83,11 +93,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private async openStagedDir(): Promise<FileSystemDirectoryHandle> {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(this.dirName, { create: true });
-    const debris: string[] = [];
-    for await (const name of dir.keys()) {
-      if (name.startsWith(TEMP_PREFIX)) debris.push(name);
-    }
-    // Collected first: removing during the walk mutates what it iterates.
+    const debris = (await namesIn(dir)).filter((name) => name.startsWith(TEMP_PREFIX));
     // Best-effort per entry, like the desktop sweep — a temp a killed writer
     // still holds open must not fail the open; the next one reclaims it.
     await Promise.all(debris.map((name) => removeIfPresent(dir, name).catch(() => undefined)));
@@ -234,10 +240,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     await transactionDone(tx);
 
     const dir = await this.stagedDir();
-    // Collected first: removing during the walk mutates what it iterates.
-    const names: string[] = [];
-    for await (const name of dir.keys()) names.push(name);
-    for (const name of names) await removeIfPresent(dir, name);
+    await Promise.all((await namesIn(dir)).map((name) => removeIfPresent(dir, name)));
   }
 
   async stagedBytesTotal(): Promise<number> {

@@ -196,8 +196,6 @@ impl StagingStore for FileStagingStore {
         Ok(total)
     }
 
-    /// The `next_op_id` counter lives beside these directories, not in them, so
-    /// the id progression survives the erase the trait requires it to.
     async fn clear(&self) -> SeamResult<()> {
         empty_dir(&self.ops_dir).map_err(|err| seam_err("staging_store clear ops", &err))?;
         empty_dir(&self.staged_dir).map_err(|err| seam_err("staging_store clear staged", &err))

@@ -141,33 +141,30 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     });
 
   /**
-   * Ends the session on this device, optionally erasing what it leaves behind.
+   * Ends the session on this device, `'erase'` also wiping what it leaves
+   * behind.
    *
-   * Each half runs its erase before its own teardown — the engine's seam wipe
-   * rides the transport the facade logout closes, and the factor drop needs the
-   * Core Kit session the session logout ends — and runs that teardown even when
-   * the erase refused. Every leg runs: a refused engine zeroize must not strand
-   * the Core Kit session, and a failed Core Kit logout must not leave the host
-   * signed in. The first refusal is what the caller sees.
+   * Each half erases before its own teardown — the engine's seam wipe rides the
+   * transport the facade logout closes, and the factor drop needs the Core Kit
+   * session the session logout ends — and tears down even when its erase
+   * refused. Every leg runs: a refused engine zeroize must not strand the Core
+   * Kit session, and a failed Core Kit logout must not leave the host signed in.
    */
-  const endSession = (forget: boolean) =>
-    exclusively(async () => {
-      const outcomes = await Promise.allSettled([
-        (async () => {
-          try {
-            if (forget) await facade?.forgetDevice?.();
-          } finally {
-            await facade?.logout();
-          }
-        })(),
-        (async () => {
-          try {
-            if (forget) await session?.forgetDevice?.();
-          } finally {
-            await session?.logout();
-          }
-        })(),
-      ]);
+  const endSession = (mode: 'keep' | 'erase') => {
+    const endHalf = async (
+      half: {
+        forgetDevice?(): Promise<void>;
+        logout(): Promise<void>;
+      } | null
+    ): Promise<void> => {
+      try {
+        if (mode === 'erase') await half?.forgetDevice?.();
+      } finally {
+        await half?.logout();
+      }
+    };
+    return exclusively(async () => {
+      const outcomes = await Promise.allSettled([endHalf(facade), endHalf(session)]);
       secrets?.use(null);
       restore = null;
       account.signedOut();
@@ -175,6 +172,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       const failed = outcomes.find((outcome) => outcome.status === 'rejected');
       if (failed) throw failed.reason as Error;
     });
+  };
 
   const unavailable = <T>(method: IdentityMethod): Promise<T> =>
     Promise.reject(new Error(`${method} sign-in is not available on this device`));
@@ -230,7 +228,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     logout() {
-      return endSession(false);
+      return endSession('keep');
     },
 
     forgetDevice() {
@@ -239,7 +237,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       if (!facade?.forgetDevice) {
         return Promise.reject(new Error('this device cannot be forgotten from here'));
       }
-      return endSession(true);
+      return endSession('erase');
     },
 
     resume() {

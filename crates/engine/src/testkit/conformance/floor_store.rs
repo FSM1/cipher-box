@@ -163,17 +163,13 @@ where
 
     // Clear ("forget this device") drops both namespaces, durably — the one
     // exit from the ratchet, so a floor left standing is a floor the device can
-    // no longer explain.
+    // no longer explain. The reopened handle is what the assertions read: an
+    // in-memory-only clear passes on the live one.
     reopened.clear().await.unwrap();
     assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), None);
-    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), None);
-    assert_eq!(reopened.sequence_floor(scope_a).await.unwrap(), None);
     let after_clear = open().await;
-    assert_eq!(
-        after_clear.epoch_floor(scope_b).await.unwrap(),
-        None,
-        "clear must be durable"
-    );
+    assert_eq!(after_clear.epoch_floor(scope_a).await.unwrap(), None);
+    assert_eq!(after_clear.epoch_floor(scope_b).await.unwrap(), None);
     assert_eq!(
         after_clear.sequence_floor(scope_a).await.unwrap(),
         None,
@@ -181,6 +177,8 @@ where
     );
 
     // A cleared store still ratchets: the erase resets the floors, not the law.
+    // A store that latched "cleared" and then took anything passes the raise
+    // above and fails here.
     assert_eq!(after_clear.raise_epoch_floor(scope_a, 4).await.unwrap(), 4);
     assert_eq!(
         after_clear.raise_epoch_floor(scope_a, 1).await.unwrap(),

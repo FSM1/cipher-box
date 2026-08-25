@@ -120,19 +120,36 @@ pub(crate) fn list_file_names(dir: &Path) -> io::Result<Vec<String>> {
 /// Unlike [`list_file_names`], this does not skip temps: a temp still holds the
 /// bytes a store was in the middle of writing, so an erase that stepped over it
 /// would leave that record behind.
+///
+/// One barrier for the whole sweep, not one per file
+/// ([`remove_file_durable`]'s): nothing here is ordered against anything else in
+/// the same directory, so a crash mid-sweep strands an arbitrary subset either
+/// way and the only recovery is to sweep again. The trailing barrier still gives
+/// a caller sweeping several directories the ordering between them.
 pub(crate) fn empty_dir(dir: &Path) -> io::Result<()> {
     // Collected first: removing during the walk mutates what it iterates.
     let mut names = Vec::new();
-    for entry in fs::read_dir(dir)? {
+    let listing = match fs::read_dir(dir) {
+        Ok(listing) => listing,
+        // Already gone is the state an erase was asking for; reporting failure
+        // would tell a member their forget did not land.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in listing {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             names.push(entry.file_name());
         }
     }
     for name in names {
-        remove_file_durable(&dir.join(name))?;
+        match fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
     }
-    Ok(())
+    fsync_dir(dir).map_err(|err| io::Error::new(err.kind(), format!("sweep barrier: {err}")))
 }
 
 /// Barriers a directory so a create/rename/unlink inside it is durable

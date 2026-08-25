@@ -70,11 +70,8 @@ export class EngineFacade {
    * seam — the floors, op queue, staged bytes and ciphertext cache a logout
    * keeps (blueprint/web-client.md "Logout").
    *
-   * The vault's half only. The host erases this device's auth state — the
-   * sealed Core Kit store and its wrapping key — and drops its factor
-   * best-effort; neither is reachable from here, and neither may wait on the
-   * network. The worker stays up so the caller can tear it down through
-   * {@link logout}, whose zeroization this does not do.
+   * Leaves the worker standing, so the {@link logout} that follows is still
+   * what zeroizes it. A refused erase rejects rather than resolving.
    */
   async forgetDevice(): Promise<void> {
     await this.command({ kind: 'forgetDevice' });

@@ -251,15 +251,26 @@ describe('the login flow', () => {
 });
 
 describe('forgetting this device', () => {
-  it('erases both halves before it tears them down', async () => {
-    const parts = build();
+  it('erases each half before it tears that half down', async () => {
+    const order: string[] = [];
+    const facade = fakeFacade({
+      forgetDevice: () => {
+        order.push('erase');
+        return Promise.resolve();
+      },
+      logout: () => {
+        order.push('teardown');
+        return Promise.resolve();
+      },
+    });
+    const parts = build({ facade });
     await parts.flow.loginWithGoogle('google.id.token');
 
     await parts.flow.forgetDevice();
 
-    expect(parts.facade.calls.forgets).toBe(1);
+    // The seam wipe rides the transport the teardown closes.
+    expect(order).toEqual(['erase', 'teardown']);
     expect(parts.session.calls.forgets).toBe(1);
-    expect(parts.facade.calls.logouts).toBe(1);
     expect(parts.session.calls.logouts).toBe(1);
     expect(parts.account.signOuts()).toBe(1);
   });

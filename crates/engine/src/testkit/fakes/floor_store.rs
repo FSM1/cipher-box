@@ -42,9 +42,12 @@ impl InMemoryFloorStore {
             .insert(key.to_vec());
     }
 
-    /// Restore every injected floor fault.
+    /// Restore every injected floor fault, the clear's included — one heal for
+    /// every injector this fake offers.
     pub fn heal_floors(&self) {
-        self.inner.lock().expect("lock").failing.clear();
+        let mut inner = self.inner.lock().expect("lock");
+        inner.failing.clear();
+        inner.failing_clear = false;
     }
 
     /// Make [`FloorStore::clear`] fail, so a test can drive the erase leg of

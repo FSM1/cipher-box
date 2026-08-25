@@ -171,11 +171,10 @@ async function runStagingDebrisBehavioral(): Promise<void> {
  * own backing labels. Anything above these counts is in-flight write debris.
  */
 const STAGED_AFTER_KIT: Record<string, number> = {
-  // The ordering phase ends on the `clear` case, which sweeps the directory —
-  // so anything left here is debris by construction.
-  ordering: 0,
+  ordering: 1,
   'failed-replacement': 1,
   'failed-first-put': 0,
+  cleared: 0,
 };
 
 /** Stores are per-fault: the kit asserts on leftover staged counts, so another

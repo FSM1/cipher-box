@@ -50,7 +50,7 @@ fn file_staging_store_passes_the_staging_store_kit() {
     block_on(conformance::staging_store::check(
         async |backing: Backing| FileStagingStore::open(root.join(backing.label())).unwrap(),
         async |backing: Backing| match backing {
-            Backing::Ordering | Backing::FailedReplacement => denial.arm(),
+            Backing::Ordering | Backing::FailedReplacement | Backing::Cleared => denial.arm(),
             Backing::FailedFirstPut => {
                 std::fs::remove_dir(root.join(backing.label()).join("staged"))
                     .expect("the kit's lever must be armed, or it proves nothing");
@@ -115,6 +115,31 @@ fn the_file_staging_store_passes_the_retire_ledger_kit() {
     block_on(conformance::retire_ledger::check(async || {
         StagingRetireLedger::new(Box::leak(Box::new(FileStagingStore::open(&path).unwrap())))
     }));
+}
+
+/// The reason `clear` sweeps with `empty_dir` rather than the temp-skipping
+/// `list_file_names`: an in-flight temp still holds the staged ciphertext its
+/// killed writer was landing, so an erase that stepped over it would leave that
+/// record behind. Enumeration hides temps, so nothing else would ever reclaim it.
+#[test]
+fn clearing_a_staging_store_sweeps_the_temps_enumeration_hides() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let store = FileStagingStore::open(&path).unwrap();
+    block_on(store.put_staged_bytes(b"key", b"staged")).unwrap();
+    std::fs::write(
+        path.join("staged").join(".cbtmp.stranded"),
+        b"half a record",
+    )
+    .unwrap();
+
+    block_on(store.clear()).unwrap();
+
+    assert_eq!(
+        std::fs::read_dir(path.join("staged")).unwrap().count(),
+        0,
+        "a temp holding staged bytes must not survive the erase"
+    );
 }
 
 #[test]

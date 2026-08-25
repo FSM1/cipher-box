@@ -282,6 +282,33 @@ mod tests {
     use super::*;
     use cipherbox_engine::testkit::block_on;
 
+    /// The whole security argument for `clear` on this store: `open` replays
+    /// leftover intents unconditionally, so a sweep that took the floors before
+    /// the intents would re-raise every floor in a crashed batch on reopen.
+    #[test]
+    fn a_cleared_floor_is_not_resurrected_by_a_leftover_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        let store = FileFloorStore::open(&path).unwrap();
+        block_on(store.raise_epoch_floor(b"scope", 9)).unwrap();
+        // A batch commit killed mid-apply: its intent is still on the platter.
+        let raises = [FloorRaise::epoch(b"scope".to_vec(), 9)];
+        atomic_write(
+            &path.join("intent").join("crashed"),
+            &encode_intent(&raises).unwrap(),
+        )
+        .unwrap();
+
+        block_on(store.clear()).unwrap();
+
+        let reopened = FileFloorStore::open(&path).unwrap();
+        assert_eq!(
+            block_on(reopened.epoch_floor(b"scope")).unwrap(),
+            None,
+            "the replay must have nothing left to re-raise"
+        );
+    }
+
     #[test]
     fn intent_round_trips() {
         let raises = vec![

@@ -6,8 +6,7 @@
  * fallback tier). Epoch floors and sequence floors are independent object
  * stores, so identical key bytes in the two namespaces never collide. Each
  * `raise*` is a read-modify-write inside one `readwrite` transaction, so the
- * stored floor is structurally incapable of regression. Only
- * {@link IdbFloorStore.clear} ("forget this device") drops them.
+ * stored floor is structurally incapable of regression.
  */
 
 import { toHex } from './bytes.js';

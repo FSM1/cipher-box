@@ -53,11 +53,7 @@ export interface Auth {
   /** `signature` is the `0x`-prefixed EIP-191 hex wagmi returns, sent verbatim. */
   loginWithWallet(message: string, signature: string): Promise<void>;
   logout(): Promise<void>;
-  /**
-   * Forget this device: a logout, plus the erase a logout deliberately leaves
-   * alone — the engine's durable seams and this device's Core Kit store, with a
-   * best-effort drop of its factor. Never reached from {@link logout}.
-   */
+  /** Forget this device ({@link LoginFlow.forgetDevice}). */
   forgetDevice(): Promise<void>;
   /** True while a login is held at a factor policy this device has no factor for. */
   recoveryRequired: boolean;

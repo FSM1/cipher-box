@@ -822,14 +822,10 @@ pub enum Command {
     Logout,
     /// Forget this device: end the session and erase every durable seam —
     /// floors, the op queue, staged bytes, the snapshot cache, and any
-    /// persisted refresh token.
+    /// persisted refresh token (blueprint/web-client.md "Logout").
     ///
     /// Device-scoped, never account-scoped: the seams never interpret their
-    /// contents, so there is no filter that could make a per-account erase
-    /// complete. Offline-capable — nothing here is a network call, and the
-    /// remote half (dropping this device's factor) is the host's, best-effort,
-    /// and may not abort this. Logout is never a trigger
-    /// (blueprint/web-client.md "Logout").
+    /// contents, so no filter could make a per-account erase complete.
     ForgetDevice,
 }
 
@@ -1043,6 +1039,10 @@ pub enum EngineError {
     /// [`Engine::start`] was called on an already-started engine (one live
     /// instance is the single writer).
     AlreadyStarted,
+    /// [`Command::ForgetDevice`] swept this instance's seams. Terminal: the
+    /// loops are stopped and the bearers sealed, so nothing here can be served
+    /// or restarted — the host builds a fresh engine.
+    Forgotten,
     /// The login secret was empty or not a valid 32-byte identity scalar.
     InvalidSecret,
     /// A read named a node absent from the rendered view.
@@ -1521,6 +1521,7 @@ impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EngineError::NotStarted => f.write_str("engine not started"),
+            EngineError::Forgotten => f.write_str("this device was forgotten"),
             EngineError::AlreadyStarted => f.write_str("engine already started"),
             EngineError::InvalidSecret => {
                 f.write_str("login secret is not a valid identity scalar")
@@ -2659,6 +2660,9 @@ pub struct Engine<T: SeamTypes> {
     /// publish/renew (no redundant 401→refresh). `None` until then.
     api: Option<Rc<ApiClient<T::Http, T::CredentialStore>>>,
     started: bool,
+    /// Terminal: [`Command::ForgetDevice`] swept the seams, so this instance
+    /// serves nothing further. Separate from `started`, which stays write-once.
+    forgotten: bool,
 }
 
 impl<T: SeamTypes> Engine<T> {
@@ -2723,6 +2727,7 @@ impl<T: SeamTypes> Engine<T> {
                 byo_reconciled: Cell::new(false),
                 api: None,
                 started: false,
+                forgotten: false,
             },
             EventStream { receiver },
         )
@@ -2748,6 +2753,9 @@ impl<T: SeamTypes> Engine<T> {
         T::SnapshotCache: Clone + 'static,
         T::StagingStore: Clone + 'static,
     {
+        if self.forgotten {
+            return Err(EngineError::Forgotten);
+        }
         if self.started {
             return Err(EngineError::AlreadyStarted);
         }
@@ -2995,32 +3003,54 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
+    /// The gate every entry point shares: a forget latches the instance
+    /// terminal, and an engine that never started has nothing to serve.
+    fn live_session(&self) -> Result<(), EngineError> {
+        match (self.forgotten, self.started) {
+            (true, _) => Err(EngineError::Forgotten),
+            (_, false) => Err(EngineError::NotStarted),
+            _ => Ok(()),
+        }
+    }
+
     /// [`Command::ForgetDevice`]: stop the session, then erase every durable
     /// seam.
     ///
-    /// The sweep is last, and the session is marked ended before it: a floor
-    /// raise or cache put from a pass still in flight would otherwise land
+    /// The sweep is last, and the instance is latched terminal before it: a
+    /// floor raise or cache put from a pass still in flight would otherwise land
     /// behind the erase and re-seed the device with state it just disowned.
-    ///
-    /// Every seam is attempted even after one refuses, and the first refusal is
-    /// what the caller sees. Stopping at it would leave the other three intact —
-    /// a partial erase is the outcome this ordering exists to avoid, not one to
-    /// fail toward.
+    /// Every seam is swept even after one refuses, and the first refusal is what
+    /// the caller sees.
     async fn forget_device(&mut self) -> Result<(), EngineError> {
         self.shut_down();
-        self.started = false;
+        self.forgotten = true;
+        // Dropped here, at the terminal owner: `shut_down` seals what the loops
+        // share, and these are the engine's own copies (security rule 7). The
+        // render goes with them — it is plaintext metadata about the vault this
+        // device is disowning.
+        let api = self.api.take();
+        self.session = None;
+        let root = self.snapshot.borrow().root;
+        *self.snapshot.borrow_mut() = Snapshot::new(root);
 
-        let mut first = Ok(());
-        let mut charge = |outcome: SeamResult<()>| {
-            if first.is_ok() {
-                first = outcome.map_err(EngineError::from_seam);
-            }
-        };
-        charge(self.seams.staging_store.clear().await);
-        charge(self.seams.snapshot_cache.clear().await);
-        charge(self.seams.floor_store.clear().await);
-        charge(self.seams.credential_store.clear_refresh_token().await);
-        first
+        // Best-effort, before the seams and outside the verdict: this is the
+        // one leg that needs the network, and the erase must land offline. On
+        // web the refresh credential is an HTTP-only cookie no seam can reach,
+        // so a server-side revoke is the only thing that ends it.
+        if let Some(api) = api {
+            let _ = api.logout().await;
+        }
+
+        [
+            self.seams.credential_store.clear_refresh_token().await,
+            self.seams.staging_store.clear().await,
+            self.seams.snapshot_cache.clear().await,
+            self.seams.floor_store.clear().await,
+        ]
+        .into_iter()
+        .find(Result::is_err)
+        .unwrap_or(Ok(()))
+        .map_err(EngineError::from_seam)
     }
 
     /// Run the cold-start live-session data path — the ordered chain composed on
@@ -3726,9 +3756,13 @@ where {
     /// [`EngineError::Unimplemented`].
     ///
     pub async fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
+        // Ahead of the session gate: an engine whose `start` failed closed — a
+        // regressed floor, an unreadable cache — is exactly the device whose
+        // only recovery is to be forgotten, and it never reached a session.
+        if matches!(command, Command::ForgetDevice) {
+            return self.forget_device().await.map(|()| CommandOutcome::Done);
         }
+        self.live_session()?;
         // One clock read per command, journaled on the op: a retried publish
         // re-mints the same sequence, so authoring time must not be re-read.
         let authored_at = self.seams.scheduler.now();
@@ -3882,7 +3916,6 @@ where {
                 self.rotate_now(node).await.map(|()| CommandOutcome::Done)
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
-            Command::ForgetDevice => self.forget_device().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
                 Ok(CommandOutcome::Done)
@@ -5178,9 +5211,7 @@ where {
         target: WriteTarget,
         size: u64,
     ) -> Result<WriteHandle, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         // Checked before anything is spent: a version of a node this device has
         // no file for would journal an `updateContent` the drain can only halt
         // on, after a whole upload's worth of staging, entropy and budget.
@@ -5319,9 +5350,7 @@ where {
         handle: WriteHandle,
         bytes: &[u8],
     ) -> Result<(), EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         match self.push_chunk_inner(handle, bytes).await {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -5375,9 +5404,7 @@ where {
     /// reachable cause is a backing file truncated mid-read, and committing it
     /// would publish a short version as a success.
     pub async fn commit_write(&mut self, handle: WriteHandle) -> Result<OpId, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         // Taken out of the ledger up front: from here the handle is spent
         // whatever happens, and its reservation must not outlive it.
         let write = self.take_write(handle)?;
@@ -5532,6 +5559,7 @@ where {
     /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
     /// method (blueprint/engine.md "API client").
     pub async fn siwe_challenge(&self) -> Result<String, EngineError> {
+        self.live_session()?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let nonce = api.siwe_challenge().await.map_err(EngineError::from_api)?;
         Ok(nonce.nonce)
@@ -5650,9 +5678,7 @@ where {
     /// the pending-op overlay — for FUSE-shaped reads (children/lookup/attrs/
     /// statfs). Fails `NotStarted` before [`start`](Self::start).
     pub async fn view(&self) -> Result<EngineView, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         Ok(EngineView {
             rendered: self.render().await?,
         })
@@ -5664,9 +5690,7 @@ where {
     /// off a render — a mount reads this for its tray without paying for the
     /// snapshot overlay on the kernel path.
     pub async fn status(&self) -> Result<SessionStatus, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         // Every `RefCell` read happens after the await, so no borrow spans it.
         let retained_records = self.scan_queue().await?.retained;
         Ok(SessionStatus {
@@ -5695,9 +5719,7 @@ where {
     /// serves (state law): one pending-ops read feeds both the overlay and the
     /// pending flags, so the flags and the rendered children never disagree.
     pub async fn snapshot(&self, folder: NodeId) -> Result<SnapshotView, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         let scan = self.scan_queue().await?;
         let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
         let rendered = {
@@ -5766,6 +5788,7 @@ where {
     /// scope root, so a revocation the owner published is *discovered* here
     /// rather than delivered.
     pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
+        self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let received = self
             .received_share_store(session)
@@ -5801,6 +5824,7 @@ where {
     /// [`EngineError::UnknownNode`], and a scope root this read could not reach
     /// leaves [`SharingView::state`] absent rather than empty.
     pub async fn sharing(&self, scope_root: NodeId) -> Result<SharingView, EngineError> {
+        self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         // A node this vault does not hold is a caller error, and must not read
         // back as the empty grant list a node that is simply not a scope root
@@ -5958,9 +5982,7 @@ where {
     /// failure; on success folds the head version's size/mtime into the base
     /// snapshot, emitting [`Event::SnapshotUpdated`] only when they changed.
     pub async fn read_content(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
         match self.read_whole(node).await {
             Ok(plaintext) => {
@@ -5994,9 +6016,7 @@ where {
     /// root-manifest fetch — once, not once per window. Closed with
     /// [`close_stream`](Engine::close_stream).
     pub async fn open_content_stream(&self, node: NodeId) -> Result<StreamHandle, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         // Reserved before the resolve, so an open past the ceiling spends no
         // network and no open that reaches the insert can be refused there.
         let slot =
@@ -6032,9 +6052,7 @@ where {
         offset: u64,
         length: u64,
     ) -> Result<Vec<u8>, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+        self.live_session()?;
         // Lifted out of the map so the borrow does not span the awaits below;
         // the pinned content key zeroizes when the last `Rc` drops.
         let stream = self
@@ -6357,6 +6375,7 @@ where {
     /// other version seals that version's bytes under this one's length —
     /// `published ++ zero-hole ++ tail`, with no error.
     pub async fn rendered_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
+        self.live_session()?;
         if let Some(staged) = self.staged_version_cid(node).await? {
             return Ok(Some(staged));
         }
@@ -7546,20 +7565,11 @@ mod tests {
     mod forget_device {
         use super::*;
 
-        /// A started engine with something durable in every seam the erase
-        /// covers, and the device handles to read them back through.
+        /// An engine with something durable in every seam the erase covers, and
+        /// the device handles to read them back through. Unstarted, so a test
+        /// that needs a session says so.
         fn loaded() -> (Engine<FakeSeamTypes>, FakeDevice, EventStream) {
-            let device = FakeWorld::new().device(b"alice-pk");
-            let (mut engine, events) = Engine::new(
-                device.seam_set(),
-                Box::new(SeededEntropy::new(42)),
-                SyncTimingProfile::CI,
-                ContentProfile::CI,
-                StoragePolicy::CI,
-                ApiBaseUrl::offline(),
-                GatewayConfig::disabled(),
-            );
-            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            let (engine, events, device) = engine_over(ApiBaseUrl::offline());
             block_on(async {
                 let floors = &device.floor_store;
                 floors.raise_epoch_floor(b"scope", 4).await.unwrap();
@@ -7577,9 +7587,16 @@ mod tests {
             (engine, device, events)
         }
 
+        /// The same, with a live session over it.
+        fn started_and_loaded() -> (Engine<FakeSeamTypes>, FakeDevice, EventStream) {
+            let (mut engine, device, events) = loaded();
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            (engine, device, events)
+        }
+
         #[test]
         fn forgetting_erases_every_durable_seam() {
-            let (mut engine, device, _events) = loaded();
+            let (mut engine, device, _events) = started_and_loaded();
 
             assert_eq!(
                 block_on(engine.command(Command::ForgetDevice)),
@@ -7605,18 +7622,73 @@ mod tests {
             });
         }
 
-        /// The session ends with the erase, so no pass this device still has in
-        /// flight can re-seed the stores it just emptied.
+        /// A forget latches the instance terminal, so no pass it still has in
+        /// flight — and no later caller — can re-seed the stores it emptied.
+        /// A fresh engine is the only way back.
         #[test]
-        fn a_forgotten_device_has_no_session_left() {
-            let (mut engine, _device, _events) = loaded();
+        fn a_forgotten_engine_serves_nothing_and_cannot_be_restarted() {
+            let (mut engine, _device, _events) = started_and_loaded();
+            let root = engine.root();
 
             block_on(engine.command(Command::ForgetDevice)).unwrap();
 
             assert_eq!(
                 block_on(engine.command(Command::ManualRefresh)),
-                Err(EngineError::NotStarted)
+                Err(EngineError::Forgotten)
             );
+            // Every public read, not just the gated ones: `shut_down` leaves the
+            // render and the session standing, so a reader that consults its own
+            // field instead of the shared gate keeps answering after the sweep.
+            assert!(matches!(
+                block_on(engine.view()),
+                Err(EngineError::Forgotten)
+            ));
+            assert!(matches!(
+                block_on(engine.snapshot(root)),
+                Err(EngineError::Forgotten)
+            ));
+            assert!(matches!(
+                block_on(engine.sharing(root)),
+                Err(EngineError::Forgotten)
+            ));
+            assert!(matches!(
+                block_on(engine.received_shares()),
+                Err(EngineError::Forgotten)
+            ));
+            assert!(matches!(
+                block_on(engine.rendered_version_cid(root)),
+                Err(EngineError::Forgotten)
+            ));
+            assert!(matches!(
+                block_on(engine.siwe_challenge()),
+                Err(EngineError::Forgotten)
+            ));
+            assert_eq!(
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                Err(EngineError::Forgotten)
+            );
+        }
+
+        /// The recovery case the affordance exists for: a device whose cold
+        /// start fails closed never reaches a session, so a forget gated on one
+        /// would leave clearing the browser's site data as the only way out.
+        #[test]
+        fn an_engine_that_never_started_can_still_be_forgotten() {
+            let (mut engine, device, _events) = loaded();
+
+            assert_eq!(
+                block_on(engine.command(Command::ForgetDevice)),
+                Ok(CommandOutcome::Done)
+            );
+
+            block_on(async {
+                assert_eq!(
+                    device.floor_store.epoch_floor(b"scope").await.unwrap(),
+                    None
+                );
+                assert!(device.staging_store.queued_ops().await.unwrap().is_empty());
+                assert_eq!(device.snapshot_cache.get(b"key").await.unwrap(), None);
+            });
         }
 
         /// A refusing seam must not spare the rest, and must still reach the
@@ -7624,7 +7696,7 @@ mod tests {
         /// one outcome neither half may produce.
         #[test]
         fn a_seam_that_refuses_the_erase_does_not_spare_the_others() {
-            let (mut engine, device, _events) = loaded();
+            let (mut engine, device, _events) = started_and_loaded();
             device.floor_store.fail_clear();
 
             assert!(matches!(

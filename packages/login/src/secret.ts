@@ -39,10 +39,11 @@ export interface LoginFacade {
   start(secret: ArrayBuffer, accountId: string): Promise<void>;
   logout(): Promise<void>;
   /**
-   * Erases the durable seams a logout keeps ("forget this device"). Absent on a
-   * host that erases them outside this seam — the desktop shell removes the
-   * account directory the engine's stores live in, which no facade command
-   * could do while that engine still holds them open.
+   * Erases the durable seams a logout keeps ("forget this device"). Optional
+   * because a host may erase them off this seam entirely; the desktop shell's
+   * own path is not landed, so its facade carries none and
+   * [`LoginFlow.forgetDevice`] refuses there rather than passing a plain logout
+   * off as an erase.
    */
   forgetDevice?(): Promise<void>;
 }
