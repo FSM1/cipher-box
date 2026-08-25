@@ -5,7 +5,8 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { SkipThrottle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { THROTTLE_SURFACES } from '../ops/throttling';
 import { GatewayTokenService } from './services/gateway-token.service';
 
 const BEARER_PREFIX = 'Bearer ';
@@ -15,23 +16,17 @@ const BEARER_PREFIX = 'Bearer ';
  * presented pseudonym still names a live session, and gets a bare yes or no.
  *
  * Deliberately outside `JwtAuthGuard` — the credential is opaque, not a JWT
- * (CONTEXT.md, Accelerator token).
+ * (CONTEXT.md, Accelerator token). What the front must do with the answer is
+ * blueprint/api.md, Egress.
  */
 @ApiTags('Auth')
 @Controller('auth/gateway')
 export class GatewayController {
   constructor(private readonly gatewayTokenService: GatewayTokenService) {}
 
-  /**
-   * Unthrottled here: every member's reads arrive from the one gateway front,
-   * so the per-IP tracker would count them all into one bucket and stall the
-   * read path at the first busy member. Bounding this surface belongs at that
-   * front, which is not built yet; until it is, what keeps a spray of invented
-   * tokens off the database is the shape gate plus the refusal cache.
-   */
   @Get('verify')
   @HttpCode(204)
-  @SkipThrottle()
+  @Throttle(THROTTLE_SURFACES.gatewayVerify)
   @ApiOperation({
     summary: 'Verify a read accelerator token for the gateway front (forward_auth)',
   })

@@ -19,15 +19,16 @@ const DEFAULT_CACHE_TTL_SECONDS = 10;
 const MAX_CACHE_TTL_SECONDS = 60;
 
 /**
- * Refusals age out far faster than acceptances: their keys are attacker-chosen,
- * so a long life would let a spray of invented tokens hold the cache full and
- * evict live entries. One second still collapses a per-block retry storm into a
- * single lookup.
+ * Refusals age out far faster than acceptances, and are capped separately
+ * below: their keys are attacker-chosen, so sharing either budget would let a
+ * spray of invented tokens push live sessions out of the cache. One second
+ * still collapses a per-block retry storm into a single lookup.
  */
 const REFUSAL_CACHE_TTL_MS = 1000;
 
-/** Bound on cached entries, so the verify path cannot grow memory without end. */
-const CACHE_MAX_ENTRIES = 10_000;
+/** Bounds on cached entries, so the verify path cannot grow memory without end. */
+const ACCEPTANCE_CACHE_MAX_ENTRIES = 10_000;
+export const REFUSAL_CACHE_MAX_ENTRIES = 1_000;
 
 /**
  * The read accelerator's credential: an opaque per-session pseudonym minted
@@ -40,8 +41,9 @@ const CACHE_MAX_ENTRIES = 10_000;
 export class GatewayTokenService {
   private readonly ttlSeconds: number;
   private readonly cacheTtlMs: number;
-  /** tokenHash → the answer, and the epoch ms it stops being trusted. */
-  private readonly cache = new Map<string, { accepted: boolean; until: number }>();
+  /** tokenHash → the epoch ms that answer stops being trusted. */
+  private readonly accepted = new Map<string, number>();
+  private readonly refused = new Map<string, number>();
 
   constructor(
     private readonly clock: Clock,
@@ -94,9 +96,11 @@ export class GatewayTokenService {
     }
     const tokenHash = sha256Hex(rawToken);
     const now = this.clock.now().getTime();
-    const cached = this.cache.get(tokenHash);
-    if (cached !== undefined && cached.until > now) {
-      return cached.accepted;
+    if ((this.accepted.get(tokenHash) ?? 0) > now) {
+      return true;
+    }
+    if ((this.refused.get(tokenHash) ?? 0) > now) {
+      return false;
     }
 
     const live = await this.gatewayTokenRepository
@@ -109,7 +113,7 @@ export class GatewayTokenService {
       .innerJoin(
         RefreshToken,
         'refresh',
-        'refresh.family_id = gateway.family_id AND refresh.used_at IS NULL AND refresh.expires_at > :now'
+        'refresh.family_id = gateway.family_id AND refresh.user_id = gateway.user_id AND refresh.used_at IS NULL AND refresh.expires_at > :now'
       )
       .where('gateway.token_hash = :tokenHash', { tokenHash })
       .andWhere('gateway.expires_at > :now')
@@ -118,20 +122,30 @@ export class GatewayTokenService {
       .getRawOne<{ expires_at: Date }>();
 
     if (!live) {
-      this.remember(tokenHash, false, now + REFUSAL_CACHE_TTL_MS);
+      remember(this.refused, REFUSAL_CACHE_MAX_ENTRIES, tokenHash, now + REFUSAL_CACHE_TTL_MS);
       return false;
     }
     // Never past the token's own expiry, so the cache cannot outlive the row.
-    this.remember(tokenHash, true, Math.min(live.expires_at.getTime(), now + this.cacheTtlMs));
+    remember(
+      this.accepted,
+      ACCEPTANCE_CACHE_MAX_ENTRIES,
+      tokenHash,
+      Math.min(live.expires_at.getTime(), now + this.cacheTtlMs)
+    );
     return true;
   }
+}
 
-  private remember(tokenHash: string, accepted: boolean, until: number): void {
-    // Re-insert so Map iteration order stays oldest-first for the eviction below.
-    this.cache.delete(tokenHash);
-    this.cache.set(tokenHash, { accepted, until });
-    if (this.cache.size > CACHE_MAX_ENTRIES) {
-      this.cache.delete(this.cache.keys().next().value as string);
-    }
+function remember(
+  cache: Map<string, number>,
+  maxEntries: number,
+  tokenHash: string,
+  until: number
+): void {
+  // Re-insert so Map iteration order stays oldest-first for the eviction below.
+  cache.delete(tokenHash);
+  cache.set(tokenHash, until);
+  if (cache.size > maxEntries) {
+    cache.delete(cache.keys().next().value as string);
   }
 }

@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sha256Hex } from '../../common/hash';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { GatewayToken } from '../entities/gateway-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { User } from '../entities/user.entity';
-import { GatewayTokenService } from './gateway-token.service';
+import { GatewayTokenService, REFUSAL_CACHE_MAX_ENTRIES } from './gateway-token.service';
 
 /**
  * The accelerator pseudonym against a REAL Postgres: its validity is a join
@@ -58,10 +59,11 @@ describe('GatewayTokenService (real Postgres)', () => {
    */
   async function startSession(
     clock: FakeClock,
-    userId?: string
+    userId?: string,
+    reviveFamilyId?: string
   ): Promise<{ userId: string; familyId: string }> {
     const owner = userId ?? (await users.save({ publicKey: randomCompressedPublicKey() })).id;
-    const familyId = randomUUID();
+    const familyId = reviveFamilyId ?? randomUUID();
     await refreshTokens.save({
       userId: owner,
       familyId,
@@ -201,6 +203,35 @@ describe('GatewayTokenService (real Postgres)', () => {
     // The cache window would still be open here; the token's expiry is not.
     clock.advanceMs(2);
     expect(await service.verify(token)).toBe(false);
+  });
+
+  it('spends its refusal budget on refusals alone, never on a live session', async () => {
+    const clock = new FakeClock();
+    const service = buildService(clock);
+    const live = await startSession(clock);
+    const revoked = await startSession(clock);
+
+    const liveToken = await service.mintForFamily(live.userId, live.familyId);
+    expect(await service.verify(liveToken)).toBe(true);
+    const revokedToken = await service.mintForFamily(revoked.userId, revoked.familyId);
+    await refreshTokens.delete({ familyId: revoked.familyId });
+    expect(await service.verify(revokedToken)).toBe(false);
+
+    // A spray of invented tokens, one past the refusal budget. These keys are
+    // the attacker's to choose, so they must cost only each other.
+    for (let i = 0; i <= REFUSAL_CACHE_MAX_ENTRIES; i += 1) {
+      await service.verify(sha256Hex(String(i)));
+    }
+
+    // The spray pushed the earlier refusal out of its own budget: restoring the
+    // session behind it is seen, which a still-cached refusal would have hidden.
+    await startSession(clock, revoked.userId, revoked.familyId);
+    expect(await service.verify(revokedToken)).toBe(true);
+
+    // The acceptance, meanwhile, is untouched — revoked underneath, so only the
+    // surviving cache entry can still answer true.
+    await refreshTokens.delete({ familyId: live.familyId });
+    expect(await service.verify(liveToken)).toBe(true);
   });
 
   it('caches a refusal, and ages it out far sooner than an acceptance', async () => {

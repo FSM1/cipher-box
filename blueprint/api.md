@@ -184,6 +184,15 @@ decay) inverted into structure.
   put full API authority on the system's highest-frequency credential
   presentation (roughly one per leaf block). Any public trustless gateway is the
   no-auth fallback; reads survive CipherBox infra loss.
+- **What the `forward_auth` front owes the pseudonym.** Three requirements, all
+  load-bearing: deny on **any** non-204, not only 401, so a verify-side fault
+  fails closed; never log the `Authorization` header, since the raw pseudonym in
+  a proxy access log is a gateway credential at rest; and **strip** it before
+  proxying upstream, so it does not reach Kubo's logs either. Not logging client
+  IPs belongs here too — the pseudonym removes the account from the gateway
+  tier, but an IP recorded beside a read re-links it. The unlinkability claim is
+  scoped to a gateway-tier observer: the API necessarily resolves pseudonym to
+  account at verify time.
   Media streaming uses ranged block/CAR fetches through the existing
   service-worker decryption layer.
 
