@@ -29,7 +29,9 @@ use crate::seams::{
     StagingStore,
 };
 
-/// Head blocks a publish left charged and unreachable, pending retirement.
+/// Registry rows a pass left charged and unreachable, pending retirement: the
+/// head blocks of a failed publish, and the names of a reclaimed subtree whose
+/// retire the registry refused.
 ///
 /// Session-lived and shared by every publisher — the drain clears it at the end
 /// of a pass, the settings publish at the point of failure — so a retire the
@@ -188,13 +190,26 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()> {
         for entry in entries {
             let key = Self::key(owner_tag, &entry.target)?;
-            // A held entry stands, so a replayed prune cannot move what the
-            // vault reports as pending; an unreadable one is repaired rather
-            // than left to sit undrainable forever.
-            if decode_entry(self.0.staged_bytes(&key).await?).is_some() {
-                continue;
+            // A held entry's figures stand, so a replayed prune cannot move what
+            // the vault reports as pending; an unreadable one is repaired rather
+            // than left to sit undrainable forever. The class is the exception:
+            // it only ever advances to `Retired`, because a node whose record a
+            // delete retired never publishes again, and keeping the stored
+            // `Published` would leave that debt unsettleable.
+            match decode_entry(self.0.staged_bytes(&key).await?) {
+                Some(held) if held.owing == entry.owing => continue,
+                Some(held) if entry.owing == OwingRecord::Retired => {
+                    let advanced = OwedRetire {
+                        owing: OwingRecord::Retired,
+                        ..held
+                    };
+                    self.0
+                        .put_staged_bytes(&key, &encode_entry(&advanced))
+                        .await?;
+                }
+                Some(_) => continue,
+                None => self.0.put_staged_bytes(&key, &encode_entry(entry)).await?,
             }
-            self.0.put_staged_bytes(&key, &encode_entry(entry)).await?;
         }
         Ok(())
     }

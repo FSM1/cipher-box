@@ -3113,11 +3113,16 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     }
 }
 
-/// A folder delete reclaims the whole subtree it detaches. Nothing under it is
-/// reachable afterwards, so nothing under it may keep a record alive, keep
-/// bytes pinned, or sit in the rendered tree as a parentless node.
+/// A folder delete retires every record it detaches and leaves no parentless
+/// node behind.
+///
+/// It does **not** unpin a descendant's content. A descendant is reached
+/// through a `ChildRef` — wire data — and nothing binds a node to the folder
+/// naming it, so this walk cannot prove the descendant is reachable only from
+/// here. A charged pin row is a leak; unpinning one a live listing still names
+/// is loss (blueprint/engine.md "Retirement").
 #[test]
-fn a_folder_delete_reclaims_its_whole_subtree() {
+fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -3163,12 +3168,63 @@ fn a_folder_delete_reclaims_its_whole_subtree() {
         );
     }
     for cid in &content {
-        assert!(retired.contains(cid), "the descendant's pins are reclaimed");
+        assert!(
+            !retired.contains(cid),
+            "a descendant's pins are a leak this walk cannot prove safe to unpin"
+        );
     }
     let view = block_on(engine.view()).unwrap();
     assert!(
         view.attrs(deep).is_none(),
         "no descendant is left behind as a parentless node"
+    );
+}
+
+/// The one ordering this pass must not produce. Everything reclaimable happens
+/// after the unlink publishes, so a delete whose record never landed unpins
+/// nothing and retires nothing — the parent still names the target, and
+/// unpinning content a live record reaches is loss where a charged row is only
+/// a leak (blueprint/engine.md "Retirement").
+#[test]
+fn a_delete_whose_unlink_never_published_reclaims_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let content: Vec<String> = registration_entries(&alice, &write_name(doomed))
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+    let mark = retire_targets(&alice).len();
+
+    // The unlink rides the parent's record, and that record will not publish.
+    world.record_store.fail_put_for(write_name(ROOT).as_str());
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes.txt"],
+        "the parent still names the target"
+    );
+    assert!(
+        retired_since(&alice, mark).is_empty(),
+        "nothing is retired or unpinned behind an unlink that never landed"
     );
 }
 

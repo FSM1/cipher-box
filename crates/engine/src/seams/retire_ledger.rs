@@ -87,9 +87,12 @@ impl OwedRetire {
 ///   account's paid debt from another's unpaid one
 ///   ([`RetireResult`](crate::api::RetireResult)).
 /// - **Keyed by target**: [`owe`](RetireLedger::owe)ing a target the store
-///   already holds keeps the stored entry rather than adding a second one, so a
-///   replayed prune cannot double the pending figure. Order is not part of the
-///   contract.
+///   already holds keeps the stored figures rather than adding a second entry,
+///   so a replayed prune cannot double the pending figure. Order is not part of
+///   the contract. The one field that moves is [`OwedRetire::owing`], and only
+///   toward [`OwingRecord::Retired`]: a node whose record a delete retired never
+///   publishes again, so the class is monotone and the stored `Published` would
+///   otherwise strand the debt.
 /// - **Never-discard**: nothing but `settle` removes an entry. There is no
 ///   attempt budget, no expiry, and no sweep — every failure mode is either
 ///   self-clearing or ours, and the byte figure is the only record of what was

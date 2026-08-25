@@ -2597,11 +2597,12 @@ pub struct Engine<T: SeamTypes> {
     /// ([`focus_refreshed`](Self::focus_refreshed)).
     focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
     /// File nodes a host operation put in view past the staleness threshold,
-    /// awaiting the tick's file leg. A file's size and mtime have no `ChildRef`
-    /// mirror, so no folder refresh can move them — its own record must resolve
-    /// (CONTEXT.md "focus window": everything below the window refreshes on
-    /// access). Shared with the tick loop, which drains it each pass.
-    focus_files: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// awaiting the tick's file leg ([`FolderRefresh::run_files`]). Most recent
+    /// last, capped at [`MAX_FOCUS_FILES`]: a focus window is about what is in
+    /// view now, so a full queue drops its oldest entry rather than refusing the
+    /// file the host just looked at. Shared with the tick loop, which drains it
+    /// each pass.
+    focus_files: Rc<RefCell<Vec<NodeId>>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2723,7 +2724,7 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
-                focus_files: Rc::new(RefCell::new(BTreeSet::new())),
+                focus_files: Rc::new(RefCell::new(Vec::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -3625,10 +3626,8 @@ where {
                     // reconciled, not just the root's.
                     let open = focus_folders(&base.borrow(), &focus.borrow());
                     let mut folder_verdict = RefreshVerdict::Reconciled;
-                    if let Some(read_seed) = &read_seed
-                        && !open.is_empty()
-                    {
-                        let report = FolderRefresh {
+                    if let Some(read_seed) = &read_seed {
+                        let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
                             http: &http,
@@ -3639,50 +3638,33 @@ where {
                             scope_id: root_id,
                             scope_read_seed: read_seed,
                             mode,
+                        };
+                        // This leg holds one scope's read material, so a file
+                        // sealed under another would fail its AAD-bound unseal
+                        // and be reported as abuse by an honest writer. Files
+                        // outside it stay queued for the leg that can serve them.
+                        let due_files = {
+                            let base = base.borrow();
+                            let mut queued = focus_files.borrow_mut();
+                            let (mine, theirs) = queued.iter().partition(|file| {
+                                base.ancestors(**file).last() == Some(&NodeId(root_id))
+                            });
+                            *queued = theirs;
+                            mine
+                        };
+                        for (nodes, report) in [
+                            (&open, refresh.run(&open).await),
+                            (&due_files, refresh.run_files(&due_files).await),
+                        ] {
+                            if nodes.is_empty() {
+                                continue;
+                            }
+                            stamp_focus_refreshed(&focus_refreshed, nodes, scheduler.now());
+                            if report.changed {
+                                let _ = events.unbounded_send(Event::SnapshotUpdated);
+                            }
+                            folder_verdict = folder_verdict.worst(report.verdict);
                         }
-                        .run(&open)
-                        .await;
-                        stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
-                        if report.changed {
-                            let _ = events.unbounded_send(Event::SnapshotUpdated);
-                        }
-                        folder_verdict = report.verdict;
-                    }
-                    // The file leg. A file's size and mtime have no `ChildRef`
-                    // mirror, so the folder leg above cannot move them however
-                    // often it runs — only the file's own record does. It is
-                    // driven by what a host put in view rather than by the whole
-                    // listing, so one open folder costs no per-entry fan-out.
-                    let due_files: Vec<NodeId> = match &read_seed {
-                        // Without the scope's read seed nothing below the root
-                        // opens, so the queue waits for a pass that can serve it.
-                        None => Vec::new(),
-                        Some(_) => core::mem::take(&mut *focus_files.borrow_mut())
-                            .into_iter()
-                            .collect(),
-                    };
-                    if let Some(read_seed) = &read_seed
-                        && !due_files.is_empty()
-                    {
-                        let report = FolderRefresh {
-                            transport: &transport,
-                            snapshot_cache: &snapshot_cache,
-                            http: &http,
-                            floors: &floors,
-                            gateway: &gateway,
-                            base: &base,
-                            events: &events,
-                            scope_id: root_id,
-                            scope_read_seed: read_seed,
-                            mode,
-                        }
-                        .run_files(&due_files)
-                        .await;
-                        stamp_focus_refreshed(&focus_refreshed, &due_files, scheduler.now());
-                        if report.changed {
-                            let _ = events.unbounded_send(Event::SnapshotUpdated);
-                        }
-                        folder_verdict = folder_verdict.worst(report.verdict);
                     }
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
@@ -6495,11 +6477,11 @@ where {
     /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
     /// operation with no node in view.
     ///
-    /// A folder becomes the focus window. A file joins the queue the tick's file
-    /// leg drains instead: its size and mtime have no `ChildRef` mirror, so no
-    /// amount of folder refreshing moves them. The queue is capped at
-    /// [`MAX_FOCUS_FILES`], so a host that stats a whole listing files a bounded
-    /// number of resolves rather than one per entry.
+    /// A folder becomes the focus window; a file joins the queue the tick's file
+    /// leg drains ([`focus_files`](Self::focus_files)). Only a node this
+    /// device's own gate-passing state calls a file takes the file path, so a
+    /// node it has not resolved yet keeps the window behaviour it had before it
+    /// was projected.
     ///
     /// Nothing resolves here: a kernel callback never waits on the record plane
     /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
@@ -6538,8 +6520,10 @@ where {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
                 let mut queued = self.focus_files.borrow_mut();
-                if queued.len() < MAX_FOCUS_FILES {
-                    queued.insert(node);
+                queued.retain(|held| *held != node);
+                queued.push(node);
+                if queued.len() > MAX_FOCUS_FILES {
+                    queued.remove(0);
                 }
             }
         }
