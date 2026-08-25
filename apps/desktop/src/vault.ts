@@ -25,6 +25,14 @@ export interface VaultWarning {
   detail: string | null;
 }
 
+/** Whether the vault is also projected as a filesystem, and where. */
+export interface MountStatus {
+  /** The mount point, once a mount is live. */
+  path: string | null;
+  /** Why there is no mount. A mount failure never fails the session. */
+  refusal: string | null;
+}
+
 export interface VaultStatus {
   /** Items directly under the vault root. */
   items: number;
@@ -35,11 +43,21 @@ export interface VaultStatus {
   provisioned: boolean;
   /** Conditions the engine raised; a trust warning is not a stale view. */
   warnings: VaultWarning[];
+  mount: MountStatus;
 }
 
 /** Reads the live vault's status; rejects when no session is live. */
 export function readVaultStatus(): Promise<VaultStatus> {
   return invoke<VaultStatus>('vault_status');
+}
+
+/**
+ * Ends the session and sweeps this device's stored vault data — everything a
+ * sign-out keeps. Rejects when no session is live, which is the only state that
+ * names the account whose data would go.
+ */
+export function forgetDevice(): Promise<void> {
+  return invoke('session_forget_device');
 }
 
 /** Calls `changed` whenever the engine emits, until the returned unlisten runs. */

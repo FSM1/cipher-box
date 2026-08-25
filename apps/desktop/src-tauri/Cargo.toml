@@ -37,8 +37,15 @@ base64.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
 
+# The filesystem the engine is projected through. Only the platforms
+# `crates/fuse` ships a host adapter for take it; the rest run the session with
+# no mount (`src/mount/detached.rs`).
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+cipherbox-fuse.workspace = true
+
 [dev-dependencies]
 # The callback listener is exercised over a real loopback socket.
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
-# The engine host's tests open its real file stores under a temp root.
+# The engine host's tests open its real file stores under a temp root, and the
+# mount-point tests prepare one under a throwaway home.
 tempfile = "3"

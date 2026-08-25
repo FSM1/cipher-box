@@ -378,6 +378,22 @@ impl DirStream {
     }
 }
 
+/// One decoded kernel request, waiting for an operation core to answer it.
+///
+/// Opaque, and answered exactly once: a host takes it from
+/// [`FuseMount::next_op`] and hands it back to [`FuseMount::answer`].
+pub struct KernelOp(Option<FuseOp>);
+
+impl Drop for KernelOp {
+    /// A FUSE request nobody answers hangs its caller for the life of the
+    /// mount, so an operation dropped unanswered is refused instead.
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            op.refuse(libc::ENOTCONN);
+        }
+    }
+}
+
 /// A live mount. Dropping it unmounts and ends the session thread; the
 /// operation core it fed is torn down separately, by its own `unmount`.
 pub struct FuseMount {
@@ -386,7 +402,7 @@ pub struct FuseMount {
     invalidator: FuseInvalidator,
     ops: mpsc::UnboundedReceiver<FuseOp>,
     owner: Ownership,
-    resumable_readdir: bool,
+    listing: DirStream,
 }
 
 impl FuseMount {
@@ -408,7 +424,7 @@ impl FuseMount {
                 uid: nix::unistd::Uid::effective().as_raw(),
                 gid: nix::unistd::Gid::effective().as_raw(),
             },
-            resumable_readdir: profile.resumable_readdir,
+            listing: DirStream::new(profile.resumable_readdir),
         })
     }
 
@@ -417,18 +433,39 @@ impl FuseMount {
         self.invalidator.clone()
     }
 
-    /// Answer kernel operations from `core` until the session ends.
+    /// The next kernel operation, or `None` once the session has ended.
+    ///
+    /// Cancel-safe: an operation is taken off the queue or it is not, so a host
+    /// may wait on this beside its other wake sources.
+    pub async fn next_op(&mut self) -> Option<KernelOp> {
+        core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx))
+            .await
+            .map(|op| KernelOp(Some(op)))
+    }
+
+    /// Answer one operation from `core`.
     ///
     /// Serial by construction — one operation core is one stateful projection —
     /// and the never-block law is what keeps a serial pump responsive: no
     /// operation here awaits IPNS resolution, publish, or API bookkeeping.
-    pub async fn serve<T: SeamTypes>(&mut self, core: &mut OperationCore<T, FuseInvalidator>) {
-        let owner = self.owner;
-        let mut listing = DirStream::new(self.resumable_readdir);
-        loop {
-            let next = core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx)).await;
-            let Some(op) = next else { break };
-            answer(core, op, owner, &mut listing).await;
+    pub async fn answer<T: SeamTypes>(
+        &mut self,
+        core: &mut OperationCore<T, FuseInvalidator>,
+        mut op: KernelOp,
+    ) {
+        if let Some(op) = op.0.take() {
+            answer(core, op, self.owner, &mut self.listing).await;
+        }
+    }
+
+    /// Stop accepting kernel operations, ahead of the unmount
+    /// (blueprint/desktop.md "Lifecycle" — quiesce, unmount, stop the engine).
+    /// Everything queued and everything the session dispatches from here is
+    /// refused rather than left for a pump that has stopped running.
+    pub fn quiesce(&mut self) {
+        self.ops.close();
+        while let Ok(op) = self.ops.try_recv() {
+            op.refuse(libc::ENOTCONN);
         }
     }
 }

@@ -3,12 +3,14 @@
 //! Hosts the login front door (`../src`, driving `@cipherbox/login`), the two
 //! native steps that front door cannot take itself — Google collection over a
 //! loopback callback ([`oauth`]) and the facade the sequence starts
-//! ([`session`]) — and the engine that facade hands the login secret to
-//! ([`engine`]).
+//! ([`session`]) — the engine that facade hands the login secret to
+//! ([`engine`]), and the filesystem that engine is projected through
+//! ([`mount`]).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engine;
+mod mount;
 mod oauth;
 mod session;
 
@@ -30,6 +32,7 @@ fn main() {
             oauth::collect_google_id_token,
             session::session_start,
             session::session_logout,
+            session::session_forget_device,
             session::vault_status
         ])
         .setup(|app| {
@@ -58,8 +61,9 @@ fn main() {
             RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
-            // Quit stops the engine before the process goes, so its loops end
-            // and what it holds is zeroized rather than left to the exit.
+            // Quit ends the session before the process goes: the mount is
+            // quiesced and unmounted and the engine's loops end, rather than
+            // both being left to the exit.
             RunEvent::Exit => app.state::<engine::EngineHost>().stop(),
             _ => {}
         });

@@ -18,10 +18,9 @@ mod config;
 mod mailbox;
 mod seams;
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fs;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
@@ -33,8 +32,11 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
+use crate::mount::{KernelOp, MountStatus, Projection};
+
 pub use config::EngineConfig;
-use seams::{DesktopSeamTypes, OsEntropy};
+pub use seams::DesktopSeamTypes;
+use seams::OsEntropy;
 
 /// The secp256k1 scalar length `crates/engine/src/session.rs` requires.
 pub const LOGIN_SECRET_LEN: usize = 32;
@@ -72,6 +74,10 @@ pub struct VaultStatus {
     pub provisioned: bool,
     /// Conditions the engine raised that no snapshot carries.
     pub warnings: Vec<VaultWarning>,
+    /// Whether the vault is also projected as a filesystem, and where. A mount
+    /// failure never fails the session, so a signed-in status carries the
+    /// refusal rather than the sign-in refusing.
+    pub mount: MountStatus,
 }
 
 /// A condition the engine emits once and never repeats, retained by the host
@@ -157,10 +163,13 @@ enum Request {
     ForgetCredentials,
 }
 
-/// The live session: the channel into its engine thread, and the thread itself.
+/// The live session: the channel into its engine thread, the thread itself, and
+/// where the durable stores it opened live — a logout keeps those, and only an
+/// explicit forget sweeps them.
 struct Live {
     requests: mpsc::UnboundedSender<Request>,
     thread: JoinHandle<()>,
+    account_dir: PathBuf,
 }
 
 /// Where the running app's one engine lives.
@@ -208,6 +217,35 @@ impl EngineHost {
         self.stop();
     }
 
+    /// Forgets this device: the session ends as a logout does, and then the
+    /// durable stores a logout preserves are swept
+    /// (blueprint/desktop.md "Lifecycle").
+    ///
+    /// The sweep is last: the engine's stores are open files until its thread
+    /// has joined, and a directory removed under a running engine would be
+    /// rebuilt by the next write.
+    pub fn forget_device(&self) -> Result<(), String> {
+        let account_dir = match self.live.lock() {
+            Ok(live) => live.as_ref().map(|live| live.account_dir.clone()),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .as_ref()
+                .map(|live| live.account_dir.clone()),
+        };
+        self.log_out();
+        let Some(account_dir) = account_dir else {
+            return Err(NO_SESSION.to_owned());
+        };
+        match fs::remove_dir_all(&account_dir) {
+            Ok(()) => Ok(()),
+            // Nothing to forget is the state a forget was asking for.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "this device's stored vault data is still here: {error}"
+            )),
+        }
+    }
+
     /// Ends the session: the engine drops (zeroizing what it holds and stopping
     /// its loops) and its thread joins. Idempotent.
     pub fn stop(&self) {
@@ -247,6 +285,8 @@ impl EngineHost {
         secret: Zeroizing<Vec<u8>>,
         session: SessionEnv,
     ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
+        let account_dir = account_data_dir(&session.data_local_dir, &account_id(&secret)?)
+            .map_err(|error| error.to_string())?;
         let mut live = self.live.lock().map_err(|_| POISONED)?;
         if live.is_some() {
             return Err(ALREADY_LIVE.to_owned());
@@ -254,12 +294,19 @@ impl EngineHost {
 
         let (requests, inbox) = mpsc::unbounded_channel();
         let (verdict, started) = oneshot::channel();
-        let thread = std::thread::Builder::new()
-            .name("cipherbox-engine".to_owned())
-            .spawn(move || host_engine(secret, session, inbox, verdict))
-            .map_err(|error| format!("the engine thread could not start: {error}"))?;
+        let thread = {
+            let account_dir = account_dir.clone();
+            std::thread::Builder::new()
+                .name("cipherbox-engine".to_owned())
+                .spawn(move || host_engine(secret, session, account_dir, inbox, verdict))
+                .map_err(|error| format!("the engine thread could not start: {error}"))?
+        };
 
-        *live = Some(Live { requests, thread });
+        *live = Some(Live {
+            requests,
+            thread,
+            account_dir,
+        });
         Ok(started)
     }
 }
@@ -270,6 +317,8 @@ pub struct SessionEnv {
     pub config: EngineConfig,
     /// `<data_local_dir>` — the account directory is composed under it.
     pub data_local_dir: PathBuf,
+    /// The member's home directory — the mount point is composed under it.
+    pub home_dir: PathBuf,
     /// The OS keyring service name holding the rotating refresh token.
     pub keyring_service: String,
     /// Called when the engine emits, so the shell re-reads what it renders.
@@ -288,10 +337,12 @@ fn account_id(secret: &[u8]) -> Result<String, String> {
         .ok_or_else(|| INVALID_SECRET.to_owned())
 }
 
-/// The engine thread: build, start, then serve until the request channel closes.
+/// The engine thread: build, start, mount, then serve until the request channel
+/// closes.
 fn host_engine(
     secret: Zeroizing<Vec<u8>>,
     session: SessionEnv,
+    account_dir: PathBuf,
     inbox: mpsc::UnboundedReceiver<Request>,
     verdict: oneshot::Sender<Result<(), String>>,
 ) {
@@ -310,24 +361,20 @@ fn host_engine(
     // whole session runs inside this LocalSet.
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        let (engine, events, credentials) = match start_engine(secret, &session).await {
+        let (engine, events, credentials) = match start_engine(secret, &session, &account_dir).await
+        {
             Ok(started) => started,
             Err(refusal) => {
                 let _ = verdict.send(Err(refusal));
                 return;
             }
         };
+        // The sign-in verdict is settled before the mount is attempted, so a
+        // mount failure has no way to fail the session it reports itself in.
         let _ = verdict.send(Ok(()));
 
-        // Shared with the drain rather than owned by it: both run on this one
-        // thread, and the status read is what carries them to the window.
-        let warnings = Rc::new(RefCell::new(Warnings::default()));
-        tokio::task::spawn_local(repaint_on_events(
-            events,
-            Rc::clone(&warnings),
-            session.changed,
-        ));
-        serve(engine, credentials, warnings, inbox).await;
+        let projection = Projection::open(engine, &session.home_dir, &account_dir);
+        serve(projection, credentials, inbox, events, session.changed).await;
     });
 }
 
@@ -337,6 +384,7 @@ fn host_engine(
 async fn start_engine(
     secret: Zeroizing<Vec<u8>>,
     session: &SessionEnv,
+    account_dir: &std::path::Path,
 ) -> Result<
     (
         Engine<DesktopSeamTypes>,
@@ -345,9 +393,7 @@ async fn start_engine(
     ),
     String,
 > {
-    let account_dir = account_data_dir(&session.data_local_dir, &account_id(&secret)?)
-        .map_err(|error| error.to_string())?;
-    let seams = seams::seam_set(&session.config, &account_dir, &session.keyring_service)
+    let seams = seams::seam_set(&session.config, account_dir, &session.keyring_service)
         .map_err(|error| error.to_string())?;
     let credentials = seams.credential_store.clone();
     // After the stores have opened: the split is measured on the volume the
@@ -355,7 +401,7 @@ async fn start_engine(
     let storage_policy = session
         .config
         .pinned_storage_policy
-        .unwrap_or_else(|| measured_storage_policy(&account_dir));
+        .unwrap_or_else(|| measured_storage_policy(account_dir));
 
     let (mut engine, events) = Engine::new(
         seams,
@@ -378,33 +424,70 @@ async fn start_engine(
     Ok((engine, events, credentials))
 }
 
-/// Serves requests until the host closes the channel (logout or quit), at which
-/// point the engine drops — stopping its loops and zeroizing what it holds.
+/// What woke the session loop. One loop and one owner: the projection holds the
+/// engine, so a status read, an engine event and a kernel operation are served
+/// in turn rather than contending for it.
+enum Woke {
+    /// The host asked for something, or closed the channel — logout or quit.
+    Request(Option<Request>),
+    /// The engine emitted, or stopped emitting.
+    Event(Option<Event>),
+    /// The kernel asked the mount for something.
+    Op(KernelOp),
+}
+
+/// Serves the session until the host closes the request channel (logout or
+/// quit), then tears the projection down: quiesce, unmount, stop the engine.
 async fn serve(
-    engine: Engine<DesktopSeamTypes>,
+    mut projection: Projection,
     credentials: KeyringCredentialStore,
-    warnings: Rc<RefCell<Warnings>>,
     mut inbox: mpsc::UnboundedReceiver<Request>,
+    mut events: EventStream,
+    changed: Box<dyn Fn() + Send>,
 ) {
-    while let Some(request) = inbox.recv().await {
-        match request {
-            Request::Status(reply) => {
-                let _ = reply.send(status(&engine, &warnings).await);
+    let mut warnings = Warnings::default();
+    // A stream that has ended is polled out of the select rather than left in
+    // it: `None` is immediately ready, and a branch that is always ready would
+    // starve the other two.
+    let mut emitting = true;
+    loop {
+        // Scoped so every wake source's borrow of the projection is released
+        // before the arm that answers takes its own.
+        let woke = {
+            tokio::select! {
+                request = inbox.recv() => Woke::Request(request),
+                event = events.next(), if emitting => Woke::Event(event),
+                op = projection.next_op() => Woke::Op(op),
+            }
+        };
+        match woke {
+            Woke::Request(None) => break,
+            Woke::Request(Some(Request::Status(reply))) => {
+                let _ = reply.send(status(&mut projection, &warnings).await);
             }
             // A keyring that refuses the delete is reported to no one: the
             // session is ending either way, and there is no surface left to
             // tell. It is the next login's `store` that overwrites it.
-            Request::ForgetCredentials => {
+            Woke::Request(Some(Request::ForgetCredentials)) => {
                 let _ = credentials.clear_refresh_token().await;
             }
+            Woke::Event(None) => emitting = false,
+            Woke::Event(Some(event)) => {
+                warnings.record(&event);
+                projection.absorb(&event).await;
+                if moves_the_status(&event) {
+                    changed();
+                }
+            }
+            Woke::Op(op) => projection.answer(op).await,
         }
     }
+    projection.tear_down();
 }
 
-async fn status(
-    engine: &Engine<DesktopSeamTypes>,
-    warnings: &RefCell<Warnings>,
-) -> Result<VaultStatus, String> {
+async fn status(projection: &mut Projection, warnings: &Warnings) -> Result<VaultStatus, String> {
+    let mount = projection.status();
+    let engine = projection.engine_mut();
     let view = engine
         .snapshot(engine.root())
         .await
@@ -414,24 +497,9 @@ async fn status(
         staleness: rung(view.staleness),
         dead_letters: view.dead_letters.len(),
         provisioned: engine.is_provisioned(),
-        warnings: warnings.borrow().list(),
+        warnings: warnings.list(),
+        mount,
     })
-}
-
-/// Drains the engine's event stream, retaining what no read reports and telling
-/// the shell to re-read when the status can have moved. Draining is not
-/// optional — an unread stream grows for as long as the session lives.
-async fn repaint_on_events(
-    mut events: EventStream,
-    warnings: Rc<RefCell<Warnings>>,
-    changed: Box<dyn Fn() + Send>,
-) {
-    while let Some(event) = events.next().await {
-        warnings.borrow_mut().record(&event);
-        if moves_the_status(&event) {
-            changed();
-        }
-    }
 }
 
 /// Whether an event can change what [`VaultStatus`] reports. A transfer's
@@ -468,9 +536,30 @@ mod tests {
             })
             .expect("a configured build parses"),
             data_local_dir: data_local_dir.to_path_buf(),
+            home_dir: data_local_dir.join("home"),
             keyring_service: "com.cipherbox.desktop.test".to_owned(),
             changed: Box::new(|| {}),
         }
+    }
+
+    /// An engine built over the desktop seam set but never started — enough to
+    /// be held, which is all a mount refusal has to leave behind.
+    fn unstarted_engine(session: &SessionEnv, account_dir: &Path) -> Engine<DesktopSeamTypes> {
+        let seams = seams::seam_set(&session.config, account_dir, &session.keyring_service)
+            .expect("the desktop stores open under a temp root");
+        Engine::new(
+            seams,
+            Box::new(OsEntropy),
+            session.config.profile,
+            ContentProfile::PRODUCTION,
+            session
+                .config
+                .pinned_storage_policy
+                .expect("the ci build pins a budget"),
+            session.config.api_base_url.clone(),
+            session.config.gateway.clone(),
+        )
+        .0
     }
 
     /// The account directory is named by the identity the API knows this
@@ -536,6 +625,72 @@ mod tests {
         host.stop();
         host.log_out();
         host.log_out();
+    }
+
+    /// The session outlives a mount it could not make: the engine is still
+    /// this session's to read from, and the refusal is reported beside the
+    /// vault rather than instead of it (blueprint/desktop.md "Lifecycle").
+    #[test]
+    fn a_mount_that_cannot_be_made_leaves_the_session_standing() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let session = session_env(dir.path());
+        // A home directory that is a file: no mount point can be made under
+        // one, whatever the mount point is called.
+        std::fs::write(&session.home_dir, b"not a home directory").expect("no home to mount under");
+
+        let account_dir = dir.path().join("account");
+        let engine = unstarted_engine(&session, &account_dir);
+        let mut projection = Projection::open(engine, &session.home_dir, &account_dir);
+
+        let mount = projection.status();
+        assert_eq!(mount.path, None);
+        assert!(mount.refusal.is_some(), "a session with no mount says why");
+        assert_eq!(
+            projection.engine_mut().profile(),
+            &session.config.profile,
+            "the session's engine is still here to serve reads",
+        );
+        projection.tear_down();
+    }
+
+    /// A logout keeps this device's durable stores — the ops a mount acked and
+    /// never published are in them, and the next mount drains them — while an
+    /// explicit forget is what sweeps them (blueprint/desktop.md "Lifecycle").
+    #[tokio::test]
+    async fn a_logout_keeps_the_durable_stores_and_a_forget_sweeps_them() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let account = account_dir(dir.path(), &scalar()).expect("a valid scalar");
+
+        for forget in [false, true] {
+            let host = EngineHost::default();
+            let started = host
+                .spawn_engine(scalar(), session_env(dir.path()))
+                .expect("the slot is free");
+            // An op this device acked to the kernel and has not published.
+            std::fs::create_dir_all(&account).expect("an account store");
+            let acked = account.join("acked-op");
+            std::fs::write(&acked, b"journaled, unpublished").expect("a queued op");
+            let _ = started.await;
+
+            if forget {
+                host.forget_device()
+                    .expect("a live session can be forgotten");
+                assert!(!account.exists(), "a forget leaves nothing of this account");
+            } else {
+                host.log_out();
+                assert!(acked.exists(), "a logout keeps what the next mount drains");
+            }
+        }
+    }
+
+    /// Forgetting needs a session to name the account whose stores go: without
+    /// one there is nothing to sweep and nothing that could be found to sweep.
+    #[test]
+    fn forgetting_a_device_with_no_session_is_refused() {
+        assert_eq!(
+            EngineHost::default().forget_device().err().as_deref(),
+            Some(NO_SESSION)
+        );
     }
 
     #[tokio::test]

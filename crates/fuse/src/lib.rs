@@ -29,7 +29,7 @@ mod spill;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use adapters::fuse::{FuseInvalidator, FuseMount};
+pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
 #[cfg(target_os = "linux")]
 pub use adapters::linux;
 #[cfg(target_os = "macos")]
