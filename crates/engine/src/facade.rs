@@ -4638,7 +4638,7 @@ where {
                 ascent: target
                     .parent_node_seed
                     .as_deref()
-                    .map(|seed| AscentAuthority::ParentSeed(seed)),
+                    .map(AscentAuthority::ParentSeed),
                 owes_ascent_link: current.carried_ascent_link,
                 pseudonym_signer: &current.pseudonym_signer,
             },

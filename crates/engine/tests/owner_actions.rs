@@ -19,6 +19,8 @@ use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+use zeroize::Zeroizing;
+
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
     EphemeralInvitee, GrantRow, InviteRecords, InviteStore, MintedInvite, RecordedInvite,
@@ -1194,5 +1196,197 @@ fn pruning_drops_the_records_the_commitment_does_not_carry_and_keeps_the_rest() 
         kept,
         vec![live.link],
         "only the record the owner-signed commitment still carries survives"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Invite claims
+// ---------------------------------------------------------------------------
+
+/// A link over a published folder, and the two sessions the claim runs between.
+///
+/// The owner's device is addressed at the owner's own identity key here, because
+/// a claim is routed to it: [`GrantScenario`]'s label works only for a mailbox
+/// nothing is sent to.
+struct ClaimScenario {
+    world: FakeWorld,
+    blocks: Blocks,
+    owner_device: FakeDevice,
+    bearer_device: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    _events: EventStream,
+    _tasks: Vec<BoxedTask>,
+    folder: NodeId,
+}
+
+impl ClaimScenario {
+    fn new() -> Self {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks, Vec::new());
+        let owner_device = world.device(&owner_identity().verifying_key().to_sec1());
+        let bearer_device = world.device(&recipient_identity().verifying_key().to_sec1());
+        let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &owner_device);
+        let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "invited");
+        Self {
+            world,
+            blocks,
+            owner_device,
+            bearer_device,
+            engine,
+            _events,
+            _tasks: tasks,
+            folder,
+        }
+    }
+
+    /// Mint a link at the folder and hand back only what a host would hold: the
+    /// URL fragment.
+    fn mint_link(&mut self) -> Zeroizing<String> {
+        let outcome = block_on(self.engine.command(Command::CreateInviteLink {
+            node: self.folder,
+            permission: Permission::Read,
+            expires_at: None,
+        }))
+        .expect("the link mints");
+        let CommandOutcome::InviteLinkMinted(link) = outcome else {
+            panic!("minting a link answers with the link");
+        };
+        link.fragment
+    }
+
+    /// The bearer's own session, holding nothing but what the fragment carries.
+    fn bearer(&self) -> (Engine<FakeSeamTypes>, EventStream) {
+        serve_http(&self.bearer_device, &self.blocks, 64);
+        let (mut engine, events) = engine_with(&self.bearer_device, 21, ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+            .expect("the bearer's own session starts");
+        (engine, events)
+    }
+
+    /// The identity keys the folder's own committed set names as grantees.
+    fn granted_to(&self) -> Vec<Vec<u8>> {
+        block_on(self.engine.sharing(self.folder))
+            .expect("a sharing read")
+            .grants
+            .expect("the invited scope root resolved")
+            .into_iter()
+            .map(|grant| grant.recipient_identity_public_key)
+            .collect()
+    }
+}
+
+/// The whole path a bearer link exists for: a holder of nothing but the fragment
+/// reaches the owner's inbox, and the owner's conversion turns that into a
+/// personal grant on the scope's own owner-signed set — anchored to the
+/// claimant's contact identity, never to the link's throwaway one.
+#[test]
+fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
+    let mut fx = ClaimScenario::new();
+    let fragment = fx.mint_link();
+    let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert!(
+        !fx.granted_to().contains(&bearer_pk),
+        "the link commits its throwaway identity, never the bearer's own"
+    );
+
+    let (mut bearer, _bearer_events) = fx.bearer();
+    assert_eq!(
+        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(
+        inbox(&fx.owner_device).len(),
+        1,
+        "the claim reached the owner's inbox"
+    );
+
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::ConvertInviteClaims { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert!(
+        fx.granted_to().contains(&bearer_pk),
+        "conversion re-anchors the link to the claimant's contact identity"
+    );
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the claim is acked only once the grant it made is published and recorded"
+    );
+    assert_eq!(
+        inbox(&fx.bearer_device).len(),
+        1,
+        "and the claimant is told which scope root to resolve"
+    );
+}
+
+/// The mailbox chooses what to redeliver, so the second delivery of one claim
+/// must not have the owner re-sign anything: the spent record refuses it, and
+/// the item is acked rather than left to redeliver forever.
+#[test]
+fn a_redelivered_claim_converts_once() {
+    let mut fx = ClaimScenario::new();
+    let fragment = fx.mint_link();
+    let (mut bearer, _bearer_events) = fx.bearer();
+    block_on(bearer.command(Command::ClaimInviteLink {
+        fragment: fragment.clone(),
+    }))
+    .expect("the first claim posts");
+    block_on(
+        fx.engine
+            .command(Command::ConvertInviteClaims { node: fx.folder }),
+    )
+    .expect("the first conversion lands");
+    let sequence_after_first = sequence_at(&fx.world, &write_name(fx.folder));
+    let granted_after_first = fx.granted_to();
+
+    // The same holder claiming again is what a redelivery looks like from the
+    // owner's side: a fresh item carrying a claim for a grant already made.
+    block_on(bearer.command(Command::ClaimInviteLink { fragment })).expect("a second claim posts");
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::ConvertInviteClaims { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(fx.folder)),
+        sequence_after_first,
+        "a claim that grants nothing new republishes nothing"
+    );
+    assert_eq!(
+        fx.granted_to(),
+        granted_after_first,
+        "and files one grant for the claimant, not a second"
+    );
+}
+
+/// A fragment is bearer key material a host hands over unread, so anything that
+/// is not one is a fail-closed refusal that reaches no mailbox — never a partial
+/// reconstruction of an identity nobody committed.
+#[test]
+fn a_fragment_that_is_not_one_claims_nothing() {
+    let fx = ClaimScenario::new();
+    let (mut bearer, _bearer_events) = fx.bearer();
+
+    for fragment in ["", "not a fragment", "Zm9vYmFy"] {
+        assert_eq!(
+            block_on(bearer.command(Command::ClaimInviteLink {
+                fragment: Zeroizing::new(fragment.to_owned())
+            })),
+            Err(EngineError::MalformedInput {
+                check: "malformed-invite-fragment"
+            }),
+        );
+    }
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "a refused claim posts nothing"
     );
 }
