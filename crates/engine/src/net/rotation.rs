@@ -983,9 +983,11 @@ where
             write_scope_seed: Some(source.write_scope_seed.clone()),
         };
         // Floor law item 3's mint source: nothing else ever seeds a freshly
-        // minted scope's write-epoch floor, and its own owner-write-blob binds
-        // that floor as AAD. Before the publish, so a failed PUT leaves a local
-        // floor on a scope id nothing else reads rather than an unopenable root.
+        // minted scope's write-epoch floor, and the root's own owner-write-blob
+        // binds that floor as AAD. The value is the parent's own durable write
+        // floor, so this reaches no epoch the device did not already hold, and
+        // the scope id is minted here — no other pass can hold its lease, so the
+        // raise cannot defer under the publish that follows it.
         floor::advance_write_epoch_on_sight(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
@@ -8177,6 +8179,103 @@ mod tests {
     fn a_scope_that_was_never_re_pointed_has_no_fresher_name() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
         assert_eq!(block_on(harness.net(&[]).consult_pointer(&SCOPE)), Ok(None));
+    }
+
+    /// The record a grant's mint hands the promotion seam: a scope root minted at
+    /// read epoch 1 for a node that is not one yet, under a fresh override seed.
+    fn promoted(node: &NodeRef) -> ResealedScopeRoot {
+        let pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
+        let owner_enc_pub = owner_enc().public();
+        let owner = owner_identity();
+        let commitment = GrantSetCommitment {
+            ipns_name: node.ipns_name.clone(),
+            owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let commitment_sig = sign_grant_set(&owner, &commitment)
+            .expect("the commitment encodes")
+            .to_compact();
+        let mut entropy = SeededEntropy::new(13);
+        let section = reseal_scope_root(
+            &mut entropy,
+            &ScopeRootIdentity {
+                v: ENVELOPE_V,
+                scope_id: node.node_id,
+                ipns_name: &node.ipns_name,
+                owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
+                ascent: None,
+                owes_ascent_link: false,
+                pseudonym_signer: &pseudonym,
+            },
+            &ResealSeeds {
+                override_seed: &FRESH_SEED,
+                read_epoch: 1,
+                prev: None,
+                write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
+                write_epoch: OWNER_ROOT_EPOCH,
+                write_history: WriteHistory::Carried(&[]),
+                pointer_read_key: &POINTER_READ_KEY,
+            },
+            &CommittedSet {
+                owner_identity: &owner.verifying_key(),
+                commitment: &commitment,
+                commitment_sig: &commitment_sig,
+                grant_ledger: &[],
+                direct_child_scope_index: &[],
+            },
+            &[],
+        )
+        .expect("the mint re-seals");
+        ResealedScopeRoot {
+            scope_id: node.node_id,
+            ipns_name: node.ipns_name.clone(),
+            read_epoch: 1,
+            write_epoch: OWNER_ROOT_EPOCH,
+            section,
+        }
+    }
+
+    /// A promotion raises the scope's write-epoch floor and then signs a root
+    /// whose owner-write-blob binds it, so the two must not be split by a
+    /// concurrent raise: a scope already leased signs nothing at all.
+    #[test]
+    fn a_promotion_under_a_live_write_epoch_lease_signs_nothing() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+        let record = promoted(&node);
+        let name = scope_name(&record.ipns_name).expect("a valid name");
+        let sequence_before = sequence_at(&harness, &name);
+
+        let lease = floor::acquire_write_epoch_lease(&node_id).expect("the scope starts free");
+        assert_eq!(
+            block_on(net.promote_scope_root(&scope, &node, &record)),
+            Err(RotationPublishError::NotPublished),
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed at the promoted name"
+        );
+        drop(lease);
+    }
+
+    /// The sequence of the record currently published at `name`.
+    fn sequence_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        name: &IpnsName,
+    ) -> Option<u64> {
+        let endpoint = harness.store.endpoints()[0].clone();
+        let bytes = harness.store.record_at(&endpoint, name.as_str())?;
+        Some(
+            IpnsRecord::unmarshal(&bytes)
+                .and_then(|record| record.verify(name))
+                .expect("the published record verifies")
+                .sequence,
+        )
     }
 
     /// A shared scope's write-epoch floor answers to one owner-vouched plane —

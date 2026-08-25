@@ -381,22 +381,18 @@ pub async fn cold_seed_checked<F: FloorStore>(
 /// (floor law item 3). Monotonic-max: a value at or below the durable floor is a
 /// no-op that reports the stored floor. Returns the resulting floor.
 ///
-/// Two sources vouch one. A **consulted scope pointer** is the polled path
-/// (`crate::net::PointerConsult`). A **scope this device mints** is the other:
-/// a grant's promoted scope root has no re-point and no scope pointer, so no
-/// other path ever reaches its floor, and `write_plane_of` reads that floor as
-/// the AAD epoch its owner-write-blob was sealed at — unseeded, the scope is
-/// write-plane dead to the device that created it. That call raises the floor
-/// *before* its publish, which the pre-advance warning on [`WriteEpochLease`]
-/// does not cover: a read grant cuts no write scope, so the value is the epoch
-/// the node's write plane already lives at, never a target a publish has yet to
-/// reach.
+/// Two sources vouch one: a **consulted scope pointer**
+/// (`crate::net::PointerConsult`), and a **scope this device mints** — a grant's
+/// promoted scope root, which no other path ever reaches
+/// (`crate::net::rotation`'s promotion).
 ///
 /// **Takes the [`WriteEpochLease`] for the raise**, and defers when the scope is
 /// already leased — returning the durable floor untouched and without waiting,
 /// so the value returned is the floor in force, not the sighted epoch. The
-/// sighting is dropped rather than queued; a floor only ever moves up, so
-/// re-sighting the same pointer re-derives it.
+/// sighting is dropped rather than queued; a floor only ever moves up and the
+/// focus tick re-consults at `pointerConsultInterval`, so the next pass
+/// re-derives it. A caller that must not proceed under the pre-raise floor
+/// compares the returned floor against what it vouched.
 ///
 /// The lease is held *across* the raise, not merely tested before it: the host
 /// store is asynchronous, and a publish that took the lease while a raise was
