@@ -20,8 +20,8 @@ use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::net::rotation::{
-    GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, RotationAncestry,
-    SweptScopeState, WaveSubtree, WriteWaveNet,
+    GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, PointerConsultArm,
+    RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -139,7 +139,7 @@ where
             },
             ancestry: RotationAncestry::default()
                 .under_parent_node_seed(self.scope_id, self.parent_node_seed),
-            owner_pointer_seed: Some(self.owner_pointer_seed),
+            pointer_consult: PointerConsultArm::Permitted,
             payload_version: self.payload_version,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),

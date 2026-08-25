@@ -31,6 +31,7 @@ import { LocalTransport } from './transport.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -379,6 +380,10 @@ export class EngineClient implements EngineTransport {
 
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     return this.current.sharing(scope);
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return this.current.receivedShares();
   }
 
   siweChallenge(): Promise<string> {

@@ -152,6 +152,32 @@ export interface SharingDescriptor {
   grants: SharingGrantDescriptor[] | null;
 }
 
+/**
+ * The engine's verdict on a received share's latest resolve (mirrors
+ * `ResolutionClass`). Only the engine reaches one — a host renders it.
+ */
+export type ReceivedShareResolution =
+  | 'granted'
+  | 'revocation-signal'
+  | 'unresolvable'
+  | 'epoch-lag';
+
+/**
+ * One share this vault accepted, as data (mirrors `ReceivedShareRow`).
+ * A wire projection of view state the engine owns, not the forbidden
+ * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
+ */
+export interface ReceivedShareDescriptor {
+  /** The shared scope — this row's stable identity, and what a browse opens. */
+  scope: Uint8Array;
+  /** Joins the row to a contact by identity key. */
+  sharerIdentityPublicKey: Uint8Array;
+  displayName: string;
+  permission: Permission;
+  /** `null` when no pass has resolved this share yet — never "still granted". */
+  resolution: ReceivedShareResolution | null;
+}
+
 /** Where a version's bytes are pinned (mirrors the facade `PinMode`). */
 export type PinMode = 'hosted' | 'external' | 'dual';
 
@@ -313,6 +339,7 @@ export type WorkerRequest =
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'sharing'; id: number; scope: Uint8Array | null }
+  | { type: 'receivedShares'; id: number }
   | { type: 'siweChallenge'; id: number }
   | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
@@ -326,7 +353,7 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
-   * the plaintext `ArrayBuffer`
+   * the rows for `receivedShares`, the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
@@ -339,6 +366,7 @@ export type WorkerMessage =
       result?:
         | SnapshotDescriptor
         | SharingDescriptor
+        | ReceivedShareDescriptor[]
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | bigint

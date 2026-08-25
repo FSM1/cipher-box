@@ -391,6 +391,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       abortWrite: () => Promise.resolve(undefined),
       snapshot: () => Promise.reject(new Error('unused')),
       sharing: () => Promise.reject(new Error('unused')),
+      receivedShares: () => Promise.reject(new Error('unused')),
       siweChallenge: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
       openContentStream: () => Promise.reject(new Error('unused')),

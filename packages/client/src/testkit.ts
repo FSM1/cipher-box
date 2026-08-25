@@ -17,6 +17,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -141,6 +142,10 @@ export class StubEngineHost implements EngineHostLike {
 
   sharing(_scope: Uint8Array | null): Promise<SharingDescriptor> {
     return notStubbed('sharing');
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return notStubbed('receivedShares');
   }
 
   siweChallenge(): Promise<string> {
@@ -451,6 +456,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly commandTransfers: Transferable[][] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly sharingReads: Array<Uint8Array | null> = [];
+  receivedShareReads = 0;
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
   readonly opened: Uint8Array[] = [];
@@ -473,6 +479,7 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve(emptySnapshot(folder ?? undefined));
   respondSharing: (scope: Uint8Array | null) => Promise<SharingDescriptor> = (scope) =>
     Promise.resolve(emptySharing(scope ?? undefined));
+  respondReceivedShares: () => Promise<ReceivedShareDescriptor[]> = () => Promise.resolve([]);
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
@@ -530,6 +537,11 @@ export class FakeEngineTransport implements EngineTransport {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     this.sharingReads.push(scope);
     return this.respondSharing(scope);
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    this.receivedShareReads += 1;
+    return this.respondReceivedShares();
   }
 
   siweChallenge(): Promise<string> {

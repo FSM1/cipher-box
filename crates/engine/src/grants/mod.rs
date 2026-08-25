@@ -21,6 +21,7 @@ pub mod invite_store;
 pub mod ledger;
 pub mod owner_entry;
 pub mod received_share_store;
+pub(crate) mod received_status;
 pub mod revocation;
 
 pub use accept::{

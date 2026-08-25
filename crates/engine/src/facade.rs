@@ -46,17 +46,18 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
+use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
     GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
     InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
     OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
-    ReceivedShareStoreError, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share, convert_invite_claim,
-    create_read_grant, enforce_committed_ledger, import_contact, link_binds_scope,
-    locate_invite_link, mint_invite_link, post_invite_claim, recipient_blinded_tag,
-    resolve_recipient, row_is_owner_attested,
+    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
+    StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
+    convert_invite_claim, create_read_grant, enforce_committed_ledger, import_contact,
+    link_binds_scope, locate_invite_link, mint_invite_link, post_invite_claim,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
@@ -68,10 +69,10 @@ use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
-    PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch,
-    ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
+    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate,
+    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold,
+    resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -369,6 +370,46 @@ pub struct SharingView {
     /// not paint as "shared with nobody". Empty is the answer for a node that is
     /// not a scope root: nothing is granted there.
     pub grants: Option<Vec<SharingGrant>>,
+}
+
+/// One share this vault accepted, as a host renders it at `/shared`
+/// (blueprint/web-client.md): the bookmark's key-free discovery fields plus the
+/// engine's own resolution verdict.
+///
+/// The label and the permission are the ones the accept committed; the scope
+/// root is the authority on both, so [`resolution`](Self::resolution) is what
+/// says whether the share still stands.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceivedShareRow {
+    /// The shared scope's id — this row's stable identity, and the handle a
+    /// browse opens it under. The scope root's `ipnsName` is deliberately not
+    /// projected: a write rotation moves it, and the durable list seals it.
+    pub scope: NodeId,
+    /// The sharer's identity key as the accepted bookmark holds it, which the
+    /// accept flow bound to a verified contact before writing.
+    pub sharer_identity_public_key: Vec<u8>,
+    /// The display label the share was accepted under.
+    pub display_name: String,
+    /// The permission the owner-signed commitment granted at accept.
+    pub permission: Permission,
+    /// The engine's classification of this share's latest resolve, or `None`
+    /// when no pass has resolved it yet (`crate::grants::revocation`).
+    pub resolution: Option<ResolutionClass>,
+}
+
+impl fmt::Debug for ReceivedShareRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReceivedShareRow")
+            .field("scope", &self.scope)
+            .field(
+                "sharer_identity_public_key",
+                &RedactedBytes::of(&self.sharer_identity_public_key),
+            )
+            .field("display_name", &self.display_name)
+            .field("permission", &self.permission)
+            .field("resolution", &self.resolution)
+            .finish()
+    }
 }
 
 /// One retained dead-lettered op and why it will never publish. The reason is
@@ -1905,9 +1946,11 @@ pub(crate) fn emit_trust_violation(
 const NOT_A_SCOPE_ROOT: &str = "sharing-target-is-not-a-scope-root";
 
 /// One tick's pointer-consult window: the scopes due this pass
-/// ([`consult_scopes_due`]) and the clock the stamps are taken from.
+/// ([`consult_scopes_due`]), which of them is the vault anchor, and the clock
+/// the stamps are taken from.
 struct ConsultWindow {
     scopes: Vec<NodeId>,
+    anchor: NodeId,
     now: UnixMillis,
 }
 
@@ -1919,6 +1962,9 @@ struct ConsultWindow {
 /// leaves the read epoch untouched, so the sweep's event-driven consult never
 /// fires for it. An unavailable pointer leaves the stamp unset, so the next tick
 /// retries rather than waiting out the interval.
+///
+/// Returns the vault anchor's owner-vouched current root when this pass
+/// consulted one (see [`consult_scopes`]).
 async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     transport: &T,
     floors: &F,
@@ -1926,36 +1972,39 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     events: &mpsc::UnboundedSender<Event>,
     consulted: &RefCell<BTreeMap<NodeId, UnixMillis>>,
     window: ConsultWindow,
-) {
+) -> Option<IpnsName> {
     // The pass owns a copy for exactly its own duration, on the same terms as
     // the tick's enc subkey: teardown empties the cell.
-    let Some(keys) = keys.borrow().clone() else {
-        return;
-    };
+    let keys = keys.borrow().clone()?;
+    let mut anchor_root = None;
     for scope in window.scopes {
         let consult = PointerConsult {
-            owner_pointer_seed: keys.scope_keys.pointer_seed(),
             scope_keys: &keys.scope_keys,
             owner_identity: &keys.owner_identity,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
         match consult.run(transport, floors, &scope.0).await {
-            Err(PointerConsultError::Unavailable) => {}
-            outcome => {
-                // A verdict is stable, so a refusal is stamped like a clean
-                // consult: re-polling a rolled-back pointer every tick would
-                // repeat its abuse event forever without changing it.
+            Err(PointerConsultError::Unavailable) => continue,
+            // A verdict is stable, so a refusal is stamped like a clean
+            // consult: re-polling a rolled-back pointer every tick would
+            // repeat its abuse event forever without changing it.
+            Err(PointerConsultError::Rejected) => {
                 consulted.borrow_mut().insert(scope, window.now);
-                if outcome.is_err() {
-                    emit_trust_violation(
-                        events,
-                        &hex_lower(&scope.0),
-                        "scope pointer unauthenticated, or vouched below the write-epoch floor",
-                    );
+                emit_trust_violation(
+                    events,
+                    &hex_lower(&scope.0),
+                    "scope pointer unauthenticated, or vouched below the write-epoch floor",
+                );
+            }
+            Ok(current_root) => {
+                consulted.borrow_mut().insert(scope, window.now);
+                if scope == window.anchor {
+                    anchor_root = current_root;
                 }
             }
         }
     }
+    anchor_root
 }
 
 /// Project a scope root's grant ledger for a host: the recipient label and the
@@ -2476,6 +2525,10 @@ pub struct Engine<T: SeamTypes> {
     /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
     /// tick re-consults and re-derives it.
     pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// The verdict the tick's last pass reached for each bookmarked shared
+    /// scope. In-memory: a verdict is what a live resolve found, so a restart
+    /// re-earns it rather than rendering one nothing observed this session.
+    received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -2599,6 +2652,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
+                received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2884,6 +2938,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }
+        if let Ok(mut verdicts) = self.received_verdicts.try_borrow_mut() {
+            verdicts.clear();
+        }
     }
 
     /// Run the cold-start live-session data path — the ordered chain composed on
@@ -3154,7 +3211,7 @@ where {
                         // the rotation read it under.
                         ancestry: RotationAncestry::default()
                             .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
-                        owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
+                        pointer_consult: PointerConsultArm::Permitted,
                         payload_version: POINTER_PAYLOAD_VERSION,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
@@ -3272,6 +3329,7 @@ where {
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
+        let received_verdicts = self.received_verdicts.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -3283,7 +3341,7 @@ where {
 
         let manual = self.manual_refresh.clone();
 
-        Some(Box::new(move |root_name: IpnsName| {
+        Some(Box::new(move |mut root_name: IpnsName| {
             manual.arm();
             let spawn_on = scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
@@ -3320,7 +3378,7 @@ where {
                             &profile,
                         ),
                     };
-                    consult_pointers(
+                    if let Some(current_root) = consult_pointers(
                         &transport,
                         &floors,
                         &consult_keys,
@@ -3328,10 +3386,14 @@ where {
                         &pointer_consulted,
                         ConsultWindow {
                             scopes: consult_targets,
+                            anchor: NodeId(root_id),
                             now,
                         },
                     )
-                    .await;
+                    .await
+                    {
+                        root_name = current_root;
+                    }
                     // Before the steady-state hold consults them: a floor raised
                     // since the last pass revokes the seeds this pass would
                     // otherwise read and seal under. The floors it reports stamp
@@ -3517,6 +3579,18 @@ where {
                     // After the drain, so the pass's own removals are swept in the
                     // same tick rather than a cadence later.
                     collect_orphans(&staging, &live_blocks).await;
+                    // Last, and after the settle above: the grantee's own read
+                    // leg is the slowest in the pass, and a host refresh waits
+                    // on nothing it reports.
+                    ReceivedShareStatus {
+                        transport: &transport,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        enc_secret: &enc_subkey,
+                    }
+                    .refresh(&staging, &entropy, &received_verdicts, now, &profile)
+                    .await;
                     let mut status = sync_status.borrow_mut();
                     status.reconcile_in_flight = false;
                     if reconciled {
@@ -3793,7 +3867,12 @@ where {
         }
         let parent = self.vault_root_scope()?;
         let current = self
-            .owner_rotation_net(api, keys, RotationAncestry::default(), None)
+            .owner_rotation_net(
+                api,
+                keys,
+                RotationAncestry::default(),
+                PointerConsultArm::Refused,
+            )
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
@@ -3832,7 +3911,7 @@ where {
         api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'a>,
         ancestry: RotationAncestry,
-        owner_pointer_seed: Option<&'a [u8; 32]>,
+        pointer_consult: PointerConsultArm,
     ) -> OwnerNet<'a, T> {
         OwnerRotationNet {
             transport: &self.seams.record_transport,
@@ -3845,7 +3924,7 @@ where {
             entropy: &self.entropy,
             keys,
             ancestry,
-            owner_pointer_seed,
+            pointer_consult,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
@@ -3937,7 +4016,12 @@ where {
             .await?;
 
         self.bounded_rotation(async || {
-            let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+            let net = self.owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            );
             let current = net
                 .resolve_anchored(&target.scope)
                 .await
@@ -4052,7 +4136,12 @@ where {
             .await?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let current = self
-            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
@@ -4175,9 +4264,6 @@ where {
 
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
-        // The converge pass consults the scope pointer, which only this seed
-        // names.
-        let owner_pointer_seed = session.owner_pointer_seed();
         let net = self.owner_rotation_net(
             api,
             OwnerRotationKeys {
@@ -4186,7 +4272,8 @@ where {
                 scope_keys: &scope_keys,
             },
             RotationAncestry::default(),
-            Some(owner_pointer_seed.as_bytes()),
+            // The converge pass consults the scope pointer.
+            PointerConsultArm::Permitted,
         );
         let current = net
             .resolve_vault_root(&parent)
@@ -4388,7 +4475,12 @@ where {
             .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
             .await?;
         let current = self
-            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
@@ -4516,7 +4608,12 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
             .await?;
-        let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+        let net = self.owner_rotation_net(
+            api,
+            owner_keys(),
+            target.ancestry(),
+            PointerConsultArm::Refused,
+        );
         let mut current = net
             .resolve_anchored(&target.scope)
             .await
@@ -4731,6 +4828,18 @@ where {
         Ok(signature)
     }
 
+    /// This session's durable received-share bookmarks.
+    fn received_share_store<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+    ) -> StagingReceivedShareStore<'a, T::StagingStore, Box<dyn Entropy>> {
+        StagingReceivedShareStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+    }
+
     /// This session's durable invite records.
     fn invite_store<'a>(
         &'a self,
@@ -4795,11 +4904,7 @@ where {
                 .await
                 .map_err(EngineError::from_gate)?;
 
-        let store = StagingReceivedShareStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        );
+        let store = self.received_share_store(session);
         let mut received = store
             .load()
             .await
@@ -5579,6 +5684,34 @@ where {
         })
     }
 
+    /// The shares this vault has accepted, key-free, each carrying the engine's
+    /// own resolution verdict (blueprint/web-client.md "/shared").
+    ///
+    /// The rows come from the durable received-shares list, so they survive a
+    /// reload; the verdict comes from the focus tick's last resolve of that
+    /// scope root, so a revocation the owner published is *discovered* here
+    /// rather than delivered.
+    pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let received = self
+            .received_share_store(session)
+            .load()
+            .await
+            .map_err(EngineError::from_received_share_store)?;
+
+        let verdicts = self.received_verdicts.borrow();
+        Ok(received
+            .iter()
+            .map(|share| ReceivedShareRow {
+                scope: NodeId(share.scope_id),
+                sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
+                display_name: share.display_name.clone(),
+                permission: share.permission.into(),
+                resolution: verdicts.get(&share.scope_id).map(|v| v.class),
+            })
+            .collect())
+    }
+
     /// The sharing state standing on `scope_root`, key-free: this vault's whole
     /// verified contact book, and the grants the scope root's own owner-signed
     /// ledger commits.
@@ -5661,7 +5794,7 @@ where {
             Err(_) => return None,
         };
         let current = self
-            .owner_rotation_net(api, keys(), target.ancestry(), None)
+            .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
@@ -8331,6 +8464,15 @@ mod tests {
             (fx.head_block, fx.head_cid_str, fx.name)
         }
 
+        /// A root record published at `node_id`'s derived write name, signed by
+        /// that name's own key — the shape a write rotation moves a root into.
+        fn root_record_at_node(node_id: [u8; 16], head_cid_str: &str, sequence: u64) -> Vec<u8> {
+            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &node_id);
+            let signer = kdf::ipns_keypair(write_seed.as_bytes());
+            let value = format!("/ipfs/{head_cid_str}");
+            IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
+        }
+
         fn root_record(head_cid_str: &str, sequence: u64) -> Vec<u8> {
             let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0);
             let signer = kdf::ipns_keypair(write_seed.as_bytes());
@@ -8804,6 +8946,35 @@ mod tests {
         /// Publish an owner-signed re-point at `SCOPE`'s **scope**-pointer name
         /// vouching `write_epoch` — the plane a write-only rotation re-points,
         /// and the one the polled consult reads.
+        use cipherbox_core::seal::Permission as CorePermission;
+        use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+        use cipherbox_core::suite::secret::SecretBytes;
+
+        use crate::grants::ReceivedSharesList;
+
+        /// A shared scope this session has accepted, whose scope root nothing on
+        /// the record plane answers for.
+        const SHARED_SCOPE: [u8; 16] = [0x7d; 16];
+
+        /// Persist one received-share bookmark into this device's durable list,
+        /// the state an accept leaves behind.
+        fn bookmark_a_received_share(device: &FakeDevice) {
+            let enc_secret = kdf::enc_subkey(&CAP_SECRET);
+            let entropy = RefCell::new(SeededEntropy::new(11));
+            let store =
+                StagingReceivedShareStore::new(&device.staging_store, &enc_secret, &entropy);
+            let mut list = ReceivedSharesList::new();
+            list.reconcile(crate::grants::ReceivedShare {
+                scope_root_name: child_name().as_str().as_bytes().to_vec(),
+                scope_id: SHARED_SCOPE,
+                sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+                display_name: "shared-folder".to_owned(),
+                permission: CorePermission::Read,
+                pointer_read_key: SecretBytes::new([0x9a; 32]),
+            });
+            block_on(store.persist(&list)).expect("the list persists");
+        }
+
         fn seed_scope_pointer(device: &FakeDevice, root_name: &IpnsName, write_epoch: u64) {
             let owner_seed = kdf::owner_pointer_seed(&CAP_SECRET);
             let read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &SCOPE);
@@ -8867,6 +9038,129 @@ mod tests {
             assert!(
                 engine.pointer_consulted.borrow().contains_key(&ROOT),
                 "the pass stamped the consult, so the interval damper can pace it",
+            );
+        }
+
+        /// The anchor's scope pointer is the only owner-vouched plane naming the
+        /// vault's current root. A pass that sights a re-point reports the moved
+        /// root, so the rest of the pass reads and publishes there rather than at
+        /// the name cold start opened with.
+        #[test]
+        fn the_anchor_consult_reports_the_root_its_pointer_vouches() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+
+            let moved = child_name();
+            seed_scope_pointer(&device, &moved, EPOCH + 1);
+            let (events, _rx) = mpsc::unbounded();
+            let consult = |anchor| {
+                block_on(consult_pointers(
+                    &device.record_store,
+                    &device.floor_store,
+                    &engine.sweep_keys,
+                    &events,
+                    &RefCell::new(BTreeMap::new()),
+                    ConsultWindow {
+                        scopes: vec![ROOT],
+                        anchor,
+                        now: UnixMillis(0),
+                    },
+                ))
+            };
+
+            assert_eq!(
+                consult(ROOT),
+                Some(moved),
+                "the anchor's re-point names the root the pass must poll"
+            );
+            assert_eq!(
+                consult(NodeId([0x9e; 16])),
+                None,
+                "a shared scope's root is its own, and never the vault's"
+            );
+        }
+
+        /// And the pass acts on it: every later leg — the gated resolve, the
+        /// held set the liveness loop renews, the drain — addresses the moved
+        /// root, not the name cold start opened with.
+        #[test]
+        fn a_tick_that_sights_a_repoint_resolves_the_moved_root() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_, head_cid, root_name) = owner_root();
+            let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            assert_eq!(
+                engine.held_records.borrow()[&ROOT.0].routing_key,
+                root_name.as_str(),
+                "cold start opened at the name the vault pointer gave it"
+            );
+
+            // The anchor's pointer names a moved root, and a record answers there.
+            let moved = child_name();
+            seed_scope_pointer(&device, &moved, EPOCH + 1);
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    moved.as_str(),
+                    root_record_at_node(CHILD_ID, &head_cid, 1),
+                );
+            }
+            let _ = drain(&mut events);
+            tick(&world, &device, &mut tasks);
+
+            // The record answering there is bound to the name it moved off, so
+            // the gate refuses it — and names what this pass resolved.
+            let abuse: Vec<String> = drain(&mut events)
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::AttributableAbuse { description } => Some(description),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(abuse.len(), 1, "one verdict on the one root resolved");
+            assert!(
+                abuse[0].contains(moved.as_str()),
+                "the pass resolved the root its anchor pointer named: {}",
+                abuse[0]
+            );
+            assert_ne!(
+                engine.held_records.borrow()[&ROOT.0].routing_key,
+                moved.as_str(),
+                "and a gate refusal holds nothing (fail-closed)"
+            );
+        }
+
+        /// The `/shared` read: the durable bookmark's key-free fields, and the
+        /// verdict only a pass that actually resolved the scope root can supply.
+        /// A share nothing has resolved yet reports no verdict at all — a host
+        /// must not paint that as "still granted".
+        #[test]
+        fn received_shares_carry_no_verdict_until_a_pass_reaches_one() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            bookmark_a_received_share(&device);
+
+            let before = block_on(engine.received_shares()).expect("the list reads");
+            assert_eq!(before.len(), 1);
+            assert_eq!(before[0].display_name, "shared-folder");
+            assert_eq!(before[0].scope, NodeId(SHARED_SCOPE));
+            assert_eq!(before[0].permission, Permission::Read);
+            assert_eq!(
+                before[0].resolution, None,
+                "no pass has resolved this scope root yet"
+            );
+
+            tick(&world, &device, &mut tasks);
+
+            let after = block_on(engine.received_shares()).expect("the list reads");
+            assert_eq!(
+                after[0].resolution,
+                Some(ResolutionClass::Unresolvable),
+                "a scope root nothing answers at is unresolvable, never a revocation",
             );
         }
 

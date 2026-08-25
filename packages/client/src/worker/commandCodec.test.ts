@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fakeWasmEnums } from '../testkit.js';
-import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
+import { buildCommand, readEvent, readReceivedShare, readSnapshot } from './commandCodec.js';
 import type { CommandDescriptor } from './protocol.js';
 import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
 
@@ -770,5 +770,36 @@ describe('readSnapshot', () => {
         ],
       })
     ).toThrow('unknown WASM pending class value: 42');
+  });
+});
+
+describe('readReceivedShare', () => {
+  const row = {
+    scope: new Uint8Array(16).fill(7),
+    sharerIdentityPublicKey: new Uint8Array([9]),
+    displayName: 'shared-folder',
+    permission: fakeWasmEnums.Permission.Read,
+    resolution: 'revocation-signal',
+  };
+
+  it('carries the row and the engine verdict through unchanged', () => {
+    expect(readReceivedShare(fakeWasm, row)).toEqual({
+      scope: row.scope,
+      sharerIdentityPublicKey: row.sharerIdentityPublicKey,
+      displayName: 'shared-folder',
+      permission: 'read',
+      resolution: 'revocation-signal',
+    });
+  });
+
+  it('reads an absent verdict as null, never as a verdict', () => {
+    expect(readReceivedShare(fakeWasm, { ...row, resolution: undefined }).resolution).toBeNull();
+  });
+
+  it('fails closed on a class it cannot map', () => {
+    // A guessed class would paint a revoked share as still granted.
+    expect(() => readReceivedShare(fakeWasm, { ...row, resolution: 'granted-ish' })).toThrow(
+      'unknown WASM resolution class: granted-ish'
+    );
   });
 });

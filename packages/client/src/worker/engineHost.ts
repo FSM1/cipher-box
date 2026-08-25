@@ -10,6 +10,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -26,6 +27,7 @@ import {
   nodeId,
   permissionFrom,
   readEvent,
+  readReceivedShare,
   readSharing,
   readSnapshot,
   record,
@@ -53,6 +55,8 @@ export interface EngineHostLike {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   /** Reads the contact book and `scope`'s committed grants, or the root's. */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
+  /** Reads this vault's accepted shares and the engine's verdict on each. */
+  receivedShares(): Promise<ReceivedShareDescriptor[]>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Opens a read stream pinned to the node's current head content version. */
@@ -251,6 +255,11 @@ export class EngineHost implements EngineHostLike {
       scope === null ? undefined : nodeId(this.wasm, scope, 'scope')
     );
     return readSharing(this.wasm, view);
+  }
+
+  async receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    const rows = await this.handle.receivedShares();
+    return rows.map((row) => readReceivedShare(this.wasm, row));
   }
 
   siweChallenge(): Promise<string> {

@@ -564,6 +564,46 @@ mod tests {
         });
     }
 
+    /// A root-scope write rotation raises the durable write-epoch floor through
+    /// the scope-pointer plane, which the write-once vault pointer does not
+    /// track. The boot after it must still adopt: refusing a vault's own genesis
+    /// anchor is a fail-closed verdict on entirely honest state.
+    #[test]
+    fn a_boot_after_a_root_write_rotation_adopts_rather_than_failing_closed() {
+        block_on(async {
+            let pointers = ScriptedPointers::default();
+            let root_name = IpnsName::from_public_key(&root_signer().verifying_key());
+            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 1, 1));
+
+            let floors = InMemoryFloorStore::default();
+            // What a root write rotation leaves behind: its scope pointer's
+            // write epoch, sighted by the focus tick's polled consult.
+            floor::advance_write_epoch_on_sight(&floors, &ROOT_SCOPE, 4)
+                .await
+                .unwrap();
+
+            let (out, events) = run(
+                &pointers,
+                &ScriptedAdopter::adopting(),
+                &floors,
+                &transport_with_root_record(&root_name),
+                &InMemorySnapshotCache::default(),
+                &pending_create(),
+            )
+            .await;
+            let out = out.expect("the genesis vault pointer rolled back no plane it writes");
+            assert_eq!(out.root_resolve, Some(RootResolve::Adopted));
+            assert_eq!(events, vec![Event::SnapshotUpdated]);
+            assert_eq!(
+                floor::write_epoch_floor(&floors, &ROOT_SCOPE)
+                    .await
+                    .unwrap(),
+                Some(4),
+                "and the monotonic-max seed leaves the higher floor standing"
+            );
+        });
+    }
+
     /// The floors a first cold start seeds are the ones a rolled-back re-point
     /// trips on the next boot: the replay is validly owner-signed, so only the
     /// floor law catches it.

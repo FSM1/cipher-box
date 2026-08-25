@@ -18,6 +18,7 @@ import type {
   CommandOutcomeDescriptor,
   NodeKind,
   Permission,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -80,6 +81,10 @@ export class EngineFacade {
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     return this.transport.sharing(scope);
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return this.transport.receivedShares();
   }
 
   /** Downloads one file node's plaintext through the verified read pipeline. */

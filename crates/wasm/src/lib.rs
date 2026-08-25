@@ -908,6 +908,58 @@ impl SharingView {
     }
 }
 
+/// One share this vault accepted, as `/shared` renders it: the accepted
+/// bookmark's key-free fields plus the engine's own resolution verdict.
+#[wasm_bindgen]
+pub struct ReceivedShareRow {
+    inner: facade::ReceivedShareRow,
+}
+
+#[wasm_bindgen]
+impl ReceivedShareRow {
+    /// The 16 raw bytes of the shared scope — this row's stable identity, and
+    /// the handle a browse opens it under.
+    #[wasm_bindgen(getter)]
+    pub fn scope(&self) -> Vec<u8> {
+        self.inner.scope.0.to_vec()
+    }
+
+    /// The sharer's secp256k1 identity key, which joins the row to a
+    /// [`SharingContact`].
+    #[wasm_bindgen(getter, js_name = sharerIdentityPublicKey)]
+    pub fn sharer_identity_public_key(&self) -> Vec<u8> {
+        self.inner.sharer_identity_public_key.clone()
+    }
+
+    /// The display label the share was accepted under.
+    #[wasm_bindgen(getter, js_name = displayName)]
+    pub fn display_name(&self) -> String {
+        self.inner.display_name.clone()
+    }
+
+    /// The permission the owner-signed commitment granted at accept.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Permission {
+        self.inner.permission.into()
+    }
+
+    /// The engine's classification of this share's latest resolve — one of
+    /// `granted`, `revocation-signal`, `unresolvable`, `epoch-lag` — or
+    /// `undefined` when no pass has resolved it yet. A host renders the
+    /// engine's verdict; it never computes one.
+    #[wasm_bindgen(getter)]
+    pub fn resolution(&self) -> Option<String> {
+        self.inner.resolution.map(|class| class.name().to_owned())
+    }
+}
+
+impl ReceivedShareRow {
+    /// Wraps an engine received-share row. Never exported to JS.
+    pub fn from_facade(inner: facade::ReceivedShareRow) -> Self {
+        Self { inner }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Commands — the write-intent surface. Built by the host, consumed (later) by
 // the engine handle; payload readback is deliberately absent so no user data or

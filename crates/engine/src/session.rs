@@ -21,6 +21,7 @@
 
 use core::fmt;
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -132,6 +133,12 @@ impl SessionIdentity {
     /// and the scope id.
     pub(crate) fn scope_pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
         kdf::scope_pointer(self.owner_pointer_seed.as_bytes(), scope_id)
+    }
+
+    /// The per-scope pointer **name** — [`Self::scope_pointer_signer`]'s public
+    /// half, and the whole capability a consult needs.
+    pub(crate) fn scope_pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+        IpnsName::from_public_key(&self.scope_pointer_signer(scope_id).verifying_key())
     }
 
     /// The stable per-scope pointer read key (`pointer-read-key` edge) that

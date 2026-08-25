@@ -121,6 +121,15 @@ export interface WasmSharingView {
   readonly grants?: readonly WasmSharingGrant[];
 }
 
+/** wasm-bindgen `ReceivedShareRow` — one share this vault accepted. */
+export interface WasmReceivedShareRow {
+  readonly scope: Uint8Array;
+  readonly sharerIdentityPublicKey: Uint8Array;
+  readonly displayName: string;
+  readonly permission: number;
+  readonly resolution?: string;
+}
+
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
@@ -137,6 +146,7 @@ export interface WasmEngineHandle {
   abortWrite(handle: bigint): Promise<unknown>;
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
+  receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
   siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<bigint>;
