@@ -28,7 +28,9 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSection, ReadBody, Version, seal_content_key,
+    sign_grant_set,
 };
+use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
@@ -45,16 +47,18 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
 use crate::grants::{
-    AcceptError, AcceptOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
-    CreateGrantError, GrantRecipient, GranteeScopePlan, InviteError, InviteMintError,
-    InviteMintPlan, InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink,
-    OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
+    AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
+    ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
+    GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
+    InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
+    OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
     ReceivedShareStoreError, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share, create_read_grant,
-    enforce_committed_ledger, link_binds_scope, locate_invite_link, mint_invite_link,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share, convert_invite_claim,
+    create_read_grant, enforce_committed_ledger, link_binds_scope, locate_invite_link,
+    mint_invite_link, post_invite_claim, recipient_blinded_tag, resolve_recipient,
+    row_is_owner_attested,
 };
-use crate::mailbox::locate_verified;
+use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
@@ -73,13 +77,14 @@ use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError,
-    ResealSeeds, ResolveFailure, Retryable, RevokeError, RotateError, RotateScopePlan,
-    ScopeRootIdentity, WriteHistory, WriteRevokeKind, bounded, derive_write_name,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokeError, RotateError,
+    RotateScopePlan, ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WriteRevokeKind, bounded,
+    derive_write_name, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
+    rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, FloorStore, OpId, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet,
-    SeamTypes, StagingStore, UnixMillis,
+    BoxedTask, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
+    SeamSet, SeamTypes, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -695,6 +700,28 @@ pub enum Command {
         /// The node whose links are being pruned.
         node: NodeId,
     },
+    /// Claim an invite link from the fragment its URL carries.
+    ///
+    /// The engine reconstructs the link's ephemeral identity, records the owner
+    /// bundle the fragment names, and posts a sealed claim to the owner's
+    /// mailbox. The fragment is the whole bearer capability, so a host moves it
+    /// from the URL to here **unread**: it parses nothing out of it, and nothing
+    /// it holds is loggable or storable ([`InviteFragment`]).
+    ClaimInviteLink {
+        /// The link's URL fragment, verbatim.
+        fragment: Zeroizing<String>,
+    },
+    /// Convert the invite claims waiting on this owner's inbox for the link
+    /// minted at `node` (owner-only).
+    ///
+    /// Per item, in this order: convert against the currently adopted set,
+    /// publish the re-signed set, record the spent claim, ack — the
+    /// ack-after-durable rule every mailbox consumer follows. An item that is
+    /// not a live claim on this scope is left on the inbox for its own consumer.
+    ConvertInviteClaims {
+        /// The node the link was minted at.
+        node: NodeId,
+    },
     /// Accept a share from a polled mailbox pointer or claimed invite.
     AcceptShare {
         /// The sealed share pointer payload.
@@ -748,6 +775,8 @@ impl Command {
             Command::CreateInviteLink { .. } => "createInviteLink",
             Command::RevokeInviteLink { .. } => "revokeInviteLink",
             Command::PruneInviteLinks { .. } => "pruneInviteLinks",
+            Command::ClaimInviteLink { .. } => "claimInviteLink",
+            Command::ConvertInviteClaims { .. } => "convertInviteClaims",
             Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
@@ -3629,6 +3658,14 @@ where {
                 .prune_invite_links(node)
                 .await
                 .map(|()| CommandOutcome::Done),
+            Command::ClaimInviteLink { fragment } => self
+                .claim_invite_link(&fragment)
+                .await
+                .map(|()| CommandOutcome::Done),
+            Command::ConvertInviteClaims { node } => self
+                .convert_invite_claims(node)
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::Grant {
                 node,
                 recipient_identity_public_key,
@@ -4370,6 +4407,278 @@ where {
             .persist(&records)
             .await
             .map_err(EngineError::from_invite_store)
+    }
+
+    /// Claim an invite link from the fragment its URL carries: reconstruct the
+    /// ephemeral identity the link committed, record the owner bundle the
+    /// fragment names, and post a sealed claim to that owner's mailbox
+    /// (blueprint/engine.md "Grants and ledger: Invites").
+    ///
+    /// The engine does the parsing so the host never has to: it is handed the
+    /// fragment verbatim and reads nothing out of it ([`InviteFragment`]).
+    ///
+    /// Recording the owner bundle comes first because it is the anchor the grant
+    /// this claim produces will arrive under — the accept flow authenticates a
+    /// sender against the contact book and nothing else.
+    async fn claim_invite_link(&self, fragment: &str) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let fragment = InviteFragment::decode(fragment).map_err(EngineError::from_invite)?;
+        let invitee = EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes())
+            .map_err(EngineError::from_invite)?;
+        let owner = self
+            .contact_store(session)
+            .record(&fragment.owner_contact_code)
+            .await
+            .map_err(EngineError::from_contact_store)?;
+
+        let mut entropy = SharedEntropy(&self.entropy);
+        let claim = InviteClaim::mint(
+            &mut entropy,
+            fragment.scope_root_name.clone(),
+            ContactCode::create(session.identity(), session.enc_subkey().public()).encode(),
+        )
+        .map_err(EngineError::from_invite)?;
+        let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
+        // Fresh random, never derived — the same rule the grant post follows
+        // ([`create_read_grant`]). Deriving it from the claim id would hand the
+        // API the one value that makes the claim single-use.
+        let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim idempotency key")
+            .map_err(EngineError::from_entropy)?;
+        post_invite_claim(
+            &self.seams.mailbox,
+            &owner,
+            &invitee,
+            &ephemeral,
+            ENVELOPE_V,
+            &claim,
+            &format!("claim-{}", hex_lower(&idempotency)),
+        )
+        .await
+        .map_err(EngineError::from_seam)
+    }
+
+    /// Convert the invite claims this session's inbox holds for the link minted
+    /// at `node`.
+    ///
+    /// Owner-only twice over: conversion authorises against the owner's own
+    /// signature over the set it is changing, and the links it converts against
+    /// come from the owner's durable records, never from an item.
+    ///
+    /// Per item, in order — convert, publish, record, ack — so an interruption
+    /// anywhere leaves the claim redeliverable rather than silently spent, and
+    /// each item converts against the set its predecessors published.
+    async fn convert_invite_claims(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let store = self.invite_store(session);
+        let mut records = store.load().await.map_err(EngineError::from_invite_store)?;
+        // The records decide the whole outcome, so an owner holding no link
+        // spends neither a resolve nor a poll on a pass that can convert nothing.
+        if records.links.is_empty() {
+            return Ok(());
+        }
+
+        // The claimant's pointer carries this label, and their received-shares
+        // codec hard-rejects a longer one — an item they could never store and
+        // never ack. Refused before anything publishes, where the name is still
+        // the owner's to change (AGENTS.md rule 8).
+        let display_name = self
+            .render()
+            .await?
+            .node(node)
+            .ok_or(EngineError::UnknownNode)?
+            .name()
+            .to_owned();
+        if display_name.len() > MAX_DISPLAY_NAME_BYTES {
+            return Err(EngineError::MalformedInput {
+                check: "grant-display-name-too-long",
+            });
+        }
+
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let check = "convert-target-is-not-a-scope-root";
+        let target = self
+            .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
+            .await?;
+        let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+        let mut current = net
+            .resolve_anchored(&target.scope)
+            .await
+            .map_err(|e| target.resolve_error(check, e))?;
+
+        let items = poll_verified(&self.seams.mailbox, session.enc_subkey(), ENVELOPE_V)
+            .await
+            .map_err(EngineError::from_seam)?;
+        for item in &items {
+            let commitment_sig =
+                EcdsaSignature::from_compact(&current.commitment_sig).ok_or_else(|| {
+                    EngineError::TrustViolation {
+                        message: "the scope root's commitment signature is unparseable".to_owned(),
+                    }
+                })?;
+            let converted = convert_invite_claim(
+                &OwnerAuthority {
+                    identity_signer: session.identity(),
+                    enc_secret: session.enc_subkey(),
+                },
+                &CommittedScope {
+                    scope_id: &target.scope.scope_id,
+                    commitment: &current.commitment,
+                    commitment_sig: &commitment_sig,
+                    ledger: &current.grant_ledger,
+                },
+                &records.links,
+                &records.claims,
+                item,
+                self.seams.scheduler.now(),
+            );
+            let converted = match converted {
+                Ok(converted) => converted,
+                // The conversion is already durable, so the item has been
+                // consumed; acking it is what stops the transport re-serving it.
+                Err(InviteError::ClaimAlreadyConverted) => {
+                    self.seams
+                        .mailbox
+                        .ack(&item.item_id)
+                        .await
+                        .map_err(EngineError::from_seam)?;
+                    continue;
+                }
+                // Not a live claim on this scope — a share pointer, another
+                // scope's claim, an expired link. Left for whichever consumer
+                // owns it.
+                Err(_) => continue,
+            };
+
+            if converted.outcome != ClaimOutcome::Unchanged {
+                self.publish_converted_claim(session, &net, &target, &current, &converted)
+                    .await?;
+                current.commitment = converted.commitment.clone();
+                current.commitment_sig = sign_grant_set(session.identity(), &converted.commitment)
+                    .map_err(|_| EngineError::MalformedInput {
+                        check: "converted-commitment-unsignable",
+                    })?
+                    .to_compact();
+                current.grant_ledger = converted.ledger.clone();
+            }
+
+            if let Some(record) = converted.record {
+                records.claims.push(record);
+                store
+                    .persist(&records)
+                    .await
+                    .map_err(EngineError::from_invite_store)?;
+            }
+
+            // Courtesy delivery, exactly as a direct grant makes it: the
+            // claimant learns which scope root to resolve, and the committed
+            // ledger there stays the authority on what they may do.
+            let mut entropy = SharedEntropy(&self.entropy);
+            let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
+            let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim grant idempotency key")
+                .map_err(EngineError::from_entropy)?;
+            post_sealed(
+                &self.seams.mailbox,
+                &converted.claimant.enc_subkey(),
+                &converted.claimant.identity_pk(),
+                &ephemeral,
+                ENVELOPE_V,
+                session.identity(),
+                &SharePointer {
+                    scope_root_name: current.commitment.ipns_name.clone(),
+                    sharer_identity_pk: owner_identity.to_sec1(),
+                    display_name: display_name.clone(),
+                    permission: converted.row.commitment_entry.permission,
+                }
+                .encode(),
+                &format!("claim-grant-{}", hex_lower(&idempotency)),
+            )
+            .await
+            .map_err(EngineError::from_seam)?;
+
+            self.seams
+                .mailbox
+                .ack(&item.item_id)
+                .await
+                .map_err(EngineError::from_seam)?;
+        }
+        Ok(())
+    }
+
+    /// Publish the set one converted claim produced at the scope root it
+    /// belongs to: owner-re-sign the commitment, re-seal at the **same** read
+    /// epoch (a claim cuts no key, so it mints no history link), and publish.
+    async fn publish_converted_claim(
+        &self,
+        session: &SessionIdentity,
+        net: &OwnerNet<'_, T>,
+        target: &OwnerScope,
+        current: &CascadeTarget,
+        converted: &ConvertedClaim,
+    ) -> Result<(), EngineError> {
+        let commitment_sig = sign_grant_set(session.identity(), &converted.commitment)
+            .map_err(|_| EngineError::MalformedInput {
+                check: "converted-commitment-unsignable",
+            })?
+            .to_compact();
+        let section = reseal_scope_root(
+            &mut SharedEntropy(&self.entropy),
+            &ScopeRootIdentity {
+                v: current.v,
+                scope_id: target.scope.scope_id,
+                ipns_name: &target.scope.ipns_name,
+                owner_enc_pub: &current.owner_enc_pub,
+                owner_enc_secret: Some(session.enc_subkey()),
+                ascent: target
+                    .parent_node_seed
+                    .as_deref()
+                    .map(|seed| AscentAuthority::ParentSeed(seed)),
+                owes_ascent_link: current.carried_ascent_link,
+                pseudonym_signer: &current.pseudonym_signer,
+            },
+            &ResealSeeds {
+                override_seed: &current.override_seed,
+                read_epoch: current.current_read_epoch,
+                prev: None,
+                write_scope_seed: &current.write_scope_seed,
+                write_epoch: current.write_epoch,
+                write_history: WriteHistory::Carried(&current.write_history_link),
+                pointer_read_key: &current.pointer_read_key,
+            },
+            &CommittedSet {
+                owner_identity: &session.owner_identity(),
+                commitment: &converted.commitment,
+                commitment_sig: &commitment_sig,
+                grant_ledger: &converted.ledger,
+                direct_child_scope_index: &current.direct_child_scope_index,
+            },
+            &current.carried_history_links,
+        )
+        .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
+        net.publish_scope_root(&ResealedScopeRoot {
+            scope_id: target.scope.scope_id,
+            ipns_name: target.scope.ipns_name.clone(),
+            read_epoch: current.current_read_epoch,
+            write_epoch: current.write_epoch,
+            section,
+        })
+        .await
+        .map_err(|e| match e.is_retryable() {
+            // A stall or a lost CAS race leaves the claim unspent and the item
+            // unacked, so the next pass re-runs it.
+            true => EngineError::Seam {
+                message: e.to_string(),
+            },
+            false => EngineError::TrustViolation {
+                message: e.to_string(),
+            },
+        })
     }
 
     /// This session's durable invite records.
