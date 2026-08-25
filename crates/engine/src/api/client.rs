@@ -84,8 +84,8 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     base_url: String,
     /// The short-lived access JWT, in memory only. Zeroized on replacement/drop.
     session: SessionBearer,
-    /// The read accelerator's pseudonym — a separate cell so the API leg and
-    /// the gateway leg never present each other's credential.
+    /// The read accelerator's pseudonym, in its own cell so the API leg and the
+    /// gateway leg cannot present each other's credential.
     accelerator: SessionBearer,
     refresh_waiters: RefreshWaiters,
 }
@@ -111,10 +111,6 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Hold this session's credentials in the caller's cells rather than
     /// private ones, so a reader sharing them sees every rotation. Replaces
     /// both cells outright: call it on a fresh client, before login.
-    ///
-    /// They stay distinct because they authorize different things — the access
-    /// JWT reaches the whole API surface, the pseudonym reaches gateway reads
-    /// and nothing else.
     pub fn with_session_bearers(
         mut self,
         session: SessionBearer,
@@ -938,8 +934,7 @@ mod tests {
     }
 
     /// The two bearers are separate capabilities: the API leg presents the
-    /// session JWT, the gateway leg the read-scoped pseudonym, and neither
-    /// ever presents the other (blueprint/api.md, Egress).
+    /// session JWT, the gateway leg the read-scoped pseudonym.
     #[test]
     fn the_api_leg_presents_the_access_jwt_while_the_accelerator_holds_the_pseudonym() {
         let (http, _creds, client) = fakes();

@@ -2478,10 +2478,8 @@ pub struct Engine<T: SeamTypes> {
     /// The session access token, shared with the API client
     /// [`start`](Self::start) builds so teardown here reaches it.
     session_bearer: SessionBearer,
-    /// The read accelerator's opaque pseudonym, shared by that same client and
-    /// the gateway leg. Read-scoped and unlinkable to the account, so an
-    /// `Authorization` header observed at the gateway tier buys neither the API
-    /// surface nor an identity.
+    /// The read accelerator's opaque pseudonym (CONTEXT.md, Accelerator token),
+    /// shared by that same client and the gateway leg.
     accelerator_bearer: SessionBearer,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
@@ -6798,10 +6796,9 @@ mod tests {
         assert_eq!(login_body["signature"], expected);
     }
 
-    /// The read accelerator is CipherBox's own token-authed gateway, and what
-    /// gates it is the login-minted pseudonym — never the access JWT, which
-    /// reaches the whole API surface. Both are bound by login rather than
-    /// configured, and both are gone with the engine.
+    /// What gates the accelerator is the login-minted pseudonym, never the
+    /// access JWT. Both are bound by login rather than configured, and both are
+    /// gone with the engine.
     #[test]
     fn login_binds_the_pseudonym_to_the_accelerator_and_shutdown_drops_both() {
         let device = FakeWorld::new().device(b"alice-pk");

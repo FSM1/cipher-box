@@ -9,7 +9,7 @@ import { AccountDevice } from '../device-approval/entities/account-device.entity
 import { DeviceApproval } from '../device-approval/entities/device-approval.entity';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { AddDeviceApprovals1787155468460 } from '../migrations/1787155468460-AddDeviceApprovals';
-import { AddGatewayTokens1787679861760 } from '../migrations/1787679861760-AddGatewayTokens';
+import { AddGatewayTokens1787681144572 } from '../migrations/1787681144572-AddGatewayTokens';
 import { AddIdentitySubjects1784800000000 } from '../migrations/1784800000000-AddIdentitySubjects';
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
 import { AddMailboxReceivedAtIndex1784692000000 } from '../migrations/1784692000000-AddMailboxReceivedAtIndex';
@@ -55,7 +55,7 @@ const MIGRATIONS = [
   AddMailboxReceivedAtIndex1784692000000,
   AddIdentitySubjects1784800000000,
   AddDeviceApprovals1787155468460,
-  AddGatewayTokens1787679861760,
+  AddGatewayTokens1787681144572,
 ];
 
 export interface IntegrationDatabase {

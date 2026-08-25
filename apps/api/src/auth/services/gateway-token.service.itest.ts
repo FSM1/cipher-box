@@ -1,8 +1,8 @@
-import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
+import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { GatewayToken } from '../entities/gateway-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
@@ -18,15 +18,6 @@ import { GatewayTokenService } from './gateway-token.service';
 const ACCESS_TTL_SECONDS = 900;
 const CACHE_TTL_SECONDS = 30;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function compressedPublicKey(): string {
-  const priv = secp256k1.utils.randomPrivateKey();
-  try {
-    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-  } finally {
-    priv.fill(0);
-  }
-}
 
 describe('GatewayTokenService (real Postgres)', () => {
   let db: IntegrationDatabase;
@@ -61,18 +52,24 @@ describe('GatewayTokenService (real Postgres)', () => {
     );
   }
 
-  /** A live session: an account plus one unused refresh row in a fresh family. */
-  async function startSession(clock: FakeClock): Promise<{ userId: string; familyId: string }> {
-    const user = await users.save({ publicKey: compressedPublicKey() });
+  /**
+   * A live session: one unused refresh row in a fresh family, on a new account
+   * unless `userId` names an existing one.
+   */
+  async function startSession(
+    clock: FakeClock,
+    userId?: string
+  ): Promise<{ userId: string; familyId: string }> {
+    const owner = userId ?? (await users.save({ publicKey: randomCompressedPublicKey() })).id;
     const familyId = randomUUID();
     await refreshTokens.save({
-      userId: user.id,
+      userId: owner,
       familyId,
       tokenHash: randomUUID().replace(/-/g, '').padEnd(64, '0'),
       expiresAt: new Date(clock.now().getTime() + REFRESH_TTL_MS),
       usedAt: null,
     });
-    return { userId: user.id, familyId };
+    return { userId: owner, familyId };
   }
 
   it('mints an opaque token that carries nothing about the account', async () => {
@@ -102,17 +99,6 @@ describe('GatewayTokenService (real Postgres)', () => {
     expect(await service.verify('b'.repeat(64))).toBe(false);
   });
 
-  it('expires with the access token', async () => {
-    const clock = new FakeClock();
-    const service = buildService(clock);
-    const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
-
-    clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
-
-    expect(await service.verify(token)).toBe(false);
-  });
-
   it('rotation replaces the family pseudonym and retires the previous one', async () => {
     const clock = new FakeClock();
     const service = buildService(clock);
@@ -131,13 +117,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const other = await refreshTokens.save({
-      userId,
-      familyId: randomUUID(),
-      tokenHash: randomUUID().replace(/-/g, '').padEnd(64, '1'),
-      expiresAt: new Date(clock.now().getTime() + REFRESH_TTL_MS),
-      usedAt: null,
-    });
+    const other = await startSession(clock, userId);
 
     const otherToken = await service.mintForFamily(userId, other.familyId);
     await service.mintForFamily(userId, familyId);
@@ -152,15 +132,8 @@ describe('GatewayTokenService (real Postgres)', () => {
     await service.mintForFamily(abandoned.userId, abandoned.familyId);
 
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
-    const relogin = randomUUID();
-    await refreshTokens.save({
-      userId: abandoned.userId,
-      familyId: relogin,
-      tokenHash: randomUUID().replace(/-/g, '').padEnd(64, '2'),
-      expiresAt: new Date(clock.now().getTime() + REFRESH_TTL_MS),
-      usedAt: null,
-    });
-    await service.mintForFamily(abandoned.userId, relogin);
+    const relogin = await startSession(clock, abandoned.userId);
+    await service.mintForFamily(relogin.userId, relogin.familyId);
 
     expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
   });
@@ -213,7 +186,7 @@ describe('GatewayTokenService (real Postgres)', () => {
 
     // Revocation lands at cache expiry, not before — the decision's stated bound.
     expect(await service.verify(token)).toBe(true);
-    clock.advanceMs(service.revocationLatencyMs + 1);
+    clock.advanceMs(CACHE_TTL_SECONDS * 1000 + 1);
     expect(await service.verify(token)).toBe(false);
   });
 
@@ -228,5 +201,27 @@ describe('GatewayTokenService (real Postgres)', () => {
     // The cache window would still be open here; the token's expiry is not.
     clock.advanceMs(2);
     expect(await service.verify(token)).toBe(false);
+  });
+
+  it('caches a refusal, and ages it out far sooner than an acceptance', async () => {
+    const clock = new FakeClock();
+    const service = buildService(clock);
+    const { userId, familyId } = await startSession(clock);
+    const token = await service.mintForFamily(userId, familyId);
+
+    await refreshTokens.delete({ familyId });
+    expect(await service.verify(token)).toBe(false);
+
+    await refreshTokens.save({
+      userId,
+      familyId,
+      tokenHash: randomUUID().replace(/-/g, '').padEnd(64, 'a'),
+      expiresAt: new Date(clock.now().getTime() + REFRESH_TTL_MS),
+      usedAt: null,
+    });
+    expect(await service.verify(token)).toBe(false);
+
+    clock.advanceMs(1001);
+    expect(await service.verify(token)).toBe(true);
   });
 });

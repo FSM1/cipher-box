@@ -1,9 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { HEX_32_BYTES_RE } from '../../common/patterns';
 
 const HEX_PUBLIC_KEY = /^(02|03)[0-9a-fA-F]{64}$|^04[0-9a-fA-F]{128}$/;
 const HEX_COMPACT_SIGNATURE = /^[0-9a-fA-F]{128}$/;
-export const HEX_REFRESH_TOKEN = /^[0-9a-f]{64}$/;
+export const HEX_REFRESH_TOKEN = HEX_32_BYTES_RE;
 const HEX_ETH_SIGNATURE = /^0x[0-9a-fA-F]{130}$/;
 
 export class ChallengeRequestDto {

@@ -6,6 +6,9 @@
  */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** 32 bytes of lowercase hex — the shape of every random bearer the API mints. */
+export const HEX_32_BYTES_RE = /^[0-9a-f]{64}$/;
+
 /** Base64 over the standard alphabet, padding optional. */
 export const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 

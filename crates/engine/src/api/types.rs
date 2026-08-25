@@ -58,8 +58,7 @@ pub(crate) struct TestLoginRequest<'a> {
 pub(crate) struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
-    /// The read accelerator's opaque pseudonym — read-scoped, and the only
-    /// credential the gateway leg ever presents.
+    /// The read accelerator's opaque pseudonym (CONTEXT.md, Accelerator token).
     pub gateway_token: String,
     #[serde(default)]
     pub is_new_user: Option<bool>,

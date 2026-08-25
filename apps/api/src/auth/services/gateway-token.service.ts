@@ -1,44 +1,47 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'node:crypto';
 import { Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
+import { sha256Hex } from '../../common/hash';
+import { HEX_32_BYTES_RE } from '../../common/patterns';
 import { GatewayToken } from '../entities/gateway-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { resolveAccessTtlSeconds } from './access-ttl';
 
-/** 32 random bytes, lowercase hex — the shape `verify` accepts. */
-export const GATEWAY_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
-
 /**
- * How long a verified token stays trusted in process. This is the revocation
- * latency: a token whose session died is still honoured until its entry ages
- * out, so the window is seconds, not minutes.
+ * How long a verified token stays trusted in process — the revocation latency,
+ * so it is seconds rather than minutes.
  */
 const DEFAULT_CACHE_TTL_SECONDS = 10;
 const MAX_CACHE_TTL_SECONDS = 60;
 
+/**
+ * Refusals age out far faster than acceptances: their keys are attacker-chosen,
+ * so a long life would let a spray of invented tokens hold the cache full and
+ * evict live entries. One second still collapses a per-block retry storm into a
+ * single lookup.
+ */
+const REFUSAL_CACHE_TTL_MS = 1000;
+
 /** Bound on cached entries, so the verify path cannot grow memory without end. */
-const DEFAULT_CACHE_MAX_ENTRIES = 10_000;
+const CACHE_MAX_ENTRIES = 10_000;
 
 /**
  * The read accelerator's credential: an opaque per-session pseudonym minted
- * beside the access token and verified by lookup (blueprint/api.md, Egress).
+ * beside the access token (CONTEXT.md, Accelerator token).
  *
  * The gateway front is the only caller of `verify`, at roughly one request per
- * leaf block, so the lookup sits behind a small in-process cache. Nothing about
- * the account crosses back — the answer is yes or no.
+ * leaf block, so every answer — accept or refuse — is cached in process.
  */
 @Injectable()
 export class GatewayTokenService {
   private readonly ttlSeconds: number;
   private readonly cacheTtlMs: number;
-  private readonly cacheMaxEntries: number;
-  /** tokenHash → epoch ms the entry stops being trusted. Insertion-ordered. */
-  private readonly cache = new Map<string, number>();
+  /** tokenHash → the answer, and the epoch ms it stops being trusted. */
+  private readonly cache = new Map<string, { accepted: boolean; until: number }>();
 
   constructor(
     private readonly clock: Clock,
@@ -54,32 +57,28 @@ export class GatewayTokenService {
         DEFAULT_CACHE_TTL_SECONDS,
         MAX_CACHE_TTL_SECONDS
       ) * 1000;
-    this.cacheMaxEntries = positiveIntConfig(
-      configService.get('GATEWAY_TOKEN_CACHE_MAX_ENTRIES'),
-      DEFAULT_CACHE_MAX_ENTRIES
-    );
   }
 
   /**
-   * Mint this session's pseudonym, then drop the family's previous one and any
-   * of the account's expired rows in one statement. Insert first: a failed
-   * sweep leaves a second live token that expires on its own, where a failed
-   * insert after a sweep would leave the session with no accelerator at all.
+   * Mint this session's pseudonym, then sweep the family's previous one and the
+   * account's expired rows. Insert precedes sweep so a failure between them
+   * cannot leave the session with no accelerator credential at all.
    */
   async mintForFamily(userId: string, familyId: string): Promise<string> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
+    const tokenHash = sha256Hex(rawToken);
     const now = this.clock.now();
-    const minted = await this.gatewayTokenRepository.save({
+    await this.gatewayTokenRepository.insert({
       userId,
       familyId,
-      tokenHash: this.hashToken(rawToken),
+      tokenHash,
       expiresAt: new Date(now.getTime() + this.ttlSeconds * 1000),
     });
     await this.gatewayTokenRepository
       .createQueryBuilder()
       .delete()
       .where('user_id = :userId', { userId })
-      .andWhere('id != :minted', { minted: minted.id })
+      .andWhere('token_hash != :tokenHash', { tokenHash })
       .andWhere('(family_id = :familyId OR expires_at <= :now)', { familyId, now })
       .execute();
     return rawToken;
@@ -90,17 +89,14 @@ export class GatewayTokenService {
    * anything that is not the minted shape, before the row is looked up.
    */
   async verify(rawToken: string): Promise<boolean> {
-    if (!GATEWAY_TOKEN_PATTERN.test(rawToken)) {
+    if (!HEX_32_BYTES_RE.test(rawToken)) {
       return false;
     }
-    const tokenHash = this.hashToken(rawToken);
-    const now = this.clock.now();
-    const trustedUntil = this.cache.get(tokenHash);
-    if (trustedUntil !== undefined) {
-      if (trustedUntil > now.getTime()) {
-        return true;
-      }
-      this.cache.delete(tokenHash);
+    const tokenHash = sha256Hex(rawToken);
+    const now = this.clock.now().getTime();
+    const cached = this.cache.get(tokenHash);
+    if (cached !== undefined && cached.until > now) {
+      return cached.accepted;
     }
 
     const live = await this.gatewayTokenRepository
@@ -117,38 +113,25 @@ export class GatewayTokenService {
       )
       .where('gateway.token_hash = :tokenHash', { tokenHash })
       .andWhere('gateway.expires_at > :now')
-      .setParameter('now', now)
+      .setParameter('now', new Date(now))
+      .limit(1)
       .getRawOne<{ expires_at: Date }>();
+
     if (!live) {
+      this.remember(tokenHash, false, now + REFUSAL_CACHE_TTL_MS);
       return false;
     }
-
-    this.remember(tokenHash, Math.min(live.expires_at.getTime(), now.getTime() + this.cacheTtlMs));
+    // Never past the token's own expiry, so the cache cannot outlive the row.
+    this.remember(tokenHash, true, Math.min(live.expires_at.getTime(), now + this.cacheTtlMs));
     return true;
   }
 
-  /** Cached-answer lifetime in ms — the bound on how stale a `verify` can be. */
-  get revocationLatencyMs(): number {
-    return this.cacheTtlMs;
-  }
-
-  private remember(tokenHash: string, trustedUntil: number): void {
-    if (trustedUntil <= this.clock.now().getTime()) {
-      return;
-    }
+  private remember(tokenHash: string, accepted: boolean, until: number): void {
     // Re-insert so Map iteration order stays oldest-first for the eviction below.
     this.cache.delete(tokenHash);
-    this.cache.set(tokenHash, trustedUntil);
-    while (this.cache.size > this.cacheMaxEntries) {
-      const oldest = this.cache.keys().next();
-      if (oldest.done) {
-        return;
-      }
-      this.cache.delete(oldest.value);
+    this.cache.set(tokenHash, { accepted, until });
+    if (this.cache.size > CACHE_MAX_ENTRIES) {
+      this.cache.delete(this.cache.keys().next().value as string);
     }
-  }
-
-  private hashToken(rawToken: string): string {
-    return createHash('sha256').update(rawToken).digest('hex');
   }
 }
