@@ -332,10 +332,10 @@ pub async fn repoint_regression<F: FloorStore>(
 /// own so a caller that must not run the read stage cannot reach that stage by
 /// accident.
 ///
-/// Unconditional wherever it runs: only an owner-authored write rotation moves
-/// this floor from the record plane, so no honest read-side advance can push it
-/// past a value the owner vouched. Which *pointer plane* a caller reads is a
-/// separate question — see [`crate::net::rotation::OwnerRotationNet`]'s consult.
+/// Unconditional in itself: a grantee's lazy-rotation unseal inflates only the
+/// *read* floor, so nothing honest pushes the write floor past a value the owner
+/// vouched on the same plane. Which pointer plane a caller reads is a separate
+/// question, settled at `crate::net::PointerConsult`.
 pub async fn write_epoch_regression<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -391,8 +391,7 @@ pub async fn cold_seed_checked<F: FloorStore>(
 /// so the value returned is the floor in force, not the sighted epoch. The
 /// sighting is dropped rather than queued; a floor only ever moves up and the
 /// focus tick re-consults at `pointerConsultInterval`, so the next pass
-/// re-derives it. A caller that must not proceed under the pre-raise floor
-/// compares the returned floor against what it vouched.
+/// re-derives it.
 ///
 /// The lease is held *across* the raise, not merely tested before it: the host
 /// store is asynchronous, and a publish that took the lease while a raise was
