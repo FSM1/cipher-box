@@ -245,8 +245,6 @@ mod tests {
         );
     }
 
-    /// The mode is a two-bit field beside a dozen other flags; masking is what
-    /// keeps `O_WRONLY | O_TRUNC` from reading as an unknown mode.
     #[cfg(unix)]
     #[test]
     fn the_mode_is_read_out_of_the_flags_around_it() {

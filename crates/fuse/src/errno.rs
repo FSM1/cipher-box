@@ -1,8 +1,4 @@
 //! The one `VfsError` → errno table, shared by every unix mount technology.
-//!
-//! v1's duplicated per-host operation trees each decided this for themselves
-//! and disagreed; the table lives here so a Linux mount and a FUSE-T mount
-//! answer a given verdict identically.
 
 use crate::error::{RefusedBudget, VfsError};
 use crate::name::NameError;
@@ -62,10 +58,6 @@ mod tests {
 
     use super::*;
 
-    fn message(text: &str) -> String {
-        text.to_owned()
-    }
-
     /// The whole vocabulary against its errno, so a new variant cannot reach a
     /// kernel as whatever the last arm happened to be.
     #[test]
@@ -93,25 +85,25 @@ mod tests {
             ),
             (
                 VfsError::Refused {
-                    message: message("out of scope"),
+                    message: "out of scope".to_owned(),
                 },
                 libc::EIO,
             ),
             (
                 VfsError::TrustViolation {
-                    message: message("regressed floor"),
+                    message: "regressed floor".to_owned(),
                 },
                 libc::EIO,
             ),
             (
                 VfsError::Unavailable {
-                    message: message("no reachable source"),
+                    message: "no reachable source".to_owned(),
                 },
                 libc::EAGAIN,
             ),
             (
                 VfsError::Internal {
-                    message: message("fsync failed"),
+                    message: "fsync failed".to_owned(),
                 },
                 libc::EIO,
             ),
@@ -166,20 +158,19 @@ mod tests {
         );
     }
 
-    /// A retryable availability failure and a terminal fail-closed verdict must
-    /// not arrive as the same code — the caller retries one and never the other
-    /// (security rule 6).
+    /// Relational, not a second copy of the table above: the two classes must
+    /// stay apart however either value moves (security rule 6).
     #[test]
     fn availability_never_arrives_as_the_fail_closed_code() {
         let unavailable = errno_of(&VfsError::Unavailable {
-            message: message("no endpoint served a record this pass could adopt"),
+            message: "no endpoint served a record this pass could adopt".to_owned(),
         });
         for terminal in [
             VfsError::TrustViolation {
-                message: message("rejected child record"),
+                message: "rejected child record".to_owned(),
             },
             VfsError::Refused {
-                message: message("rotation impossible"),
+                message: "rotation impossible".to_owned(),
             },
         ] {
             assert_ne!(errno_of(&terminal), unavailable, "{terminal}");

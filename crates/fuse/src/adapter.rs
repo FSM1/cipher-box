@@ -8,6 +8,8 @@
 use core::time::Duration;
 
 use cipherbox_core::codec::RedactedText;
+
+use crate::ops::Attributes;
 use cipherbox_engine::{NodeKind, SyncTimingProfile};
 
 /// What the core tells an adapter has changed, so the kernel's cache for it
@@ -91,19 +93,19 @@ impl CacheTtls {
         }
     }
 
-    /// How long the kernel may cache the attributes of a node of `kind` this
-    /// mount is reporting at `size`.
+    /// The size to report for `attrs`, and how long the kernel may keep it.
     ///
-    /// A *file* size the content plane has not projected yet is provisional: an
-    /// adapter must put some number in the reply, and a kernel that caches a
-    /// zero there stops reading at byte zero — the shape `cp` turns into an
-    /// empty copy of a real file. A provisional reply is therefore never
-    /// cached, and the projection's own push invalidation corrects it. A folder
-    /// has no content size to be provisional about.
-    pub fn attr_for(&self, kind: NodeKind, size: Option<u64>) -> Duration {
-        match (kind, size) {
-            (NodeKind::Folder, _) | (NodeKind::File, Some(_)) => self.attr,
-            (NodeKind::File, None) => Duration::ZERO,
+    /// One call, because the two are one rule. A *file* size the content plane
+    /// has not projected yet is provisional: an adapter has to put some number
+    /// in the reply, and a kernel that caches a zero there stops reading at byte
+    /// zero — the shape `cp` turns into an empty copy of a real file. So the
+    /// number comes with a lifetime of zero, and the projection's own push
+    /// invalidation corrects it. A folder has no content size to be provisional
+    /// about.
+    pub fn projected_size(&self, attrs: &Attributes) -> (u64, Duration) {
+        match (attrs.kind, attrs.size) {
+            (NodeKind::File, None) => (0, Duration::ZERO),
+            (_, size) => (size.unwrap_or(0), self.attr),
         }
     }
 }
@@ -200,14 +202,34 @@ mod tests {
         }
     }
 
+    fn node(kind: NodeKind, size: Option<u64>) -> Attributes {
+        Attributes {
+            ino: 2,
+            node: cipherbox_engine::NodeId([7; 16]),
+            kind,
+            size,
+            mtime_millis: None,
+        }
+    }
+
     /// A projected size is as trustworthy as any other attribute; an
     /// unprojected one is a placeholder, and a cached placeholder is the bug.
     #[test]
     fn only_a_projected_file_size_earns_an_attribute_lifetime() {
         let ttls = CacheTtls::for_host(&caps(true), &SyncTimingProfile::PRODUCTION);
-        assert_eq!(ttls.attr_for(NodeKind::File, Some(4096)), ttls.attr);
-        assert!(ttls.attr_for(NodeKind::File, Some(0)) > Duration::ZERO);
-        assert_eq!(ttls.attr_for(NodeKind::File, None), Duration::ZERO);
+        assert_eq!(
+            ttls.projected_size(&node(NodeKind::File, Some(4096))),
+            (4096, ttls.attr)
+        );
+        assert_eq!(
+            ttls.projected_size(&node(NodeKind::File, Some(0))),
+            (0, ttls.attr)
+        );
+        assert_eq!(
+            ttls.projected_size(&node(NodeKind::File, None)),
+            (0, Duration::ZERO),
+            "a placeholder size is reported but never cached"
+        );
     }
 
     /// A folder never carries a content size, so treating its absence as
@@ -215,7 +237,10 @@ mod tests {
     #[test]
     fn a_folder_is_cacheable_without_a_size() {
         let ttls = CacheTtls::for_host(&caps(true), &SyncTimingProfile::PRODUCTION);
-        assert_eq!(ttls.attr_for(NodeKind::Folder, None), ttls.attr);
+        assert_eq!(
+            ttls.projected_size(&node(NodeKind::Folder, None)),
+            (0, ttls.attr)
+        );
     }
 
     /// A mount whose kernel keeps no attribute cache has nothing to time
@@ -230,8 +255,9 @@ mod tests {
             &SyncTimingProfile::PRODUCTION,
         );
         for kind in [NodeKind::File, NodeKind::Folder] {
-            assert_eq!(ttls.attr_for(kind, Some(4096)), Duration::ZERO);
-            assert_eq!(ttls.attr_for(kind, None), Duration::ZERO);
+            for size in [Some(4096), None] {
+                assert_eq!(ttls.projected_size(&node(kind, size)).1, Duration::ZERO);
+            }
         }
     }
 }

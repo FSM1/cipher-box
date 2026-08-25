@@ -69,7 +69,7 @@ impl Drop for Mount {
                 // library go through the setuid-root "fusermount -u" to unmount.
                 fuse_unmount_pure(&self.mountpoint)
             } else {
-                error!("Unmount failed: {}", err)
+                error!("Unmount failed: {err}")
             }
         }
     }
@@ -271,7 +271,7 @@ fn fuse_mount_fusermount(
             return if stderr_string.contains("only allowed if 'user_allow_other' is set") {
                 Err(io::Error::new(ErrorKind::PermissionDenied, stderr_string))
             } else {
-                Err(io::Error::new(ErrorKind::Other, stderr_string))
+                Err(io::Error::other(stderr_string))
             };
         }
     };
@@ -335,7 +335,7 @@ fn fuse_mount_sys(mountpoint: &OsStr, options: &[MountOption]) -> Result<Option<
         Ok(file) => file,
         Err(error) => {
             if error.kind() == ErrorKind::NotFound {
-                error!("{} not found. Try 'modprobe fuse'", fuse_device_name);
+                error!("{fuse_device_name} not found. Try 'modprobe fuse'");
             }
             return Err(error);
         }

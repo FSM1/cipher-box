@@ -62,6 +62,10 @@ impl Channel {
     }
 }
 
+/// The `fuse_in_header` every message starts with. A framed read refuses a
+/// length that could not even hold it.
+const FUSE_IN_HEADER_BYTES: usize = std::mem::size_of::<crate::ll::fuse_abi::fuse_in_header>();
+
 /// One `read()` per message, the way `/dev/fuse` delivers them.
 fn receive_atomic(fd: BorrowedFd<'_>, buffer: &mut [u8]) -> io::Result<usize> {
     let rc = unsafe {
@@ -87,12 +91,14 @@ fn receive_framed(fd: BorrowedFd<'_>, buffer: &mut [u8]) -> io::Result<usize> {
 
     let mut header = [0u8; 4];
     loop {
+        // MSG_WAITALL parks until the whole length field is there; without it a
+        // peer that has sent one byte would spin this loop on a full core.
         let rc = unsafe {
             libc::recv(
                 fd,
                 header.as_mut_ptr() as *mut c_void,
                 header.len() as size_t,
-                libc::MSG_PEEK,
+                libc::MSG_PEEK | libc::MSG_WAITALL,
             )
         };
         if rc < 0 {
@@ -104,16 +110,19 @@ fn receive_framed(fd: BorrowedFd<'_>, buffer: &mut [u8]) -> io::Result<usize> {
         if rc as usize >= header.len() {
             break;
         }
-        // A partial header: the rest of it is still in flight.
     }
 
+    // A length that cannot even cover the header, or that overruns the buffer,
+    // is refused rather than turned into a short read the decoder would have to
+    // recognize as a truncated request.
     let expected = u32::from_ne_bytes(header) as usize;
-    if expected > buffer.len() {
+    if !(FUSE_IN_HEADER_BYTES..=buffer.len()).contains(&expected) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "FUSE message ({} bytes) exceeds receive buffer ({} bytes)",
+                "FUSE message length {} is outside {}..={}",
                 expected,
+                FUSE_IN_HEADER_BYTES,
                 buffer.len()
             ),
         ));
@@ -132,7 +141,10 @@ fn receive_framed(fd: BorrowedFd<'_>, buffer: &mut [u8]) -> io::Result<usize> {
             return Err(io::Error::last_os_error());
         }
         if rc == 0 {
-            break; // EOF
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("FUSE message ended after {total} of {expected} bytes"),
+            ));
         }
         total += rc as usize;
     }
@@ -153,11 +165,20 @@ impl ReplySender for ChannelSender {
             )
         };
         if rc < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            debug_assert_eq!(bufs.iter().map(|b| b.len()).sum::<usize>(), rc as usize);
-            Ok(())
+            return Err(io::Error::last_os_error());
         }
+        // Release-active, not a debug_assert: a short writev on the FUSE-T
+        // socket delivers a truncated reply, and reporting success for it
+        // desynchronizes the session against the kernel's own accounting.
+        let written = rc as usize;
+        let expected: usize = bufs.iter().map(|b| b.len()).sum();
+        if written != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                format!("short FUSE reply: {written} of {expected} bytes"),
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(feature = "abi-7-40")]
@@ -172,6 +193,7 @@ impl ReplySender for ChannelSender {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
 
     use super::*;
@@ -179,6 +201,7 @@ mod tests {
     /// A FUSE message: the four-byte total length, then the body that makes it
     /// up to that length.
     fn message(len: usize) -> Vec<u8> {
+        assert!(len >= FUSE_IN_HEADER_BYTES);
         let mut out = (len as u32).to_ne_bytes().to_vec();
         out.extend((4..len).map(|i| (i % 251) as u8));
         out
@@ -209,6 +232,28 @@ mod tests {
         assert_eq!(&buffer[..taken], &sent[..]);
     }
 
+    /// The length field itself can arrive split. Peeking it must park, not spin
+    /// and not decide on the bytes it has.
+    #[test]
+    fn a_header_split_across_reads_is_waited_out() {
+        let (kernel, us) = UnixStream::pair().expect("socketpair");
+        let sent = message(128);
+        let (head, tail) = sent.split_at(2);
+        let (head, tail) = (head.to_vec(), tail.to_vec());
+
+        let writer = std::thread::spawn(move || {
+            let mut kernel = kernel;
+            kernel.write_all(&head).expect("head");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            kernel.write_all(&tail).expect("tail");
+        });
+
+        let mut buffer = vec![0u8; 4096];
+        let taken = receive_framed(us.as_fd(), &mut buffer).expect("receive");
+        writer.join().expect("writer");
+        assert_eq!(&buffer[..taken], &sent[..]);
+    }
+
     /// Back-to-back messages: taking more than one message's bytes would leave
     /// the next request's header mid-stream and desynchronize the session.
     #[test]
@@ -228,35 +273,10 @@ mod tests {
         assert_eq!(&buffer[..taken], &second[..]);
     }
 
-    /// The peek must not consume: a header read out of the stream would leave
-    /// the body headerless.
+    /// A length outside the admissible range is refused rather than turned into
+    /// a short read the decoder has to recognize as truncated.
     #[test]
-    fn peeking_the_header_leaves_it_in_the_stream() {
-        let (kernel, us) = UnixStream::pair().expect("socketpair");
-        let sent = message(32);
-        let mut kernel = kernel;
-        kernel.write_all(&sent).expect("write");
-
-        let mut peeked = [0u8; 4];
-        let rc = unsafe {
-            libc::recv(
-                us.as_raw_fd(),
-                peeked.as_mut_ptr() as *mut c_void,
-                peeked.len() as size_t,
-                libc::MSG_PEEK,
-            )
-        };
-        assert_eq!(rc, 4);
-
-        let mut buffer = vec![0u8; 8192];
-        let taken = receive_framed(us.as_fd(), &mut buffer).expect("receive");
-        assert_eq!(&buffer[..taken], &sent[..], "the peek consumed nothing");
-    }
-
-    /// A message the buffer cannot hold is refused rather than truncated into
-    /// a half-decoded request.
-    #[test]
-    fn a_message_wider_than_the_buffer_is_refused() {
+    fn a_length_the_buffer_cannot_hold_is_refused() {
         let (kernel, us) = UnixStream::pair().expect("socketpair");
         let mut kernel = kernel;
         kernel.write_all(&message(4096)).expect("write");
@@ -264,6 +284,34 @@ mod tests {
         let mut buffer = vec![0u8; 64];
         let refusal = receive_framed(us.as_fd(), &mut buffer).expect_err("refused");
         assert_eq!(refusal.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_length_too_small_for_a_header_is_refused() {
+        let (kernel, us) = UnixStream::pair().expect("socketpair");
+        let mut kernel = kernel;
+        let mut claim = vec![0u8; 64];
+        claim[..4].copy_from_slice(&8u32.to_ne_bytes());
+        kernel.write_all(&claim).expect("write");
+
+        let mut buffer = vec![0u8; 8192];
+        let refusal = receive_framed(us.as_fd(), &mut buffer).expect_err("refused");
+        assert_eq!(refusal.kind(), io::ErrorKind::InvalidData);
+    }
+
+    /// A peer that dies mid-message must not present the fragment it managed to
+    /// send as a complete request.
+    #[test]
+    fn a_message_cut_short_by_a_dead_peer_is_not_a_message() {
+        let (kernel, us) = UnixStream::pair().expect("socketpair");
+        let sent = message(4096);
+        let mut kernel = kernel;
+        kernel.write_all(&sent[..512]).expect("prefix");
+        drop(kernel);
+
+        let mut buffer = vec![0u8; 8192];
+        let refusal = receive_framed(us.as_fd(), &mut buffer).expect_err("refused");
+        assert_eq!(refusal.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     /// A closed peer ends the session loop; it must not read as a message.
@@ -274,5 +322,33 @@ mod tests {
 
         let mut buffer = vec![0u8; 64];
         assert_eq!(receive_framed(us.as_fd(), &mut buffer).expect("eof"), 0);
+    }
+
+    /// A reply the socket only partly took is an error, not a success — and the
+    /// check has to hold in a release build, where a `debug_assert` is gone
+    /// (AGENTS.md rule 8).
+    #[test]
+    fn a_reply_the_socket_only_partly_took_is_refused() {
+        let (kernel, us) = UnixStream::pair().expect("socketpair");
+        let small: c_int = 4096;
+        let set = unsafe {
+            libc::setsockopt(
+                us.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                std::ptr::addr_of!(small).cast(),
+                std::mem::size_of::<c_int>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(set, 0, "the send buffer must shrink for this to be short");
+        us.set_nonblocking(true).expect("nonblocking");
+
+        let payload = vec![0x5au8; 4 << 20];
+        let sender = ChannelSender(Arc::new(File::from(OwnedFd::from(us))));
+        let refusal = sender
+            .send(&[io::IoSlice::new(&payload)])
+            .expect_err("a short reply is refused");
+        assert_eq!(refusal.kind(), io::ErrorKind::WriteZero);
+        drop(kernel);
     }
 }

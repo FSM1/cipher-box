@@ -759,6 +759,7 @@ version = "0.0.0"
 dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
+ "cipherbox-fuse",
  "fuser",
  "futures-channel",
  "futures-core",
@@ -1641,8 +1642,12 @@ dependencies = [
  "memchr",
  "nix",
  "page_size",
+ "pkg-config",
+ "serde",
  "smallvec",
+ "tempfile",
  "zerocopy",
+ "zeroize",
 ]
 
 [[package]]

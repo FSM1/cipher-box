@@ -34,7 +34,7 @@ serde_json.workspace = true
 base64.workspace = true
 # Nonces for the OAuth exchange. The engine's injected-entropy law is about
 # engine logic; this is host-side and never derives a key.
-getrandom = "0.3"
+getrandom.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

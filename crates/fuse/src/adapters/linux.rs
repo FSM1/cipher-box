@@ -9,9 +9,11 @@
 //!
 //! The reply object crosses the channel with the request, so the session thread
 //! never waits on the engine and the kernel is answered wherever the operation
-//! finishes.
+//! finishes. The queue between them is unbounded, which the never-block law
+//! makes unavoidable: a queued write holds its plaintext until the pump reaches
+//! it, so the mount caps the kernel's write width rather than the queue.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
@@ -20,15 +22,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{NodeKind, StatFs};
 use fuser::{
-    BackgroundSession, FileAttr, FileType, Filesystem, MountOption, Notifier, ReplyAttr,
-    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs,
-    ReplyWrite, Request, Session, TimeOrNow,
+    BackgroundSession, FileAttr, FileType, Filesystem, KernelConfig, MountOption, Notifier,
+    ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    ReplyStatfs, ReplyWrite, Request, Session, TimeOrNow,
 };
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
-use crate::adapter::{HostAdapter, HostCapabilities, Invalidation};
+use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
 use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
@@ -47,12 +49,26 @@ const STAT_BLOCK_BYTES: u64 = 512;
 /// the chunk cache's, and nothing here is served better by a larger hint.
 const PREFERRED_IO_BYTES: u32 = 4096;
 
+/// The widest single write the kernel may hand over. fuser's default is 16 MiB,
+/// and every write in flight holds that much plaintext in the op queue until
+/// the pump reaches it.
+const MAX_WRITE_BYTES: u32 = 1 << 20;
+
 /// Owner-only, and no execute bit: the projection carries no POSIX mode of its
 /// own, and a vault is not a place to hand out an executable.
 const FILE_MODE: u16 = 0o600;
 /// The directory counterpart of [`FILE_MODE`] — traversal needs the execute
 /// bit.
 const DIRECTORY_MODE: u16 = 0o700;
+
+/// `.` and `..`, which a listing synthesizes ahead of the real children.
+const DOT_ENTRIES: usize = 2;
+
+/// A request the projection cannot even name. Answered through the shared table
+/// rather than beside it, so no adapter drifts from another.
+fn malformed() -> i32 {
+    errno_of(&VfsError::Invalid)
+}
 
 /// Pushes the operation core's invalidations at the kernel.
 #[derive(Clone)]
@@ -67,9 +83,9 @@ impl HostAdapter for KernelInvalidator {
     }
 
     fn invalidate(&self, invalidation: Invalidation) {
-        // Absorbed, per the trait's contract: the mutation is already durable,
-        // and a channel that will not take the notification is the session
-        // ending, with no surface left to tell.
+        // An inode the kernel never cached answers `ENOENT`, which the notifier
+        // already absorbs; what is left is a channel on its way down, and the
+        // trait's contract is that the adapter absorbs that too.
         let _ = match invalidation {
             // Offset zero, length zero: the attributes and every cached page.
             Invalidation::Data { ino } => self.0.inval_inode(ino, 0, 0),
@@ -102,13 +118,13 @@ enum KernelOp {
     },
     SetSize {
         ino: u64,
-        size: Option<u64>,
+        size: u64,
         handle: Option<HandleId>,
         reply: ReplyAttr,
     },
     ReadDir {
         ino: u64,
-        offset: i64,
+        offset: usize,
         reply: ReplyDirectory,
     },
     Create {
@@ -176,7 +192,8 @@ enum KernelOp {
 
 impl KernelOp {
     /// Answer with `errno` instead of running — the only thing to do with a
-    /// request the engine task will never see.
+    /// request the engine task will never see. A FUSE request nobody answers
+    /// hangs its caller for the life of the mount.
     fn refuse(self, errno: i32) {
         match self {
             KernelOp::Lookup { reply, .. } | KernelOp::MkDir { reply, .. } => reply.error(errno),
@@ -208,6 +225,39 @@ impl KernelSession {
             // The engine task is gone; the mount is on its way down.
             refused.into_inner().refuse(libc::ENOTCONN);
         }
+    }
+}
+
+/// The listing the kernel is currently walking.
+///
+/// A `readdir` sequence resumes at the cookie the previous reply ended on, so
+/// rendering the directory again per continuation makes one listing cost a
+/// render per reply buffer. One slot is enough — the kernel walks one stream at
+/// a time — and a miss simply renders.
+#[derive(Default)]
+struct DirStream {
+    dir: Option<u64>,
+    entries: Vec<DirEntry>,
+}
+
+impl DirStream {
+    /// The entry a listing emits at `index`: the two dot entries, then the
+    /// children. Both dot entries name the directory itself — the kernel
+    /// resolves `..` through lookup and its own dcache, never through the inode
+    /// a listing reports.
+    fn at(&self, index: usize, ino: u64) -> Option<(u64, NodeKind, &OsStr)> {
+        match index {
+            0 => Some((ino, NodeKind::Folder, OsStr::new("."))),
+            1 => Some((ino, NodeKind::Folder, OsStr::new(".."))),
+            _ => self
+                .entries
+                .get(index - DOT_ENTRIES)
+                .map(|child| (child.ino, child.kind, OsStr::new(&child.name))),
+        }
+    }
+
+    fn len(&self) -> usize {
+        DOT_ENTRIES + self.entries.len()
     }
 }
 
@@ -264,14 +314,26 @@ impl KernelMount {
     /// and the never-block law is what keeps a serial pump responsive: no
     /// operation here awaits IPNS resolution, publish, or API bookkeeping.
     pub async fn serve<T: SeamTypes>(&mut self, core: &mut OperationCore<T, KernelInvalidator>) {
-        while let Some(op) = core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx)).await
-        {
-            answer(core, op, self.owner).await;
+        let owner = self.owner;
+        let mut listing = DirStream::default();
+        loop {
+            let next = core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx)).await;
+            let Some(op) = next else { break };
+            answer(core, op, owner, &mut listing).await;
         }
     }
 }
 
 impl Filesystem for KernelSession {
+    fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
+        // A refusal hands back the nearest width the kernel will take, which is
+        // still narrower than the default this exists to cut.
+        if let Err(nearest) = config.set_max_write(MAX_WRITE_BYTES) {
+            let _ = config.set_max_write(nearest);
+        }
+        Ok(())
+    }
+
     fn destroy(&mut self) {
         // Ends the pump: the session is over, so no further operation can be
         // answered.
@@ -279,14 +341,17 @@ impl Filesystem for KernelSession {
     }
 
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        match admissible(name) {
-            Some(name) => self.dispatch(KernelOp::Lookup {
-                parent,
-                name,
-                reply,
-            }),
-            None => reply.error(libc::EINVAL),
-        }
+        let Some(name) = as_utf8(name) else {
+            // A name the projection cannot hold provably does not exist, and
+            // absence is what `stat` and `test -e` are asking about.
+            reply.error(errno_of(&VfsError::NotFound));
+            return;
+        };
+        self.dispatch(KernelOp::Lookup {
+            parent,
+            name,
+            reply,
+        });
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
@@ -317,11 +382,14 @@ impl Filesystem for KernelSession {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        self.dispatch(KernelOp::SetSize {
-            ino,
-            size,
-            handle: fh.map(HandleId),
-            reply,
+        self.dispatch(match size {
+            Some(size) => KernelOp::SetSize {
+                ino,
+                size,
+                handle: fh.map(HandleId),
+                reply,
+            },
+            None => KernelOp::GetAttr { ino, reply },
         });
     }
 
@@ -334,36 +402,39 @@ impl Filesystem for KernelSession {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        match admissible(name) {
-            Some(name) => self.dispatch(KernelOp::MkDir {
-                parent,
-                name,
-                reply,
-            }),
-            None => reply.error(libc::EINVAL),
-        }
+        let Some(name) = as_utf8(name) else {
+            reply.error(malformed());
+            return;
+        };
+        self.dispatch(KernelOp::MkDir {
+            parent,
+            name,
+            reply,
+        });
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        match admissible(name) {
-            Some(name) => self.dispatch(KernelOp::Unlink {
-                parent,
-                name,
-                reply,
-            }),
-            None => reply.error(libc::EINVAL),
-        }
+        let Some(name) = as_utf8(name) else {
+            reply.error(malformed());
+            return;
+        };
+        self.dispatch(KernelOp::Unlink {
+            parent,
+            name,
+            reply,
+        });
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        match admissible(name) {
-            Some(name) => self.dispatch(KernelOp::RmDir {
-                parent,
-                name,
-                reply,
-            }),
-            None => reply.error(libc::EINVAL),
-        }
+        let Some(name) = as_utf8(name) else {
+            reply.error(malformed());
+            return;
+        };
+        self.dispatch(KernelOp::RmDir {
+            parent,
+            name,
+            reply,
+        });
     }
 
     fn rename(
@@ -376,16 +447,17 @@ impl Filesystem for KernelSession {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        match (admissible(name), admissible(new_name)) {
-            (Some(name), Some(new_name)) => self.dispatch(KernelOp::Rename {
-                parent,
-                name,
-                new_parent,
-                new_name,
-                reply,
-            }),
-            _ => reply.error(libc::EINVAL),
-        }
+        let (Some(name), Some(new_name)) = (as_utf8(name), as_utf8(new_name)) else {
+            reply.error(malformed());
+            return;
+        };
+        self.dispatch(KernelOp::Rename {
+            parent,
+            name,
+            new_parent,
+            new_name,
+            reply,
+        });
     }
 
     fn create(
@@ -398,8 +470,8 @@ impl Filesystem for KernelSession {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        let (Some(name), Some(access)) = (admissible(name), Access::from_open_flags(flags)) else {
-            reply.error(libc::EINVAL);
+        let (Some(name), Some(access)) = (as_utf8(name), Access::from_open_flags(flags)) else {
+            reply.error(malformed());
             return;
         };
         self.dispatch(KernelOp::Create {
@@ -412,7 +484,7 @@ impl Filesystem for KernelSession {
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let Some(access) = Access::from_open_flags(flags) else {
-            reply.error(libc::EINVAL);
+            reply.error(malformed());
             return;
         };
         self.dispatch(KernelOp::Open {
@@ -436,7 +508,7 @@ impl Filesystem for KernelSession {
         reply: ReplyData,
     ) {
         let Ok(offset) = u64::try_from(offset) else {
-            reply.error(libc::EINVAL);
+            reply.error(malformed());
             return;
         };
         self.dispatch(KernelOp::Read {
@@ -461,9 +533,11 @@ impl Filesystem for KernelSession {
         reply: ReplyWrite,
     ) {
         let Ok(offset) = u64::try_from(offset) else {
-            reply.error(libc::EINVAL);
+            reply.error(malformed());
             return;
         };
+        // The borrow is fuser's receive buffer, reused for the next request, so
+        // the payload has to be copied to outlive this callback.
         self.dispatch(KernelOp::Write {
             handle: HandleId(fh),
             offset,
@@ -480,10 +554,10 @@ impl Filesystem for KernelSession {
         offset: i64,
         reply: ReplyDirectory,
     ) {
-        if offset < 0 {
-            reply.error(libc::EINVAL);
+        let Ok(offset) = usize::try_from(offset) else {
+            reply.error(malformed());
             return;
-        }
+        };
         self.dispatch(KernelOp::ReadDir { ino, offset, reply });
     }
 
@@ -538,9 +612,9 @@ impl Filesystem for KernelSession {
     }
 }
 
-/// A name the wire can carry into the projection. The engine stores names as
-/// UTF-8 text; bytes that are not are a name no client could have committed.
-fn admissible(name: &OsStr) -> Option<String> {
+/// The engine stores names as UTF-8 text, so bytes that are not are a name no
+/// client could have committed. Admission proper is the core's.
+fn as_utf8(name: &OsStr) -> Option<String> {
     name.to_str().map(str::to_owned)
 }
 
@@ -549,88 +623,88 @@ async fn answer<T: SeamTypes>(
     core: &mut OperationCore<T, KernelInvalidator>,
     op: KernelOp,
     owner: Ownership,
+    listing: &mut DirStream,
 ) {
-    let ttls = core.cache_ttls();
     match op {
         KernelOp::Lookup {
             parent,
             name,
             reply,
-        } => match core.lookup(parent, &name).await {
-            // One lifetime covers the name binding and the attributes both, so
-            // a provisional size holds the whole reply down to zero.
-            Ok(attrs) => reply.entry(
-                &ttls.attr_for(attrs.kind, attrs.size),
-                &file_attr(&attrs, owner),
-                GENERATION,
-            ),
-            Err(refusal) => reply.error(errno_of(&refusal)),
-        },
-        KernelOp::GetAttr { ino, reply } => match core.getattr(ino).await {
-            Ok(attrs) => reply.attr(
-                &ttls.attr_for(attrs.kind, attrs.size),
-                &file_attr(&attrs, owner),
-            ),
-            Err(refusal) => reply.error(errno_of(&refusal)),
-        },
+        } => {
+            let outcome = core.lookup(parent, &name).await;
+            entry(reply, owner, core.cache_ttls(), outcome);
+        }
+        KernelOp::GetAttr { ino, reply } => {
+            let outcome = core.getattr(ino).await;
+            attr(reply, owner, core.cache_ttls(), outcome);
+        }
         KernelOp::SetSize {
             ino,
             size,
             handle,
             reply,
         } => {
-            if let Some(size) = size
-                && let Err(refusal) = core.truncate(ino, size, handle).await
-            {
-                reply.error(errno_of(&refusal));
-                return;
-            }
-            match core.getattr(ino).await {
-                Ok(attrs) => reply.attr(
-                    &ttls.attr_for(attrs.kind, attrs.size),
-                    &file_attr(&attrs, owner),
-                ),
-                Err(refusal) => reply.error(errno_of(&refusal)),
-            }
+            let outcome = match core.truncate(ino, size, handle).await {
+                Ok(()) => core.getattr(ino).await,
+                Err(refusal) => Err(refusal),
+            };
+            attr(reply, owner, core.cache_ttls(), outcome);
         }
         KernelOp::ReadDir {
             ino,
             offset,
             mut reply,
-        } => match core.readdir(ino).await {
-            Ok(entries) => {
-                emit_listing(&mut reply, ino, offset, entries);
-                reply.ok();
+        } => {
+            // A fresh stream always renders; only a continuation of the one in
+            // hand is served from it.
+            if offset == 0 || listing.dir != Some(ino) {
+                match core.readdir(ino).await {
+                    Ok(entries) => {
+                        *listing = DirStream {
+                            dir: Some(ino),
+                            entries,
+                        }
+                    }
+                    Err(refusal) => {
+                        *listing = DirStream::default();
+                        reply.error(errno_of(&refusal));
+                        return;
+                    }
+                }
             }
-            Err(refusal) => reply.error(errno_of(&refusal)),
-        },
+            emit_listing(&mut reply, ino, offset, listing);
+            reply.ok();
+        }
         KernelOp::Create {
             parent,
             name,
             access,
             reply,
-        } => match core.create(parent, &name, access).await {
-            Ok((attrs, handle)) => reply.created(
-                &ttls.attr_for(attrs.kind, attrs.size),
-                &file_attr(&attrs, owner),
-                GENERATION,
-                handle.0,
-                0,
-            ),
-            Err(refusal) => reply.error(errno_of(&refusal)),
-        },
+        } => {
+            let outcome = core.create(parent, &name, access).await;
+            let ttls = core.cache_ttls();
+            match outcome {
+                Ok((attrs, handle)) => {
+                    let (size, ttl) = ttls.projected_size(&attrs);
+                    reply.created(
+                        &ttl,
+                        &file_attr(&attrs, size, owner),
+                        GENERATION,
+                        handle.0,
+                        0,
+                    );
+                }
+                Err(refusal) => reply.error(errno_of(&refusal)),
+            }
+        }
         KernelOp::MkDir {
             parent,
             name,
             reply,
-        } => match core.mkdir(parent, &name).await {
-            Ok(attrs) => reply.entry(
-                &ttls.attr_for(attrs.kind, attrs.size),
-                &file_attr(&attrs, owner),
-                GENERATION,
-            ),
-            Err(refusal) => reply.error(errno_of(&refusal)),
-        },
+        } => {
+            let outcome = core.mkdir(parent, &name).await;
+            entry(reply, owner, core.cache_ttls(), outcome);
+        }
         KernelOp::Unlink {
             parent,
             name,
@@ -716,6 +790,38 @@ fn empty(reply: ReplyEmpty, outcome: Result<(), VfsError>) {
     }
 }
 
+/// One lifetime covers the name binding and the attributes both, so a
+/// provisional size holds the whole reply down to zero.
+fn entry(
+    reply: ReplyEntry,
+    owner: Ownership,
+    ttls: CacheTtls,
+    outcome: Result<Attributes, VfsError>,
+) {
+    match outcome {
+        Ok(attrs) => {
+            let (size, ttl) = ttls.projected_size(&attrs);
+            reply.entry(&ttl, &file_attr(&attrs, size, owner), GENERATION);
+        }
+        Err(refusal) => reply.error(errno_of(&refusal)),
+    }
+}
+
+fn attr(
+    reply: ReplyAttr,
+    owner: Ownership,
+    ttls: CacheTtls,
+    outcome: Result<Attributes, VfsError>,
+) {
+    match outcome {
+        Ok(attrs) => {
+            let (size, ttl) = ttls.projected_size(&attrs);
+            reply.attr(&ttl, &file_attr(&attrs, size, owner));
+        }
+        Err(refusal) => reply.error(errno_of(&refusal)),
+    }
+}
+
 fn reply_statfs(reply: ReplyStatfs, stats: StatFs) {
     // Byte accounting does not reach the facade; the node count and the
     // advertised name length are what this mount can answer truthfully.
@@ -731,20 +837,12 @@ fn reply_statfs(reply: ReplyStatfs, stats: StatFs) {
     );
 }
 
-/// Emit `.` and `..` and then the directory's children, resuming at `offset`.
-///
-/// Both dot entries name this directory: the kernel resolves `..` through
-/// lookup and its own dcache, never through the inode a listing reports.
-fn emit_listing(reply: &mut ReplyDirectory, ino: u64, offset: i64, entries: Vec<DirEntry>) {
-    let dots = [
-        (ino, NodeKind::Folder, OsString::from(".")),
-        (ino, NodeKind::Folder, OsString::from("..")),
-    ];
-    let children = entries
-        .into_iter()
-        .map(|entry| (entry.ino, entry.kind, OsString::from(entry.name)));
-    let taken = usize::try_from(offset).unwrap_or(usize::MAX);
-    for (index, (child, kind, name)) in dots.into_iter().chain(children).enumerate().skip(taken) {
+/// Pack `listing` into the reply buffer, resuming at `offset`.
+fn emit_listing(reply: &mut ReplyDirectory, ino: u64, offset: usize, listing: &DirStream) {
+    for index in offset..listing.len() {
+        let Some((child, kind, name)) = listing.at(index, ino) else {
+            break;
+        };
         // The offset the kernel resumes at is the one *after* this entry.
         if reply.add(child, index as i64 + 1, file_type(kind), name) {
             break;
@@ -759,12 +857,9 @@ fn file_type(kind: NodeKind) -> FileType {
     }
 }
 
-/// The projection's attributes as the kernel's `stat`.
-///
-/// An unprojected size has to become *some* number here; `attribute_ttl` is
-/// what keeps the kernel from caching that number.
-fn file_attr(attrs: &Attributes, owner: Ownership) -> FileAttr {
-    let size = attrs.size.unwrap_or(0);
+/// The projection's attributes as the kernel's `stat`, at the `size`
+/// [`CacheTtls::projected_size`] decided to report.
+fn file_attr(attrs: &Attributes, size: u64, owner: Ownership) -> FileAttr {
     let time = attrs
         .mtime_millis
         .and_then(|millis| UNIX_EPOCH.checked_add(Duration::from_millis(millis)))
@@ -793,5 +888,160 @@ fn file_attr(attrs: &Attributes, owner: Ownership) -> FileAttr {
         rdev: 0,
         blksize: PREFERRED_IO_BYTES,
         flags: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cipherbox_engine::NodeId;
+
+    use super::*;
+
+    fn owner() -> Ownership {
+        Ownership { uid: 501, gid: 20 }
+    }
+
+    fn node(kind: NodeKind, size: Option<u64>) -> Attributes {
+        Attributes {
+            ino: 42,
+            node: NodeId([3; 16]),
+            kind,
+            size,
+            mtime_millis: Some(1_700_000_000_123),
+        }
+    }
+
+    /// The mount presents no executable and nothing group- or world-readable:
+    /// the projection has no POSIX mode of its own, so what it shows is policy.
+    #[test]
+    fn the_mount_presents_owner_only_modes_and_no_execute_bit_on_files() {
+        let file = file_attr(&node(NodeKind::File, Some(1)), 1, owner());
+        assert_eq!(file.perm, 0o600);
+        assert_eq!(file.perm & 0o077, 0, "nothing for group or other");
+        assert_eq!(file.perm & 0o111, 0, "no execute bit anywhere");
+
+        let folder = file_attr(&node(NodeKind::Folder, None), 0, owner());
+        assert_eq!(folder.perm, 0o700);
+        assert_eq!(folder.perm & 0o077, 0, "nothing for group or other");
+    }
+
+    #[test]
+    fn a_node_belongs_to_the_user_who_mounted_it() {
+        let attrs = file_attr(&node(NodeKind::File, Some(1)), 1, owner());
+        assert_eq!((attrs.uid, attrs.gid), (501, 20));
+    }
+
+    /// `st_blocks` is in 512-byte units whatever `st_blksize` advertises, and it
+    /// rounds up: a kernel told zero blocks for a non-empty file reports a file
+    /// that occupies nothing.
+    #[test]
+    fn block_counts_are_512_byte_units_rounded_up() {
+        for (size, blocks) in [(0, 0), (1, 1), (512, 1), (513, 2), (4096, 8)] {
+            let attrs = file_attr(&node(NodeKind::File, Some(size)), size, owner());
+            assert_eq!(attrs.blocks, blocks, "{size} bytes");
+        }
+    }
+
+    #[test]
+    fn kinds_and_link_counts_follow_the_projection() {
+        let file = file_attr(&node(NodeKind::File, Some(0)), 0, owner());
+        assert_eq!(file.kind, FileType::RegularFile);
+        assert_eq!(file.nlink, 1);
+
+        let folder = file_attr(&node(NodeKind::Folder, None), 0, owner());
+        assert_eq!(folder.kind, FileType::Directory);
+        assert_eq!(folder.nlink, 2, "a directory's own `.` is the second link");
+    }
+
+    /// An mtime the content plane never projected is the epoch, not a clock
+    /// read: the projection has no clock of its own.
+    #[test]
+    fn an_unprojected_mtime_is_the_epoch() {
+        let mut attrs = node(NodeKind::File, Some(0));
+        attrs.mtime_millis = None;
+        assert_eq!(file_attr(&attrs, 0, owner()).mtime, UNIX_EPOCH);
+
+        attrs.mtime_millis = Some(1_500);
+        assert_eq!(
+            file_attr(&attrs, 0, owner()).mtime,
+            UNIX_EPOCH + Duration::from_millis(1_500)
+        );
+    }
+
+    fn child(ino: u64, name: &str) -> DirEntry {
+        DirEntry {
+            ino,
+            name: name.to_owned(),
+            kind: NodeKind::File,
+        }
+    }
+
+    fn stream() -> DirStream {
+        DirStream {
+            dir: Some(1),
+            entries: vec![child(2, "alpha"), child(3, "beta")],
+        }
+    }
+
+    /// A listing leads with `.` and `..`, both naming the directory itself.
+    #[test]
+    fn a_listing_leads_with_the_dot_entries() {
+        let listing = stream();
+        assert_eq!(listing.len(), 4);
+        for index in [0, 1] {
+            let (ino, kind, name) = listing.at(index, 1).expect("a dot entry");
+            assert_eq!(ino, 1);
+            assert_eq!(kind, NodeKind::Folder);
+            assert_eq!(name, if index == 0 { "." } else { ".." });
+        }
+    }
+
+    /// The cookie the kernel resumes at is the index *after* the entry it took,
+    /// so resuming there must land on the next child, never repeat or skip one.
+    #[test]
+    fn a_continuation_resumes_on_the_entry_after_the_last_one_taken() {
+        let listing = stream();
+        let emitted: Vec<_> = (0..listing.len())
+            .filter_map(|index| listing.at(index, 1))
+            .map(|(ino, _, name)| (ino, name.to_owned()))
+            .collect();
+
+        for resumed in 0..listing.len() {
+            let rest: Vec<_> = (resumed..listing.len())
+                .filter_map(|index| listing.at(index, 1))
+                .map(|(ino, _, name)| (ino, name.to_owned()))
+                .collect();
+            assert_eq!(rest, emitted[resumed..], "resuming at {resumed}");
+        }
+    }
+
+    #[test]
+    fn a_cookie_past_the_end_emits_nothing() {
+        let listing = stream();
+        assert!(listing.at(listing.len(), 1).is_none());
+        assert!(listing.at(usize::MAX, 1).is_none());
+    }
+
+    /// Everything the decoder refuses before the core sees it comes from the
+    /// one table, so a second unix adapter cannot answer these differently.
+    #[test]
+    fn a_pre_core_refusal_comes_from_the_shared_table() {
+        assert_eq!(malformed(), errno_of(&VfsError::Invalid));
+        assert_eq!(malformed(), libc::EINVAL);
+    }
+
+    #[test]
+    fn a_name_the_projection_cannot_hold_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert_eq!(as_utf8(OsStr::new("alpha")).as_deref(), Some("alpha"));
+        assert_eq!(as_utf8(OsStr::from_bytes(&[0xff, 0xfe])), None);
+    }
+
+    /// The default width is 16 MiB, and every write in flight holds that much
+    /// plaintext in the op queue.
+    #[test]
+    fn the_mount_narrows_the_kernels_write_width() {
+        assert!(MAX_WRITE_BYTES < fuser::MAX_WRITE_SIZE as u32);
     }
 }

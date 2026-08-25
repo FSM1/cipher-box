@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::{io, ops::DerefMut};
+use zeroize::Zeroize;
 
 use crate::Filesystem;
 use crate::MountOption;
@@ -154,12 +155,24 @@ impl<FS: Filesystem> Session<FS> {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
             match self.ch.receive(buf) {
-                Ok(size) => match Request::new(self.ch.sender(), &buf[..size]) {
-                    // Dispatch request
-                    Some(req) => req.dispatch(self),
+                Ok(size) => {
+                    let decoded = match Request::new(self.ch.sender(), &buf[..size]) {
+                        Some(req) => {
+                            req.dispatch(self);
+                            true
+                        }
+                        None => false,
+                    };
+                    // CipherBox patch: this buffer is reused for the life of the
+                    // mount and holds the plaintext of every write(2) that
+                    // crossed it. The adapter wipes its own copy; this is the
+                    // terminal owner of the original.
+                    buf[..size].zeroize();
                     // Quit loop on illegal request
-                    None => break,
-                },
+                    if !decoded {
+                        break;
+                    }
+                }
                 Err(err) => match err.raw_os_error() {
                     // Operation interrupted. Accordingly to FUSE, this is safe to retry
                     Some(ENOENT) => continue,

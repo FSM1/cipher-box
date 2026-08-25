@@ -6,14 +6,15 @@
 # Trimmed against upstream: the examples, the mount-requiring integration
 # tests, and their dev-dependencies are gone — this is a library the product
 # links, not a crate under development here. Every dependency is scoped to
-# `cfg(unix)` because the crate body is: on Windows `lib.rs` compiles empty,
-# and the workspace's Windows cargo check must not build unix-only crates.
-# Its own workspace root, and excluded from the product one: vendored code is
-# not ours to format or lint, and its unix-only mount paths must not be dragged
-# into the Windows and wasm32 legs of a `--workspace` build. `cargo test` on it
-# runs from the `FUSE Op Core` job by manifest path.
-[workspace]
-
+# `cfg(unix)` because the crate body is: on Windows `lib.rs` compiles empty.
+#
+# A workspace member, so it resolves through the one root `Cargo.lock` the
+# product links — a second lockfile would drift and the socket-read patch's
+# regression test would then run against a graph nothing ships. The general
+# cargo jobs exclude it by name because its build script refuses a non-Linux
+# target without libfuse and its one upstream mount test needs a kernel; clippy
+# still reaches it (the workspace wrapper applies to every member), so a
+# re-vendor has to land lint-clean against the pinned toolchain.
 [package]
 edition = "2024"
 rust-version = "1.88"
@@ -82,6 +83,8 @@ nix = { version = "0.29.0", features = ["fs", "user"] }
 page_size = "0.6.0"
 serde = { version = "1.0.102", features = ["std", "derive"], optional = true }
 smallvec = "1.6.1"
+# CipherBox patch: the reused request buffer holds write plaintext.
+zeroize = "1"
 zerocopy = { version = "0.8", features = ["derive"] }
 
 [target.'cfg(unix)'.dev-dependencies]

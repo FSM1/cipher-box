@@ -46,8 +46,6 @@ jobs:
               - '.github/actions/**'
             rust:
               - 'crates/**'
-              # The vendored fuser is a path dependency of crates/fuse, and its
-              # own workspace, so nothing else here would notice it change.
               - 'third-party/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -521,11 +519,13 @@ jobs:
       # owns its check/clippy/build on all three platforms. The contract crate
       # is excluded from the test run below (its tests need the live API stack)
       # and owns its own lint in the contract-suite job.
+      # The vendored fuser is excluded from selection but still linted: the
+      # clippy workspace wrapper applies to every member.
       - name: Cargo clippy
-        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   engine:
     name: Engine Tests
@@ -590,15 +590,13 @@ jobs:
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
 
-      # The vendored fuser is its own workspace root, so `-p` cannot reach it.
-      # Its socket-read patch travels with the regression test blueprint/
-      # desktop.md commits to, and this is where that test fires. The one
+      # The vendored fuser's socket-read patch travels with the regression test
+      # blueprint/desktop.md commits to, and this is where that test fires. The
+      # general cargo jobs exclude the crate, so this is its only gate. The one
       # upstream test that mounts a real filesystem is skipped: this job is
       # kernel-free by design.
       - name: Vendored fuser socket-read patch
-        run: |
-          cargo test --manifest-path third-party/fuser/Cargo.toml -- \
-            --skip mnt::test::mount_unmount
+        run: cargo test -p fuser -- --skip mnt::test::mount_unmount
 
   # The WASM parity gate. Runs the core KAT + property suite in three shapes —
   # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped
@@ -765,10 +763,10 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
@@ -792,10 +790,10 @@ jobs:
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   # The live contract suite (blueprint/testing.md "The contract suite"): the
   # sdk-e2e descendant and the sole contract enforcement. It stands up the CI
