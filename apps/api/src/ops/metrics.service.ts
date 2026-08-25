@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+
+/** The outcome axis shared by the auth and gateway-verify counters. */
+export type AuthOutcome = 'success' | 'rejected' | 'error';
 
 /**
  * Prometheus metrics (blueprint/api.md Ops). Uses a per-instance registry
@@ -7,6 +10,7 @@ import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom
  */
 @Injectable()
 export class MetricsService {
+  private readonly logger = new Logger(MetricsService.name);
   private readonly registry = new Registry();
   private readonly httpRequestsTotal: Counter<'method' | 'route' | 'status'>;
   private readonly httpRequestDurationSeconds: Histogram<'method' | 'route'>;
@@ -15,6 +19,12 @@ export class MetricsService {
   private readonly republisherLastWalkNames: Gauge;
   private readonly republisherLastWalkRepublished: Gauge;
   private readonly republisherWalksSkippedTotal: Counter;
+  private readonly mailboxPendingMessages: Gauge;
+  private readonly mailboxPendingCapRejectionsTotal: Counter;
+  private readonly authAttemptsTotal: Counter<'route' | 'outcome'>;
+  private readonly throttleRejectionsTotal: Counter<'route'>;
+  private readonly gatewayVerifyTotal: Counter<'outcome'>;
+  private mailboxDepthSample?: () => Promise<number>;
 
   constructor() {
     collectDefaultMetrics({ register: this.registry });
@@ -58,6 +68,48 @@ export class MetricsService {
       help: 'Republisher sweeps that skipped the walk because no routing endpoint is configured',
       registers: [this.registry],
     });
+    this.mailboxPendingMessages = new Gauge({
+      name: 'mailbox_pending_messages',
+      help: 'Undelivered mailbox messages across all recipients',
+      registers: [this.registry],
+      collect: async () => {
+        if (!this.mailboxDepthSample) {
+          return;
+        }
+        try {
+          this.mailboxPendingMessages.set(await this.mailboxDepthSample());
+        } catch (error) {
+          // A sampler fault must not fail the whole scrape: the gauge keeps its
+          // last value and every other series is still served.
+          this.logger.warn(`mailbox depth sample failed: ${String(error)}`);
+        }
+      },
+    });
+    this.mailboxPendingCapRejectionsTotal = new Counter({
+      name: 'mailbox_pending_cap_rejections_total',
+      help: 'Mailbox posts refused because the recipient is at the pending cap',
+      registers: [this.registry],
+    });
+    // Labelled by route, never by account or credential: a metric label is a
+    // permanent, unauthenticated read on /metrics.
+    this.authAttemptsTotal = new Counter({
+      name: 'auth_attempts_total',
+      help: 'Auth surface attempts, by route and outcome',
+      labelNames: ['route', 'outcome'],
+      registers: [this.registry],
+    });
+    this.throttleRejectionsTotal = new Counter({
+      name: 'throttle_rejections_total',
+      help: 'Requests refused with 429 by the global throttler, by route',
+      labelNames: ['route'],
+      registers: [this.registry],
+    });
+    this.gatewayVerifyTotal = new Counter({
+      name: 'gateway_verify_total',
+      help: 'Read accelerator token verifications for the gateway front, by outcome',
+      labelNames: ['outcome'],
+      registers: [this.registry],
+    });
   }
 
   observeRequest(method: string, route: string, status: number, durationSeconds: number): void {
@@ -80,6 +132,31 @@ export class MetricsService {
 
   observeRepublisherWalkSkipped(): void {
     this.republisherWalksSkippedTotal.inc();
+  }
+
+  /**
+   * Bind the mailbox depth to a sampler read at scrape time. Pushing it from
+   * the write paths would leave the gauge frozen between posts, which is
+   * exactly the quiet backlog the panel exists to show.
+   */
+  sampleMailboxPendingDepth(sample: () => Promise<number>): void {
+    this.mailboxDepthSample = sample;
+  }
+
+  observeMailboxPendingCapRejection(): void {
+    this.mailboxPendingCapRejectionsTotal.inc();
+  }
+
+  observeAuthAttempt(route: string, outcome: AuthOutcome): void {
+    this.authAttemptsTotal.inc({ route, outcome });
+  }
+
+  observeThrottleRejection(route: string): void {
+    this.throttleRejectionsTotal.inc({ route });
+  }
+
+  observeGatewayVerify(outcome: 'accepted' | 'refused'): void {
+    this.gatewayVerifyTotal.inc({ outcome });
   }
 
   get contentType(): string {

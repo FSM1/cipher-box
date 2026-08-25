@@ -1,7 +1,11 @@
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AuthMetricsInterceptor } from '../auth/auth-metrics.interceptor';
 import { AuthController } from '../auth/auth.controller';
+import { GatewayController } from '../auth/gateway.controller';
 import { AuthMethod } from '../auth/entities/auth-method.entity';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
@@ -17,7 +21,11 @@ import { TokenService } from '../auth/services/token.service';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
-import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import {
+  createHttpIntegrationApp,
+  HttpIntegrationApp,
+  seedAccount,
+} from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { resolveAuthLimit } from './throttling';
 
@@ -39,8 +47,9 @@ describe('ops HTTP surface (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       entities: [User, AuthMethod, RefreshToken, GatewayToken],
-      controllers: [AuthController],
+      controllers: [AuthController, GatewayController],
       providers: [
+        AuthMetricsInterceptor,
         AuthService,
         TestAuthService,
         TokenService,
@@ -105,6 +114,61 @@ describe('ops HTTP surface (real Postgres)', () => {
       expect(res.text).toContain('http_requests_total');
       expect(res.text).toMatch(/http_requests_total\{[^}]*route="\/health"[^}]*\} \d+/);
       expect(res.text).toContain('http_request_duration_seconds_bucket');
+    });
+  });
+
+  /**
+   * The panel families behind the auth, throttle, and gateway-front dashboards.
+   * A throttled request never reaches the metrics interceptor, so the 429 series
+   * is the only evidence a surface is shedding load.
+   */
+  describe('auth, throttle, and gateway-front series', () => {
+    async function scrape(): Promise<string> {
+      const res = await request(http()).get('/metrics').expect(200);
+      return res.text;
+    }
+
+    it('counts the auth surface by route and outcome', async () => {
+      // The earlier throttler cases drove /auth/challenge past its limit with
+      // invalid bodies, so its refusals are already recorded.
+      expect(await scrape()).toMatch(
+        /auth_attempts_total\{route="\/auth\/challenge",outcome="rejected"\} [1-9]\d*/
+      );
+    });
+
+    it('counts a real 429 against the route that shed it', async () => {
+      await request(http()).post('/auth/challenge').send({}).expect(429);
+      expect(await scrape()).toMatch(
+        /throttle_rejections_total\{route="\/auth\/challenge"\} [1-9]\d*/
+      );
+    });
+
+    it('counts a refused accelerator token', async () => {
+      await request(http()).get('/auth/gateway/verify').expect(401);
+      expect(await scrape()).toMatch(/gateway_verify_total\{outcome="refused"\} [1-9]\d*/);
+    });
+
+    it('counts an accepted accelerator token', async () => {
+      const account = await seedAccount(db, ctx.app.get(JwtService));
+      const familyId = randomUUID();
+      await db.dataSource.getRepository(RefreshToken).save({
+        userId: account.userId,
+        familyId,
+        tokenHash: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000),
+        usedAt: null,
+      });
+      const token = await ctx.app.get(GatewayTokenService).mintForFamily(account.userId, familyId);
+
+      await request(http())
+        .get('/auth/gateway/verify')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(204);
+
+      const text = await scrape();
+      expect(text).toMatch(/gateway_verify_total\{outcome="accepted"\} [1-9]\d*/);
+      // The pseudonym itself must never reach an unauthenticated /metrics read.
+      expect(text).not.toContain(token);
     });
   });
 });

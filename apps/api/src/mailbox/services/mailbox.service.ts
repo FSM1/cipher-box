@@ -18,6 +18,7 @@ import {
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
+import { MetricsService } from '../../ops/metrics.service';
 import { UUID_RE } from '../../common/patterns';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
 
@@ -78,8 +79,10 @@ export class MailboxService {
     private readonly dataSource: DataSource,
     private readonly identityService: IdentityService,
     private readonly clock: Clock,
+    private readonly metricsService: MetricsService,
     configService: ConfigService
   ) {
+    this.metricsService.sampleMailboxPendingDepth(() => this.messageRepository.count());
     this.pendingCap = positiveIntConfig(configService.get('MAILBOX_PENDING_CAP'), 1000);
     this.pollLimit = positiveIntConfig(configService.get('MAILBOX_POLL_LIMIT'), 100);
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
@@ -203,6 +206,7 @@ export class MailboxService {
 
       const pending = await repo.count({ where: { recipientPublicKey } });
       if (pending >= this.pendingCap) {
+        this.metricsService.observeMailboxPendingCapRejection();
         throw new ConflictException('Recipient mailbox is full');
       }
 

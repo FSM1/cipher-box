@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
+import { MetricsService } from '../../ops/metrics.service';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
@@ -63,6 +64,7 @@ describe('MailboxService global TTL sweep (real Postgres)', () => {
       db.dataSource,
       new IdentityService(),
       clock,
+      new MetricsService(),
       fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0', ...env }).service
     );
     return { service, users };

@@ -164,7 +164,7 @@ starved), same GHCR image flow, same scp-env + `compose pull` + migrations
 | `postgres`    | ports                                                                                                              |
 | `ipfs` (Kubo) | ports — pin store + trustless gateway upstream                                                                     |
 | `someguy`     | ports — the self-hosted `/routing/v1` accelerator (staging/production only; CI uses the promoted mock, testing.md) |
-| `caddy`       | ports — static web + reverse proxy + the gateway auth front (below)                                                |
+| `caddy`       | ports — static web + reverse proxy + the accelerator front over Kubo and someguy (below)                           |
 | `alloy`       | ports — Grafana Cloud shipping unchanged                                                                           |
 | `redis`       | dies — nothing queues; throttling is in-process (verified effective by the contract suite)                         |
 | `tee-worker`  | dies (FSM1/cipher-box-next#24) — with it the Phala compose files, the CVM update ritual, and the simulator         |
@@ -176,6 +176,17 @@ proxy to Kubo for block/CAR responses. The API process serves no bytes;
 Caddy enforces membership; Kubo serves. Token format and TTL are API
 build-time detail. Public trustless gateways remain the no-auth fallback,
 so this path can fail without breaking reads.
+
+The same front covers someguy's `/routing/v1` GET/resolve leg on a second
+vhost, with the PUT publish leg left open (api.md, Egress). Two vhosts,
+`gateway-staging` and `routing-staging`, both under the origin certificate
+the other vhosts use — so a new hostname needs its SAN and a DNS record
+before it resolves. Neither vhost logs, so their egress obligations are
+asserted against Caddy's adapted config in the **Lint** gate rather than
+read out of the Caddyfile. `TRUST_PROXY_HOPS` must equal the real number
+of proxies in front of the API (Cloudflare then Caddy, so 2): the front
+forwards the client address to the verify leg, and every IP-keyed rate
+limit counts back from it.
 
 **Web hosting**: Caddy keeps serving the static bundle from
 `/opt/cipherbox/web` — but the artifact deployed is the production build

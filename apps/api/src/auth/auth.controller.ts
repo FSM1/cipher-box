@@ -7,6 +7,7 @@ import {
   Res,
   UnauthorizedException,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -19,6 +20,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { THROTTLE_SURFACES } from '../ops/throttling';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import {
   ChallengeRequestDto,
   ChallengeResponseDto,
@@ -41,6 +43,7 @@ const REFRESH_COOKIE = 'refreshToken';
 
 @ApiTags('Auth')
 @Controller('auth')
+@UseInterceptors(AuthMetricsInterceptor)
 export class AuthController {
   private readonly cookieSecure: boolean;
 

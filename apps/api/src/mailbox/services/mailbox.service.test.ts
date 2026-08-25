@@ -2,6 +2,7 @@ import { ConflictException, NotFoundException, PayloadTooLargeException } from '
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityService } from '../../auth/services/identity.service';
+import { MetricsService } from '../../ops/metrics.service';
 import { User } from '../../auth/entities/user.entity';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -25,6 +26,7 @@ describe('MailboxService', () => {
   let users: FakeRepository<User>;
   let clock: FakeClock;
   let service: MailboxService;
+  let metrics: MetricsService;
   let recipient: string;
   let sender: string;
 
@@ -32,12 +34,14 @@ describe('MailboxService', () => {
     messages = new FakeRepository<MailboxMessage>();
     users = new FakeRepository<User>();
     clock = new FakeClock();
+    metrics = new MetricsService();
     service = new MailboxService(
       messages as never,
       users as never,
       new FakeDataSource(messages as never, [[User, users as never]]) as never,
       new IdentityService(),
       clock,
+      metrics,
       fakeConfig(config).service
     );
   }
@@ -146,6 +150,46 @@ describe('MailboxService', () => {
         })
       ).rejects.toBeInstanceOf(ConflictException);
       expect(messages.rows).toHaveLength(3);
+    });
+
+    it('reports the pending depth as of the scrape, not the last write', async () => {
+      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 0');
+      await service.post(sender, {
+        recipientPublicKey: recipient,
+        blob: base64Blob(64),
+        idempotencyKey: 'k0',
+      });
+      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 1');
+      // A row deleted underneath the service still moves the gauge.
+      messages.rows.length = 0;
+      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 0');
+    });
+
+    it('serves the rest of the scrape when the depth sampler faults', async () => {
+      vi.spyOn(messages, 'count').mockRejectedValue(new Error('database gone'));
+      const text = await metrics.metricsText();
+      expect(text).toContain('mailbox_pending_cap_rejections_total');
+      expect(text).toContain('process_cpu_user_seconds_total');
+    });
+
+    it('counts a cap refusal on the operator dashboard', async () => {
+      for (let i = 0; i < 3; i += 1) {
+        await service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(64),
+          idempotencyKey: `k${i}`,
+        });
+      }
+      expect(await metrics.metricsText()).toContain('mailbox_pending_cap_rejections_total 0');
+
+      await expect(
+        service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(64),
+          idempotencyKey: 'overflow',
+        })
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(await metrics.metricsText()).toContain('mailbox_pending_cap_rejections_total 1');
     });
 
     it('lets an idempotent replay through even when the mailbox is full', async () => {

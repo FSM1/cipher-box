@@ -10,6 +10,8 @@ import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
+import { MetricsService } from '../ops/metrics.service';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
@@ -73,6 +75,8 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       entities: [User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject],
       controllers: [AuthController, IdentityController],
       providers: [
+        MetricsService,
+        AuthMetricsInterceptor,
         AuthService,
         TestAuthService,
         TokenService,

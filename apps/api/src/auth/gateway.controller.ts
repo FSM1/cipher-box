@@ -6,6 +6,7 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { MetricsService } from '../ops/metrics.service';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { GatewayTokenService } from './services/gateway-token.service';
 
@@ -22,7 +23,10 @@ const BEARER_PREFIX = 'Bearer ';
 @ApiTags('Auth')
 @Controller('auth/gateway')
 export class GatewayController {
-  constructor(private readonly gatewayTokenService: GatewayTokenService) {}
+  constructor(
+    private readonly gatewayTokenService: GatewayTokenService,
+    private readonly metricsService: MetricsService
+  ) {}
 
   @Get('verify')
   @HttpCode(204)
@@ -34,11 +38,13 @@ export class GatewayController {
   @ApiUnauthorizedResponse({ description: 'Missing, malformed, expired, or revoked token' })
   async verify(@Headers('authorization') authorization?: string): Promise<void> {
     if (!authorization?.startsWith(BEARER_PREFIX)) {
+      this.metricsService.observeGatewayVerify('refused');
       throw new UnauthorizedException('Missing accelerator token');
     }
     const accepted = await this.gatewayTokenService.verify(
       authorization.slice(BEARER_PREFIX.length)
     );
+    this.metricsService.observeGatewayVerify(accepted ? 'accepted' : 'refused');
     if (!accepted) {
       throw new UnauthorizedException('Invalid accelerator token');
     }

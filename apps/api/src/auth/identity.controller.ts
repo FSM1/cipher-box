@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Header, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Post, UseInterceptors } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { THROTTLE_SURFACES } from '../ops/throttling';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { SiweLoginRequestDto } from './dto/auth.dto';
 import {
   EmailCodeRequestDto,
@@ -23,6 +24,7 @@ import { IdentityTokenService } from './services/identity-token.service';
  */
 @ApiTags('Identity')
 @Controller('auth')
+@UseInterceptors(AuthMetricsInterceptor)
 export class IdentityController {
   constructor(
     private readonly exchange: IdentityExchangeService,

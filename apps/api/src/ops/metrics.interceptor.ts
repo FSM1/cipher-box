@@ -9,6 +9,7 @@ import type { Request, Response } from 'express';
 import { Observable, throwError } from 'rxjs';
 import { catchError, tap } from 'rxjs/operators';
 import { MetricsService } from './metrics.service';
+import { routeLabel } from './route-label';
 
 /** Records count + duration for every handled HTTP request. */
 @Injectable()
@@ -22,8 +23,7 @@ export class MetricsInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest<Request & { route?: { path?: string } }>();
     const response = context.switchToHttp().getResponse<Response>();
     const method = request.method;
-    // Use the route template (bounded cardinality), never the raw URL.
-    const route = request.route?.path ?? 'unmatched';
+    const route = routeLabel(request);
     const startedAt = process.hrtime.bigint();
 
     const observe = (status: number): void => {

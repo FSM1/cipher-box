@@ -1,7 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
-import type { NextFunction, Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
@@ -19,6 +19,24 @@ function maxUploadBytes(): number {
   return raw !== undefined && Number.isInteger(value) && value > 0
     ? value
     : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+/**
+ * Reverse-proxy hops between a client and this process, from
+ * `TRUST_PROXY_HOPS`. Every IP-keyed limit — login, refresh, the gateway
+ * front's verify leg — keys on `req.ip`, which behind a proxy is the proxy's
+ * own address: one bucket for the whole internet, so the auth cap becomes a
+ * global availability limit instead of a per-attacker one.
+ *
+ * A hop COUNT, never `true`. Express trusts exactly that many entries from the
+ * right of `X-Forwarded-For`, so an entry a client injects is pushed left of
+ * the count and skipped; `true` would take the leftmost, which the client
+ * writes. Over-counting has the same effect, so the default is 0 and a
+ * direct-exposure deployment configures nothing.
+ */
+function trustProxyHops(): number {
+  const value = Number(process.env.TRUST_PROXY_HOPS);
+  return Number.isInteger(value) && value > 0 ? value : 0;
 }
 
 /**
@@ -79,6 +97,10 @@ function rawUploadBody(maxBytes: number) {
  * the supertest apps in tests — what is asserted is what ships.
  */
 export function configureApp(app: INestApplication): INestApplication {
+  const hops = trustProxyHops();
+  if (hops > 0) {
+    (app.getHttpAdapter().getInstance() as Express).set('trust proxy', hops);
+  }
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

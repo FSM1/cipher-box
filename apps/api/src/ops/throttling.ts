@@ -43,11 +43,18 @@ export const THROTTLE_SURFACES = {
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
   /**
-   * The gateway front's forward_auth leg: one bucket shared by every member
-   * reading at once, since the calls all arrive from that front's address. A
-   * ceiling on an unauthenticated, database-touching surface, not a tuned value.
+   * The gateway front's forward_auth leg, per client address — the front
+   * forwards it, and `TRUST_PROXY_HOPS` is what lets the tracker read it
+   * instead of the front's own.
+   *
+   * 50 presentations/s: the read leg presents once per sealed leaf, leaves are
+   * 1 MiB, so this caps one member's sustained read at ~50 MiB/s — above the
+   * hosted accelerator's own serving rate, and the focus-window poll's handful
+   * of resolves per tick sits inside the rounding. It doubles as the abuse
+   * bound: a refused token costs one indexed lookup per distinct token per
+   * second, so this is also what one address can push at the database.
    */
-  gatewayVerify: { default: { limit: 6_000, ttl: 60_000 } },
+  gatewayVerify: { default: { limit: 3_000, ttl: 60_000 } },
   /**
    * Mailbox post: per SENDER account (AccountThrottlerGuard keys by the
    * authenticated account). This same bucket rate-limits the unknown-recipient
