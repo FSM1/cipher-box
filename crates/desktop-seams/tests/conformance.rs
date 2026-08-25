@@ -4,12 +4,11 @@
 //! durability tests the kits do not cover (StagingStore crash-ordering and
 //! id-watermark durability).
 //!
-//! CredentialStore CI story: the OS keyring is unavailable on headless CI,
-//! so the automated gate runs the kit against the feature-gated
-//! [`FileCredentialStore`] test double; the real
+//! CredentialStore runs the kit twice: against the feature-gated
+//! [`FileCredentialStore`] double, and — in the `real_keyring_*` tests — against
+//! the production
 //! [`KeyringCredentialStore`](cipherbox_desktop_seams::KeyringCredentialStore)
-//! is exercised by the `#[ignore]`d `real_keyring_*` tests, run by hand on a
-//! machine with a keyring (see the report).
+//! on whichever OS backend the host provides.
 
 use cipherbox_desktop_seams::{
     FileCredentialStore, FileFloorStore, FileSnapshotCache, FileStagingStore, ReqwestHttp,
@@ -366,6 +365,33 @@ fn staging_store_budget_and_gc_set_agree_on_foreign_sidecars() {
     });
 }
 
+/// A noncanonical `ops/` filename parses to the same id as the zero-padded one
+/// the store writes, so a queue keyed by listed name would hand the engine one
+/// durable op twice — and the drain would replay it as two.
+#[test]
+fn staging_store_queues_one_entry_per_op_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        let op_id = store.enqueue_op(b"the-one-op").await.unwrap();
+
+        // A short-named twin of the canonical record, the way a foreign writer
+        // or a hand-edited store would leave one.
+        std::fs::write(
+            path.join("ops").join(format!("{}.op", op_id.0)),
+            b"the-one-op",
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.queued_ops().await.unwrap(),
+            vec![(op_id, b"the-one-op".to_vec())],
+            "two names for one id must queue one op"
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Network seams — driven on a Tokio current-thread runtime (reqwest needs the
 // reactor). RecordTransport has a kit; Http does not (pure passthrough), so a
@@ -575,13 +601,18 @@ fn credential_store_persists_last_account_id() {
 }
 
 // ---------------------------------------------------------------------------
-// Real OS keyring — ignored by default (no keyring on headless CI). Run
-// locally: `cargo test -p cipherbox-desktop-seams --test conformance --
-// --ignored`.
+// Real OS keyring — the production `KeyringCredentialStore` against the
+// platform backend it actually ships on: Apple Keychain, Windows Credential
+// Manager, or the Secret Service.
+//
+// `#[ignore]`d so a plain `cargo test` skips them: the Linux backend needs a
+// session bus and an unlocked Secret Service provider, which a developer shell
+// need not have. Run them with
+// `cargo test -p cipherbox-desktop-seams --test conformance -- --ignored`.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires an unlocked OS keyring; run locally"]
+#[ignore = "needs the platform keyring backend; CI runs it with --ignored"]
 fn real_keyring_credential_store_passes_the_credential_store_kit() {
     use cipherbox_desktop_seams::KeyringCredentialStore;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -600,7 +631,7 @@ fn real_keyring_credential_store_passes_the_credential_store_kit() {
 }
 
 #[test]
-#[ignore = "requires an unlocked OS keyring; run locally"]
+#[ignore = "needs the platform keyring backend; CI runs it with --ignored"]
 fn real_keyring_credential_store_persists_last_account_id() {
     use cipherbox_desktop_seams::KeyringCredentialStore;
     use std::time::{SystemTime, UNIX_EPOCH};

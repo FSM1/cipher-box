@@ -33,21 +33,21 @@ impl ReqwestRecordTransport {
     /// someguy plus at least one independent public endpoint, #23 D1). The
     /// [`EndpointId`] of each endpoint is its base URL.
     ///
-    /// # Panics
-    /// Panics if `base_urls` is empty — the endpoint set must never be empty
-    /// (the seam contract), and an empty set is a host misconfiguration, not
-    /// a runtime condition.
+    /// An empty endpoint set is refused: fan-out over no endpoint resolves
+    /// nothing, and a host that configured none must hear about it at
+    /// construction rather than on the first read.
     pub fn new(base_urls: impl IntoIterator<Item = String>) -> SeamResult<Self> {
         let endpoints: Vec<EndpointId> = base_urls.into_iter().map(EndpointId::new).collect();
-        assert!(
-            !endpoints.is_empty(),
-            "RecordTransport endpoint set must not be empty"
-        );
+        if endpoints.is_empty() {
+            return Err(SeamError::new(
+                "record_transport: endpoint set must not be empty",
+            ));
+        }
         // `/routing/v1` records are small and directly addressed: bound both
         // the handshake and the whole request so a stalled public endpoint
         // cannot hang fan-out, and follow no redirects — direct addressing
         // needs none, and refusing them closes an SSRF-shaped vector from an
-        // untrusted public endpoint. `with_client` callers own their policy.
+        // untrusted public endpoint.
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
@@ -55,22 +55,6 @@ impl ReqwestRecordTransport {
             .build()
             .map_err(|err| SeamError::new(format!("record_transport client build: {err}")))?;
         Ok(Self { client, endpoints })
-    }
-
-    /// Builds a transport over a caller-supplied `reqwest` client.
-    ///
-    /// # Panics
-    /// Panics if `base_urls` is empty (see [`ReqwestRecordTransport::new`]).
-    pub fn with_client(
-        client: reqwest::Client,
-        base_urls: impl IntoIterator<Item = String>,
-    ) -> Self {
-        let endpoints: Vec<EndpointId> = base_urls.into_iter().map(EndpointId::new).collect();
-        assert!(
-            !endpoints.is_empty(),
-            "RecordTransport endpoint set must not be empty"
-        );
-        Self { client, endpoints }
     }
 
     fn record_url(endpoint: &EndpointId, routing_key: &str) -> String {

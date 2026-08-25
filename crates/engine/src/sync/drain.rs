@@ -78,7 +78,10 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
-use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
+use crate::sync::staging::{
+    Preservation, preserve_dead_letter, release_version_blocks, version_leaf_cids,
+};
+
 use crate::sync::tick::ResolveMode;
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
@@ -408,6 +411,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
+    /// Bounds what the preserved dead-letter set may hold, so abandoned versions
+    /// cannot eat the device's staging budget
+    /// ([`StoragePolicy::preserved_budget_bytes`]).
+    pub(crate) preserved_budget_bytes: u64,
     /// The framing profile a version's pinned size is derived under — the same
     /// one the upload framed it at.
     pub(crate) content_profile: &'a ContentProfile,
@@ -677,11 +684,14 @@ where
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
-            if op.content_root_cid().is_some() {
-                self.preserve_dead_letter(*op_id).await?;
-            }
+            let preserved = match op.content_root_cid() {
+                Some(_) => self.preserve_dead_letter(*op_id).await?,
+                None => Preservation::Kept,
+            };
             self.abandon(scope, *op_id, op).await?;
-            report.dead_letters.push((*op_id, op.target, *reason));
+            report
+                .dead_letters
+                .push((*op_id, op.target, preserved.observed(*reason)));
         }
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
@@ -748,16 +758,18 @@ where
                     Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
+                    return;
+                };
                 let handed_back = if owes_its_name {
                     self.retire_unreferenced_name(scope, op).await
                 } else {
                     Ok(())
                 };
-                if handed_back.is_ok()
-                    && self.preserve_dead_letter(op_id).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
-                    report.dead_letters.push((op_id, op.target, reason));
+                if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
+                    report
+                        .dead_letters
+                        .push((op_id, op.target, preserved.observed(reason)));
                 }
             }
             // A conditional-edit loser keeps its staged version and retires
@@ -765,10 +777,13 @@ where
             // upload of the version now at the name, and unpinning content a
             // live record names is loss where leaving rows charged is a leak.
             Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
-                if self.preserve_dead_letter(op_id).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
-                    report.dead_letters.push((op_id, op.target, reason));
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
+                    return;
+                };
+                if self.dequeue_op(op_id).await.is_ok() {
+                    report
+                        .dead_letters
+                        .push((op_id, op.target, preserved.observed(reason)));
                 }
             }
             Halt::Permanent(reason) => {
@@ -2619,12 +2634,12 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
-    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<(), Halt> {
+    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<Preservation, Halt> {
         let queued = self.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
-            return Ok(());
+            return Ok(Preservation::Kept);
         };
-        preserve_dead_letter(self.staging, record)
+        preserve_dead_letter(self.staging, record, self.preserved_budget_bytes)
             .await
             .map_err(seam)
     }
