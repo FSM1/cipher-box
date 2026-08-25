@@ -49,6 +49,16 @@ const STAT_BLOCK_BYTES: u64 = 512;
 /// the chunk cache's, and nothing here is served better by a larger hint.
 const PREFERRED_IO_BYTES: u32 = 4096;
 
+/// The capacity `statfs` advertises. Byte accounting does not reach the facade,
+/// and a mount that answers zero free space is refused *before* the write by
+/// clients that read `statfs` first; a write over a real budget is still refused
+/// where it belongs, by the engine's `ENOSPC`/`EDQUOT`.
+const ADVISORY_CAPACITY_BYTES: u64 = 1 << 40;
+
+/// The node-count counterpart of [`ADVISORY_CAPACITY_BYTES`]: the nodes in use
+/// are truthful, the headroom above them is not.
+const ADVISORY_FREE_NODES: u64 = 1 << 20;
+
 /// The widest single write the kernel may hand over. fuser's default is 16 MiB,
 /// and every write in flight holds that much plaintext in the op queue until
 /// the pump reaches it.
@@ -822,15 +832,23 @@ fn attr(
     }
 }
 
+/// The counts `statfs` answers with: total blocks, total nodes, free nodes.
+fn statfs_counts(stats: StatFs) -> (u64, u64, u64) {
+    (
+        ADVISORY_CAPACITY_BYTES / u64::from(PREFERRED_IO_BYTES),
+        stats.nodes.saturating_add(ADVISORY_FREE_NODES),
+        ADVISORY_FREE_NODES,
+    )
+}
+
 fn reply_statfs(reply: ReplyStatfs, stats: StatFs) {
-    // Byte accounting does not reach the facade; the node count and the
-    // advertised name length are what this mount can answer truthfully.
+    let (blocks, files, free_nodes) = statfs_counts(stats);
     reply.statfs(
-        0,
-        0,
-        0,
-        stats.nodes,
-        0,
+        blocks,
+        blocks,
+        blocks,
+        files,
+        free_nodes,
         PREFERRED_IO_BYTES,
         MAX_NAME_BYTES as u32,
         PREFERRED_IO_BYTES,
@@ -1043,5 +1061,16 @@ mod tests {
     #[test]
     fn the_mount_narrows_the_kernels_write_width() {
         assert!(MAX_WRITE_BYTES < fuser::MAX_WRITE_SIZE as u32);
+    }
+
+    /// A client that reads `statfs` before writing refuses the write on a zero,
+    /// so the mount advertises the headroom the facade cannot measure.
+    #[test]
+    fn the_mount_advertises_room_it_cannot_measure() {
+        let (blocks, files, free_nodes) = statfs_counts(StatFs { nodes: 7 });
+
+        assert!(blocks > 0, "bavail is what a client checks before writing");
+        assert!(free_nodes > 0, "a zero ffree refuses file creation");
+        assert_eq!(files, 7 + free_nodes, "the nodes in use stay truthful");
     }
 }

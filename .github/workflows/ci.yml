@@ -518,11 +518,13 @@ jobs:
       # Tauri needs webkit2gtk system deps on Linux, and the desktop-build job
       # owns its check/clippy/build on all three platforms. The contract crate
       # is excluded from the test run below (its tests need the live API stack)
-      # and owns its own lint in the contract-suite job.
-      # The vendored fuser is excluded from selection but still linted: the
-      # clippy workspace wrapper applies to every member.
+      # and owns its own lint in the contract-suite job. The vendored fuser is
+      # linted here and nowhere else — this is the only job on a target its
+      # build script accepts — and excluded from the test run below: its one
+      # upstream test mounts a real filesystem, and the FUSE Op Core job runs
+      # the rest.
       - name: Cargo clippy
-        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser

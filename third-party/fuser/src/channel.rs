@@ -9,6 +9,7 @@ use std::{
 };
 
 use libc::{c_int, c_void, size_t};
+use zeroize::Zeroize;
 
 #[cfg(feature = "abi-7-40")]
 use crate::passthrough::BackingId;
@@ -137,10 +138,16 @@ fn receive_framed(fd: BorrowedFd<'_>, buffer: &mut [u8]) -> io::Result<usize> {
                 (expected - total) as size_t,
             )
         };
+        // CipherBox patch: a refused message is still the plaintext of whatever
+        // write(2) it carried, and no length reaches the caller to wipe it by —
+        // so the fragment goes here, where its extent is known.
         if rc < 0 {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            buffer[..total].zeroize();
+            return Err(err);
         }
         if rc == 0 {
+            buffer[..total].zeroize();
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!("FUSE message ended after {total} of {expected} bytes"),
@@ -312,6 +319,21 @@ mod tests {
         let mut buffer = vec![0u8; 8192];
         let refusal = receive_framed(us.as_fd(), &mut buffer).expect_err("refused");
         assert_eq!(refusal.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    /// The fragment a dead peer left behind is the plaintext of whatever write
+    /// it carried, and no length reaches the caller to wipe it by.
+    #[test]
+    fn a_message_cut_short_leaves_no_fragment_in_the_buffer() {
+        let (kernel, us) = UnixStream::pair().expect("socketpair");
+        let sent = message(4096);
+        let mut kernel = kernel;
+        kernel.write_all(&sent[..512]).expect("prefix");
+        drop(kernel);
+
+        let mut buffer = vec![0u8; 8192];
+        receive_framed(us.as_fd(), &mut buffer).expect_err("refused");
+        assert!(buffer.iter().all(|&b| b == 0), "the fragment is wiped");
     }
 
     /// A closed peer ends the session loop; it must not read as a message.

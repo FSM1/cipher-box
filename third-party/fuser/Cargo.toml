@@ -12,9 +12,9 @@
 # product links — a second lockfile would drift and the socket-read patch's
 # regression test would then run against a graph nothing ships. The general
 # cargo jobs exclude it by name because its build script refuses a non-Linux
-# target without libfuse and its one upstream mount test needs a kernel; clippy
-# still reaches it (the workspace wrapper applies to every member), so a
-# re-vendor has to land lint-clean against the pinned toolchain.
+# target without libfuse and its one upstream mount test needs a kernel; the
+# Linux clippy job selects it, so a re-vendor has to land lint-clean against
+# the pinned toolchain.
 [package]
 edition = "2024"
 rust-version = "1.88"

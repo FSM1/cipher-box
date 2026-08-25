@@ -171,7 +171,10 @@ impl<'a> Request<'a> {
             }
             // Any operation is invalid after destroy
             _ if se.destroyed => {
-                warn!("Ignoring FUSE operation after destroy: {}", self.request);
+                warn!(
+                    "Ignoring FUSE operation after destroy: {:?}",
+                    self.request.unique()
+                );
                 return Err(Errno::EIO);
             }
 
