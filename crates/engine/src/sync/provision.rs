@@ -48,7 +48,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
-use crate::gate::floor::{self, ColdSeedError, FloorRegression, PointerPlane};
+use crate::gate::floor::{self, ColdSeedError, FloorRegression};
 use crate::net::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -398,7 +398,7 @@ where
         min_read_epoch: GENESIS_EPOCH,
         prev_root: None,
     };
-    floor::cold_seed_checked(floors, &repoint, &scope_id, PointerPlane::VaultPointer)
+    floor::cold_seed_checked(floors, &repoint, &scope_id)
         .await
         .map_err(|e| match e {
             ColdSeedError::Seam(seam) => ProvisionError::Seam(seam),
@@ -629,6 +629,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::rotation::OwnerPointerRead;
 
     use cipherbox_core::hex::lower as hex_lower;
     use cipherbox_core::seal::{
@@ -1527,11 +1528,9 @@ mod tests {
         assert!(net.effects.borrow().is_empty(), "nothing published");
     }
 
-    /// The write-epoch floor is not that evidence. The vault pointer this mint
-    /// signs does not author that clock ([`PointerPlane`]), and the boot that
-    /// reads the pointer back no longer measures it against that floor — so
-    /// barring the mint here would refuse state this build's own cold start
-    /// adopts (AGENTS.md rule 8's symmetry, on the plane that has the rule).
+    /// The write-epoch floor is not that evidence: the vault pointer this mint
+    /// signs does not author that clock (`floor::PointerPlane`), and the boot
+    /// that reads it back does not measure it against that floor either.
     #[test]
     fn a_raised_write_epoch_floor_does_not_bar_a_first_run_mint() {
         let session = session();

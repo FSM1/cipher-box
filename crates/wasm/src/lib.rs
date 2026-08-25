@@ -917,13 +917,8 @@ pub struct ReceivedShareRow {
 
 #[wasm_bindgen]
 impl ReceivedShareRow {
-    /// The shared scope root's `ipnsName` bytes — this row's stable identity.
-    #[wasm_bindgen(getter, js_name = scopeRootName)]
-    pub fn scope_root_name(&self) -> Vec<u8> {
-        self.inner.scope_root_name.clone()
-    }
-
-    /// The 16 raw bytes of the shared scope, the handle a browse opens it under.
+    /// The 16 raw bytes of the shared scope — this row's stable identity, and
+    /// the handle a browse opens it under.
     #[wasm_bindgen(getter)]
     pub fn scope(&self) -> Vec<u8> {
         self.inner.scope.0.to_vec()

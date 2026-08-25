@@ -7,7 +7,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
-use crate::net::rotation::OwnerScopeKeys;
+use crate::net::rotation::{OwnerPointerRead, OwnerScopeKeys};
 use crate::session::SessionIdentity;
 use crate::sync::pointer::scope_pointer_name;
 
@@ -31,13 +31,15 @@ impl OwnerScopeKeys for OwnerSessionKeys<'_> {
     fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
         self.session.owner_writer_pseudonym_signer(scope_id)
     }
+}
 
+impl OwnerPointerRead for OwnerSessionKeys<'_> {
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*self.session.pointer_read_key(scope_id).as_bytes())
     }
 
     fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
-        scope_pointer_name(self.session.owner_pointer_seed().as_bytes(), scope_id)
+        self.session.scope_pointer_name(scope_id)
     }
 }
 
@@ -64,7 +66,9 @@ impl OwnerScopeKeys for OwnerSeedKeys {
     fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
         kdf::pseudonym_sign(self.pseudonym_seed.as_bytes(), scope_id)
     }
+}
 
+impl OwnerPointerRead for OwnerSeedKeys {
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*kdf::pointer_read_key(self.pointer_seed.as_bytes(), scope_id).as_bytes())
     }

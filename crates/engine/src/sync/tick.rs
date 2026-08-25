@@ -115,12 +115,14 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
 /// a re-point resolves the moved root rather than the retired name.
 pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
     let mut scopes = Vec::new();
-    for target in focus_set(snapshot, focus) {
-        let scope = match target {
-            FocusTarget::VaultPointer => snapshot.root,
-            FocusTarget::ScopePointer(scope) => scope,
-            FocusTarget::MailboxPoll | FocusTarget::Folder(_) => continue,
-        };
+    let targets = focus_set(snapshot, focus)
+        .into_iter()
+        .filter_map(|target| match target {
+            FocusTarget::VaultPointer => Some(snapshot.root),
+            FocusTarget::ScopePointer(scope) => Some(scope),
+            FocusTarget::MailboxPoll | FocusTarget::Folder(_) => None,
+        });
+    for scope in targets {
         if !scopes.contains(&scope) {
             scopes.push(scope);
         }

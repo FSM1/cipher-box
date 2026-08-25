@@ -775,7 +775,6 @@ describe('readSnapshot', () => {
 
 describe('readReceivedShare', () => {
   const row = {
-    scopeRootName: new Uint8Array([1, 2, 3]),
     scope: new Uint8Array(16).fill(7),
     sharerIdentityPublicKey: new Uint8Array([9]),
     displayName: 'shared-folder',
@@ -785,7 +784,6 @@ describe('readReceivedShare', () => {
 
   it('carries the row and the engine verdict through unchanged', () => {
     expect(readReceivedShare(fakeWasm, row)).toEqual({
-      scopeRootName: row.scopeRootName,
       scope: row.scope,
       sharerIdentityPublicKey: row.sharerIdentityPublicKey,
       displayName: 'shared-folder',

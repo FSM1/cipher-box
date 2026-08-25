@@ -168,9 +168,7 @@ export type ReceivedShareResolution =
  * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
  */
 export interface ReceivedShareDescriptor {
-  /** The shared scope root's `ipnsName` bytes — this row's stable identity. */
-  scopeRootName: Uint8Array;
-  /** The shared scope, the handle a browse opens it under. */
+  /** The shared scope — this row's stable identity, and what a browse opens. */
   scope: Uint8Array;
   /** Joins the row to a contact by identity key. */
   sharerIdentityPublicKey: Uint8Array;

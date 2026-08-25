@@ -123,7 +123,6 @@ export interface WasmSharingView {
 
 /** wasm-bindgen `ReceivedShareRow` — one share this vault accepted. */
 export interface WasmReceivedShareRow {
-  readonly scopeRootName: Uint8Array;
   readonly scope: Uint8Array;
   readonly sharerIdentityPublicKey: Uint8Array;
   readonly displayName: string;

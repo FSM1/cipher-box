@@ -90,26 +90,31 @@ pub struct OwnerRotationKeys<'a> {
 /// derives the scope-pointer **signing** key, and the root secret is the owner's
 /// master material. This narrows the rotation to exactly the two edges it uses
 /// (store the narrowest derived capability).
-pub trait OwnerScopeKeys {
+pub trait OwnerScopeKeys: OwnerPointerRead {
     /// `pseudonym-sign` for this scope — the signer every re-sealed structure
     /// is detach-signed under, and which the record's commitment must name.
     fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer;
+}
 
+/// The pointer plane's **read** edges, split out so a consult can be handed
+/// exactly them: `ownerPointerSeed` also derives the pointer record's Ed25519
+/// signing key, and this trait exposes no signer at all, so "the consult cannot
+/// sign the plane it reads" is a fact of the type rather than a comment.
+pub trait OwnerPointerRead {
     /// `pointer-read-key` for this scope — the stable key each grant blob
     /// carries.
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]>;
 
-    /// This scope's pointer **name** — the read edge of `scope-pointer`, so a
-    /// consult can address the plane without holding the seed that also derives
-    /// its Ed25519 signing key.
+    /// This scope's pointer **name**, the public half of the pointer signer.
     fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName;
 }
 
 /// Whether a rotation pass may run the sweep's scope-pointer consult
 /// (`crate::sync::pointer` "Consult discipline: polled, not fallback").
 ///
-/// A pass that runs no sweep refuses one rather than skipping it, so an arm
-/// with no pointer plane to read cannot silently acquire one.
+/// Refusing is not the same as skipping: a pass that runs no sweep has no
+/// consult to answer for, so one reached from it is a wiring error and reports
+/// as unavailable rather than resolving a plane nothing asked about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerConsultArm {
     /// The sweep's consult may run.
@@ -2856,7 +2861,7 @@ where
     /// the seed itself still comes from the moved root's own blob through the
     /// gate, never from the pointer.
     async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
-        let pointer = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
+        let pointer = self.scope_keys.pointer_name(&self.scope_id);
         let block = match RecordPointerFetch::new(self.transport)
             .fetch(&pointer)
             .await
@@ -2984,8 +2989,9 @@ where
         &self,
         repoint: &RepointObject,
     ) -> Result<(), WritePublishError> {
-        // The produce side of the gate's own rule, run against the same
-        // predicate the cold seed consumes it with, so the two cannot drift.
+        // The produce side of the gate's own rule, through the predicate the
+        // consume side reads it with, at this pass's own plane — so a re-point
+        // this build signs is one its own reader admits (rule 8).
         match floor::repoint_regression(
             self.floors,
             repoint,
@@ -3088,7 +3094,9 @@ mod tests {
         fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
             kdf::pseudonym_sign(&OWNER_ROOT_SECRET, scope_id)
         }
+    }
 
+    impl OwnerPointerRead for OwnerSeeds {
         fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
             Zeroizing::new(*kdf::pointer_read_key(&OWNER_POINTER_SEED, scope_id).as_bytes())
         }
@@ -5369,7 +5377,9 @@ mod tests {
         fn writer_pseudonym(&self, _scope_id: &[u8; 16]) -> Ed25519Signer {
             Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED)
         }
+    }
 
+    impl OwnerPointerRead for WaveSeeds {
         fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
             Zeroizing::new(*kdf::pointer_read_key(&OWNER_POINTER_SEED, scope_id).as_bytes())
         }

@@ -529,7 +529,6 @@ export function readReceivedShare(
   row: WasmReceivedShareRow
 ): ReceivedShareDescriptor {
   return {
-    scopeRootName: row.scopeRootName,
     scope: row.scope,
     sharerIdentityPublicKey: row.sharerIdentityPublicKey,
     displayName: row.displayName,

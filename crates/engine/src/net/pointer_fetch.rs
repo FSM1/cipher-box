@@ -11,7 +11,7 @@
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
 use super::fanout::fanout_get_verify;
-use super::rotation::OwnerScopeKeys;
+use super::rotation::OwnerPointerRead;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
 use crate::sync::pointer::{PointerFetch, open_repoint};
@@ -59,10 +59,9 @@ pub(crate) enum PointerConsultError {
 /// `Superseded` verdict and the focus tick's polled leg — so the trust rules a
 /// consult enforces cannot differ between them.
 pub(crate) struct PointerConsult<'a> {
-    /// The scope-pointer **name** and `pointer-read-key` derivations, and no
-    /// wider capability: `ownerPointerSeed` also derives the pointer record's
-    /// signing key, and a read holds nothing it could sign with.
-    pub scope_keys: &'a dyn OwnerScopeKeys,
+    /// The pointer plane's read edges, and no signer for it: the trait exposes
+    /// none, so this consult cannot sign the plane it reads.
+    pub scope_keys: &'a dyn OwnerPointerRead,
     /// The owner identity every re-point payload is signed under.
     pub owner_identity: &'a EcdsaVerifier,
     /// The pointer-payload envelope version a consulted re-point is read under.
@@ -123,7 +122,6 @@ mod tests {
     use crate::sync::pointer::{
         PointerError, SessionRole, resolve_vault_pointer, seal_repoint, vault_pointer_name,
     };
-    use cipherbox_core::suite::ed25519::Ed25519Signer;
     use zeroize::Zeroizing;
 
     use crate::sync::pointer::scope_pointer_name;
@@ -183,11 +181,7 @@ mod tests {
         kdf::owner_pointer_seed(SECRET)
     }
 
-    impl OwnerScopeKeys for ConsultKeys {
-        fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
-            kdf::pseudonym_sign(&[0x11; 32], scope_id)
-        }
-
+    impl OwnerPointerRead for ConsultKeys {
         fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; 32]> {
             Zeroizing::new(*kdf::pointer_read_key(owner_seed().as_bytes(), scope_id).as_bytes())
         }

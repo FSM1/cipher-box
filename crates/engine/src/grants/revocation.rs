@@ -19,13 +19,19 @@
 /// The three discovered outcomes plus the still-granted baseline. Only the three
 /// non-`Granted` variants are surfaced as distinct host signals; `Granted` means
 /// nothing changed.
+///
+/// A host renders one of these; it never computes one. Absence of a class is not
+/// a class: a share no resolve has reached yet is "not yet known", and painting
+/// that as `Granted` would show a revoked share as live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionClass {
     /// A fresh owner-signed record resolved and your blob is present — still
     /// granted, no revocation.
     Granted,
     /// A fresh owner-signed record with no blob at your tag — definitive
-    /// revocation.
+    /// revocation. The commitment covers each row, not the blob **set**, so any
+    /// committed writer can strip a blob and produce this: sound to render,
+    /// never sound to act on destructively.
     RevocationSignal,
     /// The name did not resolve to a fresh owner-signed record — unknown/stale,
     /// not a revocation.
@@ -57,10 +63,25 @@ pub struct ResolutionFacts {
     pub owner_signed_record: bool,
     /// A grant blob is present at your self-located tag in that record.
     pub blob_present: bool,
-    /// The record's AAD-confirmed epoch tag.
+    /// The record's epoch tag. A producer that unsealed the body has it
+    /// AAD-confirmed; the `/shared` read reaches no unseal, so there it is the
+    /// envelope's plaintext tag on a record already held to its name.
     pub record_epoch: u64,
     /// Your durable read-epoch floor for the scope.
     pub epoch_floor: u64,
+}
+
+impl ResolutionFacts {
+    /// The facts a resolve that reached no fresh owner-signed record supports:
+    /// absent, and absent is never a removal.
+    pub fn unresolved(epoch_floor: u64) -> Self {
+        Self {
+            owner_signed_record: false,
+            blob_present: false,
+            record_epoch: 0,
+            epoch_floor,
+        }
+    }
 }
 
 /// Classify a resolve outcome into the revocation triple (or `Granted`).

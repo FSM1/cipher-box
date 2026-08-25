@@ -46,8 +46,7 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
-use crate::grants::received_status::ReceivedShareStatus;
-use crate::grants::revocation::classify as classify_resolution;
+use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
@@ -85,7 +84,7 @@ use crate::rotation::{
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, FloorStore, Http, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
+    BoxedTask, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
     SeamSet, SeamTypes, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
@@ -377,33 +376,30 @@ pub struct SharingView {
 /// (blueprint/web-client.md): the bookmark's key-free discovery fields plus the
 /// engine's own resolution verdict.
 ///
-/// The label and the permission are the ones the accept committed. The scope
-/// root is the authority on both, so a host reads
-/// [`resolution`](Self::resolution) — not these — to learn whether the share
-/// still stands.
+/// The label and the permission are the ones the accept committed; the scope
+/// root is the authority on both, so [`resolution`](Self::resolution) is what
+/// says whether the share still stands.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReceivedShareRow {
-    /// The shared scope root's opaque `ipnsName` — this row's stable identity.
-    pub scope_root_name: Vec<u8>,
-    /// The shared scope's id, the handle a browse opens it under.
+    /// The shared scope's id — this row's stable identity, and the handle a
+    /// browse opens it under. The scope root's `ipnsName` is deliberately not
+    /// projected: a write rotation moves it, and the durable list seals it.
     pub scope: NodeId,
-    /// The sharer's identity key, as the verified contact the accept bound the
-    /// share to holds it.
+    /// The sharer's identity key as the accepted bookmark holds it, which the
+    /// accept flow bound to a verified contact before writing.
     pub sharer_identity_public_key: Vec<u8>,
     /// The display label the share was accepted under.
     pub display_name: String,
     /// The permission the owner-signed commitment granted at accept.
     pub permission: Permission,
     /// The engine's classification of this share's latest resolve, or `None`
-    /// when no pass has resolved it yet — which a host must not paint as any of
-    /// the three verdicts (`crate::grants::revocation`).
+    /// when no pass has resolved it yet (`crate::grants::revocation`).
     pub resolution: Option<ResolutionClass>,
 }
 
 impl fmt::Debug for ReceivedShareRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReceivedShareRow")
-            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
             .field("scope", &self.scope)
             .field(
                 "sharer_identity_public_key",
@@ -1968,8 +1964,7 @@ struct ConsultWindow {
 /// retries rather than waiting out the interval.
 ///
 /// Returns the vault anchor's owner-vouched current root when this pass
-/// consulted one, so the tick polls the root a re-point moved the vault to
-/// rather than the name cold start opened with.
+/// consulted one (see [`consult_scopes`]).
 async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     transport: &T,
     floors: &F,
@@ -2010,63 +2005,6 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
         }
     }
     anchor_root
-}
-
-/// The tick's received-share leg: re-resolve every bookmarked shared scope root
-/// and record the engine's verdict, so a host renders a classification this
-/// session observed rather than one it computed (blueprint/web-client.md
-/// "/shared"). The vault-root tick is the only loop a grantee runs, so a shared
-/// scope refreshes here or nowhere.
-///
-/// Replaces the whole map, so a share the list no longer holds leaves no verdict
-/// behind. A store or contact-book failure is availability and leaves the last
-/// pass's verdicts standing — the map is only rewritten from a pass that read
-/// both.
-///
-/// A share whose sharer has been forgotten from the contact book resolves to
-/// nothing: the commitment anchor and the blinded tag are both contact-held, so
-/// there is no verified identity left to hold the record to.
-async fn refresh_received_shares<T, H, F, St, E>(
-    status: &ReceivedShareStatus<'_, T, H, F>,
-    staging: &St,
-    entropy: &RefCell<E>,
-    resolutions: &RefCell<BTreeMap<Vec<u8>, ResolutionClass>>,
-) where
-    T: RecordTransport,
-    H: Http,
-    F: FloorStore,
-    St: StagingStore,
-    E: Entropy,
-{
-    let enc_secret = status.enc_secret;
-    let Ok(received) = StagingReceivedShareStore::new(staging, enc_secret, entropy)
-        .load()
-        .await
-    else {
-        return;
-    };
-    let Ok(contacts) = StagingContactStore::new(staging, enc_secret, entropy)
-        .contacts()
-        .await
-    else {
-        return;
-    };
-    let mut resolved = BTreeMap::new();
-    for share in received.iter() {
-        let class = match contacts
-            .iter()
-            .find(|c| c.identity_pk().to_sec1() == share.sharer_identity_pk)
-        {
-            Some(contact) => classify_resolution(
-                &status
-                    .facts(share, &contact.identity_pk(), &contact.enc_subkey())
-                    .await,
-            ),
-            None => ResolutionClass::Unresolvable,
-        };
-        resolved.insert(share.scope_root_name.clone(), class);
-    }
-    *resolutions.borrow_mut() = resolved;
 }
 
 /// Project a scope root's grant ledger for a host: the recipient label and the
@@ -2587,11 +2525,10 @@ pub struct Engine<T: SeamTypes> {
     /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
     /// tick re-consults and re-derives it.
     pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
-    /// The resolution class the tick's last pass reached for each bookmarked
-    /// shared scope root, keyed by that root's `ipnsName`. In-memory: a verdict
-    /// is what a live resolve found, so a restart re-earns it rather than
-    /// rendering one nothing observed this session.
-    received_resolution: Rc<RefCell<BTreeMap<Vec<u8>, ResolutionClass>>>,
+    /// The verdict the tick's last pass reached for each bookmarked shared
+    /// scope. In-memory: a verdict is what a live resolve found, so a restart
+    /// re-earns it rather than rendering one nothing observed this session.
+    received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -2715,7 +2652,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
-                received_resolution: Rc::new(RefCell::new(BTreeMap::new())),
+                received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3001,8 +2938,8 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }
-        if let Ok(mut resolutions) = self.received_resolution.try_borrow_mut() {
-            resolutions.clear();
+        if let Ok(mut verdicts) = self.received_verdicts.try_borrow_mut() {
+            verdicts.clear();
         }
     }
 
@@ -3392,7 +3329,7 @@ where {
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
-        let received_resolution = self.received_resolution.clone();
+        let received_verdicts = self.received_verdicts.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -3404,11 +3341,7 @@ where {
 
         let manual = self.manual_refresh.clone();
 
-        Some(Box::new(move |root_name: IpnsName| {
-            // Reassigned by the anchor's pointer consult below: a re-point moves
-            // the vault's root, and every leg of the pass that sights it must
-            // read and publish at the moved name.
-            let mut root_name = root_name;
+        Some(Box::new(move |mut root_name: IpnsName| {
             manual.arm();
             let spawn_on = scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
@@ -3445,9 +3378,6 @@ where {
                             &profile,
                         ),
                     };
-                    // The anchor's pointer is the only owner-vouched plane
-                    // naming the vault's current root, so a re-point published
-                    // by another device moves this pass onto the moved root.
                     if let Some(current_root) = consult_pointers(
                         &transport,
                         &floors,
@@ -3584,22 +3514,6 @@ where {
                         }
                         folder_verdict = report.verdict;
                     }
-                    // The grantee's own read leg: the vault-root tick is the
-                    // only loop a grantee runs, so a bookmarked shared scope is
-                    // re-classified here or nowhere.
-                    refresh_received_shares(
-                        &ReceivedShareStatus {
-                            transport: &transport,
-                            gateway: &gateway,
-                            http: &http,
-                            floors: &floors,
-                            enc_secret: &enc_subkey,
-                        },
-                        &staging,
-                        &entropy,
-                        &received_resolution,
-                    )
-                    .await;
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -3665,6 +3579,18 @@ where {
                     // After the drain, so the pass's own removals are swept in the
                     // same tick rather than a cadence later.
                     collect_orphans(&staging, &live_blocks).await;
+                    // Last, and after the settle above: the grantee's own read
+                    // leg is the slowest in the pass, and a host refresh waits
+                    // on nothing it reports.
+                    ReceivedShareStatus {
+                        transport: &transport,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        enc_secret: &enc_subkey,
+                    }
+                    .refresh(&staging, &entropy, &received_verdicts, now, &profile)
+                    .await;
                     let mut status = sync_status.borrow_mut();
                     status.reconcile_in_flight = false;
                     if reconciled {
@@ -4902,6 +4828,18 @@ where {
         Ok(signature)
     }
 
+    /// This session's durable received-share bookmarks.
+    fn received_share_store<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+    ) -> StagingReceivedShareStore<'a, T::StagingStore, Box<dyn Entropy>> {
+        StagingReceivedShareStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+    }
+
     /// This session's durable invite records.
     fn invite_store<'a>(
         &'a self,
@@ -4966,11 +4904,7 @@ where {
                 .await
                 .map_err(EngineError::from_gate)?;
 
-        let store = StagingReceivedShareStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        );
+        let store = self.received_share_store(session);
         let mut received = store
             .load()
             .await
@@ -5756,29 +5690,24 @@ where {
     /// The rows come from the durable received-shares list, so they survive a
     /// reload; the verdict comes from the focus tick's last resolve of that
     /// scope root, so a revocation the owner published is *discovered* here
-    /// rather than delivered. A share no pass has resolved yet reports no
-    /// verdict at all — `None` is "not yet known", never "still granted".
+    /// rather than delivered.
     pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let received = StagingReceivedShareStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        )
-        .load()
-        .await
-        .map_err(EngineError::from_received_share_store)?;
+        let received = self
+            .received_share_store(session)
+            .load()
+            .await
+            .map_err(EngineError::from_received_share_store)?;
 
-        let resolutions = self.received_resolution.borrow();
+        let verdicts = self.received_verdicts.borrow();
         Ok(received
             .iter()
             .map(|share| ReceivedShareRow {
-                scope_root_name: share.scope_root_name.clone(),
                 scope: NodeId(share.scope_id),
                 sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
                 display_name: share.display_name.clone(),
                 permission: share.permission.into(),
-                resolution: resolutions.get(&share.scope_root_name).copied(),
+                resolution: verdicts.get(&share.scope_id).map(|v| v.class),
             })
             .collect())
     }

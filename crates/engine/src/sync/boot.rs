@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::facade::{Event, NodeId};
 use crate::gate::GateRejection;
-use crate::gate::floor::{self, ColdSeedError, FloorRegression, PointerPlane};
+use crate::gate::floor::{self, ColdSeedError, FloorRegression};
 use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
@@ -209,17 +209,12 @@ where
 
     // Step 2 — floor cold-seed, fail-closed on regression: a re-point that would
     // move either floor backward is a rolled-back pointer, a trust violation.
-    floor::cold_seed_checked(
-        floors,
-        &adoption.repoint,
-        &params.root_scope_id,
-        PointerPlane::VaultPointer,
-    )
-    .await
-    .map_err(|e| match e {
-        ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),
-        ColdSeedError::Regression(reg) => ColdStartError::FloorRegression(reg),
-    })?;
+    floor::cold_seed_checked(floors, &adoption.repoint, &params.root_scope_id)
+        .await
+        .map_err(|e| match e {
+            ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),
+            ColdSeedError::Regression(reg) => ColdStartError::FloorRegression(reg),
+        })?;
 
     // Step 3 + 5 — current root name adoption through the gated, cache-first
     // resolve: last-known-good rehydrates the first paint (step 5) while the
