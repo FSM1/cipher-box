@@ -106,7 +106,6 @@ describe('EngineProvider', () => {
       contacts: [
         {
           identityPublicKey: new Uint8Array(33).fill(1),
-          encryptionPublicKey: new Uint8Array(32).fill(1),
         },
       ],
       grants: [],

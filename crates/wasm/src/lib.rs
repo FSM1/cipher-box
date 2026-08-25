@@ -821,8 +821,7 @@ impl SnapshotView {
     }
 }
 
-/// One imported contact in a [`SharingView`]: the two public keys a grant
-/// needs, and nothing else.
+/// One imported contact in a [`SharingView`].
 #[wasm_bindgen]
 pub struct SharingContact {
     inner: facade::SharingContact,
@@ -835,13 +834,6 @@ impl SharingContact {
     #[wasm_bindgen(getter, js_name = identityPublicKey)]
     pub fn identity_public_key(&self) -> Vec<u8> {
         self.inner.identity_public_key.clone()
-    }
-
-    /// The peer's X25519 encryption subkey, which the imported code's binding
-    /// signature ties to `identityPublicKey`.
-    #[wasm_bindgen(getter, js_name = encryptionPublicKey)]
-    pub fn encryption_public_key(&self) -> Vec<u8> {
-        self.inner.encryption_public_key.clone()
     }
 }
 

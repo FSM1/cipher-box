@@ -23,7 +23,7 @@ const CONTACT = { key: toHex(IDENTITY), identityPublicKey: IDENTITY };
 function view(grants: Permission[]): SharingDescriptor {
   return {
     scope: DOCS,
-    contacts: [{ identityPublicKey: IDENTITY, encryptionPublicKey: ENC }],
+    contacts: [{ identityPublicKey: IDENTITY }],
     grants: grants.map((permission) => ({
       recipientIdentityPublicKey: IDENTITY,
       permission,

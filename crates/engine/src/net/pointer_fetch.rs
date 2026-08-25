@@ -69,9 +69,6 @@ pub(crate) struct PointerConsult<'a> {
     pub owner_identity: &'a EcdsaVerifier,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
-    /// The session's vault anchor, which scopes the write-epoch regression
-    /// stage. Filling it from anything but the session root mis-scopes it.
-    pub session_root_scope_id: [u8; 16],
 }
 
 impl PointerConsult<'_> {
@@ -98,16 +95,17 @@ impl PointerConsult<'_> {
             &block,
         )
         .map_err(|_| PointerConsultError::Rejected)?;
-        // Away from the vault anchor the scope pointer is the write-epoch
-        // floor's only owner-vouched source, so a vouched epoch below it is a
-        // rollback, not staleness (rule 6). The anchor's floor also answers to
-        // the vault-pointer chain, so the two can legitimately diverge there —
-        // the read stage's narrowing in `floor::repoint_regression`, inverted.
-        if *scope_id != self.session_root_scope_id
-            && floor::write_epoch_regression(floors, scope_id, repoint.write_epoch)
-                .await
-                .map_err(|_| PointerConsultError::Unavailable)?
-                .is_some()
+        // The scope pointer is the write-epoch floor's only owner-vouched
+        // source at every scope, the vault anchor included: `RepointChannel`
+        // has no vault-pointer arm, so only provisioning ever writes that plane
+        // and it does so once, at the genesis epoch. A vouched epoch below the
+        // floor is therefore a rollback, not staleness (rule 6). Should the
+        // vault pointer ever re-point, this stage needs the read stage's
+        // narrowing in `floor::repoint_regression`, inverted.
+        if floor::write_epoch_regression(floors, scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| PointerConsultError::Unavailable)?
+            .is_some()
         {
             return Err(PointerConsultError::Rejected);
         }

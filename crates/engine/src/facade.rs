@@ -50,8 +50,9 @@ use crate::grants::{
     InviteMintPlan, InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink,
     OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
     ReceivedShareStoreError, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, accept_share, create_read_grant, link_binds_scope,
-    locate_invite_link, mint_invite_link, recipient_blinded_tag, resolve_recipient,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share, create_read_grant,
+    enforce_committed_ledger, link_binds_scope, locate_invite_link, mint_invite_link,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::locate_verified;
 use crate::net::author::ENVELOPE_V;
@@ -294,18 +295,19 @@ impl OverBudgetCause {
     }
 }
 
-/// One imported contact, projected key-free for a sharing UI: the two public
-/// keys a grant needs, and nothing else. The engine re-verifies the stored
-/// contact code before a row appears here, so a row is proof the binding held
-/// ([`Contact`](crate::grants::Contact)).
+/// One imported contact, projected key-free for a sharing UI. The engine
+/// re-verifies the stored contact code before a row appears here, so a row is
+/// proof the binding held ([`Contact`](crate::grants::Contact)).
+///
+/// The identity key alone: a grant names its recipient by it, and the engine
+/// re-resolves the matching encryption subkey from the binding-verified book
+/// rather than from anything a host hands back
+/// ([`recipient_contact`](Engine::recipient_contact)).
 #[derive(Clone, PartialEq, Eq)]
 pub struct SharingContact {
     /// The peer's secp256k1 identity key, compressed SEC1 — the grant ledger's
     /// recipient label and the address their mailbox answers at.
     pub identity_public_key: Vec<u8>,
-    /// The peer's X25519 encryption subkey, which the imported code's binding
-    /// signature ties to `identity_public_key`.
-    pub encryption_public_key: Vec<u8>,
 }
 
 /// A peer's identity key is a stable cross-service identifier for a third party,
@@ -318,10 +320,6 @@ impl fmt::Debug for SharingContact {
                 "identity_public_key",
                 &RedactedBytes::of(&self.identity_public_key),
             )
-            .field(
-                "encryption_public_key",
-                &RedactedBytes::of(&self.encryption_public_key),
-            )
             .finish()
     }
 }
@@ -332,9 +330,8 @@ impl fmt::Debug for SharingContact {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SharingGrant {
     /// The recipient's secp256k1 identity key, which joins the row to a
-    /// [`SharingContact`]. All-zero for a row the owner could not vouch for
-    /// (an invite-link bearer, or an unattested ledger entry), which joins to
-    /// no contact.
+    /// [`SharingContact`]. All-zero for a row whose recipient the owner's own
+    /// binding signature does not vouch for, which joins to no contact.
     pub recipient_identity_public_key: Vec<u8>,
     /// The permission the scope root commits for this recipient.
     pub permission: Permission,
@@ -1852,11 +1849,9 @@ pub(crate) fn emit_trust_violation(
 const NOT_A_SCOPE_ROOT: &str = "sharing-target-is-not-a-scope-root";
 
 /// One tick's pointer-consult window: the scopes due this pass
-/// ([`consult_scopes_due`]), the session anchor that scopes the write-epoch
-/// regression stage, and the clock the stamps are taken from.
+/// ([`consult_scopes_due`]) and the clock the stamps are taken from.
 struct ConsultWindow {
     scopes: Vec<NodeId>,
-    session_root_scope_id: [u8; 16],
     now: UnixMillis,
 }
 
@@ -1887,7 +1882,6 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
             scope_keys: &keys.scope_keys,
             owner_identity: &keys.owner_identity,
             payload_version: POINTER_PAYLOAD_VERSION,
-            session_root_scope_id: window.session_root_scope_id,
         };
         match consult.run(transport, floors, &scope.0).await {
             Err(PointerConsultError::Unavailable) => {}
@@ -1910,11 +1904,30 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
 
 /// Project a scope root's grant ledger for a host: the recipient label and the
 /// committed permission, and nothing the ledger's sealed half carries.
-fn project_grant_ledger(ledger: &[GrantLedgerEntry]) -> Vec<SharingGrant> {
+///
+/// Any committed **writer** authors the write body this ledger rides in
+/// (`cipherbox_core::seal::write_body`), so neither the row count nor the
+/// recipient bytes are owner truth on their own. The caller has already held the
+/// ledger to the owner-signed commitment; this holds each row's recipient label
+/// to the owner's own binding signature, filing one it cannot vouch for under
+/// [`UNATTESTED_IDENTITY_PK`] rather than naming a party the owner never signed.
+fn project_grant_ledger(
+    owner_identity: &EcdsaVerifier,
+    scope_root_ipns_name: &[u8],
+    ledger: &[GrantLedgerEntry],
+) -> Vec<SharingGrant> {
     ledger
         .iter()
         .map(|entry| SharingGrant {
-            recipient_identity_public_key: entry.recipient_identity_pk.to_vec(),
+            recipient_identity_public_key: if row_is_owner_attested(
+                owner_identity,
+                entry,
+                scope_root_ipns_name,
+            ) {
+                entry.recipient_identity_pk.to_vec()
+            } else {
+                UNATTESTED_IDENTITY_PK.to_vec()
+            },
             permission: entry.permission.into(),
         })
         .collect()
@@ -2675,7 +2688,7 @@ impl<T: SeamTypes> Engine<T> {
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
-        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone(), root_scope_id);
+        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         if let Some(root_name) = root_name {
             self.open_tick_loop(root_name);
@@ -3027,7 +3040,6 @@ where {
     fn build_sweep_task_factory(
         &self,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
-        root_scope_id: [u8; 16],
     ) -> Option<SweepTaskFactory>
     where
         T::Http: Clone + 'static,
@@ -3088,7 +3100,6 @@ where {
                             .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
                         owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
                         payload_version: POINTER_PAYLOAD_VERSION,
-                        session_root_scope_id: root_scope_id,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                     };
@@ -3261,7 +3272,6 @@ where {
                         &pointer_consulted,
                         ConsultWindow {
                             scopes: consult_targets,
-                            session_root_scope_id: root_id,
                             now,
                         },
                     )
@@ -3773,7 +3783,6 @@ where {
             ancestry,
             owner_pointer_seed,
             payload_version: POINTER_PAYLOAD_VERSION,
-            session_root_scope_id: self.snapshot.borrow().root.0,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
         }
@@ -5244,7 +5253,6 @@ where {
             .into_iter()
             .map(|contact| SharingContact {
                 identity_public_key: contact.identity_pk().to_sec1().to_vec(),
-                encryption_public_key: contact.enc_subkey().to_bytes().to_vec(),
             })
             .collect();
         Ok(SharingView {
@@ -5260,6 +5268,8 @@ where {
     /// The authority for what is a scope root is the vault root's owner-signed
     /// direct-child-scope index, which [`owner_scope`](Self::owner_scope) owns —
     /// so a node it does not name is `Some(vec![])`: nothing is granted there.
+    /// A read reports, it does not repair, so an index miss refuses rather than
+    /// reaching for a derived name ([`UnindexedScope`]).
     /// A resolve that failed is `None`, never an empty list, so a host cannot
     /// paint "shared with nobody" over a subtree it simply could not read.
     async fn scope_grants(
@@ -5276,7 +5286,13 @@ where {
             scope_keys: &scope_keys,
         };
         let target = match self
-            .owner_scope(scope_root, api, keys(), NOT_A_SCOPE_ROOT)
+            .owner_scope(
+                scope_root,
+                api,
+                keys(),
+                NOT_A_SCOPE_ROOT,
+                UnindexedScope::Refuse,
+            )
             .await
         {
             Ok(target) => target,
@@ -5290,7 +5306,15 @@ where {
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
-        Some(project_grant_ledger(&current.grant_ledger))
+        // Fail closed on a ledger the owner's commitment does not commit: the
+        // write body it rides in is authored by any committed writer, so the row
+        // set is only as trustworthy as the epoch-free commitment over it.
+        enforce_committed_ledger(&current.commitment, &current.grant_ledger).ok()?;
+        Some(project_grant_ledger(
+            &owner_identity,
+            &target.scope.ipns_name,
+            &current.grant_ledger,
+        ))
     }
 
     /// Read one file node's full plaintext content (blueprint/engine.md

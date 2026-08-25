@@ -473,7 +473,6 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
     scope: view.scope,
     contacts: view.contacts.map((contact) => ({
       identityPublicKey: contact.identityPublicKey,
-      encryptionPublicKey: contact.encryptionPublicKey,
     })),
     grants:
       view.grants?.map((grant) => ({

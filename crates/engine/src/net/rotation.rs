@@ -131,11 +131,6 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub owner_pointer_seed: Option<&'a [u8; SECRET_LEN]>,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
-    /// The session's vault-anchor scope, which scopes the consult's write-epoch
-    /// regression stage ([`Self::consult_pointer`]). Caller-supplied, as
-    /// [`WriteWaveNet::session_root_scope_id`] is: filling it from anything but
-    /// the session root silently mis-scopes that stage.
-    pub session_root_scope_id: [u8; 16],
     /// The record a re-key is about to replace, handed from the resolve that
     /// gated it to the publish (see [`GatedRoots`]). One rotation pass per net.
     pub gated: GatedRoots,
@@ -1683,7 +1678,6 @@ where
             scope_keys: self.keys.scope_keys,
             owner_identity: self.keys.identity,
             payload_version: self.payload_version,
-            session_root_scope_id: self.session_root_scope_id,
         }
         .run(self.transport, self.floors, scope_id)
         .await
@@ -3056,10 +3050,6 @@ mod tests {
     };
 
     const SCOPE: [u8; 16] = [0x44; 16];
-    /// The session's vault anchor in these fixtures — deliberately not `SCOPE`,
-    /// so the harness's nets exercise the shared-scope arm of the consult's
-    /// write-epoch regression stage.
-    const SESSION_ROOT_SCOPE: [u8; 16] = [0x5a; 16];
     const CHILD_SCOPE: [u8; 16] = [0xc1; 16];
     const OWNER_SCALAR: [u8; 32] = [0x11; 32];
     const OWNER_ENC_SCALAR: [u8; 32] = [0x33; 32];
@@ -3301,15 +3291,6 @@ mod tests {
             self.net_under(&OWNER_ROOT_SCOPE_SEED, root_child_index)
         }
 
-        /// [`Harness::net`] for a session whose vault anchor **is** `SCOPE` —
-        /// the case the consult's write-epoch regression stage narrows away
-        /// from, because the vault-pointer chain vouches the same floor there.
-        fn net_anchored_at_scope(&self) -> Net<'_, T> {
-            let mut net = self.net(&[]);
-            net.session_root_scope_id = SCOPE;
-            net
-        }
-
         fn net_rooted(&self, ancestry: RotationAncestry) -> Net<'_, T> {
             self.net_rooted_with_floors(ancestry, &self.floors)
         }
@@ -3345,7 +3326,6 @@ mod tests {
                 ancestry,
                 owner_pointer_seed: Some(&OWNER_POINTER_SEED),
                 payload_version: PAYLOAD_VERSION,
-                session_root_scope_id: SESSION_ROOT_SCOPE,
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
             }
@@ -8275,10 +8255,12 @@ mod tests {
         )
     }
 
-    /// A shared scope's write-epoch floor answers to one owner-vouched plane —
-    /// this pointer — so a vouched epoch below it is a rolled-back re-point.
+    /// A scope's write-epoch floor answers to one owner-vouched plane — this
+    /// pointer — at every scope including the vault anchor, so a vouched epoch
+    /// below it is a rolled-back re-point rather than a plane that legitimately
+    /// trails.
     #[test]
-    fn a_shared_scope_pointer_below_the_write_epoch_floor_is_rejected() {
+    fn a_scope_pointer_below_the_write_epoch_floor_is_rejected() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
         block_on(floor::advance_write_epoch_on_sight(
             &harness.floors,
@@ -8336,43 +8318,6 @@ mod tests {
         assert_eq!(
             block_on(harness.net(&[]).consult_pointer(&SCOPE)),
             Ok(Some(current_root.as_str().as_bytes().to_vec())),
-        );
-    }
-
-    /// At the vault anchor the write-epoch floor has a second owner-vouched
-    /// source on a different name — the vault-pointer chain, whose index bump is
-    /// the pointer-key-compromise recovery — so a scope pointer legitimately
-    /// trails it. Refusing there would hard-fail the sweep on honest state.
-    #[test]
-    fn the_vault_anchor_tolerates_a_scope_pointer_below_its_write_epoch_floor() {
-        let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        block_on(floor::advance_write_epoch_on_sight(
-            &harness.floors,
-            &SCOPE,
-            5,
-        ))
-        .expect("raise the write floor");
-        let current_root = vault_root([0xb0; 16], Vec::new()).name;
-        stage_scope_pointer(
-            &harness,
-            &owner_identity(),
-            &RepointObject {
-                scope_id: SCOPE,
-                current_root: current_root.clone(),
-                write_epoch: 4,
-                min_read_epoch: SWEPT_EPOCH,
-                prev_root: None,
-            },
-        );
-
-        assert_eq!(
-            block_on(harness.net_anchored_at_scope().consult_pointer(&SCOPE)),
-            Ok(Some(current_root.as_str().as_bytes().to_vec())),
-        );
-        assert_eq!(
-            block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).expect("floor read"),
-            Some(5),
-            "monotonic-max: the trailing sighting is a no-op, not a lowering",
         );
     }
 

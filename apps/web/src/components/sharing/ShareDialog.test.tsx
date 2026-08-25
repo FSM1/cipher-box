@@ -69,7 +69,6 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           scope,
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
-            encryptionPublicKey: new Uint8Array(32).fill(seed),
           })),
           grants: rowsOf(scope).map(([seed, permission]) => ({
             recipientIdentityPublicKey: identity(seed),

@@ -26,7 +26,6 @@ function view(
     scope,
     contacts: contacts.map((seed) => ({
       identityPublicKey: identity(seed),
-      encryptionPublicKey: new Uint8Array(32).fill(seed),
     })),
     grants:
       grants?.map(([seed, permission]) => ({

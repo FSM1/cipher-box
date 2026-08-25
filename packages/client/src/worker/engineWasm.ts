@@ -101,7 +101,6 @@ export interface WasmSnapshotView {
 /** wasm-bindgen `SharingContact` — one contact the vault's book holds. */
 export interface WasmSharingContact {
   readonly identityPublicKey: Uint8Array;
-  readonly encryptionPublicKey: Uint8Array;
 }
 
 /** wasm-bindgen `SharingGrant` — one grant a scope's ledger commits. */

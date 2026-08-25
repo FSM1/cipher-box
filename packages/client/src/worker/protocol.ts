@@ -122,7 +122,6 @@ export interface SnapshotDescriptor {
 /** One contact the vault's book holds, as data (mirrors `SharingContact`). */
 export interface SharingContactDescriptor {
   identityPublicKey: Uint8Array;
-  encryptionPublicKey: Uint8Array;
 }
 
 /** One grant a scope's ledger commits, as data (mirrors `SharingGrant`). */

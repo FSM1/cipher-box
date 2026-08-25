@@ -727,6 +727,54 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
     );
 }
 
+/// Any committed **writer** authors the write body a grant ledger rides in, so a
+/// row's recipient bytes are only owner truth where the owner's own binding
+/// signature covers them. A row the owner cannot vouch for is filed under the
+/// all-zero identity rather than naming a party they never signed — otherwise a
+/// co-writer could hide their own grant behind a stranger's key on the very
+/// surface the owner revokes from.
+#[test]
+fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(), bystander_row_with_corrupt_sig()],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+
+    let rows = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .grants
+        .expect("the vault root resolved");
+
+    let named: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|row| row.recipient_identity_public_key.clone())
+        .collect();
+    assert!(
+        named.contains(&recipient_identity().verifying_key().to_sec1().to_vec()),
+        "the row the owner signed names its recipient"
+    );
+    assert!(
+        named.contains(&vec![0u8; 33]),
+        "and the row it did not sign is filed unattested, not under its claimed key"
+    );
+    assert!(
+        !named.contains(
+            &EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+                .expect("valid identity scalar")
+                .verifying_key()
+                .to_sec1()
+                .to_vec()
+        ),
+        "an unverifiable owner signature must not lend a key the owner's word"
+    );
+}
+
 /// The mailbox post is the last step of the mint and nothing compensates it, so
 /// a grant that cannot commit the granted scope root must leave the recipient
 /// with nothing: an item naming a root that never published would never resolve
