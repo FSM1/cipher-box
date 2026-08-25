@@ -537,17 +537,38 @@ export function readReceivedShare(
   };
 }
 
-/** Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor. */
+/**
+ * Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor.
+ *
+ * Every getter is read once into a local: each read mints a fresh JS wrapper
+ * over a fresh boxed Rust struct, which nothing here frees.
+ */
 export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDescriptor {
+  const state = view.state;
+  const links = state?.inviteLinks;
   return {
     scope: view.scope,
     contacts: view.contacts.map((contact) => ({
       identityPublicKey: contact.identityPublicKey,
     })),
-    grants:
-      view.grants?.map((grant) => ({
-        recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
-        permission: permissionFrom(wasm, grant.permission),
-      })) ?? null,
+    state:
+      state === undefined
+        ? null
+        : {
+            grants: state.grants.map((grant) => ({
+              recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
+              permission: permissionFrom(wasm, grant.permission),
+            })),
+            canMintShare: state.canMintShare,
+            inviteLinks:
+              links === undefined
+                ? null
+                : {
+                    live: links.live,
+                    expired: links.expired,
+                    expiresAt: links.expiresAt ?? null,
+                    spent: links.spent,
+                  },
+          },
   };
 }

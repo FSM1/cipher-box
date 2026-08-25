@@ -540,11 +540,13 @@ mod tests {
     use cipherbox_core::seal::Permission as CorePermission;
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_engine::facade;
     use cipherbox_engine::facade::CommandOutcome as Outcome;
+    use cipherbox_engine::facade::NodeId as EngineNodeId;
     use cipherbox_engine::import_contact;
-    use cipherbox_engine::seams::OpId;
+    use cipherbox_engine::seams::{OpId, UnixMillis};
     use cipherbox_engine::{AcceptOutcome, Headroom, MintedInviteLink};
-    use js_sys::BigInt;
+    use js_sys::{Array, BigInt};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const CONTACT_SCALAR: [u8; 32] = [3u8; 32];
@@ -758,6 +760,79 @@ mod tests {
                 .expect("the rejection carries a code");
             assert_eq!(code, JsValue::from_str(expected), "{cause:?}");
         }
+    }
+
+    /// The share dialog branches on all of them: it offers a mint only on a plain
+    /// `true`, takes the expiry verdict from the engine rather than its own
+    /// clock, and a deadline past 2^53 must survive as the `bigint` the engine
+    /// minted, never an f64 `number`.
+    #[wasm_bindgen_test]
+    fn a_sharing_view_crosses_with_its_mint_verdict_and_link_standing() {
+        let view = |state| {
+            JsValue::from(SharingView::from_facade(facade::SharingView {
+                scope: EngineNodeId([0x5c; 16]),
+                contacts: Vec::new(),
+                state,
+            }))
+        };
+        let shared = |can_mint_share, invite_links| {
+            view(Some(facade::ScopeSharing {
+                grants: Vec::new(),
+                can_mint_share,
+                invite_links,
+            }))
+        };
+
+        let live = field(
+            &shared(
+                false,
+                Some(facade::SharingInviteLinks {
+                    live: true,
+                    expires_at: Some(UnixMillis(u64::MAX)),
+                    expired: true,
+                    spent: 3,
+                }),
+            ),
+            "state",
+        );
+        assert_eq!(field(&live, "canMintShare"), JsValue::from_bool(false));
+        assert_eq!(field(&live, "grants").unchecked_into::<Array>().length(), 0);
+        let links = field(&live, "inviteLinks");
+        assert_eq!(field(&links, "live"), JsValue::from_bool(true));
+        assert_eq!(field(&links, "expired"), JsValue::from_bool(true));
+        assert_eq!(field(&links, "spent"), JsValue::from_f64(3.0));
+        let expires_at = field(&links, "expiresAt");
+        assert_eq!(expires_at.js_typeof(), JsValue::from_str("bigint"));
+        assert_eq!(
+            String::from(
+                expires_at
+                    .unchecked_into::<BigInt>()
+                    .to_string(10)
+                    .expect("bigint renders in base 10")
+            ),
+            u64::MAX.to_string(),
+        );
+
+        let mintable = field(
+            &shared(true, Some(facade::SharingInviteLinks::default())),
+            "state",
+        );
+        assert_eq!(field(&mintable, "canMintShare"), JsValue::from_bool(true));
+        let none_live = field(&mintable, "inviteLinks");
+        assert_eq!(field(&none_live, "expired"), JsValue::from_bool(false));
+        assert!(
+            field(&none_live, "expiresAt").is_undefined(),
+            "a link with no deadline carries none, never 0n"
+        );
+
+        assert!(
+            field(&field(&shared(false, None), "state"), "inviteLinks").is_undefined(),
+            "a read that could not open the records withholds them"
+        );
+        assert!(
+            field(&view(None), "state").is_undefined(),
+            "a read that could not reach the scope root withholds every field"
+        );
     }
 
     #[wasm_bindgen_test]

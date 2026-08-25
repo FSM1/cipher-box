@@ -46,8 +46,9 @@ pub use create::{
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
     EphemeralInvitee, InviteClaim, InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES,
-    MintedInvite, OwnerAuthority, RecordedInvite, convert_invite_claim, link_binds_scope,
-    locate_invite_link, mint_invite_grant, post_invite_claim,
+    MintedInvite, OwnerAuthority, RecordedInvite, ScopeLinks, convert_invite_claim,
+    link_binds_scope, locate_invite_link, mint_invite_grant, partition_scope_links,
+    post_invite_claim,
 };
 pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
 pub use invite_store::{

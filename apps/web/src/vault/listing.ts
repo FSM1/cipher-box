@@ -6,16 +6,13 @@
 
 import { toHex } from '@cipherbox/client';
 import type { NodeKind, PendingClass, SnapshotChildDescriptor } from '@cipherbox/client';
-import { formatBytes, formatDate } from '../utils/format';
+import { formatBytes, formatDate, MAX_DATE_MILLIS } from '../utils/format';
 
 /** Stands in for a projection the child ref does not carry yet (#27 D7). */
 const UNRESOLVED = '...';
 
 /** A column with nothing to show for this kind of node. */
 const NOT_APPLICABLE = '-';
-
-/** JS `Date` tops out here; the engine's mtime is a u64 and can exceed it. */
-const MAX_DATE_MILLIS = 8_640_000_000_000_000n;
 
 export interface ListingRow {
   id: Uint8Array;
@@ -66,7 +63,7 @@ function projectedSize(value: bigint | null): string {
   return value === null ? UNRESOLVED : formatBytes(Number(value));
 }
 
-/** Out of range, `Intl` throws on the `Date` and takes the whole listing with it. */
+/** Out of range it would throw and take the whole listing with it. */
 function projectedDate(value: bigint | null): string {
   if (value === null) return UNRESOLVED;
   return value > MAX_DATE_MILLIS ? NOT_APPLICABLE : formatDate(Number(value));

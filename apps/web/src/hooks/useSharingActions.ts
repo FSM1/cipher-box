@@ -19,7 +19,10 @@ export type SharingCommand =
   | 'grant'
   | 'revoke'
   | 'downgrade'
-  | 'createInviteLink';
+  | 'createInviteLink'
+  | 'revokeInviteLink'
+  | 'pruneInviteLinks'
+  | 'convertInviteClaims';
 
 export interface SharingActions {
   busy: SharingCommand | null;
@@ -36,10 +39,17 @@ export interface SharingActions {
   /**
    * Mints a link over this scope, resolving with the engine's fragment
    * (`MintedInviteLink`) or `null` where the engine refused. An omitted
-   * `expiresAt` mints one that never expires. A link commits no grant row, so
-   * the sharing read this scope already has stands.
+   * `expiresAt` mints one that never expires. The fragment is the link's whole
+   * capability and the engine hands it over once, so a caller that drops it
+   * cannot ask for it again.
    */
   createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
+  /** Cuts this scope's live link: its future claims end, converted grants stand. */
+  revokeInviteLink(): Promise<boolean>;
+  /** Drops the records this scope's own commitment no longer carries. */
+  pruneInviteLinks(): Promise<boolean>;
+  /** Converts the claims waiting on this scope's link into grants. */
+  convertInviteClaims(): Promise<boolean>;
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -97,10 +107,35 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
           fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
+          await read(facade);
         });
         return fragment;
       },
-      [run, target]
+      [run, read, target]
+    ),
+    revokeInviteLink: useCallback(
+      () =>
+        run('revokeInviteLink', async (facade) => {
+          await facade.revokeInviteLink(target);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    pruneInviteLinks: useCallback(
+      () =>
+        run('pruneInviteLinks', async (facade) => {
+          await facade.pruneInviteLinks(target);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    convertInviteClaims: useCallback(
+      () =>
+        run('convertInviteClaims', async (facade) => {
+          await facade.convertInviteClaims(target);
+          await read(facade);
+        }),
+      [run, read, target]
     ),
   };
 }

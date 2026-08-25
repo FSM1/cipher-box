@@ -13,6 +13,9 @@ export function formatBytes(bytes: number): string {
   return `${rounded} ${UNITS[exponent]}`;
 }
 
+/** Past this, `Intl` throws on the `Date` rather than formatting it. */
+export const MAX_DATE_MILLIS = 8_640_000_000_000_000n;
+
 /** Locale-aware date for a Unix-millisecond timestamp. */
 export function formatDate(timestampMillis: number): string {
   return new Intl.DateTimeFormat(undefined, {

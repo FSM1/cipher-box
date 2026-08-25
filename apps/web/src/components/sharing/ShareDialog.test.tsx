@@ -5,6 +5,7 @@ import type {
   EventDescriptor,
   Permission,
   SharingDescriptor,
+  SharingInviteLinksDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,16 @@ const CODE_HEX = '00ff10';
 
 /** Stands in for the engine's opaque capability; the UI reads none of it. */
 const MINTED_FRAGMENT = 'a-minted-fragment';
+
+/** The identity a converted claim lands in the ledger under. */
+const CLAIMANT_SEED = 5;
+
+const NO_LINKS: SharingInviteLinksDescriptor = {
+  live: false,
+  expired: false,
+  expiresAt: null,
+  spent: 0,
+};
 
 const folder: ListingRow = {
   id: DOCS,
@@ -46,6 +57,10 @@ interface EngineState {
   contacts: number[];
   /** A scope mapped to `null` is one whose root the engine could not reach. */
   grants: Map<string, Array<[number, Permission]> | null>;
+  /** `null` for an owner whose link records the engine could not open. */
+  links: SharingInviteLinksDescriptor | null;
+  /** A share of the folder mints a scope at it, which a second share cannot. */
+  mintable: boolean;
 }
 
 /**
@@ -57,6 +72,8 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
   const state: EngineState = {
     contacts: held.contacts ?? [],
     grants: held.grants ?? new Map(),
+    links: held.links === undefined ? NO_LINKS : held.links,
+    mintable: held.mintable ?? true,
   };
   const answer = <T,>(name: string, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
@@ -74,13 +91,17 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
           })),
-          grants:
+          state:
             state.grants.get(toHex(scope)) === null
               ? null
-              : rowsOf(scope).map(([seed, permission]) => ({
-                  recipientIdentityPublicKey: identity(seed),
-                  permission,
-                })),
+              : {
+                  grants: rowsOf(scope).map(([seed, permission]) => ({
+                    recipientIdentityPublicKey: identity(seed),
+                    permission,
+                  })),
+                  canMintShare: state.mintable,
+                  inviteLinks: state.links === null ? null : { ...state.links },
+                },
         })
     ),
     importContact: vi.fn((code: Uint8Array) => {
@@ -105,8 +126,38 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         return outcome;
       })
     ),
-    createInviteLink: vi.fn((_scope: Uint8Array, _permission: Permission) =>
-      answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: MINTED_FRAGMENT })
+    createInviteLink: vi.fn((_scope: Uint8Array, _permission: Permission, expiresAt?: bigint) =>
+      answer('createInviteLink', {
+        kind: 'inviteLinkMinted' as const,
+        fragment: MINTED_FRAGMENT,
+      }).then((outcome) => {
+        state.links = { ...(state.links ?? NO_LINKS), live: true, expiresAt: expiresAt ?? null };
+        state.mintable = false;
+        return outcome;
+      })
+    ),
+    revokeInviteLink: vi.fn(() =>
+      answer('revokeInviteLink', { kind: 'done' as const }).then((outcome) => {
+        state.links = {
+          ...(state.links ?? NO_LINKS),
+          live: false,
+          expired: false,
+          expiresAt: null,
+        };
+        return outcome;
+      })
+    ),
+    pruneInviteLinks: vi.fn(() =>
+      answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
+        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
+        return outcome;
+      })
+    ),
+    convertInviteClaims: vi.fn((scope: Uint8Array) =>
+      answer('convertInviteClaims', { kind: 'done' as const }).then((outcome) => {
+        state.grants.set(toHex(scope), [...rowsOf(scope), [CLAIMANT_SEED, 'read']]);
+        return outcome;
+      })
     ),
     downgrade: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
       answer('downgrade', { kind: 'done' as const }).then((outcome) => {
@@ -152,8 +203,12 @@ async function click(testId: string) {
  * A vault whose engine already holds `contacts`, and `rows` on the folder —
  * `null` rows for a folder whose scope root the engine cannot reach.
  */
-function held(contacts: number[], rows: Array<[number, Permission]> | null = []) {
-  return { contacts, grants: new Map([[toHex(DOCS), rows]]) };
+function held(
+  contacts: number[],
+  rows: Array<[number, Permission]> | null = [],
+  rest: Partial<Pick<EngineState, 'links' | 'mintable'>> = {}
+) {
+  return { contacts, grants: new Map([[toHex(DOCS), rows]]), ...rest };
 }
 
 afterEach(() => sharingStore.clear());
@@ -397,5 +452,83 @@ describe('the invite link', () => {
     await click('share-mint-link');
 
     expect(screen.getByLabelText('close').hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('a link the engine already holds', () => {
+  const live: SharingInviteLinksDescriptor = {
+    ...NO_LINKS,
+    live: true,
+    expiresAt: SEVEN_DAYS_ON,
+  };
+
+  it('draws the standing of a link this session never minted', async () => {
+    await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+
+    expect(screen.getByTestId('share-live-link')).toBeTruthy();
+    expect(screen.getByTestId('share-live-link-expiry').textContent).toContain('expires');
+    // The capability was handed over once, at the mint; nothing can re-derive it.
+    expect(screen.queryByTestId('invite-link')).toBeNull();
+  });
+
+  it('offers no mint where the engine would refuse one', async () => {
+    await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+
+  it('says so rather than offering a mint on a shared folder carrying no link', async () => {
+    await share(sharingEngine({}, held([1], [[1, 'read']], { mintable: false })));
+
+    expect(screen.getByTestId('share-no-mint')).toBeTruthy();
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+
+  it('ends the link on a revoke and leaves the grants it converted standing', async () => {
+    const engine = await share(
+      sharingEngine({}, held([], [[CLAIMANT_SEED, 'read']], { links: live, mintable: false }))
+    );
+
+    await click('share-revoke-link');
+
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS);
+    expect(screen.queryByTestId('share-live-link')).toBeNull();
+    expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
+  });
+
+  it('shows the grant a conversion committed', async () => {
+    const engine = await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+
+    await click('share-convert-claims');
+
+    expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
+    expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
+  });
+
+  it('offers to forget the records a cut left behind, and stops once pruned', async () => {
+    const engine = await share(
+      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, mintable: false }))
+    );
+
+    expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');
+    await click('share-prune-links');
+
+    expect(engine.facade.pruneInviteLinks).toHaveBeenCalledWith(DOCS);
+    expect(screen.queryByTestId('share-prune-links')).toBeNull();
+  });
+
+  it('says the standing is unknown when the owner’s link records would not open', async () => {
+    await share(sharingEngine({}, held([], [], { links: null })));
+
+    expect(screen.getByTestId('share-links-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+
+  it('draws no link section at all for a scope root the engine could not reach', async () => {
+    await share(sharingEngine({}, held([], null)));
+
+    expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('share-links-unavailable')).toBeNull();
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 });

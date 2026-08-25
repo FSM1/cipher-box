@@ -11,7 +11,11 @@
  */
 
 import { toHex } from '@cipherbox/client';
-import type { Permission, SharingDescriptor } from '@cipherbox/client';
+import type {
+  Permission,
+  SharingDescriptor,
+  SharingInviteLinksDescriptor,
+} from '@cipherbox/client';
 
 /** A contact the engine re-verified from its stored code; `key` is its identity, as hex. */
 export interface VerifiedContact {
@@ -29,10 +33,19 @@ export interface GrantRow {
   readonly permission: Permission;
 }
 
+/** What one scope's own record says, as the engine last reported it. */
+export interface ScopeSharing {
+  readonly grants: readonly GrantRow[];
+  /** A further share here would be accepted, so a mint is worth offering. */
+  readonly canMintShare: boolean;
+  /** `null` where the engine reached the scope but not the owner's link records. */
+  readonly inviteLinks: SharingInviteLinksDescriptor | null;
+}
+
 export interface SharingState {
   readonly contacts: readonly VerifiedContact[];
-  /** Grant rows by scope, keyed by the scope root's hex node id. */
-  readonly grants: ReadonlyMap<string, readonly GrantRow[]>;
+  /** Each scope's own state, keyed by the scope root's hex node id. */
+  readonly scopes: ReadonlyMap<string, ScopeSharing>;
 }
 
 let state: SharingState = frozen([], new Map());
@@ -40,9 +53,9 @@ const listeners = new Set<() => void>();
 
 function frozen(
   contacts: readonly VerifiedContact[],
-  grants: ReadonlyMap<string, readonly GrantRow[]>
+  scopes: ReadonlyMap<string, ScopeSharing>
 ): SharingState {
-  return Object.freeze({ contacts: Object.freeze(contacts), grants });
+  return Object.freeze({ contacts: Object.freeze(contacts), scopes });
 }
 
 function publish(next: SharingState): void {
@@ -63,51 +76,54 @@ export const sharingStore = {
 
   /**
    * Takes the view the engine reported: the contact book replaces the held one,
-   * and the view's scope takes its rows. Every other scope keeps what its own
+   * and the view's scope takes its state. Every other scope keeps what its own
    * read left, since this view speaks for one scope only.
    *
-   * A view whose `grants` the engine could not reach leaves that scope's rows
-   * as they stood — last-known-good, never an empty list a render would read as
-   * "shared with nobody".
+   * A view whose scope the engine could not reach leaves that scope as it stood
+   * — last-known-good, never an empty list a render would read as "shared with
+   * nobody".
    */
   reported(view: SharingDescriptor): void {
-    const grants = new Map(state.grants);
-    if (view.grants !== null) {
-      grants.set(
+    const scopes = new Map(state.scopes);
+    if (view.state !== null) {
+      scopes.set(
         toHex(view.scope),
-        Object.freeze(
-          view.grants.map((grant) =>
-            Object.freeze({
-              contact: contactOf(grant.recipientIdentityPublicKey),
-              permission: grant.permission,
-            })
-          )
-        )
+        Object.freeze({
+          grants: Object.freeze(
+            view.state.grants.map((grant) =>
+              Object.freeze({
+                contact: contactOf(grant.recipientIdentityPublicKey),
+                permission: grant.permission,
+              })
+            )
+          ),
+          canMintShare: view.state.canMintShare,
+          inviteLinks:
+            view.state.inviteLinks === null ? null : Object.freeze(view.state.inviteLinks),
+        })
       );
     }
     publish(
       frozen(
         view.contacts.map((contact) => contactOf(contact.identityPublicKey)),
-        grants
+        scopes
       )
     );
   },
 
   clear(): void {
-    if (state.contacts.length === 0 && state.grants.size === 0) return;
+    if (state.contacts.length === 0 && state.scopes.size === 0) return;
     publish(frozen([], new Map()));
   },
 };
 
 /**
- * The rows the engine last reported for the scope with this hex node id, or
- * `null` where no read has yet returned a ledger for it. Hex because that is how
- * the UI already addresses a node (`lib/nodeId.ts`), so a render costs no
- * re-encode.
+ * What the engine last reported for the scope with this hex node id, or `null`
+ * where no read has yet reached it. Hex because that is how the UI already
+ * addresses a node (`lib/nodeId.ts`), so a render costs no re-encode.
  *
- * An empty array is the engine's own answer that the scope commits no grant;
  * `null` is the absence of an answer, which a render must not spell as one.
  */
-export function grantsFor(current: SharingState, scopeKey: string): readonly GrantRow[] | null {
-  return current.grants.get(scopeKey) ?? null;
+export function sharingFor(current: SharingState, scopeKey: string): ScopeSharing | null {
+  return current.scopes.get(scopeKey) ?? null;
 }

@@ -1,3 +1,7 @@
+import type { SharingInviteLinksDescriptor } from '@cipherbox/client';
+import type { ScopeSharing } from '../stores/sharing.store';
+import { formatDate, MAX_DATE_MILLIS } from '../utils/format';
+
 /** The claim route, so the mint and the router name one destination. */
 export const INVITE_ROUTE = '/invite';
 
@@ -26,4 +30,36 @@ export type LinkLifetime = keyof typeof LINK_LIFETIMES;
 export function expiryAt(lifetime: LinkLifetime, now: number): bigint | undefined {
   const days = LINK_LIFETIMES[lifetime];
   return days === null ? undefined : BigInt(now + days * 86_400_000);
+}
+
+/**
+ * How the engine's link standing reads to its owner. Whether the deadline has
+ * passed is the engine's verdict, read against its own clock — this only draws
+ * it.
+ */
+export function expiryLabel(links: SharingInviteLinksDescriptor): string {
+  if (links.expired) return 'expired';
+  if (links.expiresAt === null) return 'never expires';
+  return links.expiresAt > MAX_DATE_MILLIS
+    ? 'expires beyond any date'
+    : `expires ${formatDate(Number(links.expiresAt))}`;
+}
+
+/** Which of the owner's four link situations a scope is in. */
+export type InviteLinkState =
+  | { kind: 'unavailable' }
+  | { kind: 'live'; links: SharingInviteLinksDescriptor }
+  | { kind: 'mintable' }
+  | { kind: 'refused' };
+
+/**
+ * A scope the engine reached carries a live link, takes a mint, or takes
+ * neither. `unavailable` is the owner's link records refusing to open, which a
+ * render must not spell as "no link here".
+ */
+export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
+  const links = scope.inviteLinks;
+  if (links === null) return { kind: 'unavailable' };
+  if (links.live) return { kind: 'live', links };
+  return scope.canMintShare ? { kind: 'mintable' } : { kind: 'refused' };
 }
