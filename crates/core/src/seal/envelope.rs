@@ -20,8 +20,8 @@ use crate::suite::aead::{KEY_LEN, NONCE_LEN};
 
 use super::aad::{AadContext, STRUCT_TAG_READ_BODY};
 use super::body::{
-    PreservedFields, ReadBody, assert_unknown_disjoint, bytes_fixed, collect_unknown,
-    decode_read_body, encode_read_body, merge_unknown, req,
+    PreservedFields, ReadBody, assert_unknown_disjoint, assert_within_bound, bytes_fixed,
+    collect_unknown, decode_read_body, encode_read_body, merge_unknown, req,
 };
 
 /// A node's kind-uniform envelope. `scope`/`epoch` are the flattened `epochTag`
@@ -61,6 +61,15 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
     let epoch_tag = req(map, "epochTag")?.as_map()?;
     let scope = bytes_fixed::<16>(req(epoch_tag, "scope")?, "scope")?;
     let epoch = req(epoch_tag, "epoch")?.as_unsigned()?;
+
+    // Charged off the decoded maps, before `collect_unknown` copies every
+    // carried leaf: the set is attacker-sized, and the budget is what says it is
+    // too large to hold.
+    assert_within_bound(
+        CRITICAL_CARRIED_CHECK,
+        critical_carried_len(map.entries(), epoch_tag.entries()),
+        MAX_CRITICAL_CARRIED_BYTES,
+    )?;
 
     Ok(Envelope {
         v,
@@ -102,13 +111,56 @@ const GRANT_SECTION_KEY: &str = "grantSection";
 /// it; this codec models it nowhere else.
 const WRITE_SEALED_KEY: &str = "writeSealed";
 
-/// The carried fields a cut must never take (blueprint/core.md, "Carried
-/// unknown fields"). **Top-level names only**: the protection buys the blueprint
-/// rationale — losing either publishes a record the reader rejects outright —
-/// and a reader looks for both under [`Envelope::unknown`] alone. Honouring the
-/// names inside `epochTag` would instead hand a publisher an uncuttable name to
-/// pad, which is the wedge the cut exists to deny.
-const UNCUTTABLE: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
+/// The reserved uncuttable names, from before [`CRITICAL_KEY_PREFIX`] existed
+/// (blueprint/core.md, "Carried unknown fields"). **Top-level only**: losing
+/// either publishes a record the reader rejects outright, and a reader looks for
+/// both under [`Envelope::unknown`] alone. The same name inside `epochTag` bears
+/// no protocol, and honouring it there would hand a publisher an uncuttable name
+/// to pad with — the wedge the cut exists to deny.
+pub const UNCUTTABLE_KEYS: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
+
+/// The reserved key prefix a carried field wears to declare itself critical: a
+/// rewrite keeps it or refuses, never silently drops it (blueprint/core.md,
+/// "Carried unknown fields"). It says on the wire what membership in
+/// [`UNCUTTABLE_KEYS`] — frozen when each binary ships — cannot express.
+pub const CRITICAL_KEY_PREFIX: &str = "!";
+
+/// The frozen budget on carried critical bytes (blueprint/core.md, "Carried
+/// unknown fields"): the encoded cost of every [`CRITICAL_KEY_PREFIX`]-marked
+/// field plus `writeSealed`, at both levels. `grantSection` is excluded because
+/// it carries its own [`MAX_GRANT_SECTION_BYTES`](super::MAX_GRANT_SECTION_BYTES).
+pub const MAX_CRITICAL_CARRIED_BYTES: usize = 16 * 1024;
+
+/// The collection label the critical-bytes budget's refusal reports.
+const CRITICAL_CARRIED_CHECK: &str = "criticalCarried";
+
+fn is_critical(key: &str) -> bool {
+    key.starts_with(CRITICAL_KEY_PREFIX)
+}
+
+/// Top-level only; see [`UNCUTTABLE_KEYS`].
+fn is_uncuttable(key: &str) -> bool {
+    UNCUTTABLE_KEYS.contains(&key) || is_critical(key)
+}
+
+/// The encoded bytes [`MAX_CRITICAL_CARRIED_BYTES`] budgets: every uncuttable
+/// carried field but `grantSection` at top level, plus every marked field inside
+/// `epochTag`. Charged by [`entry_cost`], the same measure the cut budgets in.
+fn critical_carried_len(unknown: &[(String, Value)], tagged: &[(String, Value)]) -> usize {
+    let top = unknown
+        .iter()
+        .filter(|(key, _)| key != GRANT_SECTION_KEY && is_uncuttable(key));
+    top.chain(tagged.iter().filter(|(key, _)| is_critical(key)))
+        .filter_map(|(key, value)| entry_cost(key, value))
+        .fold(0usize, usize::saturating_add)
+}
+
+/// What one carried entry costs on the wire: its value plus its key. `None` when
+/// [`encoded_len`] cannot measure the value, which [`encode`] then refuses under
+/// its own verdict.
+fn entry_cost(key: &str, value: &Value) -> Option<usize> {
+    Some(encoded_len(value).ok()? + encoded_key_len(key))
+}
 
 /// The IPFS single-block ceiling every published block must fit: `block/put`
 /// refuses anything larger (blueprint/api.md), so a bigger record is authorable
@@ -161,16 +213,15 @@ pub fn encode_envelope_within(
 /// Largest first, so the fewest fields go and one pass relieves the pressure
 /// rather than leaving the next edit to cut again. That is a *count* bound, not
 /// a byte bound: a party padding a record below the size of an honest field can
-/// aim the first cut at it. What keeps that from mattering is that no cuttable
-/// field carries a trust decision — the two that do are [`UNCUTTABLE`] — and the
-/// fix for the day one does is a marker the field carries on the wire, not a
-/// ranking this side can guess.
+/// aim the first cut at it. What keeps that from mattering is that a field
+/// carrying a trust decision says so on the wire with [`CRITICAL_KEY_PREFIX`],
+/// which no ranking this side could guess.
 fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> CarriedCut {
     // `entries()` is canonically ordered and the sort is stable, so ranking on
     // the cost alone is deterministic without carrying the keys along.
-    let mut ranked: Vec<(usize, bool, usize)> = entry_costs(&env.unknown, UNCUTTABLE)
+    let mut ranked: Vec<(usize, bool, usize)> = entry_costs(&env.unknown, is_uncuttable)
         .map(|(cost, index)| (cost, false, index))
-        .chain(entry_costs(&env.epoch_tag_unknown, &[]).map(|(cost, index)| (cost, true, index)))
+        .chain(entry_costs(&env.epoch_tag_unknown, is_critical).map(|(c, i)| (c, true, i)))
         .collect();
     ranked.sort_by_key(|&(cost, ..)| core::cmp::Reverse(cost));
 
@@ -197,30 +248,37 @@ fn cut_carried_unknown(env: &mut Envelope, excess: usize) -> CarriedCut {
 }
 
 /// What each cuttable field costs on the wire, with its index in `fields`, less
-/// the `protected` names this set must not give up.
+/// the entries `protected` holds back.
 /// [`encode_envelope`] runs first and refuses anything [`encoded_len`] cannot
 /// measure, so an unmeasurable field never reaches the ranking.
-fn entry_costs<'a>(
-    fields: &'a PreservedFields,
-    protected: &'a [&str],
-) -> impl Iterator<Item = (usize, usize)> + 'a {
+fn entry_costs(
+    fields: &PreservedFields,
+    protected: impl Fn(&str) -> bool,
+) -> impl Iterator<Item = (usize, usize)> {
     fields
         .entries()
         .iter()
         .enumerate()
-        .filter(move |(_, (key, _))| !protected.contains(&key.as_str()))
-        .filter_map(|(index, (key, value))| {
-            Some((encoded_len(value).ok()? + encoded_key_len(key), index))
-        })
+        .filter(move |(_, (key, _))| !protected(key))
+        .filter_map(|(index, (key, value))| Some((entry_cost(key, value)?, index)))
 }
 
 /// Encode an envelope to its canonical det-CBOR plaintext.
+///
+/// Release-active and symmetric with [`decode_envelope`] on the critical-bytes
+/// budget, so a release build never mints a record its own decoder refuses
+/// (AGENTS.md encode/decode symmetry rule).
 pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
     // [`merge_unknown`] skips a carried key that collides with a typed one, so
     // without this the block would decode back to a different envelope than the
     // one encoded — and a cut would budget for bytes never on the wire.
     assert_unknown_disjoint(&env.unknown, ENVELOPE_KNOWN)?;
     assert_unknown_disjoint(&env.epoch_tag_unknown, EPOCH_TAG_KNOWN)?;
+    assert_within_bound(
+        CRITICAL_CARRIED_CHECK,
+        critical_carried_len(env.unknown.entries(), env.epoch_tag_unknown.entries()),
+        MAX_CRITICAL_CARRIED_BYTES,
+    )?;
     let mut epoch_tag = Map::new();
     epoch_tag.insert("epoch", Value::Unsigned(env.epoch));
     epoch_tag.insert("scope", Value::Bytes(env.scope.to_vec()));
@@ -524,18 +582,14 @@ mod truncation_tests {
         fields.entries().iter().map(|(k, _)| k.as_str()).collect()
     }
 
-    /// The exact limit an envelope carrying `unknown` and `epoch_tag_unknown`
-    /// meets — so each case states the set it wants to survive rather than a
-    /// number that drifts with the typed fields.
+    /// Each case states the set it wants to survive rather than a number that
+    /// drifts with the typed fields.
     fn limit_carrying(unknown: PreservedFields, epoch_tag_unknown: PreservedFields) -> usize {
         encode_envelope(&envelope(unknown, epoch_tag_unknown))
             .expect("encodes")
             .len()
     }
 
-    /// The whole contract in one: the block comes back within the limit, the
-    /// envelope is left holding exactly what that block encodes, and the cut
-    /// took the fields that overflowed rather than the set.
     #[test]
     fn a_carried_set_over_the_limit_is_cut_to_fit_rather_than_refused() {
         let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
@@ -565,9 +619,6 @@ mod truncation_tests {
         assert_eq!(block, encode_envelope(&before).expect("encodes"));
     }
 
-    /// The scope-root marker and the write plane's payload are protocol-bearing:
-    /// cutting either publishes a record the reader rejects outright, which is
-    /// the refusal the cut exists to avoid. Over the limit is where it stays.
     #[test]
     fn the_protocol_bearing_carried_fields_are_never_cut() {
         let limit = limit_carrying(PreservedFields::new(), PreservedFields::new());
@@ -580,10 +631,7 @@ mod truncation_tests {
         assert_eq!(keys(&env.unknown), vec!["writeSealed", "grantSection"]);
     }
 
-    /// The protection is the top-level names' alone. A reader looks for either
-    /// under `unknown`, so the same name inside `epochTag` bears no protocol —
-    /// honouring it there would leave a publisher an uncuttable field to pad
-    /// with, wedging every later re-author at the name behind `HeadTooLarge`.
+    /// The top-level scoping of [`UNCUTTABLE_KEYS`].
     #[test]
     fn a_protocol_bearing_name_inside_the_epoch_tag_is_still_cuttable() {
         for key in ["grantSection", "writeSealed"] {
@@ -610,9 +658,6 @@ mod truncation_tests {
         assert_eq!(keys(&env.unknown), vec!["small"]);
     }
 
-    /// One pass covers the whole excess — cutting entry by entry against an
-    /// attacker-sized set would be quadratic — so what the ranking must get
-    /// right is that it stops as soon as the budget is met and no sooner.
     #[test]
     fn a_budget_no_single_field_covers_takes_as_many_as_it_needs_and_no_more() {
         let limit = limit_carrying(fields(&[("a", 64), ("b", 64)]), PreservedFields::new());
@@ -639,8 +684,6 @@ mod truncation_tests {
         assert_eq!(cut_once(), cut_once());
     }
 
-    /// A cut destroys data under pressure someone else applied, so what it took
-    /// has to be reportable rather than inferable.
     #[test]
     fn a_cut_reports_the_carried_keys_it_dropped() {
         let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
@@ -701,5 +744,177 @@ mod truncation_tests {
         assert_eq!(cut.len(), 2);
         assert!(env.unknown.is_empty() && env.epoch_tag_unknown.is_empty());
         assert_eq!(decode_envelope(&block).expect("decodes"), env);
+    }
+
+    /// The marker's whole point: a field minted after this build shipped still
+    /// declares itself protocol-bearing.
+    #[test]
+    fn a_marked_carried_field_survives_a_cut_that_takes_everything_else() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}revocationPin");
+        let limit = limit_carrying(fields(&[(&marked, 64)]), PreservedFields::new());
+        let mut env = envelope(
+            fields(&[(&marked, 64), ("bloat", 4096), ("mid", 512)]),
+            fields(&[("tagBloat", 4096)]),
+        );
+        let (block, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+        assert!(block.len() <= limit);
+        assert_eq!(keys(&env.unknown), vec![marked.as_str()]);
+        assert!(env.epoch_tag_unknown.is_empty());
+        assert!(
+            !cut.contains(&marked),
+            "a marked field is never reported cut"
+        );
+    }
+
+    /// Unlike the grandfathered names, the marker is honoured inside `epochTag`
+    /// too — the budget, not cuttability, is what bounds what it can cost there.
+    #[test]
+    fn a_marked_epoch_tag_field_is_uncuttable() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}pin");
+        let limit = limit_carrying(PreservedFields::new(), PreservedFields::new());
+        let mut env = envelope(PreservedFields::new(), fields(&[(&marked, 512)]));
+        let (block, cut) = encode_envelope_within(&mut env, limit).expect("encodes");
+        assert!(block.len() > limit, "the caller refuses; the cut does not");
+        assert!(cut.is_empty());
+        assert_eq!(keys(&env.epoch_tag_unknown), vec![marked.as_str()]);
+    }
+
+    /// Marking padding critical is the wedge the budget exists to deny: over the
+    /// budget the record is refused at both ends, never carried forever.
+    #[test]
+    fn critical_padding_past_the_budget_is_refused_symmetrically() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}pad");
+        let env = envelope(
+            fields(&[(&marked, MAX_CRITICAL_CARRIED_BYTES)]),
+            PreservedFields::new(),
+        );
+        assert_eq!(
+            encode_envelope(&env).unwrap_err().check(),
+            "too-many-structures",
+            "encode refuses, release-active"
+        );
+
+        // The same bytes on the wire: built through the raw codec, since the
+        // envelope encoder now refuses to mint them.
+        let mut m = decode(
+            &encode_envelope(&envelope(PreservedFields::new(), PreservedFields::new())).unwrap(),
+        )
+        .unwrap()
+        .as_map()
+        .unwrap()
+        .clone();
+        m.insert(
+            marked.as_str(),
+            Value::Bytes(vec![0xab; MAX_CRITICAL_CARRIED_BYTES]),
+        );
+        let bytes = encode(&Value::Map(m)).unwrap();
+        assert_eq!(
+            decode_envelope(&bytes).unwrap_err().check(),
+            "too-many-structures",
+            "decode refuses the same bytes"
+        );
+    }
+
+    #[test]
+    fn the_grant_section_is_outside_the_critical_budget() {
+        let mut env = envelope(PreservedFields::new(), PreservedFields::new());
+        set_grant_section(&mut env, vec![0u8; MAX_CRITICAL_CARRIED_BYTES * 2]);
+        let bytes = encode_envelope(&env).expect("a large section is not budgeted here");
+        assert_eq!(decode_envelope(&bytes).expect("decodes"), env);
+    }
+
+    /// Uncuttable and unbounded on its own, so the budget is what governs it.
+    #[test]
+    fn the_write_sealed_field_is_inside_the_critical_budget() {
+        let env = envelope(
+            fields(&[("writeSealed", MAX_CRITICAL_CARRIED_BYTES)]),
+            PreservedFields::new(),
+        );
+        assert_eq!(
+            encode_envelope(&env).unwrap_err().check(),
+            "too-many-structures"
+        );
+    }
+
+    /// An unmarked carried field costs the budget nothing — the cut still
+    /// governs it.
+    #[test]
+    fn an_unmarked_carried_field_is_not_budgeted() {
+        let env = envelope(
+            fields(&[("bulk", MAX_CRITICAL_CARRIED_BYTES * 2)]),
+            fields(&[("tagBulk", MAX_CRITICAL_CARRIED_BYTES * 2)]),
+        );
+        let bytes = encode_envelope(&env).expect("encodes");
+        assert_eq!(decode_envelope(&bytes).expect("decodes"), env);
+    }
+
+    /// The marker is honoured inside `epochTag`, so the budget must reach there
+    /// too — otherwise the level that gets no name-based protection is exactly
+    /// the level a publisher can pad without limit.
+    #[test]
+    fn critical_padding_inside_the_epoch_tag_is_budgeted_too() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}pad");
+        let env = envelope(
+            PreservedFields::new(),
+            fields(&[(marked.as_str(), MAX_CRITICAL_CARRIED_BYTES)]),
+        );
+        assert_eq!(
+            encode_envelope(&env).unwrap_err().check(),
+            "too-many-structures"
+        );
+    }
+
+    /// One budget spanning both levels, not one budget each — otherwise a
+    /// publisher takes twice the allowance by splitting it.
+    #[test]
+    fn the_critical_budget_is_shared_across_both_levels() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}p");
+        let half = MAX_CRITICAL_CARRIED_BYTES / 2;
+        let env = envelope(
+            fields(&[(marked.as_str(), half)]),
+            fields(&[(marked.as_str(), half)]),
+        );
+        assert_eq!(
+            encode_envelope(&env).unwrap_err().check(),
+            "too-many-structures"
+        );
+    }
+
+    /// The budget admits its last byte and refuses the next — the boundary is
+    /// where a second implementation reading the frozen number goes wrong.
+    #[test]
+    fn the_critical_budget_admits_exactly_its_last_byte() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}p");
+        // key ("!p") costs 1 + 2; a value of this length costs 3 + len.
+        let exact = MAX_CRITICAL_CARRIED_BYTES - 3 - 3;
+        let at = envelope(fields(&[(marked.as_str(), exact)]), PreservedFields::new());
+        let bytes = encode_envelope(&at).expect("exactly at the budget encodes");
+        assert_eq!(decode_envelope(&bytes).expect("and decodes"), at);
+
+        let over = envelope(
+            fields(&[(marked.as_str(), exact + 1)]),
+            PreservedFields::new(),
+        );
+        assert_eq!(
+            encode_envelope(&over).unwrap_err().check(),
+            "too-many-structures",
+            "one byte past the budget refuses"
+        );
+    }
+
+    /// Marked and unmarked keys interleave in one canonical map: the encoder
+    /// refuses an out-of-order map, so the round trip is the assertion that a
+    /// reserved prefix costs the wire's key ordering nothing.
+    #[test]
+    fn a_marked_key_sorts_canonically_beside_unmarked_ones() {
+        let carried = fields(&[
+            (&format!("{CRITICAL_KEY_PREFIX}a"), 8),
+            (&format!("{CRITICAL_KEY_PREFIX}zzz"), 8),
+            ("mid", 8),
+            ("z", 8),
+        ]);
+        let env = envelope(carried, PreservedFields::new());
+        let bytes = encode_envelope(&env).expect("encodes canonically");
+        assert_eq!(decode_envelope(&bytes).expect("decodes"), env);
     }
 }

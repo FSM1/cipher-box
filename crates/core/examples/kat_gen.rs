@@ -33,10 +33,11 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
-    ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
-    HistoryLinkPayload, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_WRITE_BODY_BYTES,
-    MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V,
+    CRITICAL_KEY_PREFIX, ChildRef, ChildScopeRef, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES,
+    GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES,
+    MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
     OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
     OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields, ReadBody,
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
@@ -44,21 +45,22 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
     STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
-    WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, ascent_link_sig_body, build_aad, content_key_aad,
-    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
-    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
-    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
-    encode_read_body, encode_recipient_binding, encode_write_body, op_record_aad, open_ascent_link,
-    open_content_key, open_grant_blob, open_history_link, open_op_record, open_owner_blob,
-    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
-    open_settings_record, owner_local_aad, seal_ascent_link, seal_content_key, seal_grant_blob,
-    seal_history_link, seal_op_record, seal_owner_blob, seal_owner_history_link, seal_owner_local,
-    seal_owner_write_blob, seal_read_body, seal_settings_record, settings_record_aad,
-    sign_grant_set, sign_recipient_binding, sign_structure, structure_sig_preimage,
-    verify_grant_set, verify_recipient_binding, verify_structure,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput,
+    UNCUTTABLE_KEYS, Version, WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, ascent_link_sig_body,
+    build_aad, content_key_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
+    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
+    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_blob_payload,
+    encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload,
+    encode_owner_write_blob_payload, encode_read_body, encode_recipient_binding, encode_write_body,
+    op_record_aad, open_ascent_link, open_content_key, open_grant_blob, open_history_link,
+    open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
+    open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad, seal_ascent_link,
+    seal_content_key, seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob,
+    seal_owner_history_link, seal_owner_local, seal_owner_write_blob, seal_read_body,
+    seal_settings_record, settings_record_aad, sign_grant_set, sign_recipient_binding,
+    sign_structure, structure_sig_preimage, verify_grant_set, verify_recipient_binding,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -525,6 +527,10 @@ struct GrantSection {
     /// re-seal headroom reserved between it and the head-block ceiling.
     write_body_max_bytes: usize,
     write_body_reseal_headroom_bytes: usize,
+    /// The frozen total encoded-size bound on a grant section, and the envelope
+    /// headroom reserved between it and the head-block ceiling.
+    grant_section_max_bytes: usize,
+    grant_section_envelope_headroom_bytes: usize,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
@@ -745,6 +751,12 @@ struct GrantSetRejectVector {
 struct SealSection {
     aad_domain: String,
     read_body_struct_tag: u8,
+    critical_key_prefix: String,
+    critical_carried_max_bytes: usize,
+    /// The reserved uncuttable names, uncuttable by name rather than by marker.
+    /// Frozen beside the prefix: an implementation honouring only the marker
+    /// would cut these and publish a record every reader rejects.
+    uncuttable_keys: Vec<String>,
     seal: FileCount,
     open_reject: RejectSection,
     read_body_accept: FileCount,
@@ -2197,6 +2209,9 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
         seal: SealSection {
             aad_domain: AAD_DOMAIN.to_string(),
             read_body_struct_tag: STRUCT_TAG_READ_BODY,
+            critical_key_prefix: CRITICAL_KEY_PREFIX.to_string(),
+            critical_carried_max_bytes: MAX_CRITICAL_CARRIED_BYTES,
+            uncuttable_keys: UNCUTTABLE_KEYS.iter().map(|k| (*k).to_string()).collect(),
             seal: FileCount {
                 file: "vectors/seal/seal.json".to_string(),
                 count: m.seal.len(),
@@ -2454,6 +2469,8 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         write_history_link_struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
         write_body_max_bytes: MAX_WRITE_BODY_BYTES,
         write_body_reseal_headroom_bytes: WRITE_BODY_RESEAL_HEADROOM_BYTES,
+        grant_section_max_bytes: MAX_GRANT_SECTION_BYTES,
+        grant_section_envelope_headroom_bytes: GRANT_SECTION_ENVELOPE_HEADROOM_BYTES,
         write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
         write_body_reject: reject("write_body_reject", &g.write_body_reject),
         recipient_binding_accept: file_count(
@@ -3341,6 +3358,45 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
         read_body: hexstr(&encode_read_body(&body).unwrap()),
     });
 
+    // A carried field marked critical: it round-trips like any other carried
+    // field, and the marker costs the canonical key ordering nothing.
+    let mut m = decode(&encode_envelope(&env).unwrap())
+        .unwrap()
+        .as_map()
+        .unwrap()
+        .clone();
+    m.insert(
+        format!("{CRITICAL_KEY_PREFIX}revocationPin").as_str(),
+        Value::Bytes(b"pinned".to_vec()),
+    );
+    let bytes = encode(&Value::Map(m)).unwrap();
+    let decoded = decode_envelope(&bytes).expect("a marked carried field decodes");
+    assert_eq!(
+        encode_envelope(&decoded).unwrap(),
+        bytes,
+        "envelope accept with-critical-field: not byte-stable"
+    );
+    assert_eq!(
+        decoded.unknown.len(),
+        1,
+        "the marked field must be preserved"
+    );
+    assert_eq!(
+        open_read_body(&decoded, &p.key).expect("opens despite the marked field"),
+        body,
+        "envelope accept with-critical-field: open mismatch"
+    );
+    assert!(
+        names.insert("with-critical-field".to_string()),
+        "duplicate envelope accept with-critical-field"
+    );
+    out.push(EnvelopeAcceptVector {
+        name: "with-critical-field".to_string(),
+        key: hexstr(&p.key),
+        envelope: hexstr(&bytes),
+        read_body: hexstr(&encode_read_body(&body).unwrap()),
+    });
+
     out
 }
 
@@ -3425,6 +3481,34 @@ fn build_envelope_reject() -> Vec<RejectVector> {
                 m.insert("epochTag", Value::Unsigned(0));
             }),
             "unexpected-type",
+            "malformed",
+        ),
+        // Marking padding critical is what the budget denies: the field is
+        // uncuttable by construction, so unbounded it wedges the name forever.
+        (
+            "critical-carried-over-budget",
+            mutated(&|m| {
+                m.insert(
+                    format!("{CRITICAL_KEY_PREFIX}pad").as_str(),
+                    Value::Bytes(vec![0xab; MAX_CRITICAL_CARRIED_BYTES]),
+                );
+            }),
+            "too-many-structures",
+            "malformed",
+        ),
+        // The same budget reaches inside `epochTag`, so an implementation that
+        // charges only the top level is caught here rather than in the field.
+        (
+            "critical-carried-over-budget-in-epoch-tag",
+            mutated(&|m| {
+                let mut tag = m.get("epochTag").unwrap().as_map().unwrap().clone();
+                tag.insert(
+                    format!("{CRITICAL_KEY_PREFIX}pad").as_str(),
+                    Value::Bytes(vec![0xab; MAX_CRITICAL_CARRIED_BYTES]),
+                );
+                m.insert("epochTag", Value::Map(tag));
+            }),
+            "too-many-structures",
             "malformed",
         ),
     ];

@@ -25,8 +25,8 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
     ReadBody, Version, decode_grant_section, encode_envelope_within, encode_grant_section,
-    grant_section_bytes, has_grant_section, seal_read_body, set_grant_section,
-    verify_grant_set_bound,
+    grant_section_bytes, has_grant_section, is_grant_section_over_bound, seal_read_body,
+    set_grant_section, verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -76,6 +76,13 @@ pub enum AuthorError {
         /// The enforced ceiling.
         limit: usize,
     },
+    /// The authored grant section is past the codec's frozen total bound
+    /// ([`cipherbox_core::seal::MAX_GRANT_SECTION_BYTES`]) — bytes this build's
+    /// own decoder always rejects. Named apart from the generic encode fold so
+    /// an operator can tell an over-bound section from an encoder fault; the
+    /// authoring most likely to meet it is the rotation that revokes a writer
+    /// whose bytes inflated the section.
+    GrantSectionTooLarge,
 }
 
 impl AuthorError {
@@ -100,6 +107,7 @@ impl AuthorError {
             Self::SectionSignatureInvalid => "structure-signature-invalid",
             Self::Seal(e) => e.check(),
             Self::HeadTooLarge { .. } => "head-too-large",
+            Self::GrantSectionTooLarge => "grant-section-too-large",
         }
     }
 
@@ -117,7 +125,7 @@ impl AuthorError {
             | Self::CommitmentNameMismatch
             | Self::CommitmentSignatureInvalid
             | Self::SectionSignatureInvalid => true,
-            Self::Seal(_) | Self::HeadTooLarge { .. } => false,
+            Self::Seal(_) | Self::HeadTooLarge { .. } | Self::GrantSectionTooLarge => false,
         }
     }
 }
@@ -133,6 +141,16 @@ impl core::fmt::Display for AuthorError {
 }
 
 impl std::error::Error for AuthorError {}
+
+/// Split the section encode's own total-size refusal out of the generic encode
+/// fold, so the oversize verdict reaches a caller under its own name.
+fn grant_section_encode_error(error: CodecError) -> AuthorError {
+    if is_grant_section_over_bound(&error) {
+        AuthorError::GrantSectionTooLarge
+    } else {
+        AuthorError::Seal(error)
+    }
+}
 
 /// A sealed record head, ready for the pre-publish preflight: the encoded
 /// envelope block and the CID the published record's `Value` will point at.
@@ -215,7 +233,7 @@ pub fn author_scope_root_with_section(
     let mut envelope = seal(&authoring)?;
     set_grant_section(
         &mut envelope,
-        encode_grant_section(section).map_err(AuthorError::Seal)?,
+        encode_grant_section(section).map_err(grant_section_encode_error)?,
     );
     check_scope_root(&envelope, name, owner_identity)?;
     encode(envelope)
@@ -674,6 +692,33 @@ mod tests {
         );
     }
 
+    /// An over-bound section is named apart from the generic encode fold: the
+    /// authoring most likely to meet it is the rotation that revokes the writer
+    /// whose bytes inflated the section, and that must not read as a codec fault.
+    #[test]
+    fn an_over_bound_grant_section_is_named_apart_from_an_encoder_fault() {
+        let oversize = cipherbox_core::error::Malformed::TooManyStructures {
+            collection: "grantSection",
+            count: cipherbox_core::seal::MAX_GRANT_SECTION_BYTES + 1,
+            limit: cipherbox_core::seal::MAX_GRANT_SECTION_BYTES,
+        };
+        assert_eq!(
+            grant_section_encode_error(oversize.into()).check(),
+            "grant-section-too-large"
+        );
+
+        // A different collection at the same verdict stays the generic fold.
+        let other = cipherbox_core::error::Malformed::TooManyStructures {
+            collection: "grantBlobs",
+            count: 2,
+            limit: 1,
+        };
+        assert_eq!(
+            grant_section_encode_error(other.into()).check(),
+            "too-many-structures"
+        );
+    }
+
     /// Every trust refusal carries a distinct stable name, and only the trust
     /// class is charged by the write plane — a codec or size refusal is a
     /// property of the body this pass built, which a rebase may not reproduce.
@@ -687,6 +732,7 @@ mod tests {
             (AuthorError::CommitmentSignatureInvalid, true),
             (AuthorError::SectionSignatureInvalid, true),
             (AuthorError::HeadTooLarge { size: 1, limit: 0 }, false),
+            (AuthorError::GrantSectionTooLarge, false),
         ];
         let mut names = std::collections::BTreeSet::new();
         for (error, trust) in &refusals {

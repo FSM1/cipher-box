@@ -26,7 +26,7 @@
 use std::collections::BTreeSet;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::{Map, Value, decode, encode, encoded_len};
 use crate::error::{CodecError, Malformed};
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use crate::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
@@ -37,7 +37,9 @@ use super::body::{
     PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
+use super::envelope::{MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES};
 use super::grant::{GrantSetCommitment, decode_grant_set_commitment, encode_grant_set_commitment};
+use super::write_body::MAX_WRITE_BODY_BYTES;
 
 /// A grant blob as published in the grant section: its recipient blinded `tag`
 /// (the lookup key and the structure signature's `recipientTag`), the HPKE
@@ -288,6 +290,73 @@ pub const MAX_HISTORY_LINKS: usize = 256;
 /// encoder refuses.
 pub const MAX_GRANT_BLOBS: usize = 1024;
 
+/// The frozen headroom reserved above [`MAX_GRANT_SECTION_BYTES`] for the
+/// envelope a section rides inside: its typed fields, the section's own key, and
+/// the carried critical fields
+/// [`MAX_CRITICAL_CARRIED_BYTES`](super::MAX_CRITICAL_CARRIED_BYTES) budgets.
+///
+/// A band left for those fields, not a proof they fit: `readSealed` carries no
+/// byte bound of its own, so the whole-record ceiling stays the real backstop.
+pub const GRANT_SECTION_ENVELOPE_HEADROOM_BYTES: usize = 48 * 1024;
+
+/// The frozen bound on a grant section's **total encoded size**.
+///
+/// The section's per-collection bounds cap counts, not bytes: every sealed blob
+/// is opaque and every level carries a preserved `unknown` map, and none of
+/// those bytes is covered by the grant-set commitment or by a per-structure
+/// signature. Unbounded, a committed writer inflates the framing once and every
+/// later re-author of that root carries it verbatim past the block ceiling.
+///
+/// The value sits in the one band its neighbours leave; the assertions below
+/// hold it there. It narrows the head-size lever rather than closing it — the
+/// section's own maxima and the write-body's are not jointly reachable inside
+/// one block, and the whole-record ceiling stays the engine's backstop.
+pub const MAX_GRANT_SECTION_BYTES: usize = MAX_BLOCK_BYTES - GRANT_SECTION_ENVELOPE_HEADROOM_BYTES;
+
+// The section's bound is defined against its neighbours on both sides, so these
+// are one wire reservation rather than independent tunings. Compile-time,
+// because a build that breaks the chain must not run at all.
+//
+// Only the relations that constrain a free choice are asserted: with
+// `MAX_GRANT_SECTION_BYTES` *defined* as the block ceiling less its headroom,
+// restating that subtraction would assert an identity that no retune can fail.
+
+/// The floor: the sealed write-body rides inside the section, so a bound at or
+/// under the write-body's would refuse a body the write-body codec mints — a
+/// produce-side wedge one layer up.
+///
+/// The 1 KiB is headroom over the ~570 bytes such a section actually needs above
+/// the body — the seal's nonce and tag, the `writeBody` entry, the structure
+/// signature, and the required sibling fields; the executed floor is
+/// `a_maximal_write_body_still_frames_inside_the_section_bound`.
+///
+/// Since the gap between the two bounds is exactly the gap between the two
+/// headrooms, this is equally the re-seal constraint: the envelope framing above
+/// a section must leave the section framing above a carried write-body inside
+/// [`WRITE_BODY_RESEAL_HEADROOM_BYTES`](super::WRITE_BODY_RESEAL_HEADROOM_BYTES).
+const _: () = assert!(MAX_GRANT_SECTION_BYTES >= MAX_WRITE_BODY_BYTES + 1024);
+
+/// Carried critical fields are part of that envelope framing, so a maximal
+/// critical set must leave room for the envelope's typed fields beside it.
+const _: () = assert!(MAX_CRITICAL_CARRIED_BYTES < GRANT_SECTION_ENVELOPE_HEADROOM_BYTES);
+
+/// The collection label the section's total-size refusal reports. Private to
+/// core; consumers that must tell it from the per-collection bounds it shares
+/// `too-many-structures` with go through [`is_grant_section_over_bound`].
+const GRANT_SECTION_SIZE_CHECK: &str = "grantSection";
+
+/// True when `e` is the section's total-size refusal rather than one of the
+/// per-collection bounds that raise the same check name.
+pub fn is_grant_section_over_bound(e: &CodecError) -> bool {
+    matches!(
+        e,
+        CodecError::Malformed(Malformed::TooManyStructures {
+            collection: GRANT_SECTION_SIZE_CHECK,
+            ..
+        })
+    )
+}
+
 /// Release-active uniqueness check over history-link sealed bytes, symmetric
 /// across decode and encode. Each epoch mints one link under a fresh nonce over
 /// a distinct payload, so equal sealed bytes are never an honest rotator's
@@ -320,6 +389,14 @@ const GRANT_SECTION_KNOWN: &[&str] = &[
 /// The transient decoded tree copies the whole signed blob set, so it is
 /// scrubbed on drop.
 pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
+    // Before the codec walks anything: the per-collection bounds below cap
+    // counts, and the preserved-unknown maps at every level are open by
+    // construction, so the total is the only cap on the walk itself.
+    assert_within_bound(
+        GRANT_SECTION_SIZE_CHECK,
+        bytes.len(),
+        MAX_GRANT_SECTION_BYTES,
+    )?;
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
@@ -371,15 +448,19 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
 ///
 /// Release-active fail-closed guards, symmetric with [`decode_grant_section`]:
 /// a duplicate grant-blob tag (or a duplicate-tag commitment), a collection past
-/// its frozen bound, or a repeated history link each returns `Err` with the same
-/// verdict the decoder raises, so a release build never hands back bytes its own
-/// decoder rejects (AGENTS.md encode/decode symmetry rule).
+/// its frozen bound, a repeated history link, or a total past
+/// [`MAX_GRANT_SECTION_BYTES`] each returns `Err` with the same verdict the
+/// decoder raises, so a release build never hands back bytes its own decoder
+/// rejects (AGENTS.md encode/decode symmetry rule).
 pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecError> {
     // `ascentLink`/`ownerWriteBlob` are optional, so `merge_unknown`'s
     // presence-based precedence does not cover them.
     assert_unknown_disjoint(&section.unknown, GRANT_SECTION_KNOWN)?;
-    // Bounds before the uniqueness walks, the order the decoder checks them in,
-    // so a value violating both gets the same verdict from either side.
+    // Count bounds before the uniqueness walks, the order the decoder checks
+    // that pair in, so a value violating both gets the same verdict from either
+    // side. The total-size bound is measured last here — it needs the assembled
+    // value the decoder gets for free — so a section over the total *and*
+    // otherwise malformed reports the other defect from this side.
     assert_within_bound("grantBlobs", section.grant_blobs.len(), MAX_GRANT_BLOBS)?;
     assert_within_bound(
         "historyLinks",
@@ -427,6 +508,13 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     merge_unknown(&mut m, &section.unknown);
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
+    // Measured rather than encoded first: an over-bound section never
+    // materializes the buffer it would only be refused and wiped for.
+    assert_within_bound(
+        GRANT_SECTION_SIZE_CHECK,
+        encoded_len(guard.0)?,
+        MAX_GRANT_SECTION_BYTES,
+    )?;
     encode(guard.0)
 }
 
@@ -779,6 +867,69 @@ mod tests {
             encode_grant_section(&decoded).unwrap(),
             extended,
             "unknown preserved byte-stable"
+        );
+    }
+
+    /// The residual the byte bound closes: the section's counts are bounded but
+    /// its framing was not, so a committed writer could park bulk in a field no
+    /// signature covers and every later re-author of the root carried it. Both
+    /// ends refuse it, release-active, on the same verdict.
+    #[test]
+    fn a_section_past_the_byte_bound_is_refused_symmetrically() {
+        let mut section = sample();
+        section.unknown.insert(
+            "pad".to_string(),
+            Value::Bytes(vec![0xab; MAX_GRANT_SECTION_BYTES]),
+        );
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "too-many-structures",
+            "encode refuses, release-active"
+        );
+
+        // The length check precedes the walk, so any over-bound buffer is
+        // refused before the decoder allocates anything from it.
+        assert_eq!(
+            decode_grant_section(&vec![0xab; MAX_GRANT_SECTION_BYTES + 1])
+                .unwrap_err()
+                .check(),
+            "too-many-structures",
+            "decode refuses an over-bound buffer without walking it"
+        );
+    }
+
+    /// The floor the const assertion states, executed: a write-body at its own
+    /// frozen bound must still frame inside a section, or the two bounds
+    /// contradict and a legal body has nowhere to sit.
+    #[test]
+    fn a_maximal_write_body_still_frames_inside_the_section_bound() {
+        let mut section = sample();
+        // A sealed blob is `nonce(24) || ciphertext||tag(16)` over the plaintext.
+        section.write_body.sealed = vec![0xab; MAX_WRITE_BODY_BYTES + 24 + 16];
+        section.grant_blobs.clear();
+        section.history_links.clear();
+        let bytes = encode_grant_section(&section).expect("the floor clears");
+        assert!(bytes.len() <= MAX_GRANT_SECTION_BYTES);
+        assert_eq!(decode_grant_section(&bytes).expect("and decodes"), section);
+    }
+
+    /// The joint ceiling the section bound imposes, pinned so it is a decision
+    /// rather than an accident: a maximal write-body and a full history window
+    /// are not both reachable inside one section.
+    #[test]
+    fn a_maximal_write_body_and_a_full_history_window_are_not_jointly_reachable() {
+        let mut section = sample();
+        section.write_body.sealed = vec![0xab; MAX_WRITE_BODY_BYTES + 24 + 16];
+        section.history_links = (0..MAX_HISTORY_LINKS)
+            .map(|i| SignedSealed {
+                sealed: vec![i as u8; 143],
+                signature: [0x31; ED_SIG_LEN],
+                unknown: PreservedFields::new(),
+            })
+            .collect();
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "too-many-structures"
         );
     }
 }
