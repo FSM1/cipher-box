@@ -30,8 +30,8 @@ use cipherbox_engine::api::{
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
-    GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, SharePointer,
-    create_read_grant,
+    GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter,
+    SharePointer, create_read_grant,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1225,6 +1225,17 @@ impl CascadeResealResolver for LocalNet {
 impl ScopeRootPublisher for LocalNet {
     async fn publish_scope_root(
         &self,
+        _record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError> {
+        Ok(())
+    }
+}
+
+impl ScopeRootPromoter for LocalNet {
+    async fn promote_scope_root(
+        &self,
+        _parent: &ChildScopeRef,
+        _node: &NodeRef,
         _record: &ResealedScopeRoot,
     ) -> Result<(), RotationPublishError> {
         Ok(())
