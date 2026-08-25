@@ -529,6 +529,20 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
+      # The production CredentialStore against the real Secret Service, which
+      # ships on Linux desktops but is absent from a bare runner: gnome-keyring
+      # provides it, and an empty password unlocks the throwaway login keyring
+      # the daemon creates. The macOS and Windows legs run the same tests
+      # against their own native backends.
+      - name: Real OS keyring credential seam
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring dbus-x11
+          dbus-run-session -- bash -c '
+            printf "\n" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
+          '
+
   engine:
     name: Engine Tests
     needs: [changes, lint]
@@ -774,6 +788,12 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
+      # The production CredentialStore against the real Apple Keychain: the
+      # runner's login keychain is already unlocked, and each test takes a
+      # nonced service name so nothing collides or persists.
+      - name: Real OS keyring credential seam
+        run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
+
   cargo-windows:
     name: Cargo Check & Test (Windows)
     needs: [changes, lint]
@@ -800,6 +820,11 @@ jobs:
 
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
+
+      # The production CredentialStore against the real Windows Credential
+      # Manager, which needs no session unlock on a runner.
+      - name: Real OS keyring credential seam
+        run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
 
   # The live contract suite (blueprint/testing.md "The contract suite"): the
   # sdk-e2e descendant and the sole contract enforcement. It stands up the CI

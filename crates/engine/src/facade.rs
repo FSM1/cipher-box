@@ -3310,6 +3310,7 @@ where {
         let settings_hold = self.settings_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let content_profile = self.content_profile;
+        let storage_policy = self.storage_policy;
         let orphan_heads = self.orphan_heads.clone();
         let cancels = self.cancels.clone();
         let live_blocks = self.live_blocks.clone();
@@ -3554,6 +3555,7 @@ where {
                             gateway: &gateway,
                             placement: &decision,
                             profile: &profile,
+                            storage_policy: &storage_policy,
                             content_profile: &content_profile,
                             entropy: &entropy,
                             base: &base,

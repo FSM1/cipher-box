@@ -20,11 +20,13 @@ use std::collections::{BTreeMap, HashSet};
 
 use cipherbox_core::content::verify_cid;
 
+use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
+use crate::storage_policy::StoragePolicy;
 use crate::sync::drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
 };
@@ -119,8 +121,34 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
         .unwrap_or_default()
 }
 
+/// How many dead letters may be preserved at once, however small each one is.
+///
+/// The byte ceiling alone does not bound the record: a thousand tiny versions
+/// fit under it while making every orphan-GC pass expand a thousand roots.
+pub(crate) const MAX_PRESERVED_DEAD_LETTERS: usize = 16;
+
+/// What became of a dead letter's staged version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Preservation {
+    /// The version is still coherent, and its record is held.
+    Kept,
+    /// The version can never be reassembled, so nothing is held. The caller
+    /// owns the disposition: what this op already registered must be handed back
+    /// *before* the remainder is released, because the retire list is read from
+    /// the staged root manifest.
+    ContentGone,
+}
+
 /// Keep one dead letter's op record after it leaves the durable queue, so orphan
 /// GC keeps the blocks it names and the version stays openable.
+///
+/// Preserves only a version this store still holds **coherently**
+/// ([`version_is_coherent`]): a record naming blocks that can never be
+/// reassembled is [`Preservation::ContentGone`], which the caller reports as
+/// [`DeadLetterReason::ContentUnrecoverable`](crate::sync::rebase::DeadLetterReason::ContentUnrecoverable)
+/// and disposes of itself. Without that check the root's own presence keeps the
+/// prune from ever dropping such a record, so its remainder holds staging budget
+/// for the life of the device.
 ///
 /// Fails closed on a preserved record this build cannot read: overwriting it
 /// would drop the dead letters it already holds, and those are exactly what the
@@ -128,15 +156,117 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
     record: &[u8],
-) -> SeamResult<()> {
+    policy: &StoragePolicy,
+) -> SeamResult<Preservation> {
+    // Read before the release below: an unreadable preserved record must freeze
+    // the path, never let it destroy a version on the way past.
     let mut kept = read_preserved_dead_letters(store)
         .await?
         .ok_or_else(|| SeamError::new("preserve_dead_letter: unreadable preserved record"))?;
+    let root = record_content_root_cid(record)
+        .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
+    if let Some(root) = &root {
+        let staged: HashSet<Vec<u8>> = store.staged_keys().await?.into_iter().collect();
+        if !version_is_coherent(store, root, &staged).await {
+            return Ok(Preservation::ContentGone);
+        }
+    }
     if kept.iter().any(|held| held == record) {
-        return Ok(());
+        return Ok(Preservation::Kept);
     }
     kept.push(record.to_vec());
-    write_preserved_dead_letters(store, &kept).await
+    evict_over_budget(store, &mut kept, policy).await;
+    write_preserved_dead_letters(store, &kept).await?;
+    Ok(Preservation::Kept)
+}
+
+/// Whether `root_cid`'s version is still coherent, given the store's current key
+/// set: the leaves it has left form a **suffix** of the manifest.
+///
+/// The upload loop releases each leaf as it confirms, strictly in file order, so
+/// the blocks legitimately gone from a version are always a prefix — a leaf
+/// missing from the *middle* was released by nothing and is the condition the
+/// loop itself already reads as loss. Such a version can never be reassembled,
+/// and keeping it only spends the staging budget forever, since the root's own
+/// presence satisfies the prune.
+///
+/// A root that is gone, fails its own CID, or does not decode is not coherent
+/// either.
+async fn version_is_coherent<S: StagingStore>(
+    store: &S,
+    root_cid: &[u8],
+    staged: &HashSet<Vec<u8>>,
+) -> bool {
+    let Ok(Some(root_block)) = store.staged_bytes(root_cid).await else {
+        return false;
+    };
+    if verify_cid(root_cid, &root_block).is_err() {
+        return false;
+    }
+    let Ok(manifest) = decode_root(&root_block) else {
+        return false;
+    };
+    let mut held_one = false;
+    for leaf in manifest.leaf_cids.iter() {
+        if staged.contains(leaf.as_slice()) {
+            held_one = true;
+        } else if held_one {
+            return false;
+        }
+    }
+    true
+}
+
+/// The staged bytes one preserved version occupies: every leaf's sealed length
+/// plus the root block's, taken from the root manifest rather than by reading
+/// the leaves. Zero for a record naming no content, or a root the store lost.
+async fn preserved_version_bytes<S: StagingStore>(store: &S, record: &[u8]) -> u64 {
+    let Ok(Some(root)) = record_content_root_cid(record) else {
+        return 0;
+    };
+    let Ok(Some(root_block)) = store.staged_bytes(&root).await else {
+        return 0;
+    };
+    let Ok(manifest) = decode_root(&root_block) else {
+        return 0;
+    };
+    manifest
+        .size
+        .saturating_add((manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD))
+        .saturating_add(root_block.len() as u64)
+}
+
+/// Trim `kept` to the count and byte ceilings, dropping oldest first and
+/// releasing each evicted version's blocks so the budget is freed at once
+/// rather than a GC pass later. The list is append-ordered, so its head is the
+/// oldest entry.
+///
+/// The newest entry always survives, even alone over the byte ceiling: it is the
+/// one the user is about to be told about, and a single version is already
+/// bounded by the admission cap that let it stage at all.
+async fn evict_over_budget<S: StagingStore>(
+    store: &S,
+    kept: &mut Vec<Vec<u8>>,
+    policy: &StoragePolicy,
+) {
+    let budget = policy.preserved_budget_bytes();
+    let mut sizes = Vec::with_capacity(kept.len());
+    for record in kept.iter() {
+        sizes.push(preserved_version_bytes(store, record).await);
+    }
+    let mut total = sizes.iter().copied().fold(0u64, u64::saturating_add);
+    let mut evicted = 0usize;
+    while evicted + 1 < kept.len()
+        && (kept.len() - evicted > MAX_PRESERVED_DEAD_LETTERS || total > budget)
+    {
+        total = total.saturating_sub(sizes[evicted]);
+        evicted += 1;
+    }
+    for record in kept.drain(..evicted) {
+        if let Ok(Some(root)) = record_content_root_cid(&record) {
+            release_version_blocks(store, &root).await;
+        }
+    }
 }
 
 /// The dead letters the store holds. `None` when the record is present but not
@@ -271,22 +401,37 @@ pub(crate) async fn collect_orphans<S: StagingStore>(
     prune_preserved_dead_letters(store).await;
 }
 
-/// Drop preserved dead letters whose blocks the store no longer holds.
+/// Drop preserved dead letters whose version the store no longer holds whole,
+/// releasing what is left of each. A partial version is as unreassemblable as an
+/// absent one, and its surviving blocks would otherwise sit in the staging
+/// budget for the life of the device.
 async fn prune_preserved_dead_letters<S: StagingStore>(store: &S) {
     let Ok(Some(kept)) = read_preserved_dead_letters(store).await else {
         return;
     };
+    let Ok(staged) = store.staged_keys().await else {
+        return;
+    };
+    let staged: HashSet<Vec<u8>> = staged.into_iter().collect();
     let mut live = Vec::with_capacity(kept.len());
+    let mut hollow = Vec::new();
     for record in &kept {
         let Ok(Some(root)) = record_content_root_cid(record) else {
             continue;
         };
-        if matches!(store.staged_bytes(&root).await, Ok(Some(_))) {
+        if version_is_coherent(store, &root, &staged).await {
             live.push(record.clone());
+        } else {
+            hollow.push(root);
         }
     }
-    if live.len() != kept.len() {
-        let _ = write_preserved_dead_letters(store, &live).await;
+    if live.len() == kept.len() {
+        return;
+    }
+    if write_preserved_dead_letters(store, &live).await.is_ok() {
+        for root in hollow {
+            release_version_blocks(store, &root).await;
+        }
     }
 }
 
@@ -384,6 +529,15 @@ mod tests {
 
     static OWNER: LazyLock<X25519Secret> = LazyLock::new(|| X25519Secret::from_scalar([42; 32]));
 
+    /// A preserved-byte ceiling no test version can reach, so a case that means
+    /// to exercise the count cap is not decided by the byte cap instead.
+    fn roomy() -> StoragePolicy {
+        StoragePolicy {
+            staging_budget_bytes: u64::MAX,
+            ..StoragePolicy::CI
+        }
+    }
+
     fn seal(scalar: u8) -> RecordSeal<'static> {
         RecordSeal {
             owner_enc_secret: &OWNER,
@@ -393,7 +547,14 @@ mod tests {
 
     /// A framed version plus the op's staged-content reference to it.
     fn framed(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, StagedContent) {
-        let (blocks, root_block, content) = frame_version(plaintext, [9u8; KEY_LEN], 1);
+        framed_keyed(plaintext, 9)
+    }
+
+    /// A version under its own content key, the way production frames every
+    /// version. Two versions sealed under *one* key address identical chunks to
+    /// one CID, so a test that releases one would unpin the other's leaves.
+    fn framed_keyed(plaintext: &[u8], key: u8) -> (Vec<SealedChunk>, Vec<u8>, StagedContent) {
+        let (blocks, root_block, content) = frame_version(plaintext, [key; KEY_LEN], 1);
         let staged = StagedContent {
             root_cid: content.content_cid().to_vec(),
             plaintext_size: content.size(),
@@ -701,7 +862,9 @@ mod tests {
             let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            preserve_dead_letter(&store, &record).await.unwrap();
+            preserve_dead_letter(&store, &record, &roomy())
+                .await
+                .unwrap();
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
             assert_eq!(
@@ -719,9 +882,10 @@ mod tests {
     fn a_preserved_dead_letter_still_carries_the_key_that_opens_its_version() {
         let store = InMemoryStagingStore::default();
         block_on(async {
-            let (_, _, staged) = framed(b"forty bytes of content ------------------");
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
             let op = content_op(1, staged);
-            preserve_dead_letter(&store, &encode_op_record(seal(1), &op).unwrap())
+            preserve_dead_letter(&store, &encode_op_record(seal(1), &op).unwrap(), &roomy())
                 .await
                 .unwrap();
 
@@ -730,6 +894,206 @@ mod tests {
                 RecordReader::new(&OWNER).classify(&kept[0]),
                 RecordClass::Mine(op),
                 "the preserved bytes reopen to the intent, sealed key included"
+            );
+        });
+    }
+
+    /// A leaf gone from the *middle* was released by nothing — the upload loop
+    /// only ever releases in file order — so the version can never be
+    /// reassembled. Preserving it would pin ciphertext no read path reaches,
+    /// and the root's own presence would keep the prune from dropping it.
+    #[test]
+    fn a_version_missing_a_leaf_from_the_middle_is_not_preserved() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            assert!(blocks.len() > 2, "the case needs an interior leaf");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            store.remove_staged_bytes(&blocks[1].cid).await.unwrap();
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+
+            assert_eq!(
+                preserve_dead_letter(&store, &record, &roomy())
+                    .await
+                    .unwrap(),
+                Preservation::ContentGone
+            );
+            assert!(
+                read_preserved_dead_letters(&store)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_empty(),
+                "nothing is held for a version that can never publish"
+            );
+            assert!(
+                store.staged_bytes(&root_cid).await.unwrap().is_some(),
+                "the remainder is the caller's to release, once it has handed \
+                 back what the manifest still names"
+            );
+        });
+    }
+
+    /// The paired case, so the refusal above cannot pass by refusing
+    /// everything: a version the upload loop has partly confirmed is missing a
+    /// *prefix*, and that is progress, not loss.
+    #[test]
+    fn a_version_missing_only_confirmed_leading_leaves_is_still_preserved() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            store.remove_staged_bytes(&blocks[0].cid).await.unwrap();
+
+            assert_eq!(
+                preserve_dead_letter(&store, &record, &roomy())
+                    .await
+                    .unwrap(),
+                Preservation::Kept
+            );
+        });
+    }
+
+    /// Each preserved loser is a full ciphertext copy charged to the same
+    /// `staged_bytes_total` admission reads, so an unbounded set is a device
+    /// that ends up refusing every new upload with nothing but dead letters to
+    /// show for its budget.
+    #[test]
+    fn the_preserved_set_evicts_oldest_first_past_the_count_cap() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let mut records = Vec::new();
+            let mut roots = Vec::new();
+            for i in 0..=MAX_PRESERVED_DEAD_LETTERS {
+                let (blocks, root_block, staged) = framed_keyed(
+                    format!("version {i} ------------------------------").as_bytes(),
+                    i as u8,
+                );
+                put_blocks(&store, &blocks, &root_block, &staged).await;
+                roots.push(staged.root_cid.clone());
+                let record = encode_op_record(seal(i as u8), &content_op(i as u8, staged)).unwrap();
+                preserve_dead_letter(&store, &record, &roomy())
+                    .await
+                    .unwrap();
+                records.push(record);
+            }
+
+            let kept = read_preserved_dead_letters(&store).await.unwrap().unwrap();
+            assert_eq!(kept.len(), MAX_PRESERVED_DEAD_LETTERS);
+            assert_eq!(
+                kept,
+                records[1..],
+                "the oldest entry is the one evicted, the newest always survives"
+            );
+            assert!(
+                store.staged_bytes(&roots[0]).await.unwrap().is_none(),
+                "eviction frees the budget at once, not a GC pass later"
+            );
+        });
+    }
+
+    /// The count cap alone does not bound bytes: sixteen large versions still
+    /// swallow the device. Sized so one version fits the ceiling and two do not.
+    #[test]
+    fn the_preserved_set_evicts_oldest_first_past_the_byte_ceiling() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (first_blocks, first_root, first) =
+                framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &first_blocks, &first_root, &first).await;
+            let first_root_cid = first.root_cid.clone();
+            let one_version = preserved_version_bytes(
+                &store,
+                &encode_op_record(seal(1), &content_op(1, first.clone())).unwrap(),
+            )
+            .await;
+            // 25% of the budget is one version and change, so the second
+            // admission must push the first out.
+            let policy = StoragePolicy {
+                staging_budget_bytes: one_version * 4 + 4,
+                ..StoragePolicy::CI
+            };
+
+            let first_record = encode_op_record(seal(1), &content_op(1, first)).unwrap();
+            preserve_dead_letter(&store, &first_record, &policy)
+                .await
+                .unwrap();
+
+            let (second_blocks, second_root, second) =
+                framed_keyed(b"another forty bytes of content ----------", 11);
+            put_blocks(&store, &second_blocks, &second_root, &second).await;
+            let second_record = encode_op_record(seal(2), &content_op(2, second)).unwrap();
+            preserve_dead_letter(&store, &second_record, &policy)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![second_record],
+                "the byte ceiling evicts the oldest, independently of the count cap"
+            );
+            assert!(
+                store.staged_bytes(&first_root_cid).await.unwrap().is_none(),
+                "the evicted version's blocks leave the staging budget"
+            );
+        });
+    }
+
+    /// A single version over the ceiling still preserves: it is the dead letter
+    /// the user is about to be told about, and admission already bounded it.
+    #[test]
+    fn the_newest_dead_letter_survives_a_ceiling_it_alone_exceeds() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            let starved = StoragePolicy {
+                staging_budget_bytes: 1,
+                ..StoragePolicy::CI
+            };
+
+            preserve_dead_letter(&store, &record, &starved)
+                .await
+                .unwrap();
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![record]
+            );
+        });
+    }
+
+    /// The prune is where a version that goes incoherent *after* preservation is
+    /// caught — and where a set preserved by an earlier build, before the
+    /// verification above existed, is reconciled.
+    #[test]
+    fn the_prune_releases_a_preserved_version_that_lost_an_interior_leaf() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            preserve_dead_letter(&store, &record, &roomy())
+                .await
+                .unwrap();
+
+            store.remove_staged_bytes(&blocks[1].cid).await.unwrap();
+            prune_preserved_dead_letters(&store).await;
+
+            assert!(
+                read_preserved_dead_letters(&store)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_empty(),
+                "an incoherent version is as unreassemblable as an absent one"
+            );
+            assert!(
+                store.staged_bytes(&root_cid).await.unwrap().is_none(),
+                "its surviving blocks leave the staging budget with it"
             );
         });
     }
@@ -755,7 +1119,9 @@ mod tests {
                 assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
                 assert!(orphan_staging_keys(&store, &[]).await.unwrap().is_empty());
                 assert!(
-                    preserve_dead_letter(&store, b"record").await.is_err(),
+                    preserve_dead_letter(&store, b"record", &roomy())
+                        .await
+                        .is_err(),
                     "overwriting it would drop the dead letters it already holds"
                 );
             }
@@ -770,15 +1136,21 @@ mod tests {
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let root_cid = staged.root_cid.clone();
             let held = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            let (_, _, gone) = framed(b"another forty bytes of content ----------");
+            let (gone_blocks, gone_root, gone) =
+                framed_keyed(b"another forty bytes of content ----------", 11);
+            put_blocks(&store, &gone_blocks, &gone_root, &gone).await;
+            let gone_root_cid = gone.root_cid.clone();
             let collected = encode_op_record(seal(2), &content_op(2, gone)).unwrap();
-            preserve_dead_letter(&store, &held).await.unwrap();
-            preserve_dead_letter(&store, &collected).await.unwrap();
+            preserve_dead_letter(&store, &held, &roomy()).await.unwrap();
+            preserve_dead_letter(&store, &collected, &roomy())
+                .await
+                .unwrap();
             assert_eq!(
                 read_preserved_dead_letters(&store).await.unwrap().unwrap(),
                 vec![held.clone(), collected]
             );
 
+            release_version_blocks(&store, &gone_root_cid).await;
             prune_preserved_dead_letters(&store).await;
             assert_eq!(
                 read_preserved_dead_letters(&store).await.unwrap().unwrap(),

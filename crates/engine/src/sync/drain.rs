@@ -71,6 +71,7 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
+use crate::storage_policy::StoragePolicy;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -78,8 +79,23 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
-use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
+use crate::sync::staging::{
+    Preservation, preserve_dead_letter, release_version_blocks, version_leaf_cids,
+};
+
 use crate::sync::tick::ResolveMode;
+
+/// The reason a member is shown. A version that can no longer be reassembled is
+/// unrecoverable content whatever stopped the op, and saying so is what keeps
+/// the preservation honest — the alternative is a notice promising bytes no read
+/// path reaches.
+fn observed_reason(reason: DeadLetterReason, content_gone: bool) -> DeadLetterReason {
+    if content_gone {
+        DeadLetterReason::ContentUnrecoverable
+    } else {
+        reason
+    }
+}
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue.
@@ -408,6 +424,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
+    /// Bounds what the preserved dead-letter set may hold, so abandoned versions
+    /// cannot eat the device's staging budget
+    /// ([`StoragePolicy::preserved_budget_bytes`]).
+    pub(crate) storage_policy: &'a StoragePolicy,
     /// The framing profile a version's pinned size is derived under — the same
     /// one the upload framed it at.
     pub(crate) content_profile: &'a ContentProfile,
@@ -677,11 +697,21 @@ where
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
+            let mut reason = *reason;
+            let mut content_gone = false;
             if op.content_root_cid().is_some() {
-                self.preserve_dead_letter(*op_id).await?;
+                content_gone =
+                    self.preserve_dead_letter(*op_id).await? == Preservation::ContentGone;
+                reason = observed_reason(reason, content_gone);
             }
+            // Abandon first: it reads the retire list from the staged root
+            // manifest, so releasing the remainder before it would strand the
+            // leaves this op already registered.
             self.abandon(scope, *op_id, op).await?;
-            report.dead_letters.push((*op_id, op.target, *reason));
+            if content_gone {
+                self.release_staged_blocks(op).await;
+            }
+            report.dead_letters.push((*op_id, op.target, reason));
         }
         // A drop is not an abandonment: `AlreadySatisfied` on a create is the
         // create having *landed*, so retiring its name would cut a live record
@@ -748,15 +778,29 @@ where
                     Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
+                let Ok(preservation) = self.preserve_dead_letter(op_id).await else {
+                    return;
+                };
+                // Nothing was kept, so nothing is owed the halfway treatment:
+                // hand back every block this op registered along with its name,
+                // exactly as a permanently lost version does.
+                if preservation == Preservation::ContentGone {
+                    self.dead_letter(
+                        scope,
+                        op_id,
+                        op,
+                        DeadLetterReason::ContentUnrecoverable,
+                        report,
+                    )
+                    .await;
+                    return;
+                }
                 let handed_back = if owes_its_name {
                     self.retire_unreferenced_name(scope, op).await
                 } else {
                     Ok(())
                 };
-                if handed_back.is_ok()
-                    && self.preserve_dead_letter(op_id).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
+                if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
                     report.dead_letters.push((op_id, op.target, reason));
                 }
             }
@@ -765,10 +809,22 @@ where
             // upload of the version now at the name, and unpinning content a
             // live record names is loss where leaving rows charged is a leak.
             Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
-                if self.preserve_dead_letter(op_id).await.is_ok()
-                    && self.dequeue_op(op_id).await.is_ok()
-                {
-                    report.dead_letters.push((op_id, op.target, reason));
+                let Ok(preservation) = self.preserve_dead_letter(op_id).await else {
+                    return;
+                };
+                let content_gone = preservation == Preservation::ContentGone;
+                if self.dequeue_op(op_id).await.is_ok() {
+                    // Still no retire: the loser's bytes may already be
+                    // registered under the version now at the name. Only the
+                    // local remainder goes, and only once nothing can publish it.
+                    if content_gone {
+                        self.release_staged_blocks(op).await;
+                    }
+                    report.dead_letters.push((
+                        op_id,
+                        op.target,
+                        observed_reason(reason, content_gone),
+                    ));
                 }
             }
             Halt::Permanent(reason) => {
@@ -2619,12 +2675,12 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
-    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<(), Halt> {
+    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<Preservation, Halt> {
         let queued = self.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
-            return Ok(());
+            return Ok(Preservation::Kept);
         };
-        preserve_dead_letter(self.staging, record)
+        preserve_dead_letter(self.staging, record, self.storage_policy)
             .await
             .map_err(seam)
     }

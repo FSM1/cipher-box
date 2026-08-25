@@ -575,13 +575,21 @@ fn credential_store_persists_last_account_id() {
 }
 
 // ---------------------------------------------------------------------------
-// Real OS keyring — ignored by default (no keyring on headless CI). Run
-// locally: `cargo test -p cipherbox-desktop-seams --test conformance --
+// Real OS keyring — the production `KeyringCredentialStore` against the
+// platform backend it actually ships on: Apple Keychain, Windows Credential
+// Manager, or the Secret Service.
+//
+// `#[ignore]`d so a plain `cargo test` skips them: the Linux backend needs a
+// session bus and an unlocked Secret Service provider, which a developer shell
+// need not have. Every `Cargo Check & Test` gate runs them explicitly with
+// `-- --ignored`, so all three platforms are covered on every PR — the file
+// double these tests sit beside proves only that the kit is satisfiable.
+// Locally: `cargo test -p cipherbox-desktop-seams --test conformance --
 // --ignored`.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires an unlocked OS keyring; run locally"]
+#[ignore = "needs the platform keyring backend; CI runs it with --ignored"]
 fn real_keyring_credential_store_passes_the_credential_store_kit() {
     use cipherbox_desktop_seams::KeyringCredentialStore;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -600,7 +608,7 @@ fn real_keyring_credential_store_passes_the_credential_store_kit() {
 }
 
 #[test]
-#[ignore = "requires an unlocked OS keyring; run locally"]
+#[ignore = "needs the platform keyring backend; CI runs it with --ignored"]
 fn real_keyring_credential_store_persists_last_account_id() {
     use cipherbox_desktop_seams::KeyringCredentialStore;
     use std::time::{SystemTime, UNIX_EPOCH};

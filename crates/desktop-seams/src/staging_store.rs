@@ -128,7 +128,7 @@ impl StagingStore for FileStagingStore {
             let Some(id) = parse_op_id(&name) else {
                 continue;
             };
-            if let Some(bytes) = read_file_opt(&self.op_path(id))
+            if let Some(bytes) = read_file_opt(&self.ops_dir.join(&name))
                 .map_err(|err| seam_err("staging_store queued_ops read", &err))?
             {
                 ops.push((OpId(id), bytes));
@@ -161,15 +161,7 @@ impl StagingStore for FileStagingStore {
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
         let names = list_file_names(&self.staged_dir)
             .map_err(|err| seam_err("staging_store staged_keys", &err))?;
-        let mut keys = Vec::new();
-        for name in names {
-            if let Some(stem) = name.strip_suffix(SIDECAR_SUFFIX) {
-                if let Some(key) = from_hex(stem) {
-                    keys.push(key);
-                }
-            }
-        }
-        Ok(keys)
+        Ok(names.iter().filter_map(|name| sidecar_key(name)).collect())
     }
 
     async fn staged_bytes_total(&self) -> SeamResult<u64> {
@@ -177,15 +169,7 @@ impl StagingStore for FileStagingStore {
             .map_err(|err| seam_err("staging_store staged_bytes_total", &err))?;
         let mut total = 0u64;
         for name in names {
-            // Mirror `staged_keys`: only count sidecars whose stem is valid
-            // hex, so the budget total and the GC-reclaimable set (staged_keys
-            // + remove_staged_bytes) always agree on the same file set. A
-            // foreign `.bin` counted here but invisible to staged_keys could
-            // never be reclaimed and would inflate the budget permanently.
-            let is_sidecar = name
-                .strip_suffix(SIDECAR_SUFFIX)
-                .is_some_and(|stem| from_hex(stem).is_some());
-            if !is_sidecar {
+            if sidecar_key(&name).is_none() {
                 continue;
             }
             match std::fs::metadata(self.staged_dir.join(&name)) {
@@ -200,6 +184,17 @@ impl StagingStore for FileStagingStore {
         }
         Ok(total)
     }
+}
+
+/// The staging key a `staged/` filename holds, or `None` for anything that is
+/// not one of this store's sidecars (temp debris, foreign files).
+///
+/// The one predicate behind both `staged_keys` and `staged_bytes_total`, so the
+/// budget total and the GC-reclaimable set can never disagree on the file set: a
+/// foreign `.bin` counted in the budget but invisible to `staged_keys` could
+/// never be reclaimed and would inflate the budget permanently.
+fn sidecar_key(name: &str) -> Option<Vec<u8>> {
+    from_hex(name.strip_suffix(SIDECAR_SUFFIX)?)
 }
 
 /// Parses the op id out of an `ops/` filename, or `None` for anything that
