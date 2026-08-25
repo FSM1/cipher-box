@@ -41,6 +41,7 @@ import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -444,7 +445,13 @@ export class LeaderRelay {
     entry: PortEntry,
     requestId: number,
     step: () => Promise<
-      SnapshotDescriptor | CommandOutcomeDescriptor | ArrayBuffer | string | bigint | undefined
+      | SnapshotDescriptor
+      | SharingDescriptor
+      | CommandOutcomeDescriptor
+      | ArrayBuffer
+      | string
+      | bigint
+      | undefined
     >
   ): Promise<void> {
     try {
@@ -472,10 +479,14 @@ export class LeaderRelay {
     }
   }
 
-  private readValue(read: WireRead): Promise<SnapshotDescriptor | ArrayBuffer | string> {
+  private readValue(
+    read: WireRead
+  ): Promise<SnapshotDescriptor | SharingDescriptor | ArrayBuffer | string> {
     switch (read.kind) {
       case 'snapshot':
         return this.transport.snapshot(read.folder);
+      case 'sharing':
+        return this.transport.sharing(read.scope);
       case 'siweChallenge':
         return this.transport.siweChallenge();
       case 'download':

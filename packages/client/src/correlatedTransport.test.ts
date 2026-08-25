@@ -9,6 +9,7 @@ import {
 } from './correlatedTransport.js';
 import type {
   CommandOutcomeDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   WriteHandle,
 } from './worker/protocol.js';
@@ -71,6 +72,9 @@ class ProbeTransport extends CorrelatedTransport {
     return unsupported();
   }
   snapshot(): Promise<SnapshotDescriptor> {
+    return unsupported();
+  }
+  sharing(): Promise<SharingDescriptor> {
     return unsupported();
   }
   siweChallenge(): Promise<string> {

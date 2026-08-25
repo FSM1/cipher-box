@@ -98,6 +98,24 @@ export interface WasmSnapshotView {
   readonly staleness: number;
 }
 
+/** wasm-bindgen `SharingContact` — one contact the vault's book holds. */
+export interface WasmSharingContact {
+  readonly identityPublicKey: Uint8Array;
+}
+
+/** wasm-bindgen `SharingGrant` — one grant a scope's ledger commits. */
+export interface WasmSharingGrant {
+  readonly recipientIdentityPublicKey: Uint8Array;
+  readonly permission: number;
+}
+
+/** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
+export interface WasmSharingView {
+  readonly scope: Uint8Array;
+  readonly contacts: readonly WasmSharingContact[];
+  readonly grants?: readonly WasmSharingGrant[];
+}
+
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
@@ -113,6 +131,7 @@ export interface WasmEngineHandle {
   commitWrite(handle: bigint): Promise<bigint>;
   abortWrite(handle: bigint): Promise<unknown>;
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
+  sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
   siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<bigint>;

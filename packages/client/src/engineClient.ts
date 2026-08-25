@@ -31,6 +31,7 @@ import { LocalTransport } from './transport.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -374,6 +375,10 @@ export class EngineClient implements EngineTransport {
 
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.current.snapshot(folder);
+  }
+
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
+    return this.current.sharing(scope);
   }
 
   siweChallenge(): Promise<string> {

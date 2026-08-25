@@ -101,10 +101,14 @@ describe('EngineProvider', () => {
         <span />
       </EngineProvider>
     );
-    sharingStore.contactImported({
-      kind: 'contactImported',
-      identityPublicKey: new Uint8Array(33).fill(1),
-      encPublicKey: new Uint8Array(32).fill(1),
+    sharingStore.reported({
+      scope: new Uint8Array(16).fill(7),
+      contacts: [
+        {
+          identityPublicKey: new Uint8Array(33).fill(1),
+        },
+      ],
+      grants: [],
     });
 
     unmount();

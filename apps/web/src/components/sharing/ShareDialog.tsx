@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
 import { grantsFor, sharingStore } from '../../stores/sharing.store';
@@ -18,20 +18,28 @@ type Step = 'grants' | 'import';
 /**
  * Who a folder is shared with, and the owner-only changes to that set: grant,
  * revoke, and the write→read downgrade. The dialog issues one facade command
- * per action and renders the answer, verifying nothing itself.
+ * per action and renders the engine's own sharing read — it verifies nothing
+ * and remembers nothing of its own.
  */
 export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const state = useSyncExternalStore(sharingStore.subscribe, sharingStore.getState);
-  const actions = useSharingActions();
+  const actions = useSharingActions(row.id);
   const [step, setStep] = useState<Step>('grants');
   const [recipient, setRecipient] = useState('');
   const [permission, setPermission] = useState<Permission>('read');
 
+  // `null` is "no ledger read yet", which the list must not draw as "granted to
+  // nobody" — the two differ to an owner deciding whether to grant again.
   const rows = grantsFor(state, row.key);
-  const granted = new Set(rows.map((entry) => entry.contact.key));
+  const granted = new Set((rows ?? []).map((entry) => entry.contact.key));
   const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
   const busy = actions.busy !== null;
+
+  const { reload } = actions;
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
   // A refusal belongs to the step that drew it; leaving the step retires it.
   const goTo = (next: Step) => {
@@ -41,7 +49,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
 
   const grant = () => {
     if (chosen === null) return;
-    void actions.grant(row.id, chosen, permission).then((accepted) => {
+    void actions.grant(chosen, permission).then((accepted) => {
       if (accepted) setRecipient('');
     });
   };
@@ -67,16 +75,14 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
         />
       ) : (
         <div className="dialog-content" data-testid="share-dialog">
-          {/* The facade exposes no grant or contact read, so this dialog can
-              report what this session issued and nothing more. */}
-          <p className="sharing-note" data-testid="share-session-note">
-            {'// this session only — a grant issued elsewhere is not listed here'}
-          </p>
-
           <p className="dialog-label">shared with</p>
-          {rows.length === 0 ? (
+          {rows === null ? (
+            <p className="sharing-note" data-testid="share-grants-unavailable">
+              {'// grants unavailable'}
+            </p>
+          ) : rows.length === 0 ? (
             <p className="sharing-note" data-testid="share-no-grants">
-              {'// nothing granted from this session'}
+              {'// nothing granted here'}
             </p>
           ) : (
             <ul className="sharing-list" data-testid="share-grant-list">
@@ -90,7 +96,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
                     <button
                       type="button"
                       className="dialog-button"
-                      onClick={() => void actions.downgrade(row.id, entry.contact)}
+                      onClick={() => void actions.downgrade(entry.contact)}
                       disabled={busy}
                       data-testid="share-downgrade"
                     >
@@ -100,7 +106,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
                   <button
                     type="button"
                     className="dialog-button dialog-button--danger"
-                    onClick={() => void actions.revoke(row.id, entry.contact)}
+                    onClick={() => void actions.revoke(entry.contact)}
                     disabled={busy}
                     data-testid="share-revoke"
                   >
@@ -114,7 +120,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           <p className="dialog-label">grant access</p>
           {grantable.length === 0 ? (
             <p className="sharing-note" data-testid="share-no-contacts">
-              {'// no contact imported in this session — import one to grant'}
+              {'// no contact left to grant here — import one'}
             </p>
           ) : (
             <div className="dialog-content">

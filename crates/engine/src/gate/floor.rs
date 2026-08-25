@@ -25,6 +25,9 @@
 //! 4. **Regression is fail-closed** — every advance is monotonic-max via the
 //!    store (raising below the stored floor is a no-op that keeps the max), so
 //!    a floor can never move backward.
+//! 5. **A minted scope seeds its own write-epoch floor**
+//!    ([`seed_write_epoch_on_mint`]) — no pointer plane speaks for a scope that
+//!    does not exist yet, so the device that mints one anchors it.
 //!
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.
@@ -323,15 +326,24 @@ pub async fn repoint_regression<F: FloorStore>(
             vouched: repoint.min_read_epoch,
         }));
     }
-    if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id).await?
-        && repoint.write_epoch < floor
-    {
-        return Ok(Some(FloorRegression::WriteEpoch {
+    write_epoch_regression(floors, &repoint.scope_id, repoint.write_epoch).await
+}
+
+/// The durable write-epoch floor an owner-vouched `write_epoch` would roll back,
+/// if any — the write half of [`repoint_regression`], split out for the consult,
+/// which must not run the read stage.
+pub async fn write_epoch_regression<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    write_epoch: u64,
+) -> SeamResult<Option<FloorRegression>> {
+    Ok(write_epoch_floor(floors, scope_id)
+        .await?
+        .filter(|floor| write_epoch < *floor)
+        .map(|floor| FloorRegression::WriteEpoch {
             floor,
-            vouched: repoint.write_epoch,
-        }));
-    }
-    Ok(None)
+            vouched: write_epoch,
+        }))
 }
 
 /// Cold-seed a scope's floors **fail-closed on regression** (the floor law) —
@@ -369,8 +381,8 @@ pub async fn cold_seed_checked<F: FloorStore>(
 /// **Takes the [`WriteEpochLease`] for the raise**, and defers when the scope is
 /// already leased — returning the durable floor untouched and without waiting,
 /// so the value returned is the floor in force, not the sighted epoch. The
-/// sighting is dropped rather than queued; a floor only ever moves up, so
-/// re-sighting the same pointer re-derives it.
+/// sighting is dropped rather than queued; a floor only ever moves up, and the
+/// focus tick's polled consult re-sights the same pointer next pass.
 ///
 /// The lease is held *across* the raise, not merely tested before it: the host
 /// store is asynchronous, and a publish that took the lease while a raise was
@@ -387,6 +399,24 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
     floors
         .raise_epoch_floor(&write_epoch_key(scope_id), write_epoch)
         .await
+}
+
+/// Seed the write-epoch floor of a scope this device is **minting** (floor law
+/// item 5) — a grant's promoted scope root, which no pointer plane speaks for
+/// until it exists. Returns the resulting floor.
+///
+/// A pre-advance, which [`WriteEpochLease`] forbids for a *rotation*: there the
+/// target is an epoch the publish has yet to reach, so raising first would lock
+/// the write plane out on a retryable failure. A read grant cuts no write scope,
+/// so `write_epoch` here is the epoch the node's write plane already publishes
+/// at, and the root about to be signed binds that same value as its
+/// owner-write-blob AAD — raising after the signature is what would strand it.
+pub async fn seed_write_epoch_on_mint<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    write_epoch: u64,
+) -> SeamResult<u64> {
+    advance_write_epoch_on_sight(floors, scope_id, write_epoch).await
 }
 
 /// Exclusion over one scope's write-epoch floor, held across a root publish so

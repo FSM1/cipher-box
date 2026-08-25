@@ -17,6 +17,7 @@ import type {
   CommandOutcomeDescriptor,
   NodeKind,
   Permission,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
@@ -67,6 +68,14 @@ export class EngineFacade {
   /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.transport.snapshot(folder);
+  }
+
+  /**
+   * Reads the vault's verified contact book and the grants `scope`'s own record
+   * commits — the vault root's for `null`.
+   */
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
+    return this.transport.sharing(scope);
   }
 
   /** Downloads one file node's plaintext through the verified read pipeline. */

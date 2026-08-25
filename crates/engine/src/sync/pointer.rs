@@ -204,14 +204,17 @@ pub fn open_repoint(
 /// Whether to consult the scope pointer now — the polled discipline (#38 D4),
 /// decided independently of any staleness signal. The reasons are enumerated on
 /// [`ConsultReason`].
+/// `focus_tick_due` is the polled leg's own bar: the scope is in the focus
+/// window **and** its consult interval has elapsed. The caller owns both halves
+/// — this decides only which reason they amount to.
 pub fn should_consult(
     is_cold_start: bool,
-    is_open_shared_scope: bool,
+    focus_tick_due: bool,
     accessed_past_staleness: bool,
 ) -> Option<ConsultReason> {
     if is_cold_start {
         Some(ConsultReason::ColdStart)
-    } else if is_open_shared_scope {
+    } else if focus_tick_due {
         Some(ConsultReason::FocusTick)
     } else if accessed_past_staleness {
         Some(ConsultReason::OnAccess)

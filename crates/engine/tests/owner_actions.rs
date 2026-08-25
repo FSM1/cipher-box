@@ -13,7 +13,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields, ReadBody,
-    decode_envelope, decode_grant_section, grant_section_bytes, sign_grant_set,
+    decode_envelope, decode_grant_section, grant_section_bytes, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -27,7 +27,7 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
-use cipherbox_engine::rotation::MAX_ROTATION_ATTEMPTS;
+use cipherbox_engine::rotation::{MAX_ROTATION_ATTEMPTS, published_override_seed};
 use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
@@ -457,6 +457,7 @@ fn inbox(device: &FakeDevice) -> Vec<Vec<u8>> {
 struct GrantScenario {
     world: FakeWorld,
     blocks: Blocks,
+    owner_device: FakeDevice,
     recipient_device: FakeDevice,
     engine: Engine<FakeSeamTypes>,
     _events: EventStream,
@@ -477,6 +478,7 @@ impl GrantScenario {
         Self {
             world,
             blocks,
+            owner_device,
             recipient_device,
             engine,
             _events,
@@ -608,31 +610,197 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
     assert!(inbox(&fx.recipient_device).is_empty(), "and shares nothing");
 }
 
+/// A first promotion against the production publisher: the minted scope root
+/// must open under the fresh derivation the grantee holds, or their first read
+/// fails.
+#[test]
+fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
+    let mut fx = GrantScenario::new();
+    assert!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
+        "the folder starts as an ordinary node, not a scope root"
+    );
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let section = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder now answers as a scope root");
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        1,
+        "a read grant anchors the fresh scope at read epoch 1"
+    );
+
+    // The whole point of the promotion: the body carried forward re-seals under
+    // `readKey(nodeSeed(freshOverrideSeed, scopeId))`, so the seed the grantee's
+    // blob conveys opens the record they resolve.
+    let head =
+        published_head(&fx.world, &fx.blocks, &write_name(fx.folder)).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    let override_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &section,
+    )
+    .expect("the owner blob yields the fresh override seed");
+    let read_key = kdf::read_key(kdf::node_seed(&override_seed, &fx.folder.0).as_bytes());
+    open_read_body(&envelope, read_key.as_bytes())
+        .expect("the grantee's first read opens the promoted root");
+
+    assert!(
+        sequence_at(&fx.world, &write_name(ROOT)) > root_before,
+        "and the parent republished its index naming the new scope"
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "the share pointer reached the recipient"
+    );
+}
+
+/// The read the share dialog renders from: engine truth, not a tally of the
+/// commands this session happened to issue. The contact book comes from the
+/// durable store, and the grant rows off the scope root's own committed ledger —
+/// so a reload, or another device's grant, reports the same list.
+#[test]
+fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
+    let mut fx = GrantScenario::new();
+    let recipient_pk = recipient_identity().verifying_key().to_sec1().to_vec();
+
+    let before = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert_eq!(
+        before
+            .contacts
+            .iter()
+            .map(|contact| contact.identity_public_key.clone())
+            .collect::<Vec<_>>(),
+        vec![recipient_pk.clone()],
+        "the imported contact is offered as a recipient with no re-import"
+    );
+    assert_eq!(
+        before.grants,
+        Some(Vec::new()),
+        "an ordinary folder is not a scope root, so nothing is granted at it — \
+         reported as an empty list, never as an unreachable one"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let after = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert_eq!(after.scope, fx.folder);
+    let rows = after.grants.expect("the granted scope root resolved");
+    assert_eq!(rows.len(), 1, "the granted scope commits one row");
+    assert_eq!(
+        rows[0].recipient_identity_public_key, recipient_pk,
+        "the row names the recipient the grant went to"
+    );
+    assert_eq!(rows[0].permission, Permission::Read);
+
+    // Absence is not emptiness: an unreachable record plane withholds the grant
+    // list rather than reporting a shared folder as shared with nobody, and the
+    // durable contact book answers regardless.
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world.record_store.fail_endpoint(&endpoint);
+    }
+    let offline = block_on(fx.engine.sharing(fx.folder)).expect("the contact book is local");
+    assert_eq!(offline.grants, None);
+    assert_eq!(offline.contacts.len(), 1);
+
+    assert_eq!(
+        block_on(fx.engine.sharing(NodeId([0xEE; 16]))),
+        Err(EngineError::UnknownNode),
+        "a node this vault does not hold is a caller error, not an empty list"
+    );
+    assert_eq!(
+        block_on(floor::write_epoch_floor(
+            &fx.owner_device.floor_store,
+            &fx.folder.0
+        ))
+        .expect("floor read"),
+        Some(EPOCH),
+        "the mint seeded the new scope's write-epoch floor, or its own          owner-write-blob would never open"
+    );
+}
+
+/// Any committed **writer** authors the write body a grant ledger rides in, so a
+/// row's recipient bytes are only owner truth where the owner's own binding
+/// signature covers them. A row the owner cannot vouch for is filed under the
+/// all-zero identity rather than naming a party they never signed — otherwise a
+/// co-writer could hide their own grant behind a stranger's key on the very
+/// surface the owner revokes from.
+#[test]
+fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(), bystander_row_with_corrupt_sig()],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+
+    let rows = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .grants
+        .expect("the vault root resolved");
+
+    let named: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|row| row.recipient_identity_public_key.clone())
+        .collect();
+    assert!(
+        named.contains(&recipient_identity().verifying_key().to_sec1().to_vec()),
+        "the row the owner signed names its recipient"
+    );
+    assert!(
+        named.contains(&vec![0u8; 33]),
+        "and the row it did not sign is filed unattested, not under its claimed key"
+    );
+    assert!(
+        !named.contains(
+            &EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+                .expect("valid identity scalar")
+                .verifying_key()
+                .to_sec1()
+                .to_vec()
+        ),
+        "an unverifiable owner signature must not lend a key the owner's word"
+    );
+}
+
 /// The mailbox post is the last step of the mint and nothing compensates it, so
 /// a grant that cannot commit the granted scope root must leave the recipient
 /// with nothing: an item naming a root that never published would never resolve
 /// and never ack.
-///
-/// A folder gains its first scope root here, and the scope-root publisher gates
-/// the node's current record as one before it republishes — which an ordinary
-/// folder's record cannot pass, so the mint stops at a trust verdict.
 #[test]
 fn a_grant_that_cannot_publish_the_granted_scope_root_posts_no_share_pointer() {
     let mut fx = GrantScenario::new();
-    assert!(
-        published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
-        "the folder is an ordinary node, not a scope root"
-    );
+    // The promotion's own CAS is the whole fault: the folder gates, the root
+    // mints, and the PUT never lands.
+    fx.world
+        .record_store
+        .fail_put_for(write_name(fx.folder).as_str());
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
 
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::TrustViolation {
-            message: "grant creation failed: publish-failed".to_owned(),
+        Err(EngineError::Seam {
+            message: "rotation record not published".to_owned(),
         }),
     );
     assert!(
         published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
         "no scope root was committed at the granted folder"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "and the parent index never named a scope that does not exist"
     );
     assert!(
         inbox(&fx.recipient_device).is_empty(),

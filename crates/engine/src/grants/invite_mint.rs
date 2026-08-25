@@ -21,6 +21,7 @@ use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::secret::SecretBytes;
 
 use crate::entropy::Entropy;
+use crate::grants::ScopeRootPromoter;
 use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher, SweepResolver};
 use crate::seams::UnixMillis;
 
@@ -117,7 +118,7 @@ pub async fn mint_invite_link<E, R, P, S>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
     S: InviteStore,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
@@ -311,6 +312,19 @@ mod tests {
     impl CascadeResealResolver for FakeNet {
         async fn resolve(&self, _scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure> {
             Err(ResolveFailure::Rejected)
+        }
+    }
+
+    /// The promotion seam over the same recording publisher; an invite mints a
+    /// scope at a folder exactly as a direct grant does.
+    impl ScopeRootPromoter for FakeNet {
+        async fn promote_scope_root(
+            &self,
+            _parent: &ChildScopeRef,
+            _node: &NodeRef,
+            record: &ResealedScopeRoot,
+        ) -> Result<(), RotationPublishError> {
+            self.publish_scope_root(record).await
         }
     }
 

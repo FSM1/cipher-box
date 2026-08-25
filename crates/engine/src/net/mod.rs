@@ -50,6 +50,7 @@ pub use liveness::{
     eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use pointer_fetch::RecordPointerFetch;
+pub(crate) use pointer_fetch::{PointerConsult, PointerConsultError};
 pub(crate) use provision::VaultProvisionNet;
 pub use publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,

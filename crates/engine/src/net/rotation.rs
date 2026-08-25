@@ -38,7 +38,7 @@ use super::author::{
     author_scope_root_with_section,
 };
 use super::child::ChildAdopter;
-use super::pointer_fetch::RecordPointerFetch;
+use super::pointer_fetch::{PointerConsult, PointerConsultError, RecordPointerFetch};
 use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_inline};
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -51,8 +51,8 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
-    UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger, mint_grant_row,
-    recipient_self_location, row_is_owner_attested, self_locate_signed,
+    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger,
+    mint_grant_row, recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
@@ -941,6 +941,63 @@ where
     }
 }
 
+impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPromoter
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    async fn promote_scope_root(
+        &self,
+        parent: &ChildScopeRef,
+        node: &NodeRef,
+        record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError> {
+        let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
+        let override_seed = new_override_seed(self.keys.enc_secret, record)?;
+        let source = self
+            .swept_scope(parent)
+            .map_err(|_| RotationPublishError::Rejected)?;
+        // A node that already answers as a scope root is not a promotion, and
+        // one whose record does not gate is refused rather than republished
+        // under a body this pass invented ([`ScopeRootPromoter`]).
+        let current = match self.resolve_child(parent, node).await {
+            Ok(SweptChild::Interior(current)) => current,
+            Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
+            Err(failure) => return Err(promote_verdict(failure)),
+        };
+        let base = RepublishBase {
+            read_body: current.read_body,
+            unknown: current.carried_unknown,
+            epoch_tag_unknown: current.carried_epoch_tag_unknown,
+            // A read grant cuts no write scope, so the promoted root keeps
+            // signing under the write seed of the scope it is leaving.
+            write_scope_seed: Some(source.write_scope_seed.clone()),
+        };
+        floor::seed_write_epoch_on_mint(self.floors, &record.scope_id, record.write_epoch)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?;
+        self.root_publish()
+            .run(&name, record, &override_seed, base)
+            .await
+    }
+}
+
+/// Carry a sweep read verdict into the promotion's publish arm on rule 6's
+/// axis: only a transport stall is retryable. Exhaustive, so a new verdict has
+/// to be classified rather than defaulting to a trust refusal.
+fn promote_verdict(failure: SweepResolveFailure) -> RotationPublishError {
+    match failure {
+        SweepResolveFailure::Unavailable => RotationPublishError::NotPublished,
+        SweepResolveFailure::Rejected
+        | SweepResolveFailure::Superseded
+        | SweepResolveFailure::Unreadable
+        | SweepResolveFailure::ConflictingChildLabel => RotationPublishError::Rejected,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The grantee arm: the flat scope-exit cut of one granted scope root
 // (blueprint/engine.md "rotateScope" — grantee scope-exit rotations are flat,
@@ -1616,30 +1673,19 @@ where
         let seed = self
             .owner_pointer_seed
             .ok_or(SweepResolveFailure::Unavailable)?;
-        let pointer = scope_pointer_name(seed, scope_id);
-        let block = match RecordPointerFetch::new(self.transport)
-            .fetch(&pointer)
-            .await
-        {
-            Ok(Some(block)) => block,
-            Ok(None) => return Ok(None),
-            Err(_) => return Err(SweepResolveFailure::Unavailable),
-        };
-        let pointer_read_key = self.keys.scope_keys.pointer_read_key(scope_id);
-        let repoint = open_repoint(
-            &pointer_read_key,
-            self.payload_version,
-            scope_id,
-            self.keys.identity,
-            &block,
-        )
-        .map_err(|_| SweepResolveFailure::Rejected)?;
-        // Floor law item 3: an owner-vouched write epoch raises the durable
-        // floor on sight (#38 D4).
-        floor::advance_write_epoch_on_sight(self.floors, scope_id, repoint.write_epoch)
-            .await
-            .map_err(|_| SweepResolveFailure::Unavailable)?;
-        Ok(Some(repoint.current_root.as_str().as_bytes().to_vec()))
+        PointerConsult {
+            owner_pointer_seed: seed,
+            scope_keys: self.keys.scope_keys,
+            owner_identity: self.keys.identity,
+            payload_version: self.payload_version,
+        }
+        .run(self.transport, self.floors, scope_id)
+        .await
+        .map(|name| name.map(|name| name.as_str().as_bytes().to_vec()))
+        .map_err(|failure| match failure {
+            PointerConsultError::Unavailable => SweepResolveFailure::Unavailable,
+            PointerConsultError::Rejected => SweepResolveFailure::Rejected,
+        })
     }
 
     async fn resolve_child(
@@ -8110,6 +8156,169 @@ mod tests {
     fn a_scope_that_was_never_re_pointed_has_no_fresher_name() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
         assert_eq!(block_on(harness.net(&[]).consult_pointer(&SCOPE)), Ok(None));
+    }
+
+    /// The record a grant's mint hands the promotion seam: a scope root minted at
+    /// read epoch 1 for a node that is not one yet, under a fresh override seed.
+    fn promoted(node: &NodeRef) -> ResealedScopeRoot {
+        let pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
+        let owner_enc_pub = owner_enc().public();
+        let owner = owner_identity();
+        let commitment = GrantSetCommitment {
+            ipns_name: node.ipns_name.clone(),
+            owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let commitment_sig = sign_grant_set(&owner, &commitment)
+            .expect("the commitment encodes")
+            .to_compact();
+        let mut entropy = SeededEntropy::new(13);
+        let section = reseal_scope_root(
+            &mut entropy,
+            &ScopeRootIdentity {
+                v: ENVELOPE_V,
+                scope_id: node.node_id,
+                ipns_name: &node.ipns_name,
+                owner_enc_pub: &owner_enc_pub,
+                owner_enc_secret: None,
+                ascent: None,
+                owes_ascent_link: false,
+                pseudonym_signer: &pseudonym,
+            },
+            &ResealSeeds {
+                override_seed: &FRESH_SEED,
+                read_epoch: 1,
+                prev: None,
+                write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
+                write_epoch: OWNER_ROOT_EPOCH,
+                write_history: WriteHistory::Carried(&[]),
+                pointer_read_key: &POINTER_READ_KEY,
+            },
+            &CommittedSet {
+                owner_identity: &owner.verifying_key(),
+                commitment: &commitment,
+                commitment_sig: &commitment_sig,
+                grant_ledger: &[],
+                direct_child_scope_index: &[],
+            },
+            &[],
+        )
+        .expect("the mint re-seals");
+        ResealedScopeRoot {
+            scope_id: node.node_id,
+            ipns_name: node.ipns_name.clone(),
+            read_epoch: 1,
+            write_epoch: OWNER_ROOT_EPOCH,
+            section,
+        }
+    }
+
+    /// A promotion raises the scope's write-epoch floor and then signs a root
+    /// whose owner-write-blob binds it, so the two must not be split by a
+    /// concurrent raise: a scope already leased signs nothing at all.
+    #[test]
+    fn a_promotion_under_a_live_write_epoch_lease_signs_nothing() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let node = swept.children[0].clone();
+        let record = promoted(&node);
+        let name = scope_name(&record.ipns_name).expect("a valid name");
+        let sequence_before = sequence_at(&harness, &name);
+
+        let lease = floor::acquire_write_epoch_lease(&node_id).expect("the scope starts free");
+        assert_eq!(
+            block_on(net.promote_scope_root(&scope, &node, &record)),
+            Err(RotationPublishError::NotPublished),
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed at the promoted name"
+        );
+        drop(lease);
+    }
+
+    /// The sequence of the record currently published at `name`.
+    fn sequence_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        name: &IpnsName,
+    ) -> Option<u64> {
+        let endpoint = harness.store.endpoints()[0].clone();
+        let bytes = harness.store.record_at(&endpoint, name.as_str())?;
+        Some(
+            IpnsRecord::unmarshal(&bytes)
+                .and_then(|record| record.verify(name))
+                .expect("the published record verifies")
+                .sequence,
+        )
+    }
+
+    /// A scope's write-epoch floor answers to one owner-vouched plane — this
+    /// pointer — at every scope including the vault anchor, so a vouched epoch
+    /// below it is a rolled-back re-point rather than a plane that legitimately
+    /// trails.
+    #[test]
+    fn a_scope_pointer_below_the_write_epoch_floor_is_rejected() {
+        let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            5,
+        ))
+        .expect("raise the write floor");
+        stage_scope_pointer(
+            &harness,
+            &owner_identity(),
+            &RepointObject {
+                scope_id: SCOPE,
+                current_root: vault_root([0xb0; 16], Vec::new()).name,
+                write_epoch: 4,
+                min_read_epoch: SWEPT_EPOCH,
+                prev_root: None,
+            },
+        );
+
+        assert_eq!(
+            block_on(harness.net(&[]).consult_pointer(&SCOPE)),
+            Err(SweepResolveFailure::Rejected),
+            "a rollback is a trust verdict, never retryable staleness",
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).expect("floor read"),
+            Some(5),
+            "a refused consult leaves the floor where it stood",
+        );
+    }
+
+    /// The bar is `<`, not `<=`: the current epoch re-vouched is not a rollback.
+    #[test]
+    fn a_scope_pointer_exactly_at_the_write_epoch_floor_is_admitted() {
+        let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            5,
+        ))
+        .expect("raise the write floor");
+        let current_root = vault_root([0xb0; 16], Vec::new()).name;
+        stage_scope_pointer(
+            &harness,
+            &owner_identity(),
+            &RepointObject {
+                scope_id: SCOPE,
+                current_root: current_root.clone(),
+                write_epoch: 5,
+                min_read_epoch: SWEPT_EPOCH,
+                prev_root: None,
+            },
+        );
+
+        assert_eq!(
+            block_on(harness.net(&[]).consult_pointer(&SCOPE)),
+            Ok(Some(current_root.as_str().as_bytes().to_vec())),
+        );
     }
 
     /// Publish `repoint` at `SCOPE`'s scope-pointer name, sealed under the same

@@ -17,6 +17,7 @@ use crate::facade::NodeId;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{Scheduler, UnixMillis};
 use crate::sync::model::Snapshot;
+use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
 /// The open focus of the UI: the folder in view and any open shared scopes.
@@ -101,6 +102,60 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .collect()
 }
 
+/// The scope pointers a tick consults, in deterministic order: the vault
+/// anchor's first, then each open shared scope's, deduplicated.
+///
+/// The anchor rides every tick because a **write-only** rotation leaves the read
+/// epoch untouched, so it mints no superseded scope root for the sweep's
+/// event-driven consult to notice — this polled leg is the only path that
+/// advances the anchor scope's write-epoch floor in-session, and with it evicts
+/// the `writeScopeSeed` that rotation retired (#38 D4).
+pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
+    let mut scopes = vec![snapshot.root];
+    for target in focus_set(snapshot, focus) {
+        if let FocusTarget::ScopePointer(scope) = target
+            && !scopes.contains(&scope)
+        {
+            scopes.push(scope);
+        }
+    }
+    scopes
+}
+
+/// The scope pointers this tick consults: those in the window
+/// ([`consult_scopes`]) whose [`SyncTimingProfile::pointer_consult_interval`]
+/// has elapsed, so a poll cadence shorter than the interval does not re-resolve
+/// every pointer every tick. A scope no pass has consulted is due at once.
+///
+/// Routes [`ConsultReason::FocusTick`] and nothing else: cold start is the boot
+/// anchor's reason and on-access is the navigation leg's, neither of which the
+/// tick decides.
+pub fn consult_scopes_due(
+    snapshot: &Snapshot,
+    focus: &FocusWindow,
+    last_consulted: &BTreeMap<NodeId, UnixMillis>,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+) -> Vec<NodeId> {
+    consult_scopes(snapshot, focus)
+        .into_iter()
+        .filter(|scope| {
+            let due = last_consulted
+                .get(scope)
+                .is_none_or(|last| elapsed_at_least(now, *last, profile.pointer_consult_interval));
+            should_consult(false, due, false) == Some(ConsultReason::FocusTick)
+        })
+        .collect()
+}
+
+/// Whether `interval` has fully elapsed between `since` and `now` — the one
+/// comparison every timing bar in this module is stated over. Saturating, so a
+/// clock that stepped backwards reads as no time passed rather than as an
+/// enormous gap.
+fn elapsed_at_least(now: UnixMillis, since: UnixMillis, interval: Duration) -> bool {
+    now.0.saturating_sub(since.0) >= crate::sync::duration_millis(interval)
+}
+
 /// The focus window's folders due for an on-access refresh: those no pass has
 /// touched inside the staleness threshold ([`on_access_refresh_due`]). The poll
 /// leg refreshes the whole window regardless; this is the navigation leg's
@@ -133,9 +188,7 @@ pub fn focus_window_expired(
     touched: Option<UnixMillis>,
     profile: &SyncTimingProfile,
 ) -> bool {
-    touched.is_some_and(|last| {
-        now.0.saturating_sub(last.0) >= crate::sync::duration_millis(profile.focus_horizon)
-    })
+    touched.is_some_and(|last| elapsed_at_least(now, last, profile.focus_horizon))
 }
 
 /// Whether a cached folder outside the focus window is due for an on-access
@@ -146,7 +199,7 @@ pub fn on_access_refresh_due(
     last_refreshed: UnixMillis,
     profile: &SyncTimingProfile,
 ) -> bool {
-    now.0.saturating_sub(last_refreshed.0) >= crate::sync::duration_millis(profile.stale_after)
+    elapsed_at_least(now, last_refreshed, profile.stale_after)
 }
 
 /// A tick loop's control signal.
@@ -251,6 +304,50 @@ mod tests {
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
+    }
+
+    /// The vault anchor always rides the consult leg — a write-only rotation
+    /// re-points its scope pointer and mints no superseded root for the sweep —
+    /// and each open shared scope joins it once, in window order.
+    #[test]
+    fn consult_scopes_are_the_anchor_then_the_open_shared_scopes() {
+        let snap = Snapshot::new(id(0));
+        assert_eq!(
+            consult_scopes(&snap, &FocusWindow::default()),
+            vec![id(0)],
+            "a session with no shared scope open still consults its own anchor",
+        );
+
+        let focus = FocusWindow {
+            open_folder: None,
+            open_shared_scopes: vec![id(7), id(0), id(7)],
+        };
+        assert_eq!(
+            consult_scopes(&snap, &focus),
+            vec![id(0), id(7)],
+            "the anchor leads, and neither it nor a repeat is consulted twice",
+        );
+    }
+
+    /// `pointer_consult_interval` is the consult's pace, not the poll cadence.
+    #[test]
+    fn a_consult_is_due_once_the_interval_has_fully_elapsed() {
+        let profile = SyncTimingProfile::PRODUCTION;
+        let interval = crate::sync::duration_millis(profile.pointer_consult_interval);
+        let snap = Snapshot::new(id(0));
+        let focus = FocusWindow::default();
+        let due = |now: u64, stamped: Option<u64>| {
+            let mut last = BTreeMap::new();
+            if let Some(at) = stamped {
+                last.insert(id(0), UnixMillis(at));
+            }
+            !consult_scopes_due(&snap, &focus, &last, UnixMillis(now), &profile).is_empty()
+        };
+
+        assert!(due(u64::MAX, None), "a scope no pass has consulted is due");
+        assert!(!due(1_000, Some(1_000)));
+        assert!(!due(1_000 + interval - 1, Some(1_000)));
+        assert!(due(1_000 + interval, Some(1_000)));
     }
 
     #[test]

@@ -271,6 +271,27 @@ impl fmt::Display for CreateGrantError {
 
 impl std::error::Error for CreateGrantError {}
 
+/// Publish a node that is becoming a scope root for the **first time**.
+///
+/// Distinct from [`ScopeRootPublisher`], which CAS-publishes a re-sealed scope
+/// root over the record it replaces: a promotion has no such record. Its base is
+/// the granted node's own **child** record — the read body it already publishes,
+/// plus the write scope seed it inherits from the scope it is leaving, since a
+/// read grant cuts no write scope. Gating that record as a scope root, which it
+/// is not yet, refuses every honest promotion.
+pub trait ScopeRootPromoter {
+    /// Publish `record` at the granted node's name, over the node's current
+    /// gated child record inside `parent`. A node whose current record does not
+    /// gate — or which already answers as a scope root — is a fail-closed
+    /// refusal, never a publish under a fabricated body.
+    async fn promote_scope_root(
+        &self,
+        parent: &ChildScopeRef,
+        node: &NodeRef,
+        record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError>;
+}
+
 /// Mint a read grant for one recipient over `grantee`'s folder.
 ///
 /// The recipient's row over [`mint_grantee_scope`], then the mailbox share
@@ -291,7 +312,7 @@ pub async fn create_read_grant<E, R, P, M>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
     M: Mailbox,
 {
     // Refused ahead of the publishing sweep, so a self-grant costs no publish.
@@ -422,7 +443,7 @@ pub async fn mint_grantee_scope<E, R, P>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
 {
     let ConvergedSubtree { grantee, parent } = converged;
     // 1) The scope root's ipnsName, derived from the folder's write material.
@@ -495,9 +516,17 @@ where
     // 4) Publish the grantee scope root FIRST: it exists before the parent
     // references it (register-first / never-orphan), and its index carries the
     // reparented descendants before they are removed from the parent
-    // (dest-first).
+    // (dest-first). A folder becoming a scope root is a promotion, not a
+    // republish ([`ScopeRootPromoter`]).
     publisher
-        .publish_scope_root(&grantee_record)
+        .promote_scope_root(
+            &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
+            &NodeRef {
+                node_id: grantee.scope_id,
+                ipns_name: name_bytes.to_vec(),
+            },
+            &grantee_record,
+        )
         .await
         .map_err(CreateGrantError::Publish)?;
 
@@ -951,6 +980,20 @@ mod tests {
                 // Every scope this resolver reaches is a descendant.
                 carried_ascent_link: true,
             })
+        }
+    }
+
+    /// The promotion seam over the same recording publisher; the base's real
+    /// provenance is pinned against the production net
+    /// (`crates/engine/tests/owner_actions.rs`).
+    impl ScopeRootPromoter for FakeNet {
+        async fn promote_scope_root(
+            &self,
+            _parent: &ChildScopeRef,
+            _node: &NodeRef,
+            record: &ResealedScopeRoot,
+        ) -> Result<(), RotationPublishError> {
+            self.publish_scope_root(record).await
         }
     }
 

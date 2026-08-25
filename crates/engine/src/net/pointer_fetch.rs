@@ -11,10 +11,14 @@
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::suite::secret::SECRET_LEN;
 
 use super::fanout::fanout_get_verify;
-use crate::seams::{RecordTransport, SeamResult};
-use crate::sync::pointer::PointerFetch;
+use super::rotation::OwnerScopeKeys;
+use crate::gate::floor;
+use crate::seams::{FloorStore, RecordTransport, SeamResult};
+use crate::sync::pointer::{PointerFetch, open_repoint, scope_pointer_name};
 
 /// The record-plane [`PointerFetch`]: resolves pointer names over the borrowed
 /// [`RecordTransport`] seam. Holds no key material — a pure function of the
@@ -36,6 +40,79 @@ impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
             return Ok(None);
         };
         Ok(Some(verified.value))
+    }
+}
+
+/// Why a consult produced no fresher name, on rule 6's axis: a rejection is a
+/// fail-closed trust violation, a seam failure is availability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerConsultError {
+    /// A transport or floor-store failure — retryable, never a trust verdict.
+    Unavailable,
+    /// The re-point did not authenticate, or vouched a rolled-back write epoch.
+    Rejected,
+}
+
+/// One scope-pointer consult: fetch the block, authenticate the re-point,
+/// refuse a rolled-back write epoch, then advance the write-epoch floor on
+/// sight (floor law item 3, #38 D4).
+///
+/// Shared by both triggers the pointer discipline names — the sweep's
+/// `Superseded` verdict and the focus tick's polled leg — so the trust rules a
+/// consult enforces cannot differ between them.
+pub(crate) struct PointerConsult<'a> {
+    /// Derives the scope-pointer name (owner-only material, never published).
+    pub owner_pointer_seed: &'a [u8; SECRET_LEN],
+    /// The per-scope `pointer-read-key` derivation, and no wider capability.
+    pub scope_keys: &'a dyn OwnerScopeKeys,
+    /// The owner identity every re-point payload is signed under.
+    pub owner_identity: &'a EcdsaVerifier,
+    /// The pointer-payload envelope version a consulted re-point is read under.
+    pub payload_version: u64,
+}
+
+impl PointerConsult<'_> {
+    /// The scope's current owner-vouched root name, or `None` when the scope was
+    /// never re-pointed.
+    pub(crate) async fn run<T: RecordTransport, F: FloorStore>(
+        &self,
+        transport: &T,
+        floors: &F,
+        scope_id: &[u8; 16],
+    ) -> Result<Option<IpnsName>, PointerConsultError> {
+        let pointer = scope_pointer_name(self.owner_pointer_seed, scope_id);
+        let block = match RecordPointerFetch::new(transport).fetch(&pointer).await {
+            Ok(Some(block)) => block,
+            Ok(None) => return Ok(None),
+            Err(_) => return Err(PointerConsultError::Unavailable),
+        };
+        let pointer_read_key = self.scope_keys.pointer_read_key(scope_id);
+        let repoint = open_repoint(
+            &pointer_read_key,
+            self.payload_version,
+            scope_id,
+            self.owner_identity,
+            &block,
+        )
+        .map_err(|_| PointerConsultError::Rejected)?;
+        // The scope pointer is the write-epoch floor's only owner-vouched
+        // source at every scope, the vault anchor included: `RepointChannel`
+        // has no vault-pointer arm, so only provisioning ever writes that plane
+        // and it does so once, at the genesis epoch. A vouched epoch below the
+        // floor is therefore a rollback, not staleness (rule 6). Should the
+        // vault pointer ever re-point, this stage needs the read stage's
+        // narrowing in `floor::repoint_regression`, inverted.
+        if floor::write_epoch_regression(floors, scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| PointerConsultError::Unavailable)?
+            .is_some()
+        {
+            return Err(PointerConsultError::Rejected);
+        }
+        floor::advance_write_epoch_on_sight(floors, scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| PointerConsultError::Unavailable)?;
+        Ok(Some(repoint.current_root))
     }
 }
 
