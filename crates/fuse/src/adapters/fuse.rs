@@ -497,13 +497,20 @@ fn prepare(mountpoint: &Path) -> io::Result<()> {
                 return Err(io::Error::other("the mount point is not empty"));
             }
         }
+        // Owner-only from the moment it exists, not narrowed after: a
+        // `create_dir_all` takes the umask first, and the floor the mount
+        // carries has to hold over the directory fronting it the whole time.
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(mountpoint)?;
+            use std::os::unix::fs::DirBuilderExt;
+
+            return fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(mountpoint);
         }
         Err(error) => return Err(error),
     }
-    // Owner-only, matching what the mount itself admits; the directory is
-    // visible before the mount and again after it.
+    // One found is brought back to the same floor.
     restrict_dir(mountpoint)
 }
 
