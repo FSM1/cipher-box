@@ -84,6 +84,9 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     base_url: String,
     /// The short-lived access JWT, in memory only. Zeroized on replacement/drop.
     session: SessionBearer,
+    /// The read accelerator's pseudonym, in its own cell so the API leg and the
+    /// gateway leg cannot present each other's credential.
+    accelerator: SessionBearer,
     refresh_waiters: RefreshWaiters,
 }
 
@@ -100,15 +103,21 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             credentials,
             base_url: base,
             session: SessionBearer::default(),
+            accelerator: SessionBearer::default(),
             refresh_waiters: RefCell::new(None),
         }
     }
 
-    /// Hold this session's access token in `bearer` rather than a private cell,
-    /// so a reader sharing it sees every rotation. Replaces the cell outright:
-    /// call it on a fresh client, before login.
-    pub fn with_session_bearer(mut self, bearer: SessionBearer) -> Self {
-        self.session = bearer;
+    /// Hold this session's credentials in the caller's cells rather than
+    /// private ones, so a reader sharing them sees every rotation. Replaces
+    /// both cells outright: call it on a fresh client, before login.
+    pub fn with_session_bearers(
+        mut self,
+        session: SessionBearer,
+        accelerator: SessionBearer,
+    ) -> Self {
+        self.session = session;
+        self.accelerator = accelerator;
         self
     }
 
@@ -162,8 +171,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let response = ok_or_err(response)?;
         let tokens: TokenResponse = decode(&response)?;
         let is_new_user = tokens.is_new_user.unwrap_or(false);
-        self.store_tokens(tokens.access_token, tokens.refresh_token)
-            .await?;
+        self.store_tokens(tokens).await?;
         Ok(LoginOutcome { is_new_user })
     }
 
@@ -202,8 +210,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let response = ok_or_err(response)?;
         let tokens: TokenResponse = decode(&response)?;
         let is_new_user = tokens.is_new_user.unwrap_or(false);
-        self.store_tokens(tokens.access_token, tokens.refresh_token)
-            .await?;
+        self.store_tokens(tokens).await?;
         Ok(LoginOutcome { is_new_user })
     }
 
@@ -237,8 +244,13 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             public_key: body.public_key,
             private_key: Zeroizing::new(body.private_key),
         };
-        self.store_tokens(body.access_token, body.refresh_token)
-            .await?;
+        self.store_tokens(TokenResponse {
+            access_token: body.access_token,
+            refresh_token: body.refresh_token,
+            gateway_token: body.gateway_token,
+            is_new_user: body.is_new_user,
+        })
+        .await?;
         Ok(outcome)
     }
 
@@ -616,28 +628,25 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             return Err(error_from_response(&response));
         }
         let tokens: TokenResponse = decode(&response)?;
-        self.store_tokens(tokens.access_token, tokens.refresh_token)
-            .await
+        self.store_tokens(tokens).await
     }
 
-    /// Persist the refresh token and hold the access token in memory. The
+    /// Persist the refresh token and hold the two in-memory bearers. The
     /// refresh string is zeroized once handed to the store.
-    async fn store_tokens(
-        &self,
-        access_token: String,
-        refresh_token: String,
-    ) -> Result<(), ApiError> {
-        let refresh_token = Zeroizing::new(refresh_token);
+    async fn store_tokens(&self, tokens: TokenResponse) -> Result<(), ApiError> {
+        let refresh_token = Zeroizing::new(tokens.refresh_token);
         self.credentials
             .store_refresh_token(refresh_token.as_bytes())
             .await?;
-        self.session.set(access_token);
+        self.session.set(tokens.access_token);
+        self.accelerator.set(tokens.gateway_token);
         Ok(())
     }
 
-    /// Drop the in-memory access token and any persisted refresh token.
+    /// Drop both in-memory bearers and any persisted refresh token.
     async fn clear_session(&self) -> Result<(), ApiError> {
         self.session.clear();
+        self.accelerator.clear();
         self.credentials.clear_refresh_token().await?;
         Ok(())
     }
@@ -757,6 +766,14 @@ mod tests {
             .any(|(name, value)| name == AUTHORIZATION && value.starts_with("Bearer "))
     }
 
+    fn bearer_value(request: &HttpRequest) -> Option<&str> {
+        request
+            .headers
+            .iter()
+            .find(|(name, _)| name == AUTHORIZATION)
+            .map(|(_, value)| value.as_str())
+    }
+
     type Fakes = (
         ScriptedHttp,
         InMemoryCredentialStore,
@@ -784,7 +801,7 @@ mod tests {
         ));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
     }
@@ -916,13 +933,71 @@ mod tests {
         assert!(!client.is_authenticated());
     }
 
+    /// The two bearers are separate capabilities: the API leg presents the
+    /// session JWT, the gateway leg the read-scoped pseudonym.
+    #[test]
+    fn the_api_leg_presents_the_access_jwt_while_the_accelerator_holds_the_pseudonym() {
+        let (http, _creds, client) = fakes();
+        let accelerator = SessionBearer::default();
+        let client = client.with_session_bearers(SessionBearer::default(), accelerator.clone());
+        login(&http, &client);
+
+        http.enqueue_response(json_response(200, json!({})));
+        block_on(client.register(&[])).expect("register");
+
+        let request = http.requests().pop().unwrap();
+        assert_eq!(bearer_value(&request), Some("Bearer jwt-1"));
+        assert_eq!(
+            accelerator.peek().as_deref().map(String::as_str),
+            Some("gw-a"),
+            "the gateway leg reads the pseudonym from its own cell"
+        );
+    }
+
+    #[test]
+    fn rotation_replaces_the_pseudonym_the_accelerator_presents() {
+        let (http, _creds, client) = fakes();
+        let accelerator = SessionBearer::default();
+        let client = client.with_session_bearers(SessionBearer::default(), accelerator.clone());
+        login(&http, &client);
+
+        http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+        ));
+        block_on(client.refresh()).expect("refresh");
+
+        assert_eq!(
+            accelerator.peek().as_deref().map(String::as_str),
+            Some("gw-b")
+        );
+    }
+
+    #[test]
+    fn a_dead_session_drops_the_pseudonym_too() {
+        let (http, _creds, client) = fakes();
+        let accelerator = SessionBearer::default();
+        let client = client.with_session_bearers(SessionBearer::default(), accelerator.clone());
+        login(&http, &client);
+        http.enqueue_response(json_response(
+            401,
+            json!({ "message": "Invalid refresh token" }),
+        ));
+
+        assert_eq!(
+            block_on(client.refresh()).unwrap_err(),
+            ApiError::Unauthorized
+        );
+        assert!(!accelerator.is_held(), "gateway reads die with the session");
+    }
+
     #[test]
     fn refresh_sends_the_stored_token_and_rotates() {
         let (http, creds, client) = fakes();
         block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64) }),
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
         ));
 
         block_on(client.refresh()).expect("refresh");
@@ -945,7 +1020,7 @@ mod tests {
         let (http, _creds, client) = fakes();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "c".repeat(64) }),
+            json!({ "accessToken": "jwt", "refreshToken": "c".repeat(64), "gatewayToken": "gw-c" }),
         ));
         block_on(client.refresh()).expect("refresh via cookie");
         assert_eq!(body_json(&http.requests()[0]), json!({}));
@@ -976,7 +1051,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "jwt expired" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64) }),
+            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
         ));
         http.enqueue_response(json_response(200, json!({ "success": true })));
 
@@ -1000,7 +1075,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "expired" }))); // quota attempt
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64) }),
+            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
         )); // refresh ok
         http.enqueue_response(json_response(401, json!({ "message": "still bad" }))); // retry 401
 
@@ -1019,6 +1094,7 @@ mod tests {
             json!({
                 "accessToken": "jwt",
                 "refreshToken": "e".repeat(64),
+                "gatewayToken": "gw-e",
                 "isNewUser": true,
                 "publicKey": "02cafe",
                 "privateKey": private_key,
@@ -1282,7 +1358,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64) }),
+            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
         ));
 
         assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
@@ -1314,7 +1390,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64) }),
+            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
         ));
         assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert!(client.is_authenticated());
@@ -1359,6 +1435,7 @@ mod tests {
             json!({
                 "accessToken": "jwt-1\r\nX-Injected: yes",
                 "refreshToken": "a".repeat(64),
+                "gatewayToken": "gw-a",
             }),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
@@ -1375,7 +1452,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "no bearer" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64) }),
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
         ));
         http.enqueue_response(json_response(
             200,

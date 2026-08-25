@@ -4,14 +4,18 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
+import { GatewayToken } from './entities/gateway-token.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
+import { GatewayController } from './gateway.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { IdentityController } from './identity.controller';
+import { resolveAccessTtlSeconds } from './services/access-ttl';
 import { AuthService } from './services/auth.service';
 import { ChallengeService } from './services/challenge.service';
 import { EmailOtpService } from './services/email-otp.service';
+import { GatewayTokenService } from './services/gateway-token.service';
 import { GoogleOAuthService } from './services/google-oauth.service';
 import { IdentityExchangeService } from './services/identity-exchange.service';
 import { IdentityService } from './services/identity.service';
@@ -31,7 +35,7 @@ export function buildJwtOptions(configService: ConfigService) {
   if (!secret && nodeEnv !== 'development' && nodeEnv !== 'test') {
     throw new Error(`JWT_SECRET is required when NODE_ENV is '${nodeEnv}'`);
   }
-  const accessTtlSeconds = Number(configService.get('ACCESS_TOKEN_TTL_SECONDS') ?? 900);
+  const accessTtlSeconds = resolveAccessTtlSeconds(configService);
   return {
     secret: secret ?? 'cipherbox-dev-jwt-secret',
     signOptions: { expiresIn: accessTtlSeconds },
@@ -40,18 +44,19 @@ export function buildJwtOptions(configService: ConfigService) {
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, AuthMethod, RefreshToken, IdentitySubject]),
+    TypeOrmModule.forFeature([User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: buildJwtOptions,
     }),
   ],
-  controllers: [AuthController, IdentityController],
+  controllers: [AuthController, GatewayController, IdentityController],
   providers: [
     AuthService,
     TestAuthService,
     TokenService,
+    GatewayTokenService,
     ChallengeService,
     IdentityService,
     SiweService,

@@ -138,7 +138,7 @@ fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
     match (method, path) {
         (HttpMethod::Post, "/auth/test-login") => json(
             201,
-            r#"{"accessToken":"stub-access","refreshToken":"stub-refresh","isNewUser":true,"publicKey":"stub-public-key","privateKey":"00"}"#,
+            r#"{"accessToken":"stub-access","refreshToken":"stub-refresh","gatewayToken":"stub-gateway","isNewUser":true,"publicKey":"stub-public-key","privateKey":"00"}"#,
         ),
         (HttpMethod::Post, "/content/upload") => {
             json(201, &format!(r#"{{"cid":"stub","size":{}}}"#, body.len()))

@@ -52,6 +52,15 @@ What left the API relative to v1 — with the design that removed it:
   client ID. The two are not interchangeable.
 - Short-lived access JWT + rotating refresh token (HTTP-only cookie on web,
   OS keychain on desktop). Staging-gated test-login endpoint for e2e.
+- **Read accelerator token**: a third credential minted beside the access token
+  and rotating with it — an opaque per-session pseudonym, read-scoped, and the
+  only thing the gateway leg ever presents. It carries no claim, so the gateway
+  tier learns neither the account nor any capability past gateway reads; the
+  front verifies it against `GET /auth/gateway/verify`, which answers 204/401
+  and returns no identity. Its validity is derived from the refresh family, so
+  logout, reuse detection, and the account hard-delete revoke it with no second
+  revocation path; the verify endpoint's in-process cache bounds how long a
+  revoked token is still honoured.
 - **Device-approval rendezvous** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): request, poll, respond, cancel, and a
   pending list, under a **scoped, non-refreshable** pre-reconstruction token — a
   device that cannot yet reconstruct its key reaches these routes and nothing else.
@@ -171,8 +180,19 @@ decay) inverted into structure.
   pin would make repo GC walk sealed bytes it cannot interpret.
 - **Egress**: the API process serves no bytes. CipherBox runs a Kubo-backed
   **trustless gateway** (block/CAR responses, client-side CID verification)
-  gated by a CipherBox auth token — an accelerator for members. Any public
-  trustless gateway is the no-auth fallback; reads survive CipherBox infra loss.
+  gated by the read accelerator token above — never the session JWT, which would
+  put full API authority on the system's highest-frequency credential
+  presentation (roughly one per leaf block). Any public trustless gateway is the
+  no-auth fallback; reads survive CipherBox infra loss.
+- **What the `forward_auth` front owes the pseudonym.** Three requirements, all
+  load-bearing: deny on **any** non-204, not only 401, so a verify-side fault
+  fails closed; never log the `Authorization` header, since the raw pseudonym in
+  a proxy access log is a gateway credential at rest; and **strip** it before
+  proxying upstream, so it does not reach Kubo's logs either. Not logging client
+  IPs belongs here too — the pseudonym removes the account from the gateway
+  tier, but an IP recorded beside a read re-links it. The unlinkability claim is
+  scoped to a gateway-tier observer: the API necessarily resolves pseudonym to
+  account at verify time.
   Media streaming uses ranged block/CAR fetches through the existing
   service-worker decryption layer.
 

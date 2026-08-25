@@ -42,7 +42,7 @@ use cipherbox_engine::rotation::{
     WriteHistory,
 };
 use cipherbox_engine::seams::{
-    CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
+    CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
     MailboxItem as SealedMailboxItem, SeamError, SeamResult,
 };
 use cipherbox_engine::testkit::SeededEntropy;
@@ -1381,11 +1381,32 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
 /// A 429 is named here as `expect_auth` names it: every route below documents
 /// one, so a throttled run would otherwise fail as the refusal under test.
 async fn post_json(base: &str, path: &str, bearer: Option<&str>, body: serde_json::Value) -> u16 {
+    post_json_response(base, path, bearer, body).await.status
+}
+
+/// The parsed body of a POST the caller expects to succeed.
+async fn post_json_body(
+    base: &str,
+    path: &str,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let response = post_json_response(base, path, bearer, body).await;
+    assert_eq!(response.status, 200, "{path}: expected a 200");
+    serde_json::from_slice(&response.body).expect("json body")
+}
+
+async fn post_json_response(
+    base: &str,
+    path: &str,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> HttpResponse {
     let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
     if let Some(token) = bearer {
         headers.push(("authorization".to_string(), format!("Bearer {token}")));
     }
-    let status = ReqwestHttp::new()
+    let response = ReqwestHttp::new()
         .send(HttpRequest {
             method: HttpMethod::Post,
             url: format!("{base}{path}"),
@@ -1395,19 +1416,26 @@ async fn post_json(base: &str, path: &str, bearer: Option<&str>, body: serde_jso
             timeout_ms: Some(10_000),
         })
         .await
-        .expect("the API answers")
-        .status;
+        .expect("the API answers");
     assert_ne!(
-        status, 429,
+        response.status, 429,
         "{path}: the API rate-limited the suite (429). Raise the throttle limits on the API \
          under test."
     );
-    status
+    response
 }
 
 /// The access token of a fresh test-login session, read straight off the wire —
 /// the engine's client keeps its own inside.
 async fn test_login_access_token(base: &str, handle: &str) -> String {
+    test_login_body(base, handle).await["accessToken"]
+        .as_str()
+        .expect("an access token")
+        .to_string()
+}
+
+/// The whole token-response body of a fresh test-login session.
+async fn test_login_body(base: &str, handle: &str) -> serde_json::Value {
     let response = ReqwestHttp::new()
         .send(HttpRequest {
             method: HttpMethod::Post,
@@ -1433,11 +1461,90 @@ async fn test_login_access_token(base: &str, handle: &str) -> String {
         response.status, 200,
         "test login is available on the contract stack"
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&response.body).expect("login json");
-    parsed["accessToken"]
-        .as_str()
-        .expect("an access token")
-        .to_string()
+    serde_json::from_slice(&response.body).expect("login json")
+}
+
+/// The status of a bare GET, optionally bearing `token` — how the gateway front
+/// asks the API whether a read accelerator credential is still good.
+async fn get_status(base: &str, path: &str, bearer: Option<&str>) -> u16 {
+    let headers = match bearer {
+        Some(token) => vec![("authorization".to_string(), format!("Bearer {token}"))],
+        None => Vec::new(),
+    };
+    ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{base}{path}"),
+            headers,
+            body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: Some(10_000),
+        })
+        .await
+        .expect("the API answers")
+        .status
+}
+
+/// The gateway leg presents a read-scoped pseudonym, not the session JWT: the
+/// verify endpoint the accelerator's `forward_auth` front calls accepts the one
+/// and refuses the other, and the pseudonym rotates with the access token.
+#[tokio::test]
+async fn the_accelerator_token_is_read_scoped_and_rotates_with_the_session() {
+    let base = require_stack!("the_accelerator_token_is_read_scoped_and_rotates_with_the_session");
+    let login = test_login_body(&base, "contract-gateway-token").await;
+    let gateway_token = login["gatewayToken"].as_str().expect("a gateway token");
+    let access_token = login["accessToken"].as_str().expect("an access token");
+
+    assert_ne!(gateway_token, access_token);
+    assert_ne!(
+        gateway_token,
+        login["refreshToken"].as_str().expect("a refresh token")
+    );
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", Some(gateway_token)).await,
+        204,
+        "the minted pseudonym opens the accelerator"
+    );
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", Some(access_token)).await,
+        401,
+        "the session JWT is not a gateway credential"
+    );
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", None).await,
+        401,
+        "the leg is gated, not open"
+    );
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", Some(&"c".repeat(64))).await,
+        401,
+        "a well-formed token the API never minted is refused"
+    );
+
+    // A second session, never presented at the gateway: the API caches every
+    // verified answer, so the superseded pseudonym of a session already checked
+    // above would still be honoured for the length of that window.
+    let rotating = test_login_body(&base, "contract-gateway-rotation").await;
+    let superseded = rotating["gatewayToken"].as_str().expect("a gateway token");
+    let refreshed = post_json_body(
+        &base,
+        "/auth/refresh",
+        None,
+        serde_json::json!({ "refreshToken": rotating["refreshToken"] }),
+    )
+    .await;
+    let rotated = refreshed["gatewayToken"].as_str().expect("a gateway token");
+
+    assert_ne!(rotated, superseded, "refresh rotates the pseudonym");
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", Some(rotated)).await,
+        204
+    );
+    assert_eq!(
+        get_status(&base, "/auth/gateway/verify", Some(superseded)).await,
+        401,
+        "the superseded pseudonym stops opening the accelerator"
+    );
 }
 
 /// A well-formed Ed25519 signature that is not the right one. It passes DTO

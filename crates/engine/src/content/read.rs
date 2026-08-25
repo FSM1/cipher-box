@@ -69,9 +69,9 @@ struct BearerCell {
 }
 
 /// The credential a gateway leg presents, read at request time rather than
-/// captured. The accelerator's is the live session access token, which rotates
-/// on every refresh and is dropped at logout, so the API client and the gateway
-/// share one cell instead of the token being copied into the gateway once.
+/// captured. The accelerator's is the read-scoped pseudonym login mints, which
+/// rotates on every refresh and is dropped at logout, so the API client and the
+/// gateway share one cell instead of the token being copied in once.
 ///
 /// Empty is the public-fallback state and the pre-login state alike: a leg with
 /// no token sends no `Authorization` header. The token is a credential — held

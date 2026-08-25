@@ -43,6 +43,12 @@ export const THROTTLE_SURFACES = {
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
   /**
+   * The gateway front's forward_auth leg: one bucket shared by every member
+   * reading at once, since the calls all arrive from that front's address. A
+   * ceiling on an unauthenticated, database-touching surface, not a tuned value.
+   */
+  gatewayVerify: { default: { limit: 6_000, ttl: 60_000 } },
+  /**
    * Mailbox post: per SENDER account (AccountThrottlerGuard keys by the
    * authenticated account). This same bucket rate-limits the unknown-recipient
    * existence oracle — an account can only probe pubkeys at the post rate.

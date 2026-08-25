@@ -11,6 +11,8 @@ import { ChallengeService } from '../auth/services/challenge.service';
 import { IdentityService } from '../auth/services/identity.service';
 import { SiweService } from '../auth/services/siwe.service';
 import { TestAuthService } from '../auth/services/test-auth.service';
+import { GatewayToken } from '../auth/entities/gateway-token.entity';
+import { GatewayTokenService } from '../auth/services/gateway-token.service';
 import { TokenService } from '../auth/services/token.service';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
@@ -36,12 +38,13 @@ describe('ops HTTP surface (real Postgres)', () => {
     db = await createIntegrationDatabase({ poolMax: 10 });
     ctx = await createHttpIntegrationApp({
       db,
-      entities: [User, AuthMethod, RefreshToken],
+      entities: [User, AuthMethod, RefreshToken, GatewayToken],
       controllers: [AuthController],
       providers: [
         AuthService,
         TestAuthService,
         TokenService,
+        GatewayTokenService,
         ChallengeService,
         IdentityService,
         SiweService,

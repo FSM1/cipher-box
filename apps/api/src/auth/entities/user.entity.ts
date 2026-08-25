@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { AuthMethod } from './auth-method.entity';
+import { GatewayToken } from './gateway-token.entity';
 import { RefreshToken } from './refresh-token.entity';
 
 /**
@@ -43,4 +44,7 @@ export class User {
 
   @OneToMany(() => RefreshToken, (refreshToken) => refreshToken.user)
   refreshTokens: RefreshToken[];
+
+  @OneToMany(() => GatewayToken, (gatewayToken) => gatewayToken.user)
+  gatewayTokens: GatewayToken[];
 }

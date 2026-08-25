@@ -2,17 +2,20 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'node:crypto';
 import { IsNull, LessThan, Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
+import { sha256Hex } from '../../common/hash';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import { GatewayTokenService } from './gateway-token.service';
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
+  /** The read accelerator's opaque pseudonym, minted by GatewayTokenService. */
+  gatewayToken: string;
 }
 
 export interface ScopedToken {
@@ -42,6 +45,9 @@ const MAX_SCOPED_TTL_SECONDS = 3600;
  * Presenting an already-used token is reuse detection — the whole family is
  * hard-deleted (every descendant dies with it), forcing a fresh login.
  * Logout and revocation are hard deletes, never soft flags.
+ *
+ * A third credential rides the same rotation: the read accelerator's opaque
+ * pseudonym, minted per family so it dies with the session that owns it.
  */
 @Injectable()
 export class TokenService {
@@ -53,6 +59,7 @@ export class TokenService {
     private readonly jwtService: JwtService,
     private readonly clock: Clock,
     private readonly entropy: Entropy,
+    private readonly gatewayTokenService: GatewayTokenService,
     configService: ConfigService,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>
@@ -69,8 +76,8 @@ export class TokenService {
   /** Issue an access JWT and start a fresh refresh-token family. */
   async createTokenPair(userId: string, publicKey: string): Promise<TokenPair> {
     const accessToken = await this.signAccessToken(userId, publicKey);
-    const refreshToken = await this.mintRefreshToken(userId, this.entropy.randomUuid());
-    return { accessToken, refreshToken };
+    const session = await this.mintSessionCredentials(userId, this.entropy.randomUuid());
+    return { accessToken, ...session };
   }
 
   /**
@@ -144,8 +151,8 @@ export class TokenService {
 
     const publicKey = await publicKeyByUserId(existing.userId);
     const accessToken = await this.signAccessToken(existing.userId, publicKey);
-    const refreshToken = await this.mintRefreshToken(existing.userId, existing.familyId);
-    return { accessToken, refreshToken };
+    const session = await this.mintSessionCredentials(existing.userId, existing.familyId);
+    return { accessToken, ...session };
   }
 
   /** Hard-delete every refresh token the user holds (logout everywhere). */
@@ -161,7 +168,14 @@ export class TokenService {
     return this.jwtService.signAsync({ sub: userId, publicKey });
   }
 
-  private async mintRefreshToken(userId: string, familyId: string): Promise<string> {
+  /**
+   * A family's two stored credentials, born together: the refresh row that
+   * defines the session, and the pseudonym whose validity derives from it.
+   */
+  private async mintSessionCredentials(
+    userId: string,
+    familyId: string
+  ): Promise<{ refreshToken: string; gatewayToken: string }> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
     await this.refreshTokenRepository.save({
       userId,
@@ -170,10 +184,13 @@ export class TokenService {
       expiresAt: new Date(this.clock.now().getTime() + this.refreshTtlMs),
       usedAt: null,
     });
-    return rawToken;
+    return {
+      refreshToken: rawToken,
+      gatewayToken: await this.gatewayTokenService.mintForFamily(userId, familyId),
+    };
   }
 
   private hashToken(rawToken: string): string {
-    return createHash('sha256').update(rawToken).digest('hex');
+    return sha256Hex(rawToken);
   }
 }
