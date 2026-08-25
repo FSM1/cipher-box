@@ -70,10 +70,9 @@ app-staging.cipherbox.cc {
 	}
 
 	handle {
-		# The verify leg learns only whether the session is alive — never the
-		# requested path, so never account+CID per read. The deletes also drop
-		# client-supplied copies. X-Forwarded-For stays: the API rate-limits
-		# this surface by client IP.
+		# The verify leg never learns the path, so never account+CID per read; the
+		# deletes drop client-supplied copies too. X-Forwarded-For stays — the API
+		# rate-limits this surface per client.
 		reverse_proxy api:3000 {
 			method GET
 			rewrite /auth/gateway/verify?
@@ -92,8 +91,11 @@ app-staging.cipherbox.cc {
 			}
 		}
 
+		# An accelerator's stdout ships offsite, and an IP logged beside a CID
+		# re-links the account as surely as the pseudonym would.
 		reverse_proxy {args[0]} {
 			header_up -Authorization
+			header_up -X-Forwarded-For
 		}
 	}
 }
@@ -104,6 +106,8 @@ gateway-staging.cipherbox.cc {
 
 routing-staging.cipherbox.cc {
 	# Signed IPNS records are self-authenticating, so publishing needs no token.
+	# The snippet's gate is an unmatched `handle`, which Caddy orders after every
+	# matched one, so this wins the PUT wherever the import sits.
 	@publish {
 		method PUT
 		path /routing/v1/ipns/*
@@ -114,7 +118,10 @@ routing-staging.cipherbox.cc {
 		request_body {
 			max_size 64KB
 		}
-		reverse_proxy someguy:8190
+		reverse_proxy someguy:8190 {
+			header_up -Authorization
+			header_up -X-Forwarded-For
+		}
 	}
 
 	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS"

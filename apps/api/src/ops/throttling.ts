@@ -43,16 +43,10 @@ export const THROTTLE_SURFACES = {
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
   /**
-   * The gateway front's forward_auth leg, per client address — the front
-   * forwards it, and `TRUST_PROXY_HOPS` is what lets the tracker read it
-   * instead of the front's own.
-   *
-   * 50 presentations/s: the read leg presents once per sealed leaf, leaves are
-   * 1 MiB, so this caps one member's sustained read at ~50 MiB/s — above the
-   * hosted accelerator's own serving rate, and the focus-window poll's handful
-   * of resolves per tick sits inside the rounding. It doubles as the abuse
-   * bound: a refused token costs one indexed lookup per distinct token per
-   * second, so this is also what one address can push at the database.
+   * The gateway front's forward_auth leg, per client address (see
+   * `TRUST_PROXY_HOPS`). 50/s: one presentation per 1 MiB sealed leaf, so
+   * ~50 MiB/s of sustained read per member — and the per-address bound on
+   * refused-token lookups at the database.
    */
   gatewayVerify: { default: { limit: 3_000, ttl: 60_000 } },
   /**

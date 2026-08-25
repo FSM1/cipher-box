@@ -8,7 +8,7 @@ import {
 import { Observable, throwError } from 'rxjs';
 import { catchError, tap } from 'rxjs/operators';
 import { AuthOutcome, MetricsService } from '../ops/metrics.service';
-import { routeLabel } from '../ops/route-label';
+import { routeLabelFor } from '../ops/route-label';
 
 /**
  * Attempt/outcome counts for the auth surface. A refused credential and a
@@ -20,7 +20,7 @@ export class AuthMetricsInterceptor implements NestInterceptor {
   constructor(private readonly metricsService: MetricsService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const route = routeLabel(context.switchToHttp().getRequest<{ route?: { path?: string } }>());
+    const route = routeLabelFor(context);
     const observe = (outcome: AuthOutcome): void =>
       this.metricsService.observeAuthAttempt(route, outcome);
 

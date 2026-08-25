@@ -3,6 +3,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityService } from '../../auth/services/identity.service';
 import { MetricsService } from '../../ops/metrics.service';
+import { sampleMetric } from '../../testing/prometheus';
 import { User } from '../../auth/entities/user.entity';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -26,7 +27,9 @@ describe('MailboxService', () => {
   let users: FakeRepository<User>;
   let clock: FakeClock;
   let service: MailboxService;
-  let metrics: MetricsService;
+  // One instance for the file: the constructor installs process-global default
+  // collectors that are never torn down, so one per test leaks them.
+  const metrics = new MetricsService();
   let recipient: string;
   let sender: string;
 
@@ -34,7 +37,6 @@ describe('MailboxService', () => {
     messages = new FakeRepository<MailboxMessage>();
     users = new FakeRepository<User>();
     clock = new FakeClock();
-    metrics = new MetricsService();
     service = new MailboxService(
       messages as never,
       users as never,
@@ -152,17 +154,21 @@ describe('MailboxService', () => {
       expect(messages.rows).toHaveLength(3);
     });
 
+    const depth = async () => sampleMetric(await metrics.metricsText(), 'mailbox_pending_messages');
+    const capRejections = async () =>
+      sampleMetric(await metrics.metricsText(), 'mailbox_pending_cap_rejections_total');
+
     it('reports the pending depth as of the scrape, not the last write', async () => {
-      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 0');
+      expect(await depth()).toBe(0);
       await service.post(sender, {
         recipientPublicKey: recipient,
         blob: base64Blob(64),
         idempotencyKey: 'k0',
       });
-      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 1');
+      expect(await depth()).toBe(1);
       // A row deleted underneath the service still moves the gauge.
       messages.rows.length = 0;
-      expect(await metrics.metricsText()).toContain('mailbox_pending_messages 0');
+      expect(await depth()).toBe(0);
     });
 
     it('serves the rest of the scrape when the depth sampler faults', async () => {
@@ -180,7 +186,7 @@ describe('MailboxService', () => {
           idempotencyKey: `k${i}`,
         });
       }
-      expect(await metrics.metricsText()).toContain('mailbox_pending_cap_rejections_total 0');
+      const before = await capRejections();
 
       await expect(
         service.post(sender, {
@@ -189,7 +195,7 @@ describe('MailboxService', () => {
           idempotencyKey: 'overflow',
         })
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(await metrics.metricsText()).toContain('mailbox_pending_cap_rejections_total 1');
+      expect(await capRejections()).toBe((before ?? 0) + 1);
     });
 
     it('lets an idempotent replay through even when the mailbox is full', async () => {

@@ -22,25 +22,21 @@ import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-in
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 
 /**
- * Every IP-keyed limit reads `req.ip`. Behind a reverse proxy that is the
- * proxy's own address, so without `TRUST_PROXY_HOPS` the whole internet shares
- * one bucket and the auth cap becomes a global availability limit instead of a
- * per-attacker one.
- *
- * The forwarded address is also counted from the RIGHT of `X-Forwarded-For`: an
- * entry a client injects lands left of the hop count, so it must not become the
- * key. Driven through `/auth/challenge` with invalid bodies — the guard runs
- * before validation, so within the cap the answer is 400 and past it 429.
+ * `TRUST_PROXY_HOPS` is what makes every IP-keyed limit per-attacker rather than
+ * global; see .env.example for how to size it. Driven through `/auth/challenge`
+ * with invalid bodies, since the guard runs before validation: within the cap
+ * the answer is 400, past it 429.
  */
 describe('trust-proxy client-address resolution (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp | undefined;
-  const originalEnv = { ...process.env };
 
   /** A cap low enough that one forwarded address exhausts it in a short burst. */
   const CAP = 4;
   const CLIENT = '198.51.100.7';
   const OTHER_CLIENT = '203.0.113.9';
+  /** An entry no proxy wrote — whatever the caller chose to prepend. */
+  const SPOOF = '192.0.2.44';
 
   beforeAll(async () => {
     db = await createIntegrationDatabase({ poolMax: 5 });
@@ -49,7 +45,8 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
   afterEach(async () => {
     await ctx?.close();
     ctx = undefined;
-    process.env = { ...originalEnv };
+    delete process.env.TRUST_PROXY_HOPS;
+    delete process.env.THROTTLE_AUTH_LIMIT;
   });
 
   afterAll(async () => {
@@ -58,9 +55,7 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
 
   async function boot(hops: string | undefined): Promise<HttpIntegrationApp> {
     process.env.THROTTLE_AUTH_LIMIT = String(CAP);
-    if (hops === undefined) {
-      delete process.env.TRUST_PROXY_HOPS;
-    } else {
+    if (hops !== undefined) {
       process.env.TRUST_PROXY_HOPS = hops;
     }
     ctx = await createHttpIntegrationApp({
@@ -104,17 +99,25 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
     expect((await challenge(app, OTHER_CLIENT)).status).toBe(429);
   });
 
-  it('gives each forwarded client its own bucket at one hop', async () => {
+  it('keys each forwarded client separately at one hop', async () => {
     const app = await boot('1');
     expect(await exhaust(app, CLIENT)).toBe(429);
     expect((await challenge(app, OTHER_CLIENT)).status).toBe(400);
-  });
-
-  it('keys on the hop-counted address, not a client-injected one', async () => {
-    const app = await boot('1');
-    expect(await exhaust(app, CLIENT)).toBe(429);
     // Prepending an invented entry pushes the real address right of it; the hop
     // count still lands on the real one, so the bucket is not escaped.
     expect((await challenge(app, `192.0.2.1, ${CLIENT}`)).status).toBe(429);
+  });
+
+  /**
+   * The direction that fails OPEN, pinned so raising the count stays a decision
+   * rather than a default. One hop past the real chain and Express runs off the
+   * end of `X-Forwarded-For` onto the leftmost entry, which the client writes —
+   * so the caller, not the deployment, picks its own rate-limit bucket.
+   */
+  it('lets a client pick its own bucket when the hop count overshoots the chain', async () => {
+    const app = await boot('2');
+    expect(await exhaust(app, `${SPOOF}, ${CLIENT}`)).toBe(429);
+    // Same real client, a different invented entry: a fresh budget.
+    expect((await challenge(app, `198.18.0.1, ${CLIENT}`)).status).toBe(400);
   });
 });

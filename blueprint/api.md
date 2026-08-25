@@ -199,12 +199,20 @@ decay) inverted into structure.
   view of a read is a bare "is this session alive", and a forwarded request path
   would make it account + CID, or account + IPNS name, on every read. Not
   logging client IPs belongs here too: the pseudonym removes the account from
-  the gateway tier, but an IP recorded beside a read re-links it. The one
-  address the front does forward is the client's, to the verify leg alone, so
-  that surface's rate limit bounds a member rather than the front — the API
-  already sees that address on every other route the same member calls, so it
-  pairs nothing new. The unlinkability claim is scoped to a gateway-tier
-  observer: the API necessarily resolves pseudonym to account at verify time.
+  the gateway tier, but an IP recorded beside a read re-links it — and that
+  applies to the accelerators' own logs, which ship offsite, so the client
+  address is stripped alongside the pseudonym on every leg into Kubo or someguy.
+  The one place the front forwards it is the verify subrequest, so that
+  surface's rate limit bounds a member rather than the front.
+- **What the verify leg costs.** The API is told, per read, that this session is
+  alive and which address asked — no CID and no name. It already sees that
+  address on every other route the same member calls, so the pairing is not new;
+  what is new is the **cadence**, roughly one presentation per leaf block, which
+  is read timing, session duration, and approximate volume per account. The
+  in-process cache does not blunt it: the request still arrives. This is the
+  price of the unlinkability claim, not a hole in it — the claim is scoped to a
+  gateway-tier observer, and the API necessarily resolves pseudonym to account
+  at verify time.
   Media streaming uses ranged block/CAR fetches through the existing
   service-worker decryption layer.
 

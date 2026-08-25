@@ -177,16 +177,17 @@ Caddy enforces membership; Kubo serves. Token format and TTL are API
 build-time detail. Public trustless gateways remain the no-auth fallback,
 so this path can fail without breaking reads.
 
-The same front covers someguy's `/routing/v1` GET/resolve leg on a second
-vhost, with the PUT publish leg left open (api.md, Egress). Two vhosts,
-`gateway-staging` and `routing-staging`, both under the origin certificate
-the other vhosts use — so a new hostname needs its SAN and a DNS record
-before it resolves. Neither vhost logs, so their egress obligations are
-asserted against Caddy's adapted config in the **Lint** gate rather than
-read out of the Caddyfile. `TRUST_PROXY_HOPS` must equal the real number
-of proxies in front of the API (Cloudflare then Caddy, so 2): the front
-forwards the client address to the verify leg, and every IP-keyed rate
-limit counts back from it.
+Two vhosts, `gateway-staging` and `routing-staging`, both under the origin
+certificate the other vhosts use — so a new hostname needs its SAN and a DNS
+record before it resolves. Which legs are gated, and what the front owes the
+pseudonym, is api.md (Egress); because neither vhost logs, those obligations
+are asserted against Caddy's adapted config in the **Lint** gate rather than
+read out of the Caddyfile. `TRUST_PROXY_HOPS` must equal the number of
+`X-Forwarded-For` entries that actually reach the API, not the number of boxes
+in front of it: Caddy carries no `trusted_proxies`, so it replaces Cloudflare's
+header with a single entry of its own and the count is 1. Every IP-keyed rate
+limit keys on the address that resolves to — Cloudflare's edge, until Caddy is
+given Cloudflare's ranges to trust.
 
 **Web hosting**: Caddy keeps serving the static bundle from
 `/opt/cipherbox/web` — but the artifact deployed is the production build

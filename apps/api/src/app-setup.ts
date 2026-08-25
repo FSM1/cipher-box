@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import type { Express, NextFunction, Request, Response } from 'express';
+import { positiveIntConfig } from './common/config-int';
 import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
@@ -22,21 +23,13 @@ function maxUploadBytes(): number {
 }
 
 /**
- * Reverse-proxy hops between a client and this process, from
- * `TRUST_PROXY_HOPS`. Every IP-keyed limit — login, refresh, the gateway
- * front's verify leg — keys on `req.ip`, which behind a proxy is the proxy's
- * own address: one bucket for the whole internet, so the auth cap becomes a
- * global availability limit instead of a per-attacker one.
- *
- * A hop COUNT, never `true`. Express trusts exactly that many entries from the
- * right of `X-Forwarded-For`, so an entry a client injects is pushed left of
- * the count and skipped; `true` would take the leftmost, which the client
- * writes. Over-counting has the same effect, so the default is 0 and a
- * direct-exposure deployment configures nothing.
+ * Reverse-proxy hops in front of this process; 0 disables the header entirely.
+ * A hop COUNT, never `true` — Express counts back from the right of
+ * `X-Forwarded-For`, so a client-written entry lands left of the count and is
+ * skipped. See `TRUST_PROXY_HOPS` in .env.example for how to size it.
  */
 function trustProxyHops(): number {
-  const value = Number(process.env.TRUST_PROXY_HOPS);
-  return Number.isInteger(value) && value > 0 ? value : 0;
+  return positiveIntConfig(process.env.TRUST_PROXY_HOPS, 0);
 }
 
 /**
@@ -97,10 +90,7 @@ function rawUploadBody(maxBytes: number) {
  * the supertest apps in tests — what is asserted is what ships.
  */
 export function configureApp(app: INestApplication): INestApplication {
-  const hops = trustProxyHops();
-  if (hops > 0) {
-    (app.getHttpAdapter().getInstance() as Express).set('trust proxy', hops);
-  }
+  (app.getHttpAdapter().getInstance() as Express).set('trust proxy', trustProxyHops());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

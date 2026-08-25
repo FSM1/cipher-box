@@ -129,8 +129,7 @@ describe('ops HTTP surface (real Postgres)', () => {
     }
 
     it('counts the auth surface by route and outcome', async () => {
-      // The earlier throttler cases drove /auth/challenge past its limit with
-      // invalid bodies, so its refusals are already recorded.
+      await request(http()).post('/auth/challenge').send({});
       expect(await scrape()).toMatch(
         /auth_attempts_total\{route="\/auth\/challenge",outcome="rejected"\} [1-9]\d*/
       );

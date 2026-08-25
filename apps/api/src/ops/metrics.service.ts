@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
-/** The outcome axis shared by the auth and gateway-verify counters. */
+/** Auth attempt outcome; 4xx and 5xx split so panels can alert separately. */
 export type AuthOutcome = 'success' | 'rejected' | 'error';
 
 /**
@@ -24,6 +24,8 @@ export class MetricsService {
   private readonly authAttemptsTotal: Counter<'route' | 'outcome'>;
   private readonly throttleRejectionsTotal: Counter<'route'>;
   private readonly gatewayVerifyTotal: Counter<'outcome'>;
+  // Late-bound: prom-client's types accept `collect` only in the constructor,
+  // and the sampler belongs to a module this one must not depend on.
   private mailboxDepthSample?: () => Promise<number>;
 
   constructor() {
