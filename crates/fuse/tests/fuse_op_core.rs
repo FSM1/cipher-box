@@ -957,11 +957,12 @@ fn a_case_sensitive_host_resolves_no_respelling_at_all() {
     block_on(core.lookup(ROOT_INO, "Report.txt")).expect("the stored spelling resolves");
 }
 
-/// The kernel cached the entry under the name a listing gave it, so a mount
-/// that invalidated the caller's respelling would leave the real cached entry
-/// alive for its whole TTL — and this backend's entry cache is never zero.
+/// A listing binds the kernel's entry to the stored spelling and a respelled
+/// lookup binds another to the one the caller typed. `notify_inval_entry`
+/// matches one exact name, so a mutation that named either alone would leave
+/// the other serving a node that has moved for its whole TTL.
 #[test]
-fn a_respelled_mutation_invalidates_the_name_the_kernel_cached() {
+fn a_respelled_mutation_invalidates_every_spelling_the_kernel_cached() {
     let adapter = RecordingAdapter::declaring(HostCapabilities {
         case_insensitive_lookup: true,
         ..base_capabilities()
@@ -972,22 +973,54 @@ fn a_respelled_mutation_invalidates_the_name_the_kernel_cached() {
     adapter.drain();
 
     block_on(core.rename(ROOT_INO, "REPORT.TXT", ROOT_INO, "moved.txt")).expect("rename");
-    assert!(
-        adapter.drain().contains(&Invalidation::Entry {
-            parent: ROOT_INO,
-            name: "Report.txt".to_owned(),
-        }),
-        "the source entry is invalidated as stored, not as respelled"
-    );
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &["Report.txt", "REPORT.TXT"]);
 
     block_on(core.rmdir(ROOT_INO, "ARCHIVE")).expect("rmdir");
-    assert!(
-        adapter.drain().contains(&Invalidation::Entry {
-            parent: ROOT_INO,
-            name: "Archive".to_owned(),
-        }),
-        "the removed entry is invalidated as stored, not as respelled"
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &["Archive", "ARCHIVE"]);
+}
+
+/// A rename's destination is resolved by the folding comparator on every host,
+/// so the node it replaces can be cached under a spelling this rename never
+/// mentions — and the entry left behind points at an unlinked node.
+#[test]
+fn a_replacing_rename_invalidates_the_displaced_spelling_too() {
+    let (mut core, adapter) = mount();
+    block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.create(ROOT_INO, "draft.txt", Access::ReadWrite)).expect("create");
+    adapter.drain();
+
+    block_on(core.rename(ROOT_INO, "draft.txt", ROOT_INO, "REPORT.TXT")).expect("rename");
+    assert_invalidates_names(
+        &adapter.drain(),
+        ROOT_INO,
+        &["draft.txt", "REPORT.TXT", "report.txt"],
     );
+}
+
+/// The junk fold is the one respelling an exact host still resolves, so it is
+/// the one an exact host can also leave a stale entry behind for.
+#[test]
+fn a_junk_removal_invalidates_the_spelling_it_was_asked_for() {
+    let adapter = RecordingAdapter::push_capable();
+    let mut core = mount_seeded(adapter.clone(), &[(".Ds_StOrE", NodeKind::File)]);
+    block_on(core.lookup(ROOT_INO, ".DS_Store")).expect("the canonical spelling resolves");
+    adapter.drain();
+
+    block_on(core.unlink(ROOT_INO, ".DS_Store")).expect("unlink");
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &[".Ds_StOrE", ".DS_Store"]);
+}
+
+/// Every name in `names` was invalidated under `parent`, spelled exactly so.
+fn assert_invalidates_names(seen: &[Invalidation], parent: u64, names: &[&str]) {
+    for name in names {
+        assert!(
+            seen.contains(&Invalidation::Entry {
+                parent,
+                name: (*name).to_owned(),
+            }),
+            "no invalidation named {name}: {seen:?}"
+        );
+    }
 }
 
 /// Junk another client committed is hidden from every listing, so the

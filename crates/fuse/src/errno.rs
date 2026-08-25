@@ -134,8 +134,6 @@ mod tests {
         }
     }
 
-    /// The class relations, from their one home — a device budget apart from an
-    /// account budget, availability apart from a fail-closed verdict.
     #[test]
     fn the_shared_class_rules_hold_for_errno() {
         crate::error::assert_class_rules_hold(errno_of);

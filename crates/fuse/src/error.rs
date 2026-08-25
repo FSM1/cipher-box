@@ -175,7 +175,7 @@ pub(crate) fn assert_class_rules_hold(code_of: fn(&VfsError) -> i32) {
     );
 
     // Availability is retryable; a fail-closed verdict is terminal. The two
-    // must stay apart however either value moves (security rule 6).
+    // must stay apart however either value moves.
     let unavailable = code_of(&VfsError::Unavailable {
         message: "no endpoint served a record this pass could adopt".to_owned(),
     });
