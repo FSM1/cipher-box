@@ -4,7 +4,8 @@ import type { EngineClient } from '@cipherbox/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { BrowserRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EngineProvider } from '../providers/EngineProvider';
+import type { WebCoreKitSession } from '../auth/coreKit';
+import { authWrapper, fakeCoreKitSession } from '../test/authFakes';
 import { InvitePage } from './InvitePage';
 
 /** Stands in for the engine's opaque capability; the page reads none of it. */
@@ -18,17 +19,29 @@ const FRAGMENT = 'a-link-fragment';
 function claimEngine(refusal: Error | null = null, signedIn = true) {
   const addressAtDispatch: string[] = [];
   let routerHash = '';
+  const listeners = new Set<() => void>();
+  let account: string | null = signedIn ? 'acct01' : null;
   const claimInviteLink = vi.fn((_fragment: string) => {
     addressAtDispatch.push(window.location.hash);
     return refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal);
   });
   const client = {
-    subscribeSession: () => () => undefined,
-    signedInAccount: () => (signedIn ? 'acct01' : null),
+    subscribeSession(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    signedInAccount: () => account,
     facade: {
       subscribe: () => () => undefined,
       snapshot: () => new Promise<never>(() => undefined),
       setFocus: () => Promise.resolve(),
+      // The hand-off a restored Core Kit session owes the engine; it is what
+      // gives this tab an account to claim with.
+      start(_secret: ArrayBuffer, accountId: string) {
+        account = accountId;
+        for (const listener of [...listeners]) listener();
+        return Promise.resolve();
+      },
       claimInviteLink,
     },
     reportFocus: () => undefined,
@@ -46,16 +59,21 @@ function claimEngine(refusal: Error | null = null, signedIn = true) {
  * Mounts the route under `StrictMode`, so its double-invoked lifecycle stands
  * for the remount a real tab can make: a link is spent once or not at all.
  */
-async function openAt(hash: string, engine = claimEngine()) {
+async function openAt(
+  hash: string,
+  engine = claimEngine(),
+  session: WebCoreKitSession = fakeCoreKitSession().session
+) {
   window.history.replaceState(null, '', `/invite${hash}`);
+  const Providers = authWrapper(engine.client, session);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <StrictMode>
-      <BrowserRouter>
-        <EngineProvider createClient={() => engine.client}>
+      <Providers>
+        <BrowserRouter>
           <engine.RouterHash />
           {children}
-        </EngineProvider>
-      </BrowserRouter>
+        </BrowserRouter>
+      </Providers>
     </StrictMode>
   );
   await act(async () => {
@@ -134,5 +152,21 @@ describe('the invite claim route', () => {
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('waiting');
     // A new tab, so signing in does not navigate this one off the capability.
     expect(screen.getByRole('link', { name: 'sign in' }).getAttribute('target')).toBe('_blank');
+    // A session is the tab's own, so the sign-in that happens in that new tab
+    // reaches this one only across a load.
+    expect(screen.getByTestId('invite-recheck')).toBeTruthy();
+  });
+
+  it('hands the engine a restored session, so an open link needs no second sign-in', async () => {
+    // The route sits outside `RequireAuth`, and nothing else on it would make
+    // the hand-off a signed-in browser still owes the engine.
+    const engine = claimEngine(null, false);
+    const { session } = fakeCoreKitSession({ loggedIn: true });
+
+    await openAt(`#${FRAGMENT}`, engine, session);
+
+    expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready');
+    expect(screen.getByTestId('invite-account').textContent).toContain('acct01');
+    expect(engine.claimInviteLink).not.toHaveBeenCalled();
   });
 });

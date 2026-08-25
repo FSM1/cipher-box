@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
 import { expiryAt, inviteUrl, LINK_LIFETIMES, type LinkLifetime } from '../../sharing/inviteLink';
@@ -32,6 +32,10 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const [lifetime, setLifetime] = useState<LinkLifetime>('7 days');
   // Held until the dialog closes and no longer: unmounting is what forgets it.
   const [link, setLink] = useState<string | null>(null);
+  // Closed before the dispatch rather than by a render: two activations in one
+  // frame would mint two links and strand the first, a live capability nothing
+  // can name again — and `busy` is itself the render-late value that misses it.
+  const minting = useRef(false);
 
   // `null` is "no ledger read yet", which the list must not draw as "granted to
   // nobody" — the two differ to an owner deciding whether to grant again.
@@ -60,12 +64,16 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   };
 
   const mintLink = () => {
-    // `disabled` flips a render late, so two clicks in one frame would mint two
-    // links and strand the first — a live capability nothing can name again.
-    if (busy) return;
-    void actions.createInviteLink(permission, expiryAt(lifetime, Date.now())).then((fragment) => {
-      if (fragment !== null) setLink(inviteUrl(fragment));
-    });
+    if (busy || minting.current) return;
+    minting.current = true;
+    void actions
+      .createInviteLink(permission, expiryAt(lifetime, Date.now()))
+      .then((fragment) => {
+        if (fragment !== null) setLink(inviteUrl(fragment));
+      })
+      .finally(() => {
+        minting.current = false;
+      });
   };
 
   const importContact = (code: Uint8Array) => {

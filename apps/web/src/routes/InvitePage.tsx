@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LoginError } from '../components/auth/LoginError';
+import { useAuth } from '../auth/useAuth';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { useCommandRunner } from '../hooks/useCommandRunner';
 
@@ -8,7 +9,7 @@ import { useCommandRunner } from '../hooks/useCommandRunner';
 type Progress = 'noLink' | 'claiming' | 'claimed' | 'refused';
 
 /** What the page is showing, once the session it needs is folded in. */
-type ClaimState = Progress | 'waiting' | 'ready';
+type ClaimState = Progress | 'checking' | 'waiting' | 'ready';
 
 /**
  * The invite claim route (blueprint/web-client.md "Composition"). The fragment
@@ -23,6 +24,10 @@ type ClaimState = Progress | 'waiting' | 'ready';
  */
 export function InvitePage() {
   const account = useEngineAccount();
+  // A route outside `RequireAuth` still owes the engine the secret a restored
+  // Core Kit session holds: without this hand-off the tab renders signed out
+  // over a live login (`auth/useAuth.ts`).
+  const { isSignedOut } = useAuth();
   const navigate = useNavigate();
   const { error, run } = useCommandRunner<'claimInviteLink'>();
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -31,7 +36,8 @@ export function InvitePage() {
   const [carriesLink] = useState(() => window.location.hash.length > 1);
 
   const state: ClaimState =
-    progress ?? (account === null ? 'waiting' : carriesLink ? 'ready' : 'noLink');
+    progress ??
+    (account !== null ? (carriesLink ? 'ready' : 'noLink') : isSignedOut ? 'waiting' : 'checking');
 
   const claim = () => {
     if (progress !== null) return;
@@ -60,11 +66,25 @@ export function InvitePage() {
         </p>
         {state === 'refused' && <LoginError message={error} />}
         {state === 'waiting' && (
-          // A new tab, because this one holds the link: the engine belongs to
-          // the origin, so a sign-in there settles the account this page waits on.
-          <a className="terminal-btn" href="/" target="_blank" rel="noopener noreferrer">
-            sign in
-          </a>
+          <>
+            {/* A new tab, because this one holds the link: navigating away from
+                the address drops the capability with it. */}
+            <a className="terminal-btn" href="/" target="_blank" rel="noopener noreferrer">
+              sign in
+            </a>
+            {/* A session belongs to the tab that started it
+                (`EngineClient.signedInAccount`), and this one restores its own
+                once, at load — so a sign-in elsewhere reaches it by reloading,
+                which the address bar carries the link across. */}
+            <button
+              type="button"
+              className="terminal-btn"
+              onClick={() => window.location.reload()}
+              data-testid="invite-recheck"
+            >
+              reload after signing in
+            </button>
+          </>
         )}
         {state === 'ready' && (
           <>
@@ -97,6 +117,7 @@ export function InvitePage() {
  * address bar, so a retry starts from wherever the member got it.
  */
 const MESSAGES: Record<ClaimState, string> = {
+  checking: 'checking whether this browser is signed in...',
   waiting: 'sign in to claim this invite — the link keeps until you do.',
   ready: 'this link shares a folder with you.',
   noLink: 'this address carries no invite link.',

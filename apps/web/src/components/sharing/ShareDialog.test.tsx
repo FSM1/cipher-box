@@ -377,6 +377,20 @@ describe('the invite link', () => {
     expect(screen.getByTestId('share-mint-link')).toBeTruthy();
   });
 
+  it('mints one link however fast the control is activated twice', async () => {
+    const engine = await share();
+
+    // Both land before React commits the busy state, so a second link would be
+    // a live capability the member never sees and cannot revoke.
+    await act(async () => {
+      const mint = screen.getByTestId('share-mint-link');
+      mint.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      mint.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(engine.facade.createInviteLink).toHaveBeenCalledTimes(1);
+  });
+
   it('holds a shown link against a dismissal that would discard it', async () => {
     await share();
 
