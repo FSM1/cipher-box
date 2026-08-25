@@ -457,6 +457,7 @@ fn inbox(device: &FakeDevice) -> Vec<Vec<u8>> {
 struct GrantScenario {
     world: FakeWorld,
     blocks: Blocks,
+    owner_device: FakeDevice,
     recipient_device: FakeDevice,
     engine: Engine<FakeSeamTypes>,
     _events: EventStream,
@@ -477,6 +478,7 @@ impl GrantScenario {
         Self {
             world,
             blocks,
+            owner_device,
             recipient_device,
             engine,
             _events,
@@ -658,6 +660,51 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
         inbox(&fx.recipient_device).len(),
         1,
         "the share pointer reached the recipient"
+    );
+}
+
+/// The read the share dialog renders from: engine truth, not a tally of the
+/// commands this session happened to issue. The contact book comes from the
+/// durable store, and the grant rows off the scope root's own committed ledger —
+/// so a reload, or another device's grant, reports the same list.
+#[test]
+fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
+    let mut fx = GrantScenario::new();
+    let recipient_pk = recipient_identity().verifying_key().to_sec1().to_vec();
+
+    let before = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert_eq!(
+        before
+            .contacts
+            .iter()
+            .map(|contact| contact.identity_public_key.clone())
+            .collect::<Vec<_>>(),
+        vec![recipient_pk.clone()],
+        "the imported contact is offered as a recipient with no re-import"
+    );
+    assert!(
+        before.grants.is_empty(),
+        "an ordinary folder is not a scope root, so nothing is granted at it"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let after = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    assert_eq!(after.scope, fx.folder);
+    assert_eq!(after.grants.len(), 1, "the granted scope commits one row");
+    assert_eq!(
+        after.grants[0].recipient_identity_public_key, recipient_pk,
+        "the row names the recipient the grant went to"
+    );
+    assert_eq!(after.grants[0].permission, Permission::Read);
+    assert_eq!(
+        block_on(floor::write_epoch_floor(
+            &fx.owner_device.floor_store,
+            &fx.folder.0
+        ))
+        .expect("floor read"),
+        Some(EPOCH),
+        "the mint seeded the new scope's write-epoch floor, or its own          owner-write-blob would never open"
     );
 }
 

@@ -61,8 +61,8 @@ pub use facade::{
     ApiBaseUrl, BlankApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter,
     Engine, EngineError, EngineView, Event, EventStream, LoginSecret, MAX_CONTACT_CODE_BYTES,
     MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause, Permission,
-    RefusedBudget, SessionStatus, SnapshotChild, SnapshotView, Staleness, StatFs, StreamHandle,
-    WriteHandle, WriteTarget,
+    RefusedBudget, SessionStatus, SharingContact, SharingGrant, SharingView, SnapshotChild,
+    SnapshotView, Staleness, StatFs, StreamHandle, WriteHandle, WriteTarget,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,

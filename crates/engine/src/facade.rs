@@ -17,15 +17,19 @@
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
+use core::num::NonZeroU64;
 use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::codec::RedactedBytes;
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{ChildScopeRef, GrantSection, ReadBody, Version, seal_content_key};
+use cipherbox_core::seal::{
+    ChildScopeRef, GrantLedgerEntry, GrantSection, ReadBody, Version, seal_content_key,
+};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
@@ -289,6 +293,83 @@ impl OverBudgetCause {
             OverBudgetCause::AccountQuota => RefusedBudget::Account,
         }
     }
+}
+
+/// One imported contact, projected key-free for a sharing UI: the two public
+/// keys a grant needs, and nothing else. The engine re-verifies the stored
+/// contact code before a row appears here, so a row is proof the binding held
+/// ([`Contact`](crate::grants::Contact)).
+#[derive(Clone, PartialEq, Eq)]
+pub struct SharingContact {
+    /// The peer's secp256k1 identity key, compressed SEC1 — the grant ledger's
+    /// recipient label and the address their mailbox answers at.
+    pub identity_public_key: Vec<u8>,
+    /// The peer's X25519 encryption subkey, which the imported code's binding
+    /// signature ties to `identity_public_key`.
+    pub encryption_public_key: Vec<u8>,
+}
+
+/// A peer's identity key is a stable cross-service identifier for a third party,
+/// so a derived `{:?}` would file the owner's whole contact book in host logs
+/// (the [`Command`] impl below withholds the same bytes for the same reason).
+impl fmt::Debug for SharingContact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharingContact")
+            .field(
+                "identity_public_key",
+                &RedactedBytes::of(&self.identity_public_key),
+            )
+            .field(
+                "encryption_public_key",
+                &RedactedBytes::of(&self.encryption_public_key),
+            )
+            .finish()
+    }
+}
+
+/// One grant standing on a rendered scope, projected from the scope root's own
+/// owner-signed grant ledger — the engine's truth, not a record of what this
+/// session happened to issue.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SharingGrant {
+    /// The recipient's secp256k1 identity key, which joins the row to a
+    /// [`SharingContact`]. All-zero for a row the owner could not vouch for
+    /// (an invite-link bearer, or an unattested ledger entry), which joins to
+    /// no contact.
+    pub recipient_identity_public_key: Vec<u8>,
+    /// The permission the scope root commits for this recipient.
+    pub permission: Permission,
+    /// The row's advisory expiry in Unix millis, if it carries one. Not a
+    /// capability boundary — no owner signature covers it.
+    pub expires_at: Option<u64>,
+}
+
+impl fmt::Debug for SharingGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharingGrant")
+            .field(
+                "recipient_identity_public_key",
+                &RedactedBytes::of(&self.recipient_identity_public_key),
+            )
+            .field("permission", &self.permission)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// A key-free read of the sharing state a host renders for one scope: this
+/// vault's whole verified contact book, and the grants the scope's own record
+/// commits — the same altitude as [`SnapshotView`], and the read that lets a UI
+/// stop mirroring its own command outcomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharingView {
+    /// The scope root this read is for.
+    pub scope: NodeId,
+    /// Every contact this vault has imported, ordered as the book stores them.
+    pub contacts: Vec<SharingContact>,
+    /// The grants standing on `scope`, ordered as the ledger commits them.
+    /// Empty for a node that is not a scope root — nothing is granted there.
+    pub grants: Vec<SharingGrant>,
 }
 
 /// One retained dead-lettered op and why it will never publish. The reason is
@@ -1818,6 +1899,19 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
             Err(PointerConsultError::Unavailable) => {}
         }
     }
+}
+
+/// Project a scope root's grant ledger for a host: the recipient label and the
+/// committed permission, and nothing the ledger's sealed half carries.
+fn project_grant_ledger(ledger: &[GrantLedgerEntry]) -> Vec<SharingGrant> {
+    ledger
+        .iter()
+        .map(|entry| SharingGrant {
+            recipient_identity_public_key: entry.recipient_identity_pk.to_vec(),
+            permission: entry.permission.into(),
+            expires_at: entry.expires_at.map(NonZeroU64::get),
+        })
+        .collect()
 }
 
 pub(crate) fn emit_trust_violation(
@@ -5101,6 +5195,93 @@ where {
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
+    }
+
+    /// The sharing state standing on `scope_root`, key-free: this vault's whole
+    /// verified contact book, and the grants the scope root's own owner-signed
+    /// ledger commits.
+    ///
+    /// The contact book is durable, so a contact imported in an earlier session
+    /// is offered without a re-import. The grant half is read from the record
+    /// plane rather than remembered, so a reload — or a grant another device
+    /// issued — renders the same list.
+    ///
+    /// A node the vault root's committed child-scope index does not name is not
+    /// a scope root, and nothing is granted at it: the grant list is empty, and
+    /// that emptiness is the answer, not an unknown.
+    pub async fn sharing(&self, scope_root: NodeId) -> Result<SharingView, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let contacts = StagingContactStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+        .contacts()
+        .await
+        .map_err(EngineError::from_contact_store)?
+        .into_iter()
+        .map(|contact| SharingContact {
+            identity_public_key: contact.identity_pk().to_sec1().to_vec(),
+            encryption_public_key: contact.enc_subkey().to_bytes().to_vec(),
+        })
+        .collect();
+        Ok(SharingView {
+            scope: scope_root,
+            contacts,
+            grants: self.scope_grants(session, scope_root).await?,
+        })
+    }
+
+    /// The grant ledger `scope_root`'s record commits, projected key-free.
+    ///
+    /// The authority for what is a scope root is the vault root's owner-signed
+    /// direct-child-scope index — the same authority
+    /// [`owner_scope`](Self::owner_scope) reads — so a node it does not name
+    /// carries no grants.
+    async fn scope_grants(
+        &self,
+        session: &SessionIdentity,
+        scope_root: NodeId,
+    ) -> Result<Vec<SharingGrant>, EngineError> {
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let parent = self.vault_root_scope()?;
+        let current = self
+            .owner_rotation_net(api, keys(), RotationAncestry::default(), None)
+            .resolve_vault_root(&parent)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        if scope_root.0 == parent.scope_id {
+            return Ok(project_grant_ledger(&current.grant_ledger));
+        }
+        let Some(scope) = current
+            .direct_child_scope_index
+            .iter()
+            .find(|child| child.scope_id == scope_root.0)
+            .cloned()
+        else {
+            return Ok(Vec::new());
+        };
+        let parent_node_seed =
+            Zeroizing::new(*kdf::node_seed(&current.override_seed, &scope_root.0).as_bytes());
+        let target = self
+            .owner_rotation_net(
+                api,
+                keys(),
+                RotationAncestry::default()
+                    .under_parent_node_seed(scope_root.0, Some(&parent_node_seed)),
+                None,
+            )
+            .resolve_anchored(&scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        Ok(project_grant_ledger(&target.grant_ledger))
     }
 
     /// Read one file node's full plaintext content (blueprint/engine.md

@@ -982,6 +982,13 @@ where
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
         };
+        // Floor law item 3's mint source: nothing else ever seeds a freshly
+        // minted scope's write-epoch floor, and its own owner-write-blob binds
+        // that floor as AAD. Before the publish, so a failed PUT leaves a local
+        // floor on a scope id nothing else reads rather than an unopenable root.
+        floor::advance_write_epoch_on_sight(self.floors, &record.scope_id, record.write_epoch)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?;
         self.root_publish()
             .run(&name, record, &override_seed, base)
             .await

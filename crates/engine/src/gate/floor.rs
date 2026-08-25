@@ -19,9 +19,10 @@
 //!    revocation boundary) and `writeEpoch` the write-epoch floor. The
 //!    [`RepointObject`] is authenticated by construction, so no floor moves on
 //!    an unsigned or non-owner re-point (see [`cold_seed`]).
-//! 3. **Pointer `writeEpoch` advances on sight** ([`advance_write_epoch_on_sight`])
-//!    — an owner-vouched write epoch above the durable floor raises it the
-//!    moment it is seen (#38 D4).
+//! 3. **An owner-vouched `writeEpoch` advances on sight**
+//!    ([`advance_write_epoch_on_sight`]) — above the durable floor it raises it
+//!    the moment it is seen (#38 D4). Two sources vouch one: a consulted scope
+//!    pointer, and a scope root this device is itself about to sign.
 //! 4. **Regression is fail-closed** — every advance is monotonic-max via the
 //!    store (raising below the stored floor is a no-op that keeps the max), so
 //!    a floor can never move backward.
@@ -376,10 +377,20 @@ pub async fn cold_seed_checked<F: FloorStore>(
         .map_err(ColdSeedError::Seam)
 }
 
-/// Advance the write-epoch floor on sight of an owner-vouched pointer
-/// `writeEpoch` (floor law item 3). Monotonic-max: a value at or below the
-/// durable floor is a no-op that reports the stored floor. Returns the
-/// resulting floor.
+/// Advance the write-epoch floor on sight of an owner-vouched `writeEpoch`
+/// (floor law item 3). Monotonic-max: a value at or below the durable floor is a
+/// no-op that reports the stored floor. Returns the resulting floor.
+///
+/// Two sources vouch one. A **consulted scope pointer** is the polled path
+/// (`crate::net::PointerConsult`). A **scope this device mints** is the other:
+/// a grant's promoted scope root has no re-point and no scope pointer, so no
+/// other path ever reaches its floor, and `write_plane_of` reads that floor as
+/// the AAD epoch its owner-write-blob was sealed at — unseeded, the scope is
+/// write-plane dead to the device that created it. That call raises the floor
+/// *before* its publish, which the pre-advance warning on [`WriteEpochLease`]
+/// does not cover: a read grant cuts no write scope, so the value is the epoch
+/// the node's write plane already lives at, never a target a publish has yet to
+/// reach.
 ///
 /// **Takes the [`WriteEpochLease`] for the raise**, and defers when the scope is
 /// already leased — returning the durable floor untouched and without waiting,
