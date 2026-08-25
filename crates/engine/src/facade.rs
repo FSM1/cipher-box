@@ -89,7 +89,7 @@ use crate::sync::drain::{Drain, DrainReport, DrainScope, published_op_mark};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pointer::PointerFetch;
+use crate::sync::pointer::{ConsultReason, PointerFetch, should_consult};
 use crate::sync::project::project_child_version;
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
@@ -104,7 +104,6 @@ use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
-use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, focus_folders, focus_folders_due,
     focus_window_expired, on_access_refresh_due, pointer_consult_due, resolve_mode, run_tick_loop,
@@ -7702,7 +7701,9 @@ mod tests {
         use crate::content::DAG_ROOT_CODEC;
         use crate::net::RE_PUT_INTERVAL;
         use crate::seams::{BoxedTask, EndpointId, RecordTransport};
-        use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+        use crate::sync::pointer::{
+            SessionRole, scope_pointer_name, scope_pointer_signer, seal_repoint, vault_pointer_name,
+        };
         use crate::testkit::{
             FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_SCOPE_SEED as SCOPE_SEED,
             OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, owner_root_fixture,
@@ -8230,6 +8231,75 @@ mod tests {
 
         /// The write-epoch floor is the same rule on the seed the drain mints
         /// every new node's name and signer from.
+        /// Publish an owner-signed re-point at `SCOPE`'s **scope**-pointer name
+        /// vouching `write_epoch` — the plane a write-only rotation re-points,
+        /// and the one the polled consult reads.
+        fn seed_scope_pointer(device: &FakeDevice, root_name: &IpnsName, write_epoch: u64) {
+            let owner_seed = kdf::owner_pointer_seed(&CAP_SECRET);
+            let read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &SCOPE);
+            let mut entropy = SeededEntropy::new(3);
+            let block = seal_repoint(
+                SessionRole::Owner,
+                &mut entropy,
+                read_key.as_bytes(),
+                POINTER_PAYLOAD_VERSION,
+                &owner_identity(),
+                &RepointObject {
+                    scope_id: SCOPE,
+                    current_root: root_name.clone(),
+                    write_epoch,
+                    min_read_epoch: EPOCH,
+                    prev_root: None,
+                },
+            )
+            .unwrap();
+            let record = IpnsRecord::create_v2(
+                &scope_pointer_signer(owner_seed.as_bytes(), &SCOPE),
+                &block,
+                1,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal();
+            let pointer_name = scope_pointer_name(owner_seed.as_bytes(), &SCOPE);
+            for endpoint in device.record_store.endpoints() {
+                device
+                    .record_store
+                    .seed_record(&endpoint, pointer_name.as_str(), record.clone());
+            }
+        }
+
+        /// The residual a write-only rotation leaves: it raises no read epoch, so
+        /// it mints no superseded scope root for the sweep's event-driven consult
+        /// — the polled tick leg is what advances the write-epoch floor, and with
+        /// it evicts the `writeScopeSeed` that rotation retired.
+        #[test]
+        fn the_focus_tick_consults_the_scope_pointer_and_advances_the_write_epoch_floor() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            assert!(engine.scope_write_seeds.borrow().contains_key(&SCOPE));
+
+            let (_, _, root_name) = owner_root();
+            seed_scope_pointer(&device, &root_name, EPOCH + 1);
+            tick(&world, &device, &mut tasks);
+
+            assert_eq!(
+                block_on(floor::write_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                Some(EPOCH + 1),
+                "the polled consult advanced the write-epoch floor on sight",
+            );
+            assert!(
+                !engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                "and the seed the rotation retired is evicted in the same pass",
+            );
+            assert!(
+                engine.pointer_consulted.borrow().contains_key(&ROOT),
+                "the pass stamped the consult, so the interval damper can pace it",
+            );
+        }
+
         #[test]
         fn a_write_epoch_floor_rise_evicts_the_cached_scope_write_seed() {
             let world = FakeWorld::new();

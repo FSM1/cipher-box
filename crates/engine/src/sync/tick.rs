@@ -288,6 +288,53 @@ mod tests {
         NodeId([b; 16])
     }
 
+    /// The vault anchor always rides the consult leg — a write-only rotation
+    /// re-points its scope pointer and mints no superseded root for the sweep —
+    /// and each open shared scope joins it once, in window order.
+    #[test]
+    fn consult_scopes_are_the_anchor_then_the_open_shared_scopes() {
+        let snap = Snapshot::new(id(0));
+        assert_eq!(
+            consult_scopes(&snap, &FocusWindow::default()),
+            vec![id(0)],
+            "a session with no shared scope open still consults its own anchor",
+        );
+
+        let focus = FocusWindow {
+            open_folder: None,
+            open_shared_scopes: vec![id(7), id(0), id(7)],
+        };
+        assert_eq!(
+            consult_scopes(&snap, &focus),
+            vec![id(0), id(7)],
+            "the anchor leads, and neither it nor a repeat is consulted twice",
+        );
+    }
+
+    /// `pointer_consult_interval` is the consult's pace, not the poll cadence.
+    #[test]
+    fn a_consult_is_due_once_the_interval_has_fully_elapsed() {
+        let profile = SyncTimingProfile::PRODUCTION;
+        let interval = crate::sync::duration_millis(profile.pointer_consult_interval);
+        let last = UnixMillis(1_000);
+
+        assert!(
+            pointer_consult_due(UnixMillis(u64::MAX), None, &profile),
+            "a scope no pass has consulted is due at once",
+        );
+        assert!(!pointer_consult_due(UnixMillis(1_000), Some(last), &profile));
+        assert!(!pointer_consult_due(
+            UnixMillis(1_000 + interval - 1),
+            Some(last),
+            &profile
+        ));
+        assert!(pointer_consult_due(
+            UnixMillis(1_000 + interval),
+            Some(last),
+            &profile
+        ));
+    }
+
     #[test]
     fn focus_set_is_vault_scopes_mailbox_then_the_folder_chain() {
         let mut snap = Snapshot::new(id(0));
