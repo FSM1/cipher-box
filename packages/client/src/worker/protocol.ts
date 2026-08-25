@@ -19,6 +19,14 @@
 
 import { isBuffer } from '../buffers.js';
 
+/**
+ * The most fragment characters any hop carries. A guard, not the contract — the
+ * engine's own bound is what a fragment answers to — and it belongs here so the
+ * sender refuses an oversize link before a structured clone puts it in another
+ * realm's heap.
+ */
+export const MAX_FRAGMENT_CHARS = 4096;
+
 /** Grant permission level (mirrors the facade `Permission`). */
 export type Permission = 'read' | 'write';
 
@@ -204,7 +212,7 @@ export type CommandDescriptor =
   /**
    * The fragment is the whole bearer capability, opaque above the engine: it
    * crosses verbatim, is never parsed, and never reaches a log or any durable
-   * store on the way.
+   * store on the way. Length-bounded by [`MAX_FRAGMENT_CHARS`].
    */
   | { kind: 'claimInviteLink'; fragment: string }
   | { kind: 'convertInviteClaims'; node: Uint8Array }

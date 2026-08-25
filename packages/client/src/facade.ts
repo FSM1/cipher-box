@@ -12,6 +12,7 @@
 
 import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
+import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -197,11 +198,7 @@ export class EngineFacade {
     return this.command({ kind: 'downgrade', node, recipientIdentityPublicKey });
   }
 
-  /**
-   * Mints an invite link; an omitted `expiresAt` mints one that never expires.
-   * Resolves with the link's whole bearer capability, which belongs in a URL
-   * fragment and nowhere durable.
-   */
+  /** Mints an invite link; an omitted `expiresAt` mints one that never expires. */
   async createInviteLink(
     node: Uint8Array,
     permission: Permission,
@@ -236,6 +233,12 @@ export class EngineFacade {
    * session-restore state and in the back/forward entry.
    */
   claimInviteLink(fragment: string): Promise<CommandOutcomeDescriptor> {
+    // Refused here rather than sent: past this call the fragment is cloned into
+    // the worker's realm — and, behind a follower, the leader tab's — before
+    // anything measures it (AGENTS.md 8).
+    if (fragment.length > MAX_FRAGMENT_CHARS) {
+      return Promise.reject(new Error('that is not an invite link'));
+    }
     return this.command({ kind: 'claimInviteLink', fragment });
   }
 

@@ -1,8 +1,8 @@
 import { StrictMode, type ReactNode } from 'react';
 import { EngineRequestError } from '@cipherbox/client';
 import type { EngineClient } from '@cipherbox/client';
-import { act, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
 import { InvitePage } from './InvitePage';
@@ -12,13 +12,14 @@ const FRAGMENT = 'a-link-fragment';
 
 /**
  * The engine as the claim route sees it, with the address bar sampled at the
- * moment the claim is dispatched — the ordering the capability's exposure window
- * depends on.
+ * moment the claim is dispatched — the ordering the capability's exposure
+ * window depends on — and react-router's own location readable after it.
  */
 function claimEngine(refusal: Error | null = null, signedIn = true) {
-  const hashAtDispatch: string[] = [];
+  const addressAtDispatch: string[] = [];
+  let routerHash = '';
   const claimInviteLink = vi.fn((_fragment: string) => {
-    hashAtDispatch.push(window.location.hash);
+    addressAtDispatch.push(window.location.hash);
     return refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal);
   });
   const client = {
@@ -33,20 +34,28 @@ function claimEngine(refusal: Error | null = null, signedIn = true) {
     reportFocus: () => undefined,
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
-  return { client, claimInviteLink, hashAtDispatch };
+  /** Reports what react-router's own location still carries. */
+  function RouterHash() {
+    routerHash = useLocation().hash;
+    return null;
+  }
+  return { client, claimInviteLink, addressAtDispatch, RouterHash, routerHash: () => routerHash };
 }
 
 /**
- * Mounts the route under `StrictMode`, so its double-invoked effect stands for
- * the remount a real tab can make: a link is spent once or not at all.
+ * Mounts the route under `StrictMode`, so its double-invoked lifecycle stands
+ * for the remount a real tab can make: a link is spent once or not at all.
  */
-async function claimAt(hash: string, engine = claimEngine()) {
-  window.location.hash = hash;
+async function openAt(hash: string, engine = claimEngine()) {
+  window.history.replaceState(null, '', `/invite${hash}`);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <StrictMode>
-      <MemoryRouter>
-        <EngineProvider createClient={() => engine.client}>{children}</EngineProvider>
-      </MemoryRouter>
+      <BrowserRouter>
+        <EngineProvider createClient={() => engine.client}>
+          <engine.RouterHash />
+          {children}
+        </EngineProvider>
+      </BrowserRouter>
     </StrictMode>
   );
   await act(async () => {
@@ -55,11 +64,30 @@ async function claimAt(hash: string, engine = claimEngine()) {
   return engine;
 }
 
+/** Presses the claim control and lets the command settle. */
+async function claim() {
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('invite-claim-confirm'));
+  });
+}
+
 afterEach(() => window.history.replaceState(null, '', '/'));
 
 describe('the invite claim route', () => {
+  it('spends nothing until the member asks for it', async () => {
+    // A page that claimed on mount would spend a link for any site that can
+    // navigate a signed-in tab here.
+    const { claimInviteLink } = await openAt(`#${FRAGMENT}`);
+
+    expect(claimInviteLink).not.toHaveBeenCalled();
+    expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready');
+    expect(screen.getByTestId('invite-account').textContent).toContain('acct01');
+  });
+
   it('hands the fragment to the facade verbatim, once, and holds none of it', async () => {
-    const { claimInviteLink } = await claimAt(`#${FRAGMENT}`);
+    const { claimInviteLink } = await openAt(`#${FRAGMENT}`);
+
+    await claim();
 
     expect(claimInviteLink.mock.calls).toEqual([[FRAGMENT]]);
     // Nothing rendered it, so nothing screenshots, logs, or restores it.
@@ -67,33 +95,44 @@ describe('the invite claim route', () => {
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('claimed');
   });
 
-  it('clears the address bar before the claim is awaited', async () => {
-    const { hashAtDispatch } = await claimAt(`#${FRAGMENT}`);
+  it('clears the address bar before the await, and the router location with it', async () => {
+    const engine = await openAt(`#${FRAGMENT}`);
 
-    expect(hashAtDispatch).toEqual(['']);
+    await claim();
+
+    expect(engine.addressAtDispatch).toEqual(['']);
     expect(window.location.hash).toBe('');
+    // Cleared through the router, so its in-memory location drops it too — a
+    // raw `history.replaceState` would leave the capability there for the tab's
+    // life.
+    expect(engine.routerHash()).toBe('');
   });
 
-  it('claims nothing at an address that carries no link', async () => {
-    const { claimInviteLink } = await claimAt('');
+  it('offers no claim at an address that carries no link', async () => {
+    const { claimInviteLink } = await openAt('');
 
     expect(claimInviteLink).not.toHaveBeenCalled();
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('noLink');
+    expect(screen.queryByTestId('invite-claim-confirm')).toBeNull();
   });
 
   it("renders the engine's refusal in its own words", async () => {
     const refusal = new EngineRequestError('malformed-invite-fragment', 'malformedInput');
-    await claimAt(`#${FRAGMENT}`, claimEngine(refusal));
+    await openAt(`#${FRAGMENT}`, claimEngine(refusal));
 
-    expect(screen.getByTestId('invite-error').textContent).toBe('malformed-invite-fragment');
+    await claim();
+
+    expect(screen.getByRole('alert').textContent).toBe('malformed-invite-fragment');
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('refused');
   });
 
   it('leaves the link in the address bar until there is a session to claim with', async () => {
-    const { claimInviteLink } = await claimAt(`#${FRAGMENT}`, claimEngine(null, false));
+    const { claimInviteLink } = await openAt(`#${FRAGMENT}`, claimEngine(null, false));
 
     expect(claimInviteLink).not.toHaveBeenCalled();
     expect(window.location.hash).toBe(`#${FRAGMENT}`);
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('waiting');
+    // A new tab, so signing in does not navigate this one off the capability.
+    expect(screen.getByRole('link', { name: 'sign in' }).getAttribute('target')).toBe('_blank');
   });
 });

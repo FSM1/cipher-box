@@ -1,38 +1,54 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { LoginError } from '../components/auth/LoginError';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { useCommandRunner } from '../hooks/useCommandRunner';
 
-/** How far the claim got. The link itself is never one of these. */
-type ClaimState = 'waiting' | 'noLink' | 'claiming' | 'claimed' | 'refused';
+/** How far a claim got. The link itself is never one of these. */
+type Progress = 'noLink' | 'claiming' | 'claimed' | 'refused';
+
+/** What the page is showing, once the session it needs is folded in. */
+type ClaimState = Progress | 'waiting' | 'ready';
 
 /**
  * The invite claim route (blueprint/web-client.md "Composition"). The fragment
  * is the whole bearer capability, so it goes from `location.hash` to the facade
  * and nowhere else — unparsed, unrendered, and never in state.
+ *
+ * The claim needs a gesture. A mount-time claim would let any page that can
+ * navigate a signed-in tab here — an `iframe`, a `window.open`, a mailed link —
+ * spend an attacker's link under the member's identity, which posts their
+ * contact code to a mailbox the link names and writes its minter into their
+ * contact book (`crates/engine/src/facade.rs`, `claim_invite_link`).
  */
 export function InvitePage() {
   const account = useEngineAccount();
+  const navigate = useNavigate();
   const { error, run } = useCommandRunner<'claimInviteLink'>();
-  const [state, setState] = useState<ClaimState>('waiting');
-  const spent = useRef(false);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  // Read once, before the claim clears it: afterwards an empty hash means spent,
+  // not absent.
+  const [carriesLink] = useState(() => window.location.hash.length > 1);
 
-  useEffect(() => {
-    if (account === null || spent.current) return;
-    spent.current = true;
+  const state: ClaimState =
+    progress ?? (account === null ? 'waiting' : carriesLink ? 'ready' : 'noLink');
+
+  const claim = () => {
+    if (progress !== null) return;
     const fragment = window.location.hash.slice(1);
     if (fragment === '') {
-      setState('noLink');
+      setProgress('noLink');
       return;
     }
-    // Cleared before the await, per `EngineFacade.claimInviteLink`, and through
-    // `history` so the restorable entry loses it too.
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-    setState('claiming');
+    // Through the router, so the capability leaves its in-memory location as
+    // well as the address bar — and before the await, per
+    // `EngineFacade.claimInviteLink`.
+    navigate(`${window.location.pathname}${window.location.search}`, { replace: true });
+    setProgress('claiming');
     void run('claimInviteLink', (facade) => facade.claimInviteLink(fragment)).then((accepted) =>
-      setState(accepted ? 'claimed' : 'refused')
+      setProgress(accepted ? 'claimed' : 'refused')
     );
-  }, [account, run]);
+  };
 
   return (
     <div className="login-container">
@@ -42,10 +58,28 @@ export function InvitePage() {
         <p className="login-description" data-testid="invite-status">
           {MESSAGES[state]}
         </p>
-        {state === 'refused' && error !== null && (
-          <p className="dialog-error" role="alert" data-testid="invite-error">
-            {error}
-          </p>
+        {state === 'refused' && <LoginError message={error} />}
+        {state === 'waiting' && (
+          // A new tab, because this one holds the link: the engine belongs to
+          // the origin, so a sign-in there settles the account this page waits on.
+          <a className="terminal-btn" href="/" target="_blank" rel="noopener noreferrer">
+            sign in
+          </a>
+        )}
+        {state === 'ready' && (
+          <>
+            <p className="login-description" data-testid="invite-account">
+              claiming as {account}
+            </p>
+            <button
+              type="button"
+              className="terminal-btn terminal-btn--filled"
+              onClick={claim}
+              data-testid="invite-claim-confirm"
+            >
+              claim this invite
+            </button>
+          </>
         )}
         {state === 'claimed' && (
           <Link className="terminal-btn" to="/files">
@@ -59,12 +93,14 @@ export function InvitePage() {
 
 /**
  * A claim reaches the owner's inbox; the grant it asks for is theirs to
- * complete, so this promises delivery and never access.
+ * complete, so this promises delivery and never access. A spent link leaves the
+ * address bar, so a retry starts from wherever the member got it.
  */
 const MESSAGES: Record<ClaimState, string> = {
-  waiting: 'sign in to claim this invite — reopen the link once you have.',
+  waiting: 'sign in to claim this invite — the link keeps until you do.',
+  ready: 'this link shares a folder with you.',
   noLink: 'this address carries no invite link.',
   claiming: 'claiming...',
   claimed: 'claim sent. the folder shows up once the person who shared it accepts.',
-  refused: 'this invite could not be claimed.',
+  refused: 'this invite could not be claimed — open the link again to retry.',
 };

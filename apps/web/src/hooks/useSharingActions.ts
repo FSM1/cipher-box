@@ -34,11 +34,12 @@ export interface SharingActions {
   revoke(contact: VerifiedContact): Promise<boolean>;
   downgrade(contact: VerifiedContact): Promise<boolean>;
   /**
-   * Mints a link over this scope, resolving with the engine's fragment — the
-   * whole bearer capability — or `null` where the engine refused. The caller
-   * frames it into a URL and puts it nowhere durable.
+   * Mints a link over this scope, resolving with the engine's fragment
+   * (`MintedInviteLink`) or `null` where the engine refused. An omitted
+   * `expiresAt` mints one that never expires. A link commits no grant row, so
+   * the sharing read this scope already has stands.
    */
-  createInviteLink(permission: Permission): Promise<string | null>;
+  createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -92,19 +93,14 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     createInviteLink: useCallback(
-      async (permission) => {
-        // The mint cuts a fresh scope at this node, so the ledger the dialog
-        // renders is a different one afterwards. A minted link is handed back
-        // even when that re-read fails: the capability already exists, and
-        // swallowing it strands the scope it opens.
-        const minted: { fragment: string | null } = { fragment: null };
+      async (permission, expiresAt) => {
+        let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          minted.fragment = (await facade.createInviteLink(target, permission)).fragment;
-          await read(facade);
+          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
         });
-        return minted.fragment;
+        return fragment;
       },
-      [run, read, target]
+      [run, target]
     ),
   };
 }

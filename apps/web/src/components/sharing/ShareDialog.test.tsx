@@ -7,7 +7,7 @@ import type {
   SharingDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
@@ -308,14 +308,41 @@ describe('the import step', () => {
   });
 });
 
+/** The link the dialog is showing, as the member reads it. */
+function shownLink(): string {
+  return (
+    screen.getByTestId('invite-link').querySelector('.details-copyable-text')?.textContent ?? ''
+  );
+}
+
+/** Noon on a fixed day, so a minted deadline is an exact number. */
+const MINTED_AT = Date.UTC(2026, 7, 25, 12);
+const SEVEN_DAYS_ON = BigInt(MINTED_AT + 7 * 86_400_000);
+
 describe('the invite link', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(MINTED_AT);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('mints a link that expires, unless the owner asks for one that does not', async () => {
+    const engine = await share();
+
+    fireEvent.change(screen.getByLabelText('link expires'), { target: { value: 'never' } });
+    await click('share-mint-link');
+
+    // `undefined` is the engine's "no deadline"; the default above is not it.
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', undefined);
+  });
+
   it('frames the engine fragment into the claim URL, in the URL fragment', async () => {
     const engine = await share();
 
     await click('share-mint-link');
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read');
-    const url = new URL(screen.getByTestId<HTMLInputElement>('invite-link-url').value);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON);
+    const url = new URL(shownLink());
     expect(url.pathname).toBe('/invite');
     expect(url.hash).toBe(`#${MINTED_FRAGMENT}`);
     // A fragment reaches no server; a query string would.
@@ -329,12 +356,11 @@ describe('the invite link', () => {
     await share();
     await click('share-mint-link');
 
-    await click('invite-link-copy');
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('copy invite link'));
+    });
 
-    expect(writeText).toHaveBeenCalledWith(
-      screen.getByTestId<HTMLInputElement>('invite-link-url').value
-    );
-    expect(screen.getByTestId('invite-link-copy').textContent).toBe('copied');
+    expect(writeText).toHaveBeenCalledWith(shownLink());
   });
 
   it("renders the engine's refusal of a write link instead of a link", async () => {
@@ -347,7 +373,7 @@ describe('the invite link', () => {
     expect(screen.getByTestId('dialog-error').textContent).toBe(
       'write-links-need-a-write-scope-cut'
     );
-    expect(screen.queryByTestId('invite-link-url')).toBeNull();
+    expect(screen.queryByTestId('invite-link')).toBeNull();
     expect(screen.getByTestId('share-mint-link')).toBeTruthy();
   });
 

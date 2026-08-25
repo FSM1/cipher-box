@@ -7,6 +7,7 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
+import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   BlockedOpDescriptor,
   CommandDescriptor,
@@ -104,9 +105,6 @@ function deadline(value: unknown, field: string): bigint {
   if (at <= 0n || at > 0xffff_ffff_ffff_ffffn) throw invalidField(field, value);
   return at;
 }
-
-/** A guard, not the contract: the engine's own bound is what a fragment answers to. */
-const MAX_FRAGMENT_CHARS = 4096;
 
 /**
  * A bearer link's URL fragment, length-guarded before the copy into wasm linear
