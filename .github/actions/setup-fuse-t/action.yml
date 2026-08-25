@@ -1,0 +1,25 @@
+name: Provision FUSE-T
+description: Install the pinned FUSE-T release — the macOS FUSE backend the host adapter links and mounts.
+
+runs:
+  using: composite
+  steps:
+    # One version across every macOS leg: the leg that compiles the adapter and
+    # the legs that mount it must not sit on different FUSE-T releases. Pinned
+    # by digest as well as version — this installer runs as root on the runner.
+    - name: Provision FUSE-T
+      shell: bash
+      env:
+        FUSE_T_VERSION: '1.2.7'
+        FUSE_T_SHA256: 6a29c747e61a86a405a189efc3de42812d73147135f93a1bb0624c1e7b90e654
+      run: |
+        set -euo pipefail
+        command -v pkg-config >/dev/null || brew install pkg-config
+        curl -fsSL --retry 3 -o /tmp/fuse-t.pkg \
+          "https://github.com/macos-fuse-t/fuse-t/releases/download/${FUSE_T_VERSION}/fuse-t-macos-installer-${FUSE_T_VERSION}.pkg"
+        echo "${FUSE_T_SHA256}  /tmp/fuse-t.pkg" | shasum -a 256 -c -
+        sudo installer -pkg /tmp/fuse-t.pkg -target /
+        # The vendored fuser's build script probes this and nothing else on
+        # macOS, so a mount that never linked FUSE-T fails here rather than at
+        # runtime.
+        pkg-config --exists fuse-t

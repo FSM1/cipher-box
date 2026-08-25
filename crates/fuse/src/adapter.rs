@@ -60,6 +60,12 @@ pub struct HostCapabilities {
     /// suppressed the cache — the `noattrcache` the FUSE-T SMB backend requires
     /// (blueprint/desktop.md "Freshness") — says `false`.
     pub attribute_cache: bool,
+    /// Whether a name the kernel hands over resolves case-insensitively — the
+    /// Windows convention — or matches the stored spelling exactly, which is
+    /// the unix one. Presentation only: collisions are decided by the engine's
+    /// one strict comparator on every platform, so a folder committed anywhere
+    /// mounts everywhere (blueprint/desktop.md "Names and attributes").
+    pub case_insensitive_lookup: bool,
 }
 
 /// The kernel-facing cache lifetimes for one mount, derived from what its
@@ -151,6 +157,7 @@ mod tests {
         HostCapabilities {
             push_invalidation,
             attribute_cache: true,
+            case_insensitive_lookup: false,
         }
     }
 
@@ -179,6 +186,7 @@ mod tests {
                     &HostCapabilities {
                         push_invalidation,
                         attribute_cache: false,
+                        case_insensitive_lookup: false,
                     },
                     &profile,
                 );
@@ -251,6 +259,7 @@ mod tests {
             &HostCapabilities {
                 push_invalidation: true,
                 attribute_cache: false,
+                case_insensitive_lookup: false,
             },
             &SyncTimingProfile::PRODUCTION,
         );

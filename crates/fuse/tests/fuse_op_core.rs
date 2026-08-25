@@ -47,12 +47,19 @@ struct RecordingAdapter {
     seen: Rc<RefCell<Vec<Invalidation>>>,
 }
 
+/// The capabilities every mount in this suite starts from: a push-capable
+/// backend that presents names the unix way.
+fn base_capabilities() -> HostCapabilities {
+    HostCapabilities {
+        push_invalidation: true,
+        attribute_cache: true,
+        case_insensitive_lookup: false,
+    }
+}
+
 impl RecordingAdapter {
     fn push_capable() -> Self {
-        Self::declaring(HostCapabilities {
-            push_invalidation: true,
-            attribute_cache: true,
-        })
+        Self::declaring(base_capabilities())
     }
 
     fn declaring(capabilities: HostCapabilities) -> Self {
@@ -903,12 +910,183 @@ fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
     );
 }
 
+/// A host that presents names case-insensitively — the Windows convention —
+/// resolves a respelling to the child stored as entered, and the listing keeps
+/// showing the stored spelling (blueprint/desktop.md "Names and attributes").
+#[test]
+fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
+    let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
+        case_insensitive_lookup: true,
+        ..base_capabilities()
+    }));
+    let created = block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+
+    let found = block_on(core.lookup(ROOT_INO, "REPORT.TXT")).expect("the respelling resolves");
+    assert_eq!(found.node, created.0.node);
+    assert_eq!(
+        block_on(core.readdir(ROOT_INO))
+            .expect("listing")
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>(),
+        vec!["Report.txt".to_owned()],
+        "the stored name is never mutated by how it was looked up"
+    );
+}
+
+/// Case-sensitive presentation is the unix convention, and it has to hold for
+/// every operation that names an existing node — a mount whose `lookup` says a
+/// respelling does not exist must not delete through it.
+#[test]
+fn a_case_sensitive_host_resolves_no_respelling_at_all() {
+    let (mut core, _adapter) = mount();
+    block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+    assert_eq!(
+        block_on(core.unlink(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+    assert_eq!(
+        block_on(core.rename(ROOT_INO, "REPORT.TXT", ROOT_INO, "other.txt")),
+        Err(VfsError::NotFound)
+    );
+    block_on(core.lookup(ROOT_INO, "Report.txt")).expect("the stored spelling resolves");
+}
+
+/// A listing binds the kernel's entry to the stored spelling and a respelled
+/// lookup binds another to the one the caller typed. `notify_inval_entry`
+/// matches one exact name, so a mutation that named either alone would leave
+/// the other serving a node that has moved for its whole TTL.
+#[test]
+fn a_respelled_mutation_invalidates_every_spelling_the_kernel_cached() {
+    let adapter = RecordingAdapter::declaring(HostCapabilities {
+        case_insensitive_lookup: true,
+        ..base_capabilities()
+    });
+    let mut core = mount_with(adapter.clone());
+    block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.mkdir(ROOT_INO, "Archive")).expect("mkdir");
+    adapter.drain();
+
+    block_on(core.rename(ROOT_INO, "REPORT.TXT", ROOT_INO, "moved.txt")).expect("rename");
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &["Report.txt", "REPORT.TXT"]);
+
+    block_on(core.rmdir(ROOT_INO, "ARCHIVE")).expect("rmdir");
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &["Archive", "ARCHIVE"]);
+}
+
+/// A rename's destination is resolved by the folding comparator on every host,
+/// so the node it replaces can be cached under a spelling this rename never
+/// mentions — and the entry left behind points at an unlinked node.
+#[test]
+fn a_replacing_rename_invalidates_the_displaced_spelling_too() {
+    let (mut core, adapter) = mount();
+    block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.create(ROOT_INO, "draft.txt", Access::ReadWrite)).expect("create");
+    adapter.drain();
+
+    block_on(core.rename(ROOT_INO, "draft.txt", ROOT_INO, "REPORT.TXT")).expect("rename");
+    assert_invalidates_names(
+        &adapter.drain(),
+        ROOT_INO,
+        &["draft.txt", "REPORT.TXT", "report.txt"],
+    );
+}
+
+/// The junk fold is the one respelling an exact host still resolves, so it is
+/// the one an exact host can also leave a stale entry behind for.
+#[test]
+fn a_junk_removal_invalidates_the_spelling_it_was_asked_for() {
+    let adapter = RecordingAdapter::push_capable();
+    let mut core = mount_seeded(adapter.clone(), &[(".Ds_StOrE", NodeKind::File)]);
+    block_on(core.lookup(ROOT_INO, ".DS_Store")).expect("the canonical spelling resolves");
+    adapter.drain();
+
+    block_on(core.unlink(ROOT_INO, ".DS_Store")).expect("unlink");
+    assert_invalidates_names(&adapter.drain(), ROOT_INO, &[".Ds_StOrE", ".DS_Store"]);
+}
+
+/// Every name in `names` was invalidated under `parent`, spelled exactly so.
+fn assert_invalidates_names(seen: &[Invalidation], parent: u64, names: &[&str]) {
+    for name in names {
+        assert!(
+            seen.contains(&Invalidation::Entry {
+                parent,
+                name: (*name).to_owned(),
+            }),
+            "no invalidation named {name}: {seen:?}"
+        );
+    }
+}
+
+/// Junk another client committed is hidden from every listing, so the
+/// canonical spelling is the only one a user can type. A host that resolves
+/// names exactly still has to find it, or a peer could park an unlistable,
+/// unremovable node at the vault root by spelling it oddly.
+#[test]
+fn hidden_junk_stays_removable_under_a_spelling_no_listing_shows() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, ".Ds_StOrE", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    assert!(
+        block_on(core.readdir(ROOT_INO))
+            .expect("listing")
+            .is_empty(),
+        "junk is hidden however it is spelled"
+    );
+    block_on(core.lookup(ROOT_INO, ".DS_Store")).expect("the canonical spelling resolves");
+    block_on(core.unlink(ROOT_INO, ".DS_Store")).expect("and removes it");
+}
+
+/// The junk fold is for junk only: an ordinary name a listing does show is
+/// resolved exactly, so the fold cannot become a general case-insensitive
+/// back door on a host that presents names the unix way.
+#[test]
+fn the_junk_fold_does_not_reach_an_ordinary_name() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, "Report.txt", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+}
+
+/// Presentation is not collision policy: however a host spells a lookup, two
+/// names that fold together are one name to the engine's strict comparator, on
+/// every platform, so a folder committed anywhere mounts everywhere.
+#[test]
+fn the_strict_comparator_decides_collisions_whatever_the_host_presents() {
+    for case_insensitive_lookup in [true, false] {
+        let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
+            case_insensitive_lookup,
+            ..base_capabilities()
+        }));
+        block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+        assert_eq!(
+            block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).err(),
+            Some(VfsError::AlreadyExists),
+            "case-insensitive presentation: {case_insensitive_lookup}"
+        );
+        assert_eq!(
+            block_on(core.mkdir(ROOT_INO, "REPORT.TXT")).err(),
+            Some(VfsError::AlreadyExists)
+        );
+    }
+}
+
 #[test]
 fn a_noattrcache_mount_keeps_its_entry_cache_and_loses_only_the_attribute_one() {
     let (with_attrs, _adapter) = mount();
     let suppressed = mount_with(RecordingAdapter::declaring(HostCapabilities {
-        push_invalidation: true,
         attribute_cache: false,
+        ..base_capabilities()
     }));
 
     assert!(
@@ -927,7 +1105,7 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
     let (with_push, _adapter) = mount();
     let without_push = mount_with(RecordingAdapter::declaring(HostCapabilities {
         push_invalidation: false,
-        attribute_cache: true,
+        ..base_capabilities()
     }));
 
     assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
@@ -1199,6 +1377,45 @@ fn a_write_past_the_addressable_end_is_refused_rather_than_wrapped() {
         block_on(core.write(handle, u64::MAX, b"xy")),
         Err(VfsError::Invalid),
         "a window that cannot even be expressed is invalid"
+    );
+}
+
+/// Every other test frames the mount at 16 bytes. Production frames it at the
+/// content plane's chunk — 1_048_536, deliberately not a power of two — and
+/// that is the stride a spill file's slots are laid out on, so offset
+/// arithmetic that only holds for small aligned blocks shows up here and
+/// nowhere else (blueprint/desktop.md "Reads, writes, and the never-block
+/// law").
+#[test]
+fn a_write_at_production_framing_round_trips_across_its_block_boundaries() {
+    let block = CacheBudget::PRODUCTION.block_bytes() as usize;
+    let mut core = OperationCore::new(
+        started_engine().0,
+        RecordingAdapter::push_capable(),
+        CacheBudget::PRODUCTION,
+        spill_area(),
+    );
+    let handle = writing_handle(&mut core);
+
+    // Starts inside the first slot, covers a whole one, ends inside the third.
+    let at = (block / 2) as u64;
+    let plaintext: Vec<u8> = (0..block * 2 + 5).map(|byte| (byte % 251) as u8).collect();
+    assert_eq!(
+        block_on(core.write(handle, at, &plaintext)).expect("the write lands") as usize,
+        plaintext.len()
+    );
+
+    assert_eq!(
+        block_on(core.read(handle, at, plaintext.len() as u32)).expect("the read"),
+        plaintext,
+        "a slot stride that is off by a byte reads back shifted plaintext"
+    );
+    assert!(
+        block_on(core.read(handle, 0, at as u32))
+            .expect("the read")
+            .iter()
+            .all(|byte| *byte == 0),
+        "the hole ahead of the write reads as zeros, never as another slot"
     );
 }
 
@@ -2496,7 +2713,7 @@ mod published {
             CacheBudget::CI,
             RecordingAdapter::declaring(HostCapabilities {
                 push_invalidation: false,
-                attribute_cache: true,
+                ..base_capabilities()
             }),
         );
         let ino = mount.ino;

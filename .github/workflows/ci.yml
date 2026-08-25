@@ -764,6 +764,10 @@ jobs:
           key: macos-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: macos-cargo-
 
+      # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
+      # it compiles at all (blueprint/desktop.md "Backends").
+      - uses: ./.github/actions/setup-fuse-t
+
       - name: Cargo check (workspace)
         run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 

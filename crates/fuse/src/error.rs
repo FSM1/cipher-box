@@ -146,6 +146,51 @@ impl fmt::Display for VfsError {
 
 impl std::error::Error for VfsError {}
 
+/// The relations every host code table has to keep, whatever code space it
+/// maps into. Asserted once here and called from each table's own tests, so a
+/// verdict cannot be classified one way on unix and another on Windows.
+#[cfg(test)]
+pub(crate) fn assert_class_rules_hold(code_of: fn(&VfsError) -> i32) {
+    // A full device tells the user to free space here, a hosted-quota refusal
+    // tells them to buy or free space there. Collapsing them sends them to the
+    // wrong machine.
+    let device: Vec<i32> = [
+        OverBudgetCause::StagingLimit,
+        OverBudgetCause::DeviceFull,
+        OverBudgetCause::StagingBacklog,
+        OverBudgetCause::StorageUnmeasured,
+        OverBudgetCause::TooManyWrites,
+    ]
+    .into_iter()
+    .map(|cause| code_of(&VfsError::OverBudget(cause)))
+    .collect();
+    assert!(
+        device.windows(2).all(|pair| pair[0] == pair[1]),
+        "every device budget answers alike"
+    );
+    assert_ne!(
+        code_of(&VfsError::OverBudget(OverBudgetCause::AccountQuota)),
+        device[0],
+        "an account budget is not a full device"
+    );
+
+    // Availability is retryable; a fail-closed verdict is terminal. The two
+    // must stay apart however either value moves.
+    let unavailable = code_of(&VfsError::Unavailable {
+        message: "no endpoint served a record this pass could adopt".to_owned(),
+    });
+    for terminal in [
+        VfsError::TrustViolation {
+            message: "rejected child record".to_owned(),
+        },
+        VfsError::Refused {
+            message: "rotation impossible".to_owned(),
+        },
+    ] {
+        assert_ne!(code_of(&terminal), unavailable, "{terminal}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cipherbox_engine::seams::OpId;

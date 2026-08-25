@@ -274,8 +274,30 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
         self.ttl_check(Some(parent_node));
-        let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let meta = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         Ok(self.attributes(&meta))
+    }
+
+    /// Find `name` under `parent` as the host presents names — the one rule
+    /// every operation that names an existing node resolves through.
+    ///
+    /// Which engine rule the host presents — see
+    /// [`HostCapabilities::case_insensitive_lookup`]. Collisions are not on
+    /// this axis: `create`, `mkdir`, and a rename's destination stay with the
+    /// strict comparator.
+    ///
+    /// Junk is the one class an exact host still resolves by folding, because
+    /// the mount hides it: a peer's `.Ds_StOrE` never appears in a listing, so
+    /// the canonical spelling is the only one a user can type, and without the
+    /// fold it could never be unlinked ([`is_platform_junk`]).
+    fn resolve(&self, view: &EngineView, parent: NodeId, name: &str) -> Option<NodeAttrs> {
+        if self.adapter.capabilities().case_insensitive_lookup {
+            return view.lookup(parent, name);
+        }
+        view.lookup_exact(parent, name)
+            .or_else(|| is_platform_junk(name).then(|| view.lookup(parent, name))?)
     }
 
     /// Read one node's attributes.
@@ -353,7 +375,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
         let new_parent_node = self.directory(&view, new_parent)?;
-        let source = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let source = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         if contains(&view, source.id, new_parent_node) {
             return Err(VfsError::Invalid);
         }
@@ -377,13 +401,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             node: source.id,
             new_parent: new_parent_node,
             new_name: new_name.to_owned(),
-            replacing: replaced.map(|dest| dest.id),
+            replacing: replaced.as_ref().map(|dest| dest.id),
         })
         .await?;
 
         let ino = self.inodes.ino_for(source.id);
-        self.entry_changed(parent, name);
-        self.entry_changed(new_parent, new_name);
+        self.entry_refolded(parent, &source.name, name);
+        // A replaced destination was itself resolved by the folding
+        // comparator, so the kernel may hold it under a spelling that is
+        // neither the stored source name nor the one this rename installs.
+        let displaced = replaced.map(|dest| dest.name);
+        self.entry_refolded(
+            new_parent,
+            displaced.as_deref().unwrap_or(new_name),
+            new_name,
+        );
         self.adapter.invalidate(Invalidation::Attributes { ino });
         Ok(())
     }
@@ -892,11 +924,24 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.adapter.invalidate(Invalidation::Attributes { ino });
     }
 
+    /// Invalidate one name binding, under exactly the spelling given —
+    /// `notify_inval_entry` matches one name and no fold of it.
     fn entry_changed(&self, parent: u64, name: &str) {
         self.adapter.invalidate(Invalidation::Entry {
             parent,
             name: name.to_owned(),
         });
+    }
+
+    /// Invalidate a binding a fold reached, under both spellings the kernel may
+    /// hold it under: the stored one a listing gave it, and the one the caller
+    /// typed and had an entry minted for. Clearing only one leaves the other
+    /// serving a node that has moved for its whole TTL.
+    fn entry_refolded(&self, parent: u64, stored: &str, requested: &str) {
+        self.entry_changed(parent, stored);
+        if requested != stored {
+            self.entry_changed(parent, requested);
+        }
     }
 
     fn node_of(&self, ino: u64) -> Result<NodeId, VfsError> {
@@ -963,10 +1008,13 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ) -> Result<(), VfsError> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
-        let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let meta = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         removable(&view, &meta, expected)?;
+        let gone = meta.name.clone();
         self.delete(&view, meta.id).await?;
-        self.entry_changed(parent, name);
+        self.entry_refolded(parent, &gone, name);
         Ok(())
     }
 

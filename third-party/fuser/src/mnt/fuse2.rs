@@ -13,7 +13,7 @@ use std::{
 fn ensure_last_os_error() -> io::Error {
     let err = io::Error::last_os_error();
     match err.raw_os_error() {
-        Some(0) => io::Error::new(io::ErrorKind::Other, "Unspecified Error"),
+        Some(0) => io::Error::other("Unspecified Error"),
         _ => err,
     }
 }
@@ -62,7 +62,7 @@ impl Drop for Mount {
                     return;
                 }
             }
-            warn!("umount failed with {:?}", err);
+            warn!("umount failed with {err:?}");
         }
     }
 }
