@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{OwedRetire, RetireLedger};
+use crate::seams::{OwedRetire, OwingRecord, RetireLedger};
 
 /// A distinct doomed-version root address, spelled as the ledger stores them.
 fn root(seed: u8) -> String {
@@ -144,11 +144,12 @@ where
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
     // The owing node is what the drain re-reads to decide what the retire may
-    // name, and the manifest total is the bound it holds a hand-framed root to.
-    // Both are as durable as the owed figure, and none of the three moves under
-    // a replay.
+    // name, its class is whether that read can find anything, and the manifest
+    // total is the bound it holds a hand-framed root to. All are as durable as
+    // the owed figure, and none of the four moves under a replay.
     let quoted = OwedRetire {
         node: [0x5C; 16],
+        owing: OwingRecord::Retired,
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,

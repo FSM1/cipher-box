@@ -7,7 +7,7 @@
 //! network; mutations become facade intent ops. No keys, no publish
 //! machinery, and no freshness policy of its own — the staleness threshold and
 //! the focus window live below the facade, and the projection only reports
-//! which folder an operation had in view.
+//! which node an operation had in view.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -138,7 +138,7 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     served: HashMap<NodeId, Served>,
     /// Per directory, the entries this mount last listed, on the same terms.
     listed: HashMap<NodeId, BTreeMap<String, NodeId>>,
-    /// The folder the last read-path operation found past the staleness
+    /// The node the last read-path operation found past the staleness
     /// threshold, if any.
     refresh_hint: Option<NodeId>,
 }
@@ -181,7 +181,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         CacheTtls::for_host(&self.adapter.capabilities(), self.engine.profile())
     }
 
-    /// The folder the most recent read-path operation found past the staleness
+    /// The node the most recent read-path operation found past the staleness
     /// threshold, if any — the refresh hint that operation's TTL check fired.
     /// The engine's next tick is what acts on it; a host surfaces it as the
     /// "checking for updates" state.
@@ -252,15 +252,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
-    /// The **FUSE-op TTL check**: put the folder this operation has in view into
-    /// the engine's focus window, and record the hint a folder past the
-    /// staleness threshold fires (blueprint/desktop.md "Freshness"). The
-    /// thresholds and the window are the engine's; this only reports which
-    /// folder the operation was about, and answers from the render it already
-    /// has (the never-block law).
-    fn ttl_check(&mut self, folder: Option<NodeId>) {
-        let stale = self.engine.note_focus_access(folder);
-        self.refresh_hint = folder.filter(|_| stale);
+    /// The **FUSE-op TTL check**: put the node this operation has in view into
+    /// the engine's focus window, and record the hint a node past the staleness
+    /// threshold fires (blueprint/desktop.md "Freshness"). The thresholds and
+    /// the window are the engine's; this only reports which node the operation
+    /// was about, and answers from the render it already has (the never-block
+    /// law).
+    fn ttl_check(&mut self, node: Option<NodeId>) {
+        let stale = self.engine.note_focus_access(node);
+        self.refresh_hint = node.filter(|_| stale);
     }
 
     /// Resolve a name under a directory.
@@ -302,9 +302,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let node = self.node_of(ino)?;
         let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
-        // A file puts no folder in view: the lookup that minted its inode
-        // already put its parent there.
-        self.ttl_check((meta.kind == NodeKind::Folder).then_some(node));
+        // A file goes in as itself: its size and mtime live in its own record,
+        // and its parent's listing mirrors neither, so putting the parent in
+        // view would refresh everything about it except what `getattr` returns.
+        self.ttl_check(Some(node));
         Ok(self.attributes(&meta))
     }
 

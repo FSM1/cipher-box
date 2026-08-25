@@ -1,10 +1,12 @@
-//! The focus-window folder refresh: the read leg that renders a folder **below**
-//! the scope root (blueprint/engine.md "Sync core: focus-window tick").
+//! The focus-window refresh: the read leg that renders a node **below** the
+//! scope root (blueprint/engine.md "Sync core: focus-window tick").
 //!
-//! Each folder the window names resolves its own record cache-first through
+//! Each node the window names resolves its own record cache-first through
 //! [`resolve_child`], passes the [`ChildAdopter`] gate on this device's floors,
-//! and merges into the base with [`project_folder`] — the root leg's merge
-//! model, one level down.
+//! and merges into the base — the root leg's merge model, one level down. A
+//! folder merges its listing with [`project_folder`]; a file merges its head
+//! version with [`project_child_version`], which is the only way its size and
+//! mtime move, since a `ChildRef` mirrors neither.
 
 use core::cell::RefCell;
 
@@ -16,10 +18,10 @@ use zeroize::Zeroizing;
 use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
-use crate::gate::{GateError, RejectionReason};
+use crate::gate::{Adopted, GateError, RejectionReason};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
-use crate::sync::project::project_folder;
+use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::refresh::RefreshVerdict;
 use crate::sync::tick::ResolveMode;
 
@@ -92,53 +94,17 @@ where
     /// Merge each of `folders` into the base, reporting whether the base moved.
     /// They arrive nearest-first; the merge runs root-ward, so a parent that
     /// dropped a child unlinks it before the pass would project into it.
-    ///
-    /// Every failure is per-folder and non-fatal: an unresolvable record is
-    /// availability staleness, an attributable gate rejection is fail-closed and
-    /// surfaced as [`Event::AttributableAbuse`], and both leave last-known-good
-    /// rendering without stopping the pass. Each still lands in the report, so
-    /// the caller's verdict covers the folders as well as the root.
     pub(crate) async fn run(&self, folders: &[NodeId]) -> FolderRefreshReport {
         let mut report = FolderRefreshReport {
             changed: false,
             verdict: RefreshVerdict::Reconciled,
         };
         for folder in folders.iter().rev() {
-            let Some(name) = self.folder_name(*folder) else {
+            let Some((name, adopted)) = self
+                .resolve_focused(*folder, NodeKind::Folder, &mut report)
+                .await
+            else {
                 continue;
-            };
-            let adopter = ChildAdopter::new(
-                self.gateway,
-                self.http,
-                self.floors,
-                self.scope_id,
-                self.scope_read_seed.clone(),
-                folder.0,
-            );
-            let adopted = match resolve_child(
-                self.transport,
-                self.snapshot_cache,
-                &adopter,
-                &name,
-                self.mode,
-            )
-            .await
-            {
-                Ok(adopted) => adopted,
-                // Availability: the base keeps rendering last-known-good.
-                Err(
-                    ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
-                ) => {
-                    report.fold(RefreshVerdict::Unreachable);
-                    continue;
-                }
-                Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
-                    if let Some(verdict) = rejection_verdict(&rejection.reason) {
-                        emit_trust_violation(self.events, name.as_str(), rejection);
-                        report.fold(verdict);
-                    }
-                    continue;
-                }
             };
             let ReadBody::Folder {
                 modified_at,
@@ -167,13 +133,108 @@ where
         report
     }
 
-    /// The folder's write-plane name as its parent's `ChildRef` carried it.
-    /// `None` for a node absent from gate-passing state, a non-folder, or a ref
-    /// whose bytes are not a canonical IPNS name.
-    fn folder_name(&self, folder: NodeId) -> Option<IpnsName> {
+    /// Fold each file's published head into the base, reporting whether the base
+    /// moved.
+    ///
+    /// A `ChildRef` carries no size or mtime mirror, so a folder refresh cannot
+    /// move a file's projected attributes however often it runs — only the
+    /// file's own record does. This is that leg, and it is on-access rather than
+    /// ticked over a whole listing (CONTEXT.md "focus window").
+    ///
+    /// Failure handling is the folder leg's, and a file that has published no
+    /// version leaves the base untouched rather than projecting a zero.
+    pub(crate) async fn run_files(&self, files: &[NodeId]) -> FolderRefreshReport {
+        let mut report = FolderRefreshReport {
+            changed: false,
+            verdict: RefreshVerdict::Reconciled,
+        };
+        for file in files {
+            let Some((name, adopted)) = self
+                .resolve_focused(*file, NodeKind::File, &mut report)
+                .await
+            else {
+                continue;
+            };
+            let ReadBody::File { versions, .. } = &adopted.read_body else {
+                emit_trust_violation(
+                    self.events,
+                    name.as_str(),
+                    "sealed folder body behind a file child ref",
+                );
+                report.fold(RefreshVerdict::Rejected);
+                continue;
+            };
+            let Some(head) = versions.first() else {
+                continue;
+            };
+            report.changed |= project_child_version(
+                &mut self.base.borrow_mut(),
+                *file,
+                head.size,
+                head.modified_at,
+                versions.len() as u64,
+                Some(&head.content_cid),
+            );
+        }
+        report
+    }
+
+    /// Resolve one focused node's own record through the child gate.
+    ///
+    /// Every failure is per-node and non-fatal: an unresolvable record is
+    /// availability staleness, an attributable gate rejection is fail-closed and
+    /// surfaced as [`Event::AttributableAbuse`], and both leave last-known-good
+    /// rendering without stopping the pass. Each still lands in `report`, so the
+    /// caller's verdict covers the focused nodes as well as the root.
+    async fn resolve_focused(
+        &self,
+        node: NodeId,
+        kind: NodeKind,
+        report: &mut FolderRefreshReport,
+    ) -> Option<(IpnsName, Adopted)> {
+        let name = self.child_name(node, kind)?;
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.scope_id,
+            self.scope_read_seed.clone(),
+            node.0,
+        );
+        match resolve_child(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            &name,
+            self.mode,
+        )
+        .await
+        {
+            Ok(adopted) => Some((name, adopted)),
+            // Availability: the base keeps rendering last-known-good.
+            Err(
+                ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
+            ) => {
+                report.fold(RefreshVerdict::Unreachable);
+                None
+            }
+            Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
+                if let Some(verdict) = rejection_verdict(&rejection.reason) {
+                    emit_trust_violation(self.events, name.as_str(), rejection);
+                    report.fold(verdict);
+                }
+                None
+            }
+        }
+    }
+
+    /// The node's write-plane name as its parent's `ChildRef` carried it.
+    /// `None` for a node absent from gate-passing state, one of another kind, or
+    /// a ref whose bytes are not a canonical IPNS name.
+    fn child_name(&self, node: NodeId, kind: NodeKind) -> Option<IpnsName> {
         let base = self.base.borrow();
-        let meta = base.node(folder)?;
-        if meta.kind != NodeKind::Folder {
+        let meta = base.node(node)?;
+        if meta.kind != kind {
             return None;
         }
         IpnsName::parse(core::str::from_utf8(meta.ipns_name.as_deref()?).ok()?).ok()

@@ -2,6 +2,24 @@
 
 use super::SeamResult;
 
+/// Whether the node owing a retirement still publishes a record of its own.
+///
+/// The settlement pass decides what a retire may name by reading the owing
+/// node's published record, which a node that survived its own shortening always
+/// has and a hard-deleted one never will.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwingRecord {
+    /// The node outlives the debt — a prune shortened its history. An
+    /// unreadable record stands the entry down: retiring what this pass failed
+    /// to read is loss, where the row left charged is only a leak.
+    Published,
+    /// The node's own record is retired with the debt — a hard delete. Nothing
+    /// resolves at its name and nothing it named is reachable, so an unreadable
+    /// record reads as an empty live set. Without the distinction the debt is
+    /// permanently unsettleable against a never-discard ledger.
+    Retired,
+}
+
 /// One owed retirement: a doomed version's **root** `contentCid` and the pinned
 /// bytes retiring its expansion frees.
 ///
@@ -16,6 +34,8 @@ pub struct OwedRetire {
     /// node's published record to decide what the retire may name, so the entry
     /// carries it rather than a snapshot of the answer.
     pub node: [u8; 16],
+    /// Whether that re-read can be expected to find anything.
+    pub owing: OwingRecord,
     /// The doomed version's root `contentCid` (multibase string).
     pub target: String,
     /// The pinned bytes this entry stands for, as the prune quoted them.
@@ -30,14 +50,25 @@ pub struct OwedRetire {
 }
 
 impl OwedRetire {
-    /// A debt quoted at its whole manifest total.
+    /// A debt quoted at its whole manifest total, owed by a node that outlives
+    /// it.
     #[must_use]
     pub fn whole(node: [u8; 16], target: String, pinned_bytes: u64) -> Self {
         Self {
             node,
+            owing: OwingRecord::Published,
             target,
             owed_bytes: pinned_bytes,
             manifest_bytes: pinned_bytes,
+        }
+    }
+
+    /// The same debt, owed by a node this op hard-deletes.
+    #[must_use]
+    pub fn whole_retired(node: [u8; 16], target: String, pinned_bytes: u64) -> Self {
+        Self {
+            owing: OwingRecord::Retired,
+            ..Self::whole(node, target, pinned_bytes)
         }
     }
 }

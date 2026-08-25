@@ -31,7 +31,7 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildRef, PreservedFields, ReadBody, Version, open_content_key, open_read_body,
+    ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -66,8 +66,8 @@ use crate::net::{
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, OwedRetire, RecordTransport, RetireLedger, Scheduler,
-    SeamResult, SnapshotCache, StagingStore,
+    CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
+    RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
@@ -488,6 +488,21 @@ struct DestAdd {
 
 /// One node's record as loaded for re-authoring: the envelope fields a
 /// republish must carry forward byte-stable (#27 D10) plus the opened body.
+/// The most nodes one delete reclaims.
+///
+/// A folder's child list is wire data, and every enumerated node costs a record
+/// resolve at the head of a strict FIFO: without a ceiling one hand-authored
+/// listing holds every other op in the queue behind its walk.
+const DELETE_SUBTREE_MAX: usize = 4096;
+
+/// One node a delete reclaims: the name its record publishes under, and the
+/// content roots that record still names.
+struct Doomed {
+    node: NodeId,
+    name: IpnsName,
+    versions: Vec<ContentVersion>,
+}
+
 struct LoadedNode {
     name: IpnsName,
     sequence: u64,
@@ -624,7 +639,7 @@ where
             self.gateway,
             self.http,
             self.content_profile,
-            async |node| self.live_node_cids(scope, node).await,
+            async |node, owing| self.live_node_cids(scope, node, owing).await,
         )
         .await
         {
@@ -1340,8 +1355,19 @@ where
         Ok(())
     }
 
-    /// Delete: drop the parent's ref. The name itself is retired only on
-    /// abandonment, which the failure valve owns.
+    /// Delete: reclaim the target's whole subtree, then drop the parent's ref.
+    ///
+    /// The debt is journaled **before** the unlink publishes, for the reason
+    /// [`Self::publish_prune`] states and more acutely: a prune's node survives
+    /// to name its own survivors, where after a delete nothing names any root
+    /// the subtree held. The registry rows, the live set and the base drop only
+    /// once the shortened parent is live — a reference outliving its referent is
+    /// the one ordering this pass must not produce.
+    ///
+    /// Reclaiming is also the revocation cut. An unlinked node is in no eager
+    /// set, so rotation never reaches it and a revoked grantee holding the old
+    /// seed reads it for as long as its record and pins survive; retiring both
+    /// is what ends that.
     async fn publish_delete(
         &self,
         scope: &DrainScope<'_>,
@@ -1351,13 +1377,40 @@ where
         let target = applied.op.target;
         let parent = self.published_parent(target)?;
         self.ensure_folder(scope, pass, parent).await?;
-        let children = &mut pass.folder_mut(parent)?.children;
-        let before = children.len();
-        children.retain(|child| child.id != target.0);
         // Removing an absent ref is the op already satisfied, never a publish.
-        if children.len() == before {
+        let Some(kind) = pass
+            .folder(parent)?
+            .children
+            .iter()
+            .find(|child| child.id == target.0)
+            .map(|child| child.kind)
+        else {
             return Ok(());
-        }
+        };
+
+        let doomed = self
+            .enumerate_doomed(scope, pass.epoch, parent, target, kind)
+            .await?;
+        let owed: Vec<OwedRetire> = doomed
+            .iter()
+            .flat_map(|node| {
+                node.versions.iter().map(|version| {
+                    OwedRetire::whole_retired(
+                        node.node.0,
+                        version.content_cid.clone(),
+                        version.pinned_bytes,
+                    )
+                })
+            })
+            .collect();
+        StagingRetireLedger::new(self.staging)
+            .owe(&owner_tag(scope.enc_secret), &owed)
+            .await
+            .map_err(seam)?;
+
+        pass.folder_mut(parent)?
+            .children
+            .retain(|child| child.id != target.0);
         self.publish_folder(
             scope,
             pass,
@@ -1367,7 +1420,101 @@ where
         )
         .await
         .map_err(Halt::from)?;
+        self.reclaim_doomed(&doomed).await;
         Ok(())
+    }
+
+    /// Every node the delete of `target` reclaims, refusing the whole operation
+    /// if a descendant folder cannot be enumerated.
+    ///
+    /// Fail-closed on structure, best-effort per file — v1's locked law. A
+    /// folder this pass cannot read hides an unknown subtree, and unlinking
+    /// above it would strand records and pins nothing can ever name again; a
+    /// file whose own record will not open loses only its content debt, which is
+    /// a leak, and its name retires regardless.
+    ///
+    /// The walk carries the parent it descended from so a node some **other**
+    /// parent still links — a dual-link — is left standing whole: this op cuts
+    /// one link, and reclaiming a node a live listing still names is loss.
+    async fn enumerate_doomed(
+        &self,
+        scope: &DrainScope<'_>,
+        epoch: u64,
+        parent: NodeId,
+        target: NodeId,
+        kind: NodeKind,
+    ) -> Result<Vec<Doomed>, Halt> {
+        let mut doomed = Vec::new();
+        // The link this op cuts is the target's only doomed one, so the parent
+        // seeds the set the reachability test is taken against.
+        let mut seen = BTreeSet::from([parent.0]);
+        let mut pending = vec![(target, kind)];
+        while let Some((node, kind)) = pending.pop() {
+            // Child refs are wire data a scope's write-seed holder authors, so a
+            // diamond or a cycle among them is reachable: a node already walked
+            // is never walked again.
+            if seen.contains(&node.0) {
+                continue;
+            }
+            {
+                let base = self.base.borrow();
+                if base
+                    .links_to(node)
+                    .iter()
+                    .any(|link| !seen.contains(&link.parent.0))
+                {
+                    continue;
+                }
+            }
+            seen.insert(node.0);
+            if doomed.len() >= DELETE_SUBTREE_MAX {
+                return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
+            }
+            let loaded = self
+                .load_child_node(scope, epoch, node, ResolveMode::CacheFirst)
+                .await;
+            let versions = match (loaded, kind) {
+                (Ok(loaded), _) => match loaded.body {
+                    ReadBody::Folder { children, .. } => {
+                        pending.extend(children.iter().map(|child| (NodeId(child.id), child.kind)));
+                        Vec::new()
+                    }
+                    ReadBody::File { versions, .. } => {
+                        self.pinned_history(&versions).unwrap_or_default()
+                    }
+                },
+                (Err(halt), NodeKind::Folder) => return Err(halt),
+                (Err(_), NodeKind::File) => Vec::new(),
+            };
+            doomed.push(Doomed {
+                node,
+                name: derive_write_name(scope.write_scope_seed, &node.0),
+                versions,
+            });
+        }
+        Ok(doomed)
+    }
+
+    /// Stop keeping a reclaimed subtree alive: retire its registry rows, and
+    /// drop it from this device's live set and base snapshot.
+    ///
+    /// Best-effort on the registry, like every other post-publish retire: a
+    /// refused batch leaves rows charged, which is a leak, where failing an op
+    /// whose unlink is already live would re-run a delete that now finds nothing
+    /// to remove. The local drops are unconditional — whatever the registry
+    /// answered, this device must stop re-PUTting records no parent references.
+    async fn reclaim_doomed(&self, doomed: &[Doomed]) {
+        let names: Vec<String> = doomed
+            .iter()
+            .map(|node| node.name.as_str().to_owned())
+            .collect();
+        let _ = retire(self.api, &names).await;
+        let mut held = self.held.borrow_mut();
+        let mut base = self.base.borrow_mut();
+        for node in doomed {
+            held.remove(&node.node.0);
+            base.remove_node(node.node);
+        }
     }
 
     /// The one plan behind rename, relink, and move: relocate a child ref,
@@ -1908,6 +2055,9 @@ where
             let expansion = self.expand_version(version).await?;
             owed.push(OwedRetire {
                 node: node.0,
+                // The prune shortens this node's history and leaves the node
+                // itself published.
+                owing: OwingRecord::Published,
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,
@@ -1932,11 +2082,24 @@ where
     /// `None` when the record or any version it names could not be established,
     /// which stands that node's entries down for the pass — a partial set unpins
     /// what it failed to read, where a pin row left charged is only a leak.
+    ///
+    /// [`OwingRecord::Retired`] is the one class answered without a read: a hard
+    /// delete leaves the node's record resolvable at its own name until its EOL
+    /// lapses, so consulting it would hold the debt for that whole window over
+    /// content no live listing reaches. The class is checked against this
+    /// device's own tree rather than trusted — a node the tree still links is a
+    /// mislabelled entry and is answered from its record like any other, so it
+    /// cannot unpin what a live record names.
     async fn live_node_cids(
         &self,
         scope: &DrainScope<'_>,
         node: [u8; 16],
+        owing: OwingRecord,
     ) -> Option<BTreeSet<String>> {
+        let unlinked = self.base.borrow().links_to(NodeId(node)).is_empty();
+        if owing == OwingRecord::Retired && unlinked {
+            return Some(BTreeSet::new());
+        }
         let (_, epoch) = self.load_scope_root(scope).await.ok()?;
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a

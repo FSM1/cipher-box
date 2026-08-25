@@ -40,7 +40,7 @@ pub(crate) use http::AUTHORIZATION;
 pub(crate) use live::LiveSeam;
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
-pub use retire_ledger::{OwedRetire, RetireLedger};
+pub use retire_ledger::{OwedRetire, OwingRecord, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
 pub use staging_store::{OpId, StagingStore};

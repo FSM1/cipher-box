@@ -2445,6 +2445,13 @@ impl Drop for StreamSlot {
 /// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
 pub const MAX_OPEN_STREAMS: usize = 256;
 
+/// The most file nodes an on-access refresh queue holds between ticks.
+///
+/// Each queued file costs the next tick one record resolve, and a host that
+/// stats a large listing puts every entry in view: the ceiling bounds the pass
+/// to the window rather than to the listing.
+pub const MAX_FOCUS_FILES: usize = 64;
+
 pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
@@ -2589,6 +2596,12 @@ pub struct Engine<T: SeamTypes> {
     /// not the refresh stamp a completed pass earns
     /// ([`focus_refreshed`](Self::focus_refreshed)).
     focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
+    /// File nodes a host operation put in view past the staleness threshold,
+    /// awaiting the tick's file leg. A file's size and mtime have no `ChildRef`
+    /// mirror, so no folder refresh can move them — its own record must resolve
+    /// (CONTEXT.md "focus window": everything below the window refreshes on
+    /// access). Shared with the tick loop, which drains it each pass.
+    focus_files: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2710,6 +2723,7 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
+                focus_files: Rc::new(RefCell::new(BTreeSet::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -3447,6 +3461,7 @@ where {
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
+        let focus_files = self.focus_files.clone();
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
         let consult_keys = self.sweep_keys.clone();
@@ -3632,6 +3647,42 @@ where {
                             let _ = events.unbounded_send(Event::SnapshotUpdated);
                         }
                         folder_verdict = report.verdict;
+                    }
+                    // The file leg. A file's size and mtime have no `ChildRef`
+                    // mirror, so the folder leg above cannot move them however
+                    // often it runs — only the file's own record does. It is
+                    // driven by what a host put in view rather than by the whole
+                    // listing, so one open folder costs no per-entry fan-out.
+                    let due_files: Vec<NodeId> = match &read_seed {
+                        // Without the scope's read seed nothing below the root
+                        // opens, so the queue waits for a pass that can serve it.
+                        None => Vec::new(),
+                        Some(_) => core::mem::take(&mut *focus_files.borrow_mut())
+                            .into_iter()
+                            .collect(),
+                    };
+                    if let Some(read_seed) = &read_seed
+                        && !due_files.is_empty()
+                    {
+                        let report = FolderRefresh {
+                            transport: &transport,
+                            snapshot_cache: &snapshot_cache,
+                            http: &http,
+                            floors: &floors,
+                            gateway: &gateway,
+                            base: &base,
+                            events: &events,
+                            scope_id: root_id,
+                            scope_read_seed: read_seed,
+                            mode,
+                        }
+                        .run_files(&due_files)
+                        .await;
+                        stamp_focus_refreshed(&focus_refreshed, &due_files, scheduler.now());
+                        if report.changed {
+                            let _ = events.unbounded_send(Event::SnapshotUpdated);
+                        }
+                        folder_verdict = folder_verdict.worst(report.verdict);
                     }
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
@@ -6439,39 +6490,58 @@ where {
         })
     }
 
-    /// Note that a host filesystem operation put `folder` in view, and report
+    /// Note that a host filesystem operation put `node` in view, and report
     /// whether its state is past the staleness threshold — the desktop
     /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
-    /// operation with no folder in view.
+    /// operation with no node in view.
+    ///
+    /// A folder becomes the focus window. A file joins the queue the tick's file
+    /// leg drains instead: its size and mtime have no `ChildRef` mirror, so no
+    /// amount of folder refreshing moves them. The queue is capped at
+    /// [`MAX_FOCUS_FILES`], so a host that stats a whole listing files a bounded
+    /// number of resolves rather than one per entry.
     ///
     /// Nothing resolves here: a kernel callback never waits on the record plane
     /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
     /// refresh hint, and the tick is what acts on it, over the window this call
-    /// set. The hint is recorded so a burst of callbacks over one folder costs
-    /// one hint rather than one per callback.
-    pub fn note_focus_access(&self, folder: Option<NodeId>) -> bool {
-        let Some(folder) = folder else {
+    /// set. The hint is recorded so a burst of callbacks over one node costs one
+    /// hint rather than one per callback.
+    pub fn note_focus_access(&self, node: Option<NodeId>) -> bool {
+        let Some(node) = node else {
             return false;
         };
         let now = self.seams.scheduler.now();
-        self.focus.borrow_mut().open_folder = Some(folder);
-        self.focus_touched.set(Some(now));
-        // A pass that resolved the folder and a hint already filed for it both
+        let is_file = self
+            .snapshot
+            .borrow()
+            .node(node)
+            .is_some_and(|meta| meta.kind == NodeKind::File);
+        if !is_file {
+            self.focus.borrow_mut().open_folder = Some(node);
+            self.focus_touched.set(Some(now));
+        }
+        // A pass that resolved the node and a hint already filed for it both
         // answer this access; the later of the two is what it is measured from.
         let hinted = self
             .focus_hinted
             .get()
-            .filter(|(hinted, _)| *hinted == folder)
+            .filter(|(hinted, _)| *hinted == node)
             .map(|(_, at)| at);
         let last = self
             .focus_refreshed
             .borrow()
-            .get(&folder)
+            .get(&node)
             .copied()
             .max(hinted);
         let stale = last.is_none_or(|last| on_access_refresh_due(now, last, &self.profile));
         if stale {
-            self.focus_hinted.set(Some((folder, now)));
+            self.focus_hinted.set(Some((node, now)));
+            if is_file {
+                let mut queued = self.focus_files.borrow_mut();
+                if queued.len() < MAX_FOCUS_FILES {
+                    queued.insert(node);
+                }
+            }
         }
         stale
     }
