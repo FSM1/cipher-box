@@ -307,14 +307,10 @@ pub const GRANT_SECTION_ENVELOPE_HEADROOM_BYTES: usize = 48 * 1024;
 /// signature. Unbounded, a committed writer inflates the framing once and every
 /// later re-author of that root carries it verbatim past the block ceiling.
 ///
-/// The value sits in the one band the surrounding constants leave. Its floor is
-/// [`MAX_WRITE_BODY_BYTES`](super::MAX_WRITE_BODY_BYTES): the sealed write-body
-/// rides in [`GrantSection::write_body`], so a smaller bound would refuse a body
-/// the write-body codec mints. Its ceiling is
-/// [`MAX_BLOCK_BYTES`](super::MAX_BLOCK_BYTES) less the envelope framing above.
-/// It narrows the head-size lever rather than closing it — the section's own
-/// maxima and the write-body's are not jointly reachable inside one block, and
-/// the whole-record ceiling stays the engine's backstop.
+/// The value sits in the one band its neighbours leave; the assertions below
+/// hold it there. It narrows the head-size lever rather than closing it — the
+/// section's own maxima and the write-body's are not jointly reachable inside
+/// one block, and the whole-record ceiling stays the engine's backstop.
 pub const MAX_GRANT_SECTION_BYTES: usize = MAX_BLOCK_BYTES - GRANT_SECTION_ENVELOPE_HEADROOM_BYTES;
 
 // The section's bound is defined against its neighbours on both sides, so these

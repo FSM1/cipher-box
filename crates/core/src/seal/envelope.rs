@@ -114,9 +114,9 @@ const WRITE_SEALED_KEY: &str = "writeSealed";
 /// The reserved uncuttable names, from before [`CRITICAL_KEY_PREFIX`] existed
 /// (blueprint/core.md, "Carried unknown fields"). **Top-level only**: losing
 /// either publishes a record the reader rejects outright, and a reader looks for
-/// both under [`Envelope::unknown`] alone. Honouring them inside `epochTag`
-/// would instead hand a publisher an uncuttable name to pad with no budget
-/// attached, which is the wedge the cut exists to deny.
+/// both under [`Envelope::unknown`] alone. The same name inside `epochTag` bears
+/// no protocol, and honouring it there would hand a publisher an uncuttable name
+/// to pad with — the wedge the cut exists to deny.
 pub const UNCUTTABLE_KEYS: &[&str] = &[GRANT_SECTION_KEY, WRITE_SEALED_KEY];
 
 /// The reserved key prefix a carried field wears to declare itself critical: a
@@ -134,12 +134,11 @@ pub const MAX_CRITICAL_CARRIED_BYTES: usize = 16 * 1024;
 /// The collection label the critical-bytes budget's refusal reports.
 const CRITICAL_CARRIED_CHECK: &str = "criticalCarried";
 
-/// Whether a carried key declares itself critical.
 fn is_critical(key: &str) -> bool {
     key.starts_with(CRITICAL_KEY_PREFIX)
 }
 
-/// Whether a top-level carried key is uncuttable: a reserved name or a marked one.
+/// Top-level only; see [`UNCUTTABLE_KEYS`].
 fn is_uncuttable(key: &str) -> bool {
     UNCUTTABLE_KEYS.contains(&key) || is_critical(key)
 }
@@ -583,18 +582,14 @@ mod truncation_tests {
         fields.entries().iter().map(|(k, _)| k.as_str()).collect()
     }
 
-    /// The exact limit an envelope carrying `unknown` and `epoch_tag_unknown`
-    /// meets — so each case states the set it wants to survive rather than a
-    /// number that drifts with the typed fields.
+    /// Each case states the set it wants to survive rather than a number that
+    /// drifts with the typed fields.
     fn limit_carrying(unknown: PreservedFields, epoch_tag_unknown: PreservedFields) -> usize {
         encode_envelope(&envelope(unknown, epoch_tag_unknown))
             .expect("encodes")
             .len()
     }
 
-    /// The whole contract in one: the block comes back within the limit, the
-    /// envelope is left holding exactly what that block encodes, and the cut
-    /// took the fields that overflowed rather than the set.
     #[test]
     fn a_carried_set_over_the_limit_is_cut_to_fit_rather_than_refused() {
         let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
@@ -624,9 +619,6 @@ mod truncation_tests {
         assert_eq!(block, encode_envelope(&before).expect("encodes"));
     }
 
-    /// The scope-root marker and the write plane's payload are protocol-bearing:
-    /// cutting either publishes a record the reader rejects outright, which is
-    /// the refusal the cut exists to avoid. Over the limit is where it stays.
     #[test]
     fn the_protocol_bearing_carried_fields_are_never_cut() {
         let limit = limit_carrying(PreservedFields::new(), PreservedFields::new());
@@ -639,10 +631,7 @@ mod truncation_tests {
         assert_eq!(keys(&env.unknown), vec!["writeSealed", "grantSection"]);
     }
 
-    /// The protection is the top-level names' alone. A reader looks for either
-    /// under `unknown`, so the same name inside `epochTag` bears no protocol —
-    /// honouring it there would leave a publisher an uncuttable field to pad
-    /// with, wedging every later re-author at the name behind `HeadTooLarge`.
+    /// The top-level scoping of [`UNCUTTABLE_KEYS`].
     #[test]
     fn a_protocol_bearing_name_inside_the_epoch_tag_is_still_cuttable() {
         for key in ["grantSection", "writeSealed"] {
@@ -669,9 +658,6 @@ mod truncation_tests {
         assert_eq!(keys(&env.unknown), vec!["small"]);
     }
 
-    /// One pass covers the whole excess — cutting entry by entry against an
-    /// attacker-sized set would be quadratic — so what the ranking must get
-    /// right is that it stops as soon as the budget is met and no sooner.
     #[test]
     fn a_budget_no_single_field_covers_takes_as_many_as_it_needs_and_no_more() {
         let limit = limit_carrying(fields(&[("a", 64), ("b", 64)]), PreservedFields::new());
@@ -698,8 +684,6 @@ mod truncation_tests {
         assert_eq!(cut_once(), cut_once());
     }
 
-    /// A cut destroys data under pressure someone else applied, so what it took
-    /// has to be reportable rather than inferable.
     #[test]
     fn a_cut_reports_the_carried_keys_it_dropped() {
         let limit = limit_carrying(fields(&[("small", 8)]), PreservedFields::new());
@@ -762,9 +746,8 @@ mod truncation_tests {
         assert_eq!(decode_envelope(&block).expect("decodes"), env);
     }
 
-    /// The marker's whole point: a field minted after this build shipped says on
-    /// the wire that it is protocol-bearing, and a cut that takes everything
-    /// else leaves it.
+    /// The marker's whole point: a field minted after this build shipped still
+    /// declares itself protocol-bearing.
     #[test]
     fn a_marked_carried_field_survives_a_cut_that_takes_everything_else() {
         let marked = format!("{CRITICAL_KEY_PREFIX}revocationPin");
@@ -832,8 +815,6 @@ mod truncation_tests {
         );
     }
 
-    /// `grantSection` is the budget's one exclusion — it carries its own byte
-    /// bound, and a budget large enough to hold it would be no budget at all.
     #[test]
     fn the_grant_section_is_outside_the_critical_budget() {
         let mut env = envelope(PreservedFields::new(), PreservedFields::new());
@@ -842,8 +823,7 @@ mod truncation_tests {
         assert_eq!(decode_envelope(&bytes).expect("decodes"), env);
     }
 
-    /// `writeSealed` is uncuttable and carries no bound of its own, so it is
-    /// inside the budget.
+    /// Uncuttable and unbounded on its own, so the budget is what governs it.
     #[test]
     fn the_write_sealed_field_is_inside_the_critical_budget() {
         let env = envelope(
