@@ -1,13 +1,21 @@
-# The web e2e smoke slice (blueprint/testing.md). The suite runs against the
-# production static build, so it needs the engine WASM: a caller passes
-# `wasm-artifact` to hand over the module its run already built, and a caller
-# that does not gets the module built here. It builds the bundle twice: once as
-# it ships, once with `VITE_E2E_HOOK` for the introspection seam. The suite
-# asserts the shipping one carries no hook.
+# The web e2e suite (blueprint/testing.md), in two slices: `smoke` is the PR
+# gate's bounded-minutes budget, `full` is the main gate's whole suite. The
+# suite runs against the production static build, so it needs the engine WASM: a
+# caller passes `wasm-artifact` to hand over the module its run already built,
+# and a caller that does not gets the module built here. It builds the bundle
+# twice: once as it ships, once with `VITE_E2E_HOOK` for the introspection seam.
+# The suite asserts the shipping one carries no hook.
 name: Web E2E Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Which slice to run
+        required: false
+        default: smoke
+        type: choice
+        options: [smoke, full]
   workflow_call:
     inputs:
       ref:
@@ -22,12 +30,21 @@ on:
         required: false
         default: ''
         type: string
+      suite:
+        description: >-
+          Which slice to run: `smoke` drops every `@full`-tagged spec and holds
+          the PR gate's minutes budget; `full` runs the whole suite.
+        required: false
+        default: smoke
+        type: string
 
 permissions: {}
 
 jobs:
   web-e2e:
-    name: Web E2E Smoke
+    # Both callers get the name their slice earns, and `smoke` renders exactly
+    # the name branch protection already knows.
+    name: Web E2E ${{ inputs.suite == 'full' && 'Full' || 'Smoke' }}
     runs-on: ubuntu-latest
     # The suite itself runs in seconds; the budget covers a standalone
     # dispatch, where a cold-cache wasm build runs ahead of it.
@@ -218,18 +235,22 @@ jobs:
       # (Playwright runs it under sudo, and a killed attempt leaves a root-owned
       # apt-get holding the dpkg lock that the next attempt dies on), and a
       # failure warns rather than fails. If a library really is missing, the
-      # smoke slice says so in the browser launch error.
+      # suite says so in the browser launch error.
       - name: Install the Playwright system dependencies
         timeout-minutes: 6
         run: |
           timeout --kill-after=30 240 \
             pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium \
-            || echo "::warning::playwright install-deps did not complete; the smoke slice shows whether a library is actually missing"
+            || echo "::warning::playwright install-deps did not complete; the suite shows whether a library is actually missing"
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
-      # suite that needs a live stack.
-      - name: Run the web e2e smoke slice
+      # suite that needs a live stack. The step timeout is the slice's test-time
+      # budget, so a smoke slice that outgrows the PR gate trips here.
+      - name: Run the web e2e suite
+        timeout-minutes: ${{ inputs.suite == 'full' && 30 || 12 }}
         run: pnpm --filter @cipherbox/web-e2e test:e2e
+        env:
+          E2E_SUITE: ${{ inputs.suite }}
 
       - name: Upload the Playwright report on failure
         if: failure()

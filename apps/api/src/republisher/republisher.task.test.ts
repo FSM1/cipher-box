@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, fakeConfig } from '../testing/fakes';
+import { minimalIpnsRecord } from '../testing/ipns-record';
 import { MinimalIpnsSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
 import { RepublisherAlerter } from './republisher.alerter';
@@ -7,20 +8,6 @@ import { RepublisherTask } from './republisher.task';
 import type { CacheUpsertResult } from './services/record-cache.service';
 
 const HOUR = 3_600_000;
-
-/** Build an IPNS-record-shaped byte string carrying only the sequence field (5). */
-function record(sequence: bigint): Buffer {
-  const tag = (5 << 3) | 0;
-  const bytes: number[] = [tag];
-  let v = sequence;
-  do {
-    let byte = Number(v & 0x7fn);
-    v >>= 7n;
-    if (v > 0n) byte |= 0x80;
-    bytes.push(byte);
-  } while (v > 0n);
-  return Buffer.from(bytes);
-}
 
 /** A well-formed record carrying NO sequence field — the reader returns null. */
 function recordWithoutSequence(): Buffer {
@@ -118,7 +105,7 @@ class ConcurrencyTransport extends RecordTransport {
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     this.inFlight -= 1;
-    return record(1n);
+    return minimalIpnsRecord(1n);
   }
 
   async republish(name: string, _record: Buffer): Promise<void> {
@@ -188,8 +175,8 @@ describe('RepublisherTask walk', () => {
     const transport = new FakeTransport();
     const alerter = new RecordingAlerter();
     const clock = new FakeClock();
-    transport.resolveAnswers.set('name-a', record(1n));
-    transport.resolveAnswers.set('name-b', record(1n));
+    transport.resolveAnswers.set('name-a', minimalIpnsRecord(1n));
+    transport.resolveAnswers.set('name-b', minimalIpnsRecord(1n));
 
     await buildTask({ names: ['name-a', 'name-b'], cache, transport, alerter, clock }).runOnce();
 
@@ -206,7 +193,7 @@ describe('RepublisherTask walk', () => {
     const alerter = new RecordingAlerter();
     transport.resolveAnswers.set('orphan', null); // registered-never-published orphan
     transport.resolveAnswers.set('unreachable', 'throw'); // transport-level failure
-    transport.resolveAnswers.set('live', record(1n));
+    transport.resolveAnswers.set('live', minimalIpnsRecord(1n));
 
     await buildTask({
       names: ['orphan', 'unreachable', 'live'],
@@ -230,9 +217,9 @@ describe('RepublisherTask walk', () => {
     const alerter = new RecordingAlerter();
     const clock = new FakeClock();
     cache.upsertThrows.add('boom');
-    transport.resolveAnswers.set('boom', record(1n));
-    transport.resolveAnswers.set('name-a', record(1n));
-    transport.resolveAnswers.set('name-b', record(1n));
+    transport.resolveAnswers.set('boom', minimalIpnsRecord(1n));
+    transport.resolveAnswers.set('name-a', minimalIpnsRecord(1n));
+    transport.resolveAnswers.set('name-b', minimalIpnsRecord(1n));
 
     await buildTask({
       names: ['boom', 'name-a', 'name-b'],
@@ -257,13 +244,13 @@ describe('RepublisherTask walk', () => {
     const cache = new FakeRecordCache();
     const clock = new FakeClock();
     cache.seed('name', {
-      record: record(5n),
+      record: minimalIpnsRecord(5n),
       sequence: 5n,
       lastRepublishedAt: clock.now(),
       createdAt: clock.now(),
     });
     const transport = new FakeTransport();
-    transport.resolveAnswers.set('name', record(3n)); // older than cached seq 5
+    transport.resolveAnswers.set('name', minimalIpnsRecord(3n)); // older than cached seq 5
 
     await buildTask({
       names: ['name'],
@@ -283,13 +270,13 @@ describe('RepublisherTask walk', () => {
     const cache = new FakeRecordCache();
     const clock = new FakeClock();
     cache.seed('name', {
-      record: record(5n),
+      record: minimalIpnsRecord(5n),
       sequence: 5n,
       lastRepublishedAt: clock.now(),
       createdAt: clock.now(),
     });
     const transport = new FakeTransport();
-    transport.resolveAnswers.set('name', record(7n));
+    transport.resolveAnswers.set('name', minimalIpnsRecord(7n));
 
     await buildTask({
       names: ['name'],
@@ -311,16 +298,16 @@ describe('RepublisherTask walk', () => {
     // A name last re-PUT 25h ago whose re-PUT keeps failing this sweep.
     const stalePast = new Date(clock.now().getTime() - 25 * HOUR);
     cache.seed('stale', {
-      record: record(2n),
+      record: minimalIpnsRecord(2n),
       sequence: 2n,
       lastRepublishedAt: stalePast,
       createdAt: stalePast,
     });
-    transport.resolveAnswers.set('stale', record(2n));
+    transport.resolveAnswers.set('stale', minimalIpnsRecord(2n));
     transport.republishFailures.add('stale');
 
     // A healthy name that re-PUTs fine this sweep.
-    transport.resolveAnswers.set('fresh', record(1n));
+    transport.resolveAnswers.set('fresh', minimalIpnsRecord(1n));
 
     await buildTask({ names: ['stale', 'fresh'], cache, transport, alerter, clock }).runOnce();
 
@@ -337,7 +324,7 @@ describe('RepublisherTask walk', () => {
     const transport = new FakeTransport();
     const alerter = new RecordingAlerter();
     const clock = new FakeClock();
-    transport.resolveAnswers.set('name', record(1n));
+    transport.resolveAnswers.set('name', minimalIpnsRecord(1n));
 
     await buildTask({ names: ['name'], cache, transport, alerter, clock }).runOnce();
 
@@ -377,7 +364,7 @@ describe('RepublisherTask walk', () => {
     }).runOnce();
     expect(cache.rows.get('name')?.sequence).toBe(0n);
 
-    transport.resolveAnswers.set('name', record(1n));
+    transport.resolveAnswers.set('name', minimalIpnsRecord(1n));
     await buildTask({
       names: ['name'],
       cache,
@@ -395,7 +382,7 @@ describe('RepublisherTask walk', () => {
     const transport = new FakeTransport();
     transport.isConfigured = false;
     const alerter = new RecordingAlerter();
-    transport.resolveAnswers.set('name-a', record(1n));
+    transport.resolveAnswers.set('name-a', minimalIpnsRecord(1n));
 
     await buildTask({
       names: ['name-a', 'name-b', 'name-c'],

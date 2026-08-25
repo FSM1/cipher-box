@@ -1,7 +1,7 @@
-# DORMANT during the v2 build: the v1 e2e suites were demolished with the
-# v1 layout, and the v2 main-gate suites (full web-e2e, desktop mounted
-# matrix, cross-client matrix) land per blueprint/testing.md. Re-engage by
-# restoring the push->main trigger when those suites exist.
+# DORMANT during the v2 build: the v1 e2e suites were demolished with the v1
+# layout, and the v2 main-gate suites land per blueprint/testing.md. The full
+# web-e2e slice is wired below; the desktop mounted matrix and the cross-client
+# matrix are not. Re-engage by restoring the push->main trigger once they are.
 name: CI E2E Tests
 
 on:
@@ -81,6 +81,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/web-e2e.yml
+    with:
+      suite: full
 
   desktop-e2e:
     name: Desktop E2E

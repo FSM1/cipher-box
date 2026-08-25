@@ -963,6 +963,7 @@ jobs:
     uses: ./.github/workflows/web-e2e.yml
     with:
       wasm-artifact: web-engine-wasm
+      suite: smoke
 
   # Single always-reporting gate for the smoke slice, mirroring
   # contract-suite-result: branch protection requires this stable context, so a
