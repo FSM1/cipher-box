@@ -4556,29 +4556,34 @@ where {
                 Err(_) => continue,
             };
 
+            // An unchanged set is one this claim adds nothing to, so it owes no
+            // publish — and the later items in this pass go on converting
+            // against what the earlier ones actually published.
             if converted.outcome != ClaimOutcome::Unchanged {
-                self.publish_converted_claim(session, &net, &target, &current, &converted)
-                    .await?;
-                current.commitment = converted.commitment.clone();
-                current.commitment_sig = sign_grant_set(session.identity(), &converted.commitment)
+                let commitment_sig = sign_grant_set(session.identity(), &converted.commitment)
                     .map_err(|_| EngineError::MalformedInput {
                         check: "converted-commitment-unsignable",
                     })?
                     .to_compact();
+                self.publish_converted_claim(
+                    session,
+                    &net,
+                    &target,
+                    &current,
+                    &converted,
+                    &commitment_sig,
+                )
+                .await?;
+                current.commitment = converted.commitment.clone();
+                current.commitment_sig = commitment_sig;
                 current.grant_ledger = converted.ledger.clone();
             }
 
-            if let Some(record) = converted.record {
-                records.claims.push(record);
-                store
-                    .persist(&records)
-                    .await
-                    .map_err(EngineError::from_invite_store)?;
-            }
-
-            // Courtesy delivery, exactly as a direct grant makes it: the
-            // claimant learns which scope root to resolve, and the committed
-            // ledger there stays the authority on what they may do.
+            // Ahead of the spent record, so a post that fails leaves the claim
+            // unrecorded and the next pass re-runs it: past the record, the
+            // claim is refused as spent and the pointer would never be sent.
+            // The courtesy delivery a direct grant makes, at the terms the
+            // committed ledger — not this pointer — stays the authority on.
             let mut entropy = SharedEntropy(&self.entropy);
             let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
             let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim grant idempotency key")
@@ -4602,6 +4607,14 @@ where {
             .await
             .map_err(EngineError::from_seam)?;
 
+            if let Some(record) = converted.record {
+                records.claims.push(record);
+                store
+                    .persist(&records)
+                    .await
+                    .map_err(EngineError::from_invite_store)?;
+            }
+
             self.seams
                 .mailbox
                 .ack(&item.item_id)
@@ -4612,8 +4625,8 @@ where {
     }
 
     /// Publish the set one converted claim produced at the scope root it
-    /// belongs to: owner-re-sign the commitment, re-seal at the **same** read
-    /// epoch (a claim cuts no key, so it mints no history link), and publish.
+    /// belongs to: re-seal at the **same** read epoch (a claim cuts no key, so
+    /// it mints no history link) and publish.
     async fn publish_converted_claim(
         &self,
         session: &SessionIdentity,
@@ -4621,12 +4634,8 @@ where {
         target: &OwnerScope,
         current: &CascadeTarget,
         converted: &ConvertedClaim,
+        commitment_sig: &[u8; 64],
     ) -> Result<(), EngineError> {
-        let commitment_sig = sign_grant_set(session.identity(), &converted.commitment)
-            .map_err(|_| EngineError::MalformedInput {
-                check: "converted-commitment-unsignable",
-            })?
-            .to_compact();
         let section = reseal_scope_root(
             &mut SharedEntropy(&self.entropy),
             &ScopeRootIdentity {
@@ -4654,7 +4663,7 @@ where {
             &CommittedSet {
                 owner_identity: &session.owner_identity(),
                 commitment: &converted.commitment,
-                commitment_sig: &commitment_sig,
+                commitment_sig,
                 grant_ledger: &converted.ledger,
                 direct_child_scope_index: &current.direct_child_scope_index,
             },

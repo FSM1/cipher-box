@@ -261,6 +261,21 @@ describe('EngineFacade', () => {
     });
   });
 
+  it('spells an omitted invite deadline as a link that never expires', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const node = new Uint8Array(16);
+
+    await facade.createInviteLink(node, 'read');
+    await facade.createInviteLink(node, 'write', 1_800_000_000_000n);
+
+    expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', expiresAt: null });
+    expect(transport.commands[1]).toMatchObject({
+      kind: 'createInviteLink',
+      expiresAt: 1_800_000_000_000n,
+    });
+  });
+
   it('delegates the stream trio to the transport, window intact', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);

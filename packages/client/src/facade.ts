@@ -194,8 +194,38 @@ export class EngineFacade {
     return this.command({ kind: 'downgrade', node, recipientIdentityPublicKey });
   }
 
-  createInviteLink(node: Uint8Array, permission: Permission): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'createInviteLink', node, permission });
+  /** Mints an invite link; an omitted `expiresAt` mints one that never expires. */
+  createInviteLink(
+    node: Uint8Array,
+    permission: Permission,
+    expiresAt?: bigint
+  ): Promise<CommandOutcomeDescriptor> {
+    return this.command({
+      kind: 'createInviteLink',
+      node,
+      permission,
+      expiresAt: expiresAt ?? null,
+    });
+  }
+
+  /** Revokes the link minted at `node`: future claims end, converted grants stand. */
+  revokeInviteLink(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'revokeInviteLink', node });
+  }
+
+  /** Drops the invite records the scope's owner-signed commitment no longer carries. */
+  pruneInviteLinks(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'pruneInviteLinks', node });
+  }
+
+  /** Claims a link from its URL fragment — `location.hash.slice(1)`, verbatim. */
+  claimInviteLink(fragment: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'claimInviteLink', fragment });
+  }
+
+  /** Converts the claims waiting on the link minted at `node` into grants. */
+  convertInviteClaims(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'convertInviteClaims', node });
   }
 
   acceptShare(sealedSharePointer: Uint8Array): Promise<CommandOutcomeDescriptor> {

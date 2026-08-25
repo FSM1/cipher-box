@@ -78,6 +78,7 @@ describe('buildCommand', () => {
       kind: 'createInviteLink',
       node: new Uint8Array(16),
       permission: 'write',
+      expiresAt: null,
     });
 
     expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.Folder);
@@ -144,6 +145,129 @@ describe('buildCommand', () => {
   it('rejects an op id that is not the engine bigint', () => {
     expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
       'invalid request field opId: number'
+    );
+  });
+
+  describe('invite links', () => {
+    /** Stands in for a real fragment, which is a bearer capability. */
+    const FRAGMENT = 'placeholder-invite-fragment';
+    const node = new Uint8Array(16).fill(7);
+
+    /** Records what each invite builder was called with. */
+    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
+      const calls: Record<string, unknown[][]> = {};
+      const record =
+        (name: string) =>
+        (...args: unknown[]): object => {
+          (calls[name] ??= []).push(args);
+          return {};
+        };
+      const wasm = {
+        ...fakeWasmEnums,
+        NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+        Command: {
+          createInviteLink: record('createInviteLink'),
+          revokeInviteLink: record('revokeInviteLink'),
+          pruneInviteLinks: record('pruneInviteLinks'),
+          claimInviteLink: record('claimInviteLink'),
+          convertInviteClaims: record('convertInviteClaims'),
+        },
+      } as unknown as EngineWasm;
+      return { wasm, calls };
+    };
+
+    it('carries the link deadline through as the engine bigint', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'createInviteLink',
+        node,
+        permission: 'read',
+        expiresAt: 1_800_000_000_000n,
+      });
+
+      expect(calls.createInviteLink).toEqual([
+        [{ bytes: node }, fakeWasmEnums.Permission.Read, 1_800_000_000_000n],
+      ]);
+    });
+
+    it('spells an absent link deadline as undefined, never as null', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'createInviteLink',
+        node,
+        permission: 'write',
+        expiresAt: null,
+      });
+
+      expect(calls.createInviteLink).toEqual([
+        [{ bytes: node }, fakeWasmEnums.Permission.Write, undefined],
+      ]);
+    });
+
+    it.each(['revokeInviteLink', 'pruneInviteLinks', 'convertInviteClaims'] as const)(
+      'builds a %s from the node alone',
+      (kind) => {
+        const { wasm, calls } = spyWasm();
+
+        buildCommand(wasm, { kind, node });
+
+        expect(calls[kind]).toEqual([[{ bytes: node }]]);
+      }
+    );
+
+    it('hands the claim its URL fragment verbatim, as the one argument', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'claimInviteLink', fragment: FRAGMENT });
+
+      expect(calls.claimInviteLink).toEqual([[FRAGMENT]]);
+    });
+
+    it('rejects a link deadline that is not the engine bigint', () => {
+      expect(
+        refuses({
+          kind: 'createInviteLink',
+          node,
+          permission: 'read',
+          expiresAt: 1_800_000_000_000,
+        })
+      ).toThrow('invalid request field expiresAt: number');
+      expect(
+        refuses({ kind: 'createInviteLink', node, permission: 'read', expiresAt: '2030' })
+      ).toThrow('invalid request field expiresAt: string');
+    });
+
+    it('rejects a zero or negative link deadline the engine would refuse', () => {
+      const { wasm, calls } = spyWasm();
+      const refusesDeadline =
+        (expiresAt: bigint): (() => unknown) =>
+        () =>
+          buildCommand(wasm, { kind: 'createInviteLink', node, permission: 'read', expiresAt });
+
+      expect(refusesDeadline(0n)).toThrow('invalid request field expiresAt: bigint');
+      expect(refusesDeadline(-1n)).toThrow('invalid request field expiresAt: bigint');
+      // Refused before the node was minted, so no wasm handle is stranded.
+      expect(calls.createInviteLink).toBeUndefined();
+    });
+
+    it('rejects a claim fragment that is not a string', () => {
+      expect(refuses({ kind: 'claimInviteLink', fragment: 12345 })).toThrow(
+        'invalid request field fragment: number'
+      );
+      expect(refuses({ kind: 'claimInviteLink', fragment: null })).toThrow(
+        'invalid request field fragment: null'
+      );
+    });
+
+    it.each(['revokeInviteLink', 'pruneInviteLinks', 'convertInviteClaims'] as const)(
+      'rejects a %s whose node is not bytes',
+      (kind) => {
+        expect(refuses({ kind, node: 'sixteen bytes!!!' })).toThrow(
+          'invalid request field node: string'
+        );
+      }
     );
   });
 

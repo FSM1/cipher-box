@@ -93,6 +93,17 @@ export function minted(value: unknown, field: string): bigint {
   return value;
 }
 
+/**
+ * An invite link's Unix-millis deadline. Zero is refused here rather than left
+ * to the `NonZeroU64` the engine holds, which rejects it only once the call's
+ * wasm objects are minted — the ordering [`retentionCap`] keeps.
+ */
+function deadline(value: unknown, field: string): bigint {
+  const at = minted(value, field);
+  if (at <= 0n) throw invalidField(field, value);
+  return at;
+}
+
 export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes(value, field));
 }
@@ -248,11 +259,23 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         nodeId(wasm, descriptor.node, 'node'),
         bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
       );
-    case 'createInviteLink':
+    case 'createInviteLink': {
+      const at =
+        descriptor.expiresAt == null ? undefined : deadline(descriptor.expiresAt, 'expiresAt');
       return wasm.Command.createInviteLink(
         nodeId(wasm, descriptor.node, 'node'),
-        permission(wasm, descriptor.permission)
+        permission(wasm, descriptor.permission),
+        at
       );
+    }
+    case 'revokeInviteLink':
+      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'));
+    case 'pruneInviteLinks':
+      return wasm.Command.pruneInviteLinks(nodeId(wasm, descriptor.node, 'node'));
+    case 'claimInviteLink':
+      return wasm.Command.claimInviteLink(text(descriptor.fragment, 'fragment'));
+    case 'convertInviteClaims':
+      return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
     case 'acceptShare':
       return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
@@ -454,7 +477,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
   };
 }
 
-function permissionFrom(wasm: EngineWasm, permission: number): Permission {
+export function permissionFrom(wasm: EngineWasm, permission: number): Permission {
   switch (permission) {
     case wasm.Permission.Read:
       return 'read';
