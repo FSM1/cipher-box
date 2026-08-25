@@ -6,7 +6,10 @@ use core::cell::RefCell;
 use cipherbox_core::kdf;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
-use cipherbox_engine::grants::{ContactStore, StagingContactStore, resolve_recipient};
+use cipherbox_engine::grants::{
+    ContactStore, InviteRecords, InviteStore, RecordedInvite, StagingContactStore,
+    StagingInviteStore, resolve_recipient,
+};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
@@ -91,6 +94,12 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             Command::RotateNow { node },
             EngineError::UnsupportedTarget {
                 check: "rotate-target-is-not-a-scope-root",
+            },
+        ),
+        (
+            Command::RevokeInviteLink { node },
+            EngineError::MalformedInput {
+                check: "link-not-committed",
             },
         ),
     ]
@@ -220,11 +229,85 @@ fn the_owner_action_arms_refuse_with_their_own_verdicts() {
     }
 }
 
-/// The invite mint is wired, so it refuses with its own verdict rather than
-/// falling through the catch-all — and it refuses a node that names no scope
-/// root before it reaches any key material.
+/// A link mints the invited folder's own scope, so the vault root — whose scope
+/// is the session's — is refused before any key material is reached.
 #[test]
-fn minting_an_invite_link_refuses_a_node_that_names_no_scope_root() {
+fn minting_an_invite_link_refuses_the_vault_root() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let root = block_on(engine.view()).expect("view").root();
+
+    assert_eq!(
+        block_on(engine.command(Command::CreateInviteLink {
+            node: root,
+            permission: Permission::Read,
+            expires_at: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "invite-target-is-the-vault-root"
+        }),
+    );
+}
+
+/// The records decide the whole of a prune, so an owner holding none is a no-op
+/// rather than a refusal — and answers without resolving anything, which an
+/// engine with no scope material could not do at all.
+#[test]
+fn pruning_invite_links_an_owner_never_minted_is_a_no_op() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::PruneInviteLinks {
+            node: NodeId([1; 16])
+        })),
+        Ok(CommandOutcome::Done),
+    );
+}
+
+/// A prune that cannot reach the scope drops nothing: an unresolvable scope root
+/// is staleness, and forgetting a record on it would leave a row that may be
+/// live with nothing to revoke it.
+#[test]
+fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let root = block_on(engine.view()).expect("view").root();
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let store = StagingInviteStore::new(&device.staging_store, &enc_subkey, &entropy);
+    let records = InviteRecords {
+        links: vec![RecordedInvite {
+            tag: [0x4e; 32],
+            ephemeral_identity_pk: [0x02; 33],
+            ephemeral_enc_pk: [0x5f; 32],
+            expires_at: None,
+        }],
+        claims: Vec::new(),
+    };
+    block_on(store.persist(&records)).expect("the records persist");
+
+    assert!(matches!(
+        block_on(engine.command(Command::PruneInviteLinks { node: root })),
+        Err(EngineError::ContentUnavailable { .. }),
+    ));
+    assert_eq!(
+        block_on(store.load()).expect("the records load"),
+        records,
+        "the offered set is untouched"
+    );
+}
+
+/// A write link would hand the bearer the write-scope seed the whole parent
+/// scope derives its names from, so it is refused ahead of every other check.
+#[test]
+fn minting_a_write_invite_link_is_refused() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
@@ -233,28 +316,29 @@ fn minting_an_invite_link_refuses_a_node_that_names_no_scope_root() {
     assert_eq!(
         block_on(engine.command(Command::CreateInviteLink {
             node: NodeId([1; 16]),
-            permission: Permission::Read,
+            permission: Permission::Write,
+            expires_at: None,
         })),
         Err(EngineError::UnsupportedTarget {
-            check: "invite-target-is-not-a-scope-root"
+            check: "write-links-need-a-write-scope-cut"
         }),
     );
 }
 
-/// The vault root passes the target check, so an offline engine stops at the
-/// scope material it has not resolved — availability, never the catch-all.
+/// A folder passes the target check, so an offline engine stops at the scope
+/// material it has not resolved — availability, never the catch-all.
 #[test]
-fn minting_an_invite_link_on_an_unresolved_vault_root_reports_availability() {
+fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
-    let root = block_on(engine.view()).expect("view").root();
 
     assert!(matches!(
         block_on(engine.command(Command::CreateInviteLink {
-            node: root,
+            node: NodeId([1; 16]),
             permission: Permission::Read,
+            expires_at: None,
         })),
         Err(EngineError::ContentUnavailable { .. }),
     ));

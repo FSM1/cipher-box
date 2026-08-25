@@ -3,7 +3,7 @@
 //! or revoked in the next, and what keeps a claim single-use.
 //!
 //! [`convert_invite_claim`](super::convert_invite_claim) and
-//! [`revoke_invite_link`](super::revoke_invite_link) both take a
+//! [`locate_invite_link`](super::locate_invite_link) both read a
 //! [`RecordedInvite`] back as input, and nothing in a resolved record marks a
 //! row as an invite, so this store is the owner's authority over its own links
 //! rather than a cache of published state. The spent-claim half
@@ -17,14 +17,17 @@
 //! `ephemeralIdentityPk` and the tag binds only the **encryption** half, so a
 //! party who could author a record would pair a real link's `ephemeralEncPk`
 //! with an identity key it holds and drive the owner into minting a genuine
-//! grant at that link's committed permission. The recorded deadline is the
-//! authority for expiry on the same rule.
+//! grant at that link's committed permission. The same authorship cuts the other
+//! way now that a revoke names its link here: a record pairing an ordinary
+//! grantee's `encPk` with that grantee's committed tag re-derives under the
+//! owner's own half, so it would drive the owner into cutting a grant it never
+//! revoked. The recorded deadline is the authority for expiry on the same rule.
 //!
 //! What the seal does *not* buy, because the structure carries no monotone
 //! generation: a host replaying an earlier sealed set restores a deadline the
 //! owner has since shortened, and dropping the stored key entirely reads as an
 //! owner who minted nothing — leaving a live commitment entry no
-//! [`revoke_invite_link`](super::revoke_invite_link) call can name, since the
+//! [`locate_invite_link`](super::locate_invite_link) call can name, since the
 //! cut is derived from the record rather than looked up by tag. The
 //! owner-signed commitment caps both: conversion reads the permission there and
 //! treats absence as revocation, and honours the published deadline as a
@@ -68,6 +71,12 @@ const INVITE_RECORDS_V: u64 = 2;
 /// The frozen bound on recorded links, enforced release-active in both codec
 /// directions (AGENTS.md rule 8). One record per live link across every scope
 /// the owner has invited to; it bounds reader CPU and the staging budget alike.
+///
+/// A record whose scope root never published spends a slot that nothing can
+/// reclaim on its own: no record resolves at that name for a prune to read a
+/// commitment out of, and dropping one on an unresolvable name is the fail-open
+/// the prune exists to avoid. A later mint at the same node publishes a
+/// commitment that supersedes it, and the prune reclaims it then.
 pub const MAX_INVITE_RECORDS: usize = 1024;
 
 /// The frozen bound on spent-claim records, on the same rule as
@@ -152,6 +161,20 @@ pub struct InviteRecords {
     /// The claims already converted, the authority for what may not be claimed
     /// again.
     pub claims: Vec<ConvertedClaimRecord>,
+}
+
+impl InviteRecords {
+    /// Drop the links `tags` names, and the conversions they produced.
+    ///
+    /// A spent-claim record is what makes a claim single-use, and it is
+    /// collectable exactly when the link it came in on is gone: no claim on a
+    /// link the owner no longer records can convert
+    /// ([`ConvertedClaimRecord::link_tag`](super::ConvertedClaimRecord::link_tag)),
+    /// so dropping the pair together re-admits nothing.
+    pub fn forget_links(&mut self, tags: &BTreeSet<[u8; 32]>) {
+        self.links.retain(|link| !tags.contains(&link.tag));
+        self.claims.retain(|claim| !tags.contains(&claim.link_tag));
+    }
 }
 
 /// Durable persistence for the owner's invite state.

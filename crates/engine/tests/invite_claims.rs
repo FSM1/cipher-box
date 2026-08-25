@@ -16,8 +16,8 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::grants::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
     EphemeralInvitee, InviteClaim, InviteRecords, InviteStore, OwnerAuthority, RecordedInvite,
-    StagingInviteStore, convert_invite_claim, import_contact, mint_invite_grant, post_invite_claim,
-    revoke_invite_link,
+    StagingInviteStore, convert_invite_claim, import_contact, locate_invite_link,
+    mint_invite_grant, post_invite_claim,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::rotation::derive_write_name;
@@ -374,14 +374,11 @@ fn a_link_minted_in_one_session_converts_and_revokes_in_the_next() {
     .expect("the recovered record converts the claim");
     assert_eq!(converted.outcome, ClaimOutcome::Granted);
 
-    let cut = revoke_invite_link(&keys.authority(), &l.scope(), &recovered.links[0])
-        .expect("the recovered record revokes its link");
-    assert!(
-        !cut.commitment
-            .entries
-            .iter()
-            .any(|e| e.tag == l.recorded.tag),
-        "the link the earlier session minted is cut from the owner-signed set"
+    let located = locate_invite_link(&keys.authority(), &l.scope(), &recovered.links)
+        .expect("the recovered record names its link");
+    assert_eq!(
+        located.tag, l.recorded.tag,
+        "the link a later session revokes is the one the earlier session minted",
     );
 }
 

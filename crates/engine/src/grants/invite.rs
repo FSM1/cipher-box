@@ -11,7 +11,10 @@
 //! [`reseal_scope_root`](crate::rotation::reseal_scope_root) wraps — an invite is
 //! byte-shaped like a personal grantee's and an observer learns only blob count.
 //! (The sealed write-body is longer by a row that carries a deadline; that
-//! ciphertext length is the residual observable.)
+//! ciphertext length is the residual observable.) Parity is per record, not per
+//! transaction: a link mints its scope exactly as a personal grant does but
+//! posts no share pointer, so "a scope root registered with no mailbox post
+//! behind it" still tells the API which folders were shared by link.
 //!
 //! The invite secret is the whole capability — it rides the link's URL fragment,
 //! so the link is honestly bearer and multi-claim. Its deadline lives on
@@ -228,37 +231,6 @@ impl EphemeralInvitee {
     }
 }
 
-/// What a minted link hands out, as the host must present it.
-///
-/// Every invite link is bearer — the fragment secret is the whole capability —
-/// so what a host must not get wrong is what *ending* one costs, and that is
-/// what this names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkCapability {
-    /// A read link: cutting its tag from the owner-signed set and rotating the
-    /// read plane ends it.
-    Read,
-    /// A write link: the blob hands the fragment holder an extractable subtree
-    /// signing key, so it stays usable until `rotate_scope_write` runs. Pruning
-    /// the ledger revokes nothing (blueprint/engine.md "Invites").
-    BearerWrite,
-}
-
-impl LinkCapability {
-    /// The capability a link at `permission` hands out.
-    pub fn of(permission: Permission) -> Self {
-        match permission {
-            Permission::Read => Self::Read,
-            Permission::Write => Self::BearerWrite,
-        }
-    }
-
-    /// Whether the link hands out an extractable subtree signing key.
-    pub fn is_bearer_write(&self) -> bool {
-        matches!(self, Self::BearerWrite)
-    }
-}
-
 /// One invite link as the owner recorded it at mint — **owner-local state, never
 /// network bytes**.
 ///
@@ -289,10 +261,8 @@ pub struct MintedInvite {
     /// The link's blinded tag, commitment entry and ledger row.
     pub row: GrantRow,
     /// The owner-local record [`convert_invite_claim`] and
-    /// [`revoke_invite_link`] act on. Persist it with the link.
+    /// [`locate_invite_link`] act on. Persist it with the link.
     pub link: RecordedInvite,
-    /// What the link hands out.
-    pub capability: LinkCapability,
 }
 
 /// Mint an invite link over the scope root at `scope_id`.
@@ -336,7 +306,6 @@ pub fn mint_invite_grant(
             expires_at,
         },
         row,
-        capability: LinkCapability::of(permission),
     })
 }
 
@@ -597,11 +566,7 @@ pub fn convert_invite_claim(
     if link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
         return Err(InviteError::LinkExpired);
     }
-    // Re-derive the record's tag, so a link recorded against another scope root
-    // cannot be replayed here.
-    let link_enc =
-        X25519Public::from_bytes(link.ephemeral_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
-    if recipient_blinded_tag(owner.enc_secret, &link_enc, name) != Some(link.tag) {
+    if !link_binds_scope(owner.enc_secret, link, name) {
         return Err(InviteError::LinkNotCommitted);
     }
     // Bound to a link the owner recorded, so the spent set can be consulted.
@@ -709,74 +674,47 @@ pub fn convert_invite_claim(
     })
 }
 
-/// The owner-signed cut a link revocation makes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InviteRevocation {
-    /// The grant-set commitment the owner re-signs, without the link's entry.
-    pub commitment: GrantSetCommitment,
-    /// The grant ledger matching it.
-    pub ledger: Vec<GrantLedgerEntry>,
-    /// What the revoked link handed out.
-    pub capability: LinkCapability,
-}
-
-impl InviteRevocation {
-    /// Whether publishing this cut with a read rotation is the whole revocation.
-    ///
-    /// `false` for a write link: its fragment holder keeps an extractable
-    /// subtree signing key until `rotate_scope_write` runs, so the cut alone has
-    /// revoked nothing and a host must report the link as not yet revoked.
-    pub fn is_complete(&self) -> bool {
-        !self.capability.is_bearer_write()
-    }
-}
-
-/// Cut an invite link out of the owner-signed grant set. Owner-only, and only a
-/// link the owner recorded — a tag that is merely committed belongs to some
-/// grantee and is not this function's to cut.
+/// Whether `link` records a link on the scope root at `scope_root_name`.
 ///
-/// Grants already converted from the link are untouched: revoking a link ends
-/// future claims, not the personal grants it already produced.
-pub fn revoke_invite_link(
+/// Re-derives the record's blinded tag from the owner's own half of the
+/// pairwise ECDH: the tag binds the scope root's name, so a record made against
+/// another scope root cannot be replayed against this one, and a record whose
+/// stored tag does not match its own key material is not this owner's.
+pub fn link_binds_scope(
+    owner_enc_secret: &X25519Secret,
+    link: &RecordedInvite,
+    scope_root_name: &[u8],
+) -> bool {
+    X25519Public::from_bytes(link.ephemeral_enc_pk).is_some_and(|enc| {
+        recipient_blinded_tag(owner_enc_secret, &enc, scope_root_name) == Some(link.tag)
+    })
+}
+
+/// The one live link the owner recorded at `scope` — the link a revoke cuts.
+///
+/// Owner-only, and only a link the owner recorded **and** the owner-signed
+/// commitment still carries: a tag that is merely committed belongs to some
+/// grantee (a claim's personal grant among them) and is not a link's to cut,
+/// and a recorded tag the commitment has dropped names a link that is already
+/// gone. Ambiguity is refused rather than resolved to the first match.
+pub fn locate_invite_link<'a>(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
-    link: &RecordedInvite,
-) -> Result<InviteRevocation, InviteError> {
+    links: &'a [RecordedInvite],
+) -> Result<&'a RecordedInvite, InviteError> {
     owner.authorise(scope)?;
-    // Re-derive the record's tag on the same rule as `convert_invite_claim`, so a
-    // record from another scope root cannot cut an ordinary grantee's entry.
-    let link_enc =
-        X25519Public::from_bytes(link.ephemeral_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
-    if recipient_blinded_tag(
-        owner.enc_secret,
-        &link_enc,
-        scope.commitment.ipns_name.as_slice(),
-    ) != Some(link.tag)
-    {
+    let name = scope.commitment.ipns_name.as_slice();
+    // Membership first: it costs a lookup, where binding the record to this
+    // scope costs an ECDH.
+    let mut live = links.iter().filter(|link| {
+        scope.commitment.entries.iter().any(|e| e.tag == link.tag)
+            && link_binds_scope(owner.enc_secret, link, name)
+    });
+    let link = live.next().ok_or(InviteError::LinkNotCommitted)?;
+    if live.next().is_some() {
         return Err(InviteError::LinkNotCommitted);
     }
-    let capability = scope
-        .commitment
-        .entries
-        .iter()
-        .find(|e| e.tag == link.tag)
-        .map(|e| LinkCapability::of(e.permission))
-        .ok_or(InviteError::LinkNotCommitted)?;
-
-    let mut commitment = scope.commitment.clone();
-    commitment.entries.retain(|e| e.tag != link.tag);
-    let ledger: Vec<GrantLedgerEntry> = scope
-        .ledger
-        .iter()
-        .filter(|e| e.tag != link.tag)
-        .cloned()
-        .collect();
-    check_publishable(&commitment, &ledger)?;
-    Ok(InviteRevocation {
-        commitment,
-        ledger,
-        capability,
-    })
+    Ok(link)
 }
 
 /// The produce-side mirror of what a resolver hard-rejects: the grant-set
@@ -1722,7 +1660,7 @@ mod tests {
             "not-owner",
         );
         assert_eq!(
-            revoke_invite_link(&rogue, &scope, &l.link)
+            locate_invite_link(&rogue, &scope, &[l.link])
                 .unwrap_err()
                 .check(),
             "not-owner",
@@ -1745,47 +1683,27 @@ mod tests {
     }
 
     #[test]
-    fn a_write_link_is_bearer_and_a_ledger_cut_alone_revokes_nothing() {
+    fn a_link_is_located_only_when_recorded_and_still_committed() {
         let read = link(0x71, Permission::Read, None);
         let write = link(0x72, Permission::Write, None);
-        assert!(
-            write.capability.is_bearer_write(),
-            "a write link hands out an extractable subtree signing key",
-        );
-        assert!(!read.capability.is_bearer_write());
-
         let keys = Owner::new();
         let owner = keys.authority();
         let (commitment, sig, ledger) = committed(&[read.row.clone(), write.row.clone()]);
         let scope = committed_scope(&commitment, &sig, &ledger);
 
-        let cut = revoke_invite_link(&owner, &scope, &write.link).expect("cuts");
-        assert!(
-            !cut.is_complete(),
-            "a write link is not revoked until rotate_scope_write runs",
+        assert_eq!(
+            locate_invite_link(&owner, &scope, &[write.link]).expect("locates"),
+            &write.link,
         );
-        assert_eq!(cut.capability, LinkCapability::BearerWrite);
-        assert!(
-            !cut.commitment
-                .entries
-                .iter()
-                .any(|e| e.tag == write.row.tag)
-        );
-        assert!(!cut.ledger.iter().any(|e| e.tag == write.row.tag));
-        assert!(
-            cut.commitment.entries.iter().any(|e| e.tag == read.row.tag),
-            "the other grantee is untouched",
-        );
-
-        assert!(
-            revoke_invite_link(&owner, &scope, &read.link)
-                .expect("cuts")
-                .is_complete(),
-            "a read link's cut plus a read rotation is the whole revocation",
-        );
+        // A link the owner never recorded is nobody's to cut, and neither is a
+        // recorded one the commitment has already dropped.
         let unknown = link(0x73, Permission::Read, None);
         assert_eq!(
-            revoke_invite_link(&owner, &scope, &unknown.link)
+            locate_invite_link(&owner, &scope, &[]).unwrap_err().check(),
+            "link-not-committed",
+        );
+        assert_eq!(
+            locate_invite_link(&owner, &scope, &[unknown.link])
                 .unwrap_err()
                 .check(),
             "link-not-committed",
@@ -1797,7 +1715,15 @@ mod tests {
             ..unknown.link
         };
         assert_eq!(
-            revoke_invite_link(&owner, &scope, &mixed)
+            locate_invite_link(&owner, &scope, &[mixed])
+                .unwrap_err()
+                .check(),
+            "link-not-committed",
+        );
+        // Two live links on one scope have no defined cut, so the ambiguity is
+        // refused rather than resolved to the first match.
+        assert_eq!(
+            locate_invite_link(&owner, &scope, &[read.link, write.link])
                 .unwrap_err()
                 .check(),
             "link-not-committed",

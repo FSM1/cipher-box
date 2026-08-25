@@ -6,6 +6,8 @@
 //! Every assertion lands on published bytes, a durable floor, or the recipient's
 //! inbox — what another device would see — never on a command's return alone.
 
+use core::cell::RefCell;
+
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
@@ -18,7 +20,10 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use cipherbox_engine::gate::floor;
-use cipherbox_engine::grants::{GrantRow, mint_grant_row};
+use cipherbox_engine::grants::{
+    EphemeralInvitee, GrantRow, InviteRecords, InviteStore, MintedInvite, RecordedInvite,
+    StagingInviteStore, mint_grant_row, mint_invite_grant,
+};
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -389,6 +394,44 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
     .expect("a contributory recipient key");
     row.ledger_entry.owner_sig[0] ^= 0xff;
     row
+}
+
+/// An invite link over the vault root's scope: the row the owner commits, and
+/// the record that is the owner's only authority for calling that row a link.
+fn invite_link_at_root(secret_byte: u8) -> MintedInvite {
+    let invitee = EphemeralInvitee::from_secret(&[secret_byte; 32]).expect("a valid scalar");
+    mint_invite_grant(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        &invitee,
+        &SCOPE,
+        &WRITE_SCOPE_SEED,
+        CorePermission::Read,
+        None,
+    )
+    .expect("a contributory invitee key")
+}
+
+/// Put `links` in the owner's durable invite records, as a mint would have.
+fn record_links(device: &FakeDevice, links: &[RecordedInvite]) {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(11));
+    block_on(
+        StagingInviteStore::new(&device.staging_store, &enc, &entropy).persist(&InviteRecords {
+            links: links.to_vec(),
+            claims: Vec::new(),
+        }),
+    )
+    .expect("the records persist");
+}
+
+/// The links the owner still records.
+fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(12));
+    block_on(StagingInviteStore::new(&device.staging_store, &enc, &entropy).load())
+        .expect("the records load")
+        .links
 }
 
 /// Import the recipient into the owner's contact book, which is the only thing
@@ -829,5 +872,159 @@ fn a_stalled_cut_re_drives_the_read_cascade_under_one_bound() {
         published_read_epoch(&world, &blocks, ROOT),
         EPOCH,
         "and nothing the stall re-drove landed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Invite links
+// ---------------------------------------------------------------------------
+
+/// Revoking a link is the read revoke it is made of: the row leaves the
+/// owner-signed set, the read plane cuts so the bearer's blob is gone from
+/// everything published after it, and only then does the owner forget the
+/// record.
+#[test]
+fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let bystander = recipient_row_at_root();
+    let link = invite_link_at_root(0x4e);
+    seed_vault(&world, &blocks, vec![link.row.clone(), bystander.clone()]);
+    let alice = world.device(b"alice");
+    record_links(&alice, &[link.link]);
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+
+    let before = published_grant_section(&world, &blocks, ROOT).expect("the root is a scope root");
+    assert!(
+        before
+            .grant_blobs
+            .iter()
+            .any(|blob| blob.tag == link.row.tag),
+        "the bearer starts out able to self-locate a blob"
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        published_read_epoch(&world, &blocks, ROOT),
+        EPOCH + 1,
+        "the cut drove a fresh-seed cascade, not just a commitment edit"
+    );
+    let after = published_grant_section(&world, &blocks, ROOT).expect("the root republished");
+    assert!(
+        !after
+            .commitment
+            .entries
+            .iter()
+            .any(|e| e.tag == link.row.tag),
+        "the link's row is no longer committed, so a claim on it is refused"
+    );
+    assert!(
+        !after
+            .grant_blobs
+            .iter()
+            .any(|blob| blob.tag == link.row.tag),
+        "and the bearer has no blob in the re-sealed set"
+    );
+    assert!(
+        after
+            .grant_blobs
+            .iter()
+            .any(|blob| blob.tag == bystander.tag),
+        "revoking a link ends future claims, not the grants it already produced"
+    );
+    assert!(
+        recorded_links(&alice).is_empty(),
+        "the cut landed, so the record it was derived from is spent"
+    );
+}
+
+/// Every node of a scope publishes at a derived name, so a folder that is no
+/// scope root answers there with an ordinary record the gate refuses. That is
+/// the caller naming the wrong node, not an abuse event — and the difference is
+/// what a host alarms on.
+#[test]
+fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks, Vec::new());
+    let alice = world.device(b"alice");
+    record_links(&alice, &[invite_link_at_root(0x4e).link]);
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink { node: folder })),
+        Err(EngineError::UnsupportedTarget {
+            check: "revoke-link-target-is-not-a-scope-root"
+        }),
+    );
+    assert_eq!(
+        recorded_links(&alice).len(),
+        1,
+        "a refused revoke forgets nothing"
+    );
+}
+
+/// A tag the owner does not record as a link belongs to some grantee, so a
+/// revoke that could reach it would cut an ordinary grant. It publishes nothing
+/// instead.
+#[test]
+fn revoking_a_link_the_owner_never_recorded_publishes_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let grantee = recipient_row_at_root();
+    let root_name = seed_vault(&world, &blocks, vec![grantee.clone()]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    let before = sequence_at(&world, &root_name);
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        Err(EngineError::MalformedInput {
+            check: "link-not-committed"
+        }),
+    );
+
+    assert_eq!(sequence_at(&world, &root_name), before);
+    let after = published_grant_section(&world, &blocks, ROOT).expect("the root is unchanged");
+    assert!(
+        after
+            .commitment
+            .entries
+            .iter()
+            .any(|e| e.tag == grantee.tag),
+        "the grantee's row is untouched"
+    );
+}
+
+/// The reclaim a failed publish owes: a record the scope's own commitment does
+/// not carry names a row that is not live, so its slot comes back — while a
+/// record the commitment does carry stays, because forgetting it would leave a
+/// live link nothing can revoke.
+#[test]
+fn pruning_drops_the_records_the_commitment_does_not_carry_and_keeps_the_rest() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let live = invite_link_at_root(0x4e);
+    let never_published = invite_link_at_root(0x5f);
+    seed_vault(&world, &blocks, vec![live.row.clone()]);
+    let alice = world.device(b"alice");
+    record_links(&alice, &[live.link, never_published.link]);
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+
+    assert_eq!(
+        block_on(engine.command(Command::PruneInviteLinks { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let kept = recorded_links(&alice);
+    assert_eq!(
+        kept,
+        vec![live.link],
+        "only the record the owner-signed commitment still carries survives"
     );
 }
