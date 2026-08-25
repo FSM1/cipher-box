@@ -196,7 +196,6 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
             </div>
           )}
 
-          {/* A read that never reached the scope has already said so above. */}
           {scope !== null && (
             <>
               <InviteLinkPanel

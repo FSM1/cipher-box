@@ -32,7 +32,6 @@ function policy(scriptSrc: readonly string[]): string {
   ].join('; ');
 }
 
-/** What a served bundle carries — preview here, Caddy on staging. */
 export const CONTENT_SECURITY_POLICY = policy(SCRIPT_SRC);
 
 /**

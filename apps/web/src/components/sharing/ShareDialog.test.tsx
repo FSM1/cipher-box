@@ -527,8 +527,6 @@ describe('a link the engine already holds', () => {
   it('draws no link section at all for a scope root the engine could not reach', async () => {
     await share(sharingEngine({}, held([], null)));
 
-    // The grant list already reports the one failure; a second note would read
-    // as a second thing having gone wrong.
     expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
     expect(screen.queryByTestId('share-links-unavailable')).toBeNull();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();

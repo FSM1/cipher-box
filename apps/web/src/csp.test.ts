@@ -30,6 +30,10 @@ describe('the served policy', () => {
     expect(CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
   });
 
+  it('runs no inline script', () => {
+    expect(CONTENT_SECURITY_POLICY).not.toContain("'unsafe-inline'");
+  });
+
   it('is the one every deployed vhost serves', () => {
     const deployed = deployedPolicies();
 
