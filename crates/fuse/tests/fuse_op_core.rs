@@ -990,6 +990,41 @@ fn a_respelled_mutation_invalidates_the_name_the_kernel_cached() {
     );
 }
 
+/// Junk another client committed is hidden from every listing, so the
+/// canonical spelling is the only one a user can type. A host that resolves
+/// names exactly still has to find it, or a peer could park an unlistable,
+/// unremovable node at the vault root by spelling it oddly.
+#[test]
+fn hidden_junk_stays_removable_under_a_spelling_no_listing_shows() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, ".Ds_StOrE", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    assert!(
+        block_on(core.readdir(ROOT_INO))
+            .expect("listing")
+            .is_empty(),
+        "junk is hidden however it is spelled"
+    );
+    block_on(core.lookup(ROOT_INO, ".DS_Store")).expect("the canonical spelling resolves");
+    block_on(core.unlink(ROOT_INO, ".DS_Store")).expect("and removes it");
+}
+
+/// The junk fold is for junk only: an ordinary name a listing does show is
+/// resolved exactly, so the fold cannot become a general case-insensitive
+/// back door on a host that presents names the unix way.
+#[test]
+fn the_junk_fold_does_not_reach_an_ordinary_name() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, "Report.txt", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+}
+
 /// Presentation is not collision policy: however a host spells a lookup, two
 /// names that fold together are one name to the engine's strict comparator, on
 /// every platform, so a folder committed anywhere mounts everywhere.

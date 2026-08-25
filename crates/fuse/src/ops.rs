@@ -287,12 +287,17 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// [`HostCapabilities::case_insensitive_lookup`]. Collisions are not on
     /// this axis: `create`, `mkdir`, and a rename's destination stay with the
     /// strict comparator.
+    ///
+    /// Junk is the one class an exact host still resolves by folding, because
+    /// the mount hides it: a peer's `.Ds_StOrE` never appears in a listing, so
+    /// the canonical spelling is the only one a user can type, and without the
+    /// fold it could never be unlinked ([`is_platform_junk`]).
     fn resolve(&self, view: &EngineView, parent: NodeId, name: &str) -> Option<NodeAttrs> {
         if self.adapter.capabilities().case_insensitive_lookup {
-            view.lookup(parent, name)
-        } else {
-            view.lookup_exact(parent, name)
+            return view.lookup(parent, name);
         }
+        view.lookup_exact(parent, name)
+            .or_else(|| is_platform_junk(name).then(|| view.lookup(parent, name))?)
     }
 
     /// Read one node's attributes.

@@ -11,6 +11,9 @@
 # The libfuse2 mount path (`src/mnt/fuse2.rs`) carries two lint fixes on top of
 # upstream: it is the path FUSE-T links, so it compiles for the first time with
 # the macOS adapter, and the pinned toolchain's clippy refuses it as-shipped.
+# `option_to_string` is re-exported for the same reason: the product enforces
+# its mount floor on the string the mount program receives, and `Session::new`
+# runs no option check of its own.
 #
 # A workspace member, so it resolves through the one root `Cargo.lock` the
 # product links — a second lockfile would drift and the socket-read patch's

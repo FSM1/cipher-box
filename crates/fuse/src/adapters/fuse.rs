@@ -110,28 +110,40 @@ fn floor_options() -> Vec<MountOption> {
     ]
 }
 
-/// Options that would admit someone other than the mount's maker. Refused
-/// rather than asserted against: a vault the whole machine can read is not a
-/// trade for tidier teardown, and `auto_unmount` is on the list because fuser
-/// must add `allow_other` to get it.
-fn forbidden_options() -> Vec<MountOption> {
-    vec![
-        MountOption::AllowOther,
-        MountOption::AllowRoot,
-        MountOption::AutoUnmount,
-    ]
+/// Option tokens a backend may not carry. Each either admits someone other
+/// than the mount's maker — a vault the whole machine can read is not a trade
+/// for tidier teardown, and `auto_unmount` is here because fuser adds
+/// `allow_other` to get it — or is the antonym of a floor option, and vault
+/// content is bytes another client committed.
+const WIDENING_TOKENS: &[&str] = &[
+    "allow_other",
+    "allow_root",
+    "auto_unmount",
+    "suid",
+    "exec",
+    "dev",
+];
+
+/// Whether `option` carries one of [`WIDENING_TOKENS`].
+///
+/// Decided on the string the mount program receives, not on the enum: a
+/// `CUSTOM` renders verbatim, so `CUSTOM("allow_other")` is `allow_other` to
+/// the mount and a variant comparison would wave it through. A custom string
+/// is several options when it holds commas, and `nosuid` must not read as
+/// `suid`, so each token is compared whole.
+fn widens_access(option: &MountOption) -> bool {
+    fuser::option_to_string(option).split(',').any(|token| {
+        let key = token.split('=').next().unwrap_or(token);
+        WIDENING_TOKENS.contains(&key)
+    })
 }
 
 /// The floor plus what `profile` adds, or an error if the backend asked for an
-/// option that widens who may read the vault.
+/// option that widens who may read the vault or what it may be trusted to hold.
 fn mount_options(profile_options: Vec<MountOption>) -> io::Result<Vec<MountOption>> {
-    let forbidden = forbidden_options();
-    if let Some(refused) = profile_options
-        .iter()
-        .find(|option| forbidden.contains(option))
-    {
+    if let Some(refused) = profile_options.iter().find(|option| widens_access(option)) {
         return Err(io::Error::other(format!(
-            "a mount option would admit more than its maker: {refused:?}"
+            "a mount option would widen the vault's floor: {refused:?}"
         )));
     }
     let mut options = floor_options();
@@ -1179,10 +1191,33 @@ mod tests {
         }
         assert!(options.contains(&MountOption::CUSTOM("backend=smb".to_owned())));
 
-        for refused in forbidden_options() {
+        for refused in [
+            MountOption::AllowOther,
+            MountOption::AllowRoot,
+            MountOption::AutoUnmount,
+            MountOption::Suid,
+            MountOption::Exec,
+            MountOption::Dev,
+            // A backend that speaks only in custom strings — which is what the
+            // FUSE-T profile is — reaches the same options this way.
+            MountOption::CUSTOM("allow_other".to_owned()),
+            MountOption::CUSTOM("noattrcache,suid".to_owned()),
+        ] {
             assert!(
                 mount_options(vec![refused.clone()]).is_err(),
                 "{refused:?} must be refused, not merely absent"
+            );
+        }
+
+        for allowed in [
+            MountOption::NoAtime,
+            MountOption::CUSTOM("noattrcache".to_owned()),
+            MountOption::CUSTOM("backend=smb".to_owned()),
+            MountOption::CUSTOM("nfc".to_owned()),
+        ] {
+            assert!(
+                mount_options(vec![allowed.clone()]).is_ok(),
+                "{allowed:?} narrows nothing and must pass"
             );
         }
     }
