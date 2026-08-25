@@ -59,11 +59,11 @@ use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
-    HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PublishError,
-    PointerConsult, PointerConsultError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch,
-    ResolveOutcome, RootAdopter,
-    VaultProvisionNet, assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
-    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
+    HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
+    PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch,
+    ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate, eol_renew_pass,
+    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -2585,8 +2585,7 @@ impl<T: SeamTypes> Engine<T> {
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
-        *self.sweep_tasks.borrow_mut() =
-            self.build_sweep_task_factory(api.clone(), root_scope_id);
+        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone(), root_scope_id);
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         if let Some(root_name) = root_name {
             self.open_tick_loop(root_name);

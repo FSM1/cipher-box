@@ -51,8 +51,8 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
-    UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger, mint_grant_row,
-    recipient_self_location, row_is_owner_attested, self_locate_signed,
+    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger,
+    mint_grant_row, recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
@@ -943,6 +943,57 @@ where
         self.root_publish()
             .run(&name, record, &override_seed, current)
             .await
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPromoter
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    async fn promote_scope_root(
+        &self,
+        parent: &ChildScopeRef,
+        node: &NodeRef,
+        record: &ResealedScopeRoot,
+    ) -> Result<(), RotationPublishError> {
+        let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
+        let override_seed = new_override_seed(self.keys.enc_secret, record)?;
+        let source = self
+            .swept_scope(parent)
+            .map_err(|_| RotationPublishError::Rejected)?;
+        // The base is the node's own record as this pass gates it inside the
+        // scope it is leaving. A node that already answers as a scope root is
+        // not a promotion, and one whose record does not gate is refused rather
+        // than republished under a body this pass invented.
+        let current = match self.resolve_child(parent, node).await {
+            Ok(SweptChild::Interior(current)) => current,
+            Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
+            Err(failure) => return Err(promote_verdict(failure)),
+        };
+        let base = RepublishBase {
+            read_body: current.read_body,
+            unknown: current.carried_unknown,
+            epoch_tag_unknown: current.carried_epoch_tag_unknown,
+            // A read grant cuts no write scope, so the promoted root keeps
+            // signing under the write seed of the scope it is leaving.
+            write_scope_seed: Some(source.write_scope_seed.clone()),
+        };
+        self.root_publish()
+            .run(&name, record, &override_seed, base)
+            .await
+    }
+}
+
+/// Carry a sweep read verdict into the promotion's publish arm on rule 6's
+/// axis: only a transport stall is retryable.
+fn promote_verdict(failure: SweepResolveFailure) -> RotationPublishError {
+    match failure {
+        SweepResolveFailure::Unavailable => RotationPublishError::NotPublished,
+        _ => RotationPublishError::Rejected,
     }
 }
 
@@ -8126,8 +8177,12 @@ mod tests {
     #[test]
     fn a_shared_scope_pointer_below_the_write_epoch_floor_is_rejected() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        block_on(floor::advance_write_epoch_on_sight(&harness.floors, &SCOPE, 5))
-            .expect("raise the write floor");
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            5,
+        ))
+        .expect("raise the write floor");
         stage_scope_pointer(
             &harness,
             &owner_identity(),
@@ -8156,8 +8211,12 @@ mod tests {
     #[test]
     fn a_scope_pointer_exactly_at_the_write_epoch_floor_is_admitted() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        block_on(floor::advance_write_epoch_on_sight(&harness.floors, &SCOPE, 5))
-            .expect("raise the write floor");
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            5,
+        ))
+        .expect("raise the write floor");
         let current_root = vault_root([0xb0; 16], Vec::new()).name;
         stage_scope_pointer(
             &harness,
@@ -8184,8 +8243,12 @@ mod tests {
     #[test]
     fn the_vault_anchor_tolerates_a_scope_pointer_below_its_write_epoch_floor() {
         let (harness, _, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
-        block_on(floor::advance_write_epoch_on_sight(&harness.floors, &SCOPE, 5))
-            .expect("raise the write floor");
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            5,
+        ))
+        .expect("raise the write floor");
         let current_root = vault_root([0xb0; 16], Vec::new()).name;
         stage_scope_pointer(
             &harness,

@@ -322,7 +322,11 @@ mod tests {
             pointer_consult_due(UnixMillis(u64::MAX), None, &profile),
             "a scope no pass has consulted is due at once",
         );
-        assert!(!pointer_consult_due(UnixMillis(1_000), Some(last), &profile));
+        assert!(!pointer_consult_due(
+            UnixMillis(1_000),
+            Some(last),
+            &profile
+        ));
         assert!(!pointer_consult_due(
             UnixMillis(1_000 + interval - 1),
             Some(last),

@@ -13,7 +13,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields, ReadBody,
-    decode_envelope, decode_grant_section, grant_section_bytes, sign_grant_set,
+    decode_envelope, decode_grant_section, grant_section_bytes, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -27,7 +27,7 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
-use cipherbox_engine::rotation::MAX_ROTATION_ATTEMPTS;
+use cipherbox_engine::rotation::{MAX_ROTATION_ATTEMPTS, published_override_seed};
 use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
@@ -608,31 +608,87 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
     assert!(inbox(&fx.recipient_device).is_empty(), "and shares nothing");
 }
 
+/// The promotion the grant arm actually performs: an ordinary folder becomes a
+/// scope root for the first time, against the production publisher. The base is
+/// the folder's own child record — there is no scope root to republish over —
+/// and the minted root must open under the fresh derivation the grantee will
+/// hold, or their first read fails.
+#[test]
+fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
+    let mut fx = GrantScenario::new();
+    assert!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
+        "the folder starts as an ordinary node, not a scope root"
+    );
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let section = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder now answers as a scope root");
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        1,
+        "a read grant anchors the fresh scope at read epoch 1"
+    );
+
+    // The whole point of the promotion: the body carried forward re-seals under
+    // `readKey(nodeSeed(freshOverrideSeed, scopeId))`, so the seed the grantee's
+    // blob conveys opens the record they resolve.
+    let head =
+        published_head(&fx.world, &fx.blocks, &write_name(fx.folder)).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    let override_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &section,
+    )
+    .expect("the owner blob yields the fresh override seed");
+    let read_key = kdf::read_key(kdf::node_seed(&override_seed, &fx.folder.0).as_bytes());
+    open_read_body(&envelope, read_key.as_bytes())
+        .expect("the grantee's first read opens the promoted root");
+
+    assert!(
+        sequence_at(&fx.world, &write_name(ROOT)) > root_before,
+        "and the parent republished its index naming the new scope"
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "the share pointer reached the recipient"
+    );
+}
+
 /// The mailbox post is the last step of the mint and nothing compensates it, so
 /// a grant that cannot commit the granted scope root must leave the recipient
 /// with nothing: an item naming a root that never published would never resolve
 /// and never ack.
-///
-/// A folder gains its first scope root here, and the scope-root publisher gates
-/// the node's current record as one before it republishes — which an ordinary
-/// folder's record cannot pass, so the mint stops at a trust verdict.
 #[test]
 fn a_grant_that_cannot_publish_the_granted_scope_root_posts_no_share_pointer() {
     let mut fx = GrantScenario::new();
-    assert!(
-        published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
-        "the folder is an ordinary node, not a scope root"
-    );
+    // The promotion's own CAS is the whole fault: the folder gates, the root
+    // mints, and the PUT never lands.
+    fx.world
+        .record_store
+        .fail_put_for(write_name(fx.folder).as_str());
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
 
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::TrustViolation {
-            message: "grant creation failed: publish-failed".to_owned(),
+        Err(EngineError::Seam {
+            message: "rotation record not published".to_owned(),
         }),
     );
     assert!(
         published_grant_section(&fx.world, &fx.blocks, fx.folder).is_none(),
         "no scope root was committed at the granted folder"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "and the parent index never named a scope that does not exist"
     );
     assert!(
         inbox(&fx.recipient_device).is_empty(),
