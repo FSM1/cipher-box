@@ -80,6 +80,11 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
+        case 'receivedShares': {
+          const result = await host.receivedShares();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'siweChallenge': {
           const result = await host.siweChallenge();
           post({ type: 'response', id: request.id, ok: true, result });

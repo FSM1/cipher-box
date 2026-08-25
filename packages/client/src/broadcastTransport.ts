@@ -47,6 +47,7 @@ import { commandTransfer } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -231,6 +232,10 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     return this.read<SharingDescriptor>({ kind: 'sharing', scope });
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return this.read<ReceivedShareDescriptor[]>({ kind: 'receivedShares' });
   }
 
   siweChallenge(): Promise<string> {

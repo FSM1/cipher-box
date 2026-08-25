@@ -46,17 +46,19 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
 use crate::gate::{GateError, floor};
+use crate::grants::received_status::ReceivedShareStatus;
+use crate::grants::revocation::classify as classify_resolution;
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
     GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
     InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
     OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
-    ReceivedShareStoreError, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share, convert_invite_claim,
-    create_read_grant, enforce_committed_ledger, import_contact, link_binds_scope,
-    locate_invite_link, mint_invite_link, post_invite_claim, recipient_blinded_tag,
-    resolve_recipient, row_is_owner_attested,
+    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
+    StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
+    convert_invite_claim, create_read_grant, enforce_committed_ledger, import_contact,
+    link_binds_scope, locate_invite_link, mint_invite_link, post_invite_claim,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
@@ -83,7 +85,7 @@ use crate::rotation::{
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
+    BoxedTask, FloorStore, Http, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
     SeamSet, SeamTypes, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
@@ -369,6 +371,49 @@ pub struct SharingView {
     /// not paint as "shared with nobody". Empty is the answer for a node that is
     /// not a scope root: nothing is granted there.
     pub grants: Option<Vec<SharingGrant>>,
+}
+
+/// One share this vault accepted, as a host renders it at `/shared`
+/// (blueprint/web-client.md): the bookmark's key-free discovery fields plus the
+/// engine's own resolution verdict.
+///
+/// The label and the permission are the ones the accept committed. The scope
+/// root is the authority on both, so a host reads
+/// [`resolution`](Self::resolution) — not these — to learn whether the share
+/// still stands.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceivedShareRow {
+    /// The shared scope root's opaque `ipnsName` — this row's stable identity.
+    pub scope_root_name: Vec<u8>,
+    /// The shared scope's id, the handle a browse opens it under.
+    pub scope: NodeId,
+    /// The sharer's identity key, as the verified contact the accept bound the
+    /// share to holds it.
+    pub sharer_identity_public_key: Vec<u8>,
+    /// The display label the share was accepted under.
+    pub display_name: String,
+    /// The permission the owner-signed commitment granted at accept.
+    pub permission: Permission,
+    /// The engine's classification of this share's latest resolve, or `None`
+    /// when no pass has resolved it yet — which a host must not paint as any of
+    /// the three verdicts (`crate::grants::revocation`).
+    pub resolution: Option<ResolutionClass>,
+}
+
+impl fmt::Debug for ReceivedShareRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReceivedShareRow")
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .field("scope", &self.scope)
+            .field(
+                "sharer_identity_public_key",
+                &RedactedBytes::of(&self.sharer_identity_public_key),
+            )
+            .field("display_name", &self.display_name)
+            .field("permission", &self.permission)
+            .field("resolution", &self.resolution)
+            .finish()
+    }
 }
 
 /// One retained dead-lettered op and why it will never publish. The reason is
@@ -1967,6 +2012,73 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     anchor_root
 }
 
+/// The tick's received-share leg: re-resolve every bookmarked shared scope root
+/// and record the engine's verdict, so a host renders a classification this
+/// session observed rather than one it computed (blueprint/web-client.md
+/// "/shared"). The vault-root tick is the only loop a grantee runs, so a shared
+/// scope refreshes here or nowhere.
+///
+/// Replaces the whole map, so a share the list no longer holds leaves no verdict
+/// behind. A store or contact-book failure is availability and leaves the last
+/// pass's verdicts standing — the map is only rewritten from a pass that read
+/// both.
+///
+/// A share whose sharer has been forgotten from the contact book resolves to
+/// nothing: the commitment anchor and the blinded tag are both contact-held, so
+/// there is no verified identity left to hold the record to.
+async fn refresh_received_shares<T, H, F, St, E>(
+    transport: &T,
+    gateway: &Gateway,
+    http: &H,
+    floors: &F,
+    staging: &St,
+    entropy: &RefCell<E>,
+    enc_secret: &X25519Secret,
+    resolutions: &RefCell<BTreeMap<Vec<u8>, ResolutionClass>>,
+) where
+    T: RecordTransport,
+    H: Http,
+    F: FloorStore,
+    St: StagingStore,
+    E: Entropy,
+{
+    let Ok(received) = StagingReceivedShareStore::new(staging, enc_secret, entropy)
+        .load()
+        .await
+    else {
+        return;
+    };
+    let Ok(contacts) = StagingContactStore::new(staging, enc_secret, entropy)
+        .contacts()
+        .await
+    else {
+        return;
+    };
+    let status = ReceivedShareStatus {
+        transport,
+        gateway,
+        http,
+        floors,
+        enc_secret,
+    };
+    let mut resolved = BTreeMap::new();
+    for share in received.iter() {
+        let class = match contacts
+            .iter()
+            .find(|c| c.identity_pk().to_sec1() == share.sharer_identity_pk)
+        {
+            Some(contact) => classify_resolution(
+                &status
+                    .facts(share, &contact.identity_pk(), &contact.enc_subkey())
+                    .await,
+            ),
+            None => ResolutionClass::Unresolvable,
+        };
+        resolved.insert(share.scope_root_name.clone(), class);
+    }
+    *resolutions.borrow_mut() = resolved;
+}
+
 /// Project a scope root's grant ledger for a host: the recipient label and the
 /// committed permission, and nothing the ledger's sealed half carries.
 ///
@@ -2485,6 +2597,11 @@ pub struct Engine<T: SeamTypes> {
     /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
     /// tick re-consults and re-derives it.
     pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// The resolution class the tick's last pass reached for each bookmarked
+    /// shared scope root, keyed by that root's `ipnsName`. In-memory: a verdict
+    /// is what a live resolve found, so a restart re-earns it rather than
+    /// rendering one nothing observed this session.
+    received_resolution: Rc<RefCell<BTreeMap<Vec<u8>, ResolutionClass>>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -2608,6 +2725,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
+                received_resolution: Rc::new(RefCell::new(BTreeMap::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2892,6 +3010,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
+        }
+        if let Ok(mut resolutions) = self.received_resolution.try_borrow_mut() {
+            resolutions.clear();
         }
     }
 
@@ -3281,6 +3402,7 @@ where {
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
+        let received_resolution = self.received_resolution.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -3472,6 +3594,20 @@ where {
                         }
                         folder_verdict = report.verdict;
                     }
+                    // The grantee's own read leg: the vault-root tick is the
+                    // only loop a grantee runs, so a bookmarked shared scope is
+                    // re-classified here or nowhere.
+                    refresh_received_shares(
+                        &transport,
+                        &gateway,
+                        &http,
+                        &floors,
+                        &staging,
+                        &entropy,
+                        &enc_subkey,
+                        &received_resolution,
+                    )
+                    .await;
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -5620,6 +5756,39 @@ where {
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
+    }
+
+    /// The shares this vault has accepted, key-free, each carrying the engine's
+    /// own resolution verdict (blueprint/web-client.md "/shared").
+    ///
+    /// The rows come from the durable received-shares list, so they survive a
+    /// reload; the verdict comes from the focus tick's last resolve of that
+    /// scope root, so a revocation the owner published is *discovered* here
+    /// rather than delivered. A share no pass has resolved yet reports no
+    /// verdict at all — `None` is "not yet known", never "still granted".
+    pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let received = StagingReceivedShareStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+        .load()
+        .await
+        .map_err(EngineError::from_received_share_store)?;
+
+        let resolutions = self.received_resolution.borrow();
+        Ok(received
+            .iter()
+            .map(|share| ReceivedShareRow {
+                scope_root_name: share.scope_root_name.clone(),
+                scope: NodeId(share.scope_id),
+                sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
+                display_name: share.display_name.clone(),
+                permission: share.permission.into(),
+                resolution: resolutions.get(&share.scope_root_name).copied(),
+            })
+            .collect())
     }
 
     /// The sharing state standing on `scope_root`, key-free: this vault's whole

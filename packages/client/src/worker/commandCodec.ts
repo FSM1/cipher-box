@@ -17,6 +17,8 @@ import type {
   OpProgressPhase,
   PendingClass,
   Permission,
+  ReceivedShareDescriptor,
+  ReceivedShareResolution,
   SharingDescriptor,
   SnapshotDescriptor,
   Staleness,
@@ -28,6 +30,7 @@ import type {
   WasmEvent,
   WasmByoIpfsConfig,
   WasmNodeId,
+  WasmReceivedShareRow,
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
@@ -499,6 +502,40 @@ export function permissionFrom(wasm: EngineWasm, permission: number): Permission
       // guessed permission would misreport who can write to a scope.
       throw new Error(`unknown WASM permission value: ${permission}`);
   }
+}
+
+/**
+ * The four verdicts `ResolutionClass::name` produces, and nothing else: an
+ * unmapped string is a JS/WASM version mismatch, and guessing one would paint a
+ * revoked share as still granted.
+ */
+function resolution(name: string | undefined): ReceivedShareResolution | null {
+  switch (name) {
+    case undefined:
+      return null;
+    case 'granted':
+    case 'revocation-signal':
+    case 'unresolvable':
+    case 'epoch-lag':
+      return name;
+    default:
+      throw new Error(`unknown WASM resolution class: ${name}`);
+  }
+}
+
+/** Reads a wasm-bindgen `ReceivedShareRow`'s getters into a descriptor. */
+export function readReceivedShare(
+  wasm: EngineWasm,
+  row: WasmReceivedShareRow
+): ReceivedShareDescriptor {
+  return {
+    scopeRootName: row.scopeRootName,
+    scope: row.scope,
+    sharerIdentityPublicKey: row.sharerIdentityPublicKey,
+    displayName: row.displayName,
+    permission: permissionFrom(wasm, row.permission),
+    resolution: resolution(row.resolution),
+  };
 }
 
 /** Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor. */

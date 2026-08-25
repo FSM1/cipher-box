@@ -26,6 +26,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -45,6 +46,7 @@ export interface BroadcastChannelLike {
 export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }
+  | { kind: 'receivedShares' }
   | { kind: 'siweChallenge' }
   | { kind: 'download'; node: Uint8Array };
 
@@ -123,6 +125,7 @@ export type PortResponse =
       result?:
         | SnapshotDescriptor
         | SharingDescriptor
+        | ReceivedShareDescriptor[]
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | string

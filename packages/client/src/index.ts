@@ -68,6 +68,8 @@ export type {
   SnapshotDescriptor,
   SnapshotChildDescriptor,
   BreadcrumbDescriptor,
+  ReceivedShareDescriptor,
+  ReceivedShareResolution,
   SharingDescriptor,
   SharingContactDescriptor,
   SharingGrantDescriptor,

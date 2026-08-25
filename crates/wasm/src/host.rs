@@ -34,7 +34,7 @@ use crate::seams_bridge::{
     JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter, RecordTransportAdapter,
     SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
 };
-use crate::{Command, CommandOutcome, Event, NodeId, SharingView, SnapshotView};
+use crate::{Command, CommandOutcome, Event, NodeId, ReceivedShareRow, SharingView, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -348,6 +348,28 @@ impl EngineHandle {
             let scope_root = scope_root.unwrap_or_else(|| engine.root());
             let view = engine.sharing(scope_root).await.map_err(engine_error)?;
             Ok(SharingView::from_facade(view).into())
+        })
+    }
+
+    /// Reads this vault's accepted shares for a `/shared` route: the durable
+    /// received-share list, each row carrying the engine's own resolution
+    /// verdict. Resolves with the rows; rejects with the engine error.
+    #[wasm_bindgen(js_name = receivedShares)]
+    pub fn received_shares(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let rows = engine
+                .read()
+                .await
+                .received_shares()
+                .await
+                .map_err(engine_error)?;
+            Ok(rows
+                .into_iter()
+                .map(ReceivedShareRow::from_facade)
+                .map(JsValue::from)
+                .collect::<js_sys::Array>()
+                .into())
         })
     }
 

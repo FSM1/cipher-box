@@ -15,6 +15,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -58,6 +59,7 @@ export interface EngineTransport {
    * or the vault root's for `null`.
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
+  receivedShares(): Promise<ReceivedShareDescriptor[]>;
   /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -185,6 +187,12 @@ export class LocalTransport extends CorrelatedTransport {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     return this.request<SharingDescriptor>(this.ready, (id) =>
       this.worker.postMessage({ type: 'sharing', id, scope }, [])
+    );
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return this.request<ReceivedShareDescriptor[]>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'receivedShares', id }, [])
     );
   }
 

@@ -13,6 +13,7 @@ import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -35,6 +36,7 @@ class FakeTransport implements EngineTransport {
   commands: CommandDescriptor[] = [];
   snapshots: Uint8Array[] = [];
   sharingReads: Array<Uint8Array | null> = [];
+  receivedShareReads = 0;
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
   opened: Uint8Array[] = [];
@@ -88,6 +90,11 @@ class FakeTransport implements EngineTransport {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     this.sharingReads.push(scope);
     return Promise.resolve(emptySharing(scope ?? undefined));
+  }
+
+  receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    this.receivedShareReads += 1;
+    return Promise.resolve([]);
   }
 
   siweChallenge(): Promise<string> {
