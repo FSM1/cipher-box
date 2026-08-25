@@ -7,6 +7,7 @@
 
 import {
   COREKIT_STATUS,
+  factorKeyCurve,
   FactorKeyTypeShareDescription,
   generateFactorKey,
   keyToMnemonic,
@@ -15,6 +16,7 @@ import {
   WEB3AUTH_NETWORK,
   Web3AuthMPCCoreKit,
 } from '@web3auth/mpc-core-kit';
+import { Point } from '@tkey/common-types';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import BN from 'bn.js';
 import {
@@ -40,6 +42,8 @@ export interface WebCoreKitSession extends CoreKitSession {
   hasRecoveryPhrase(): boolean;
   /** Turns the factor policy on; the phrase it returns is shown exactly once. */
   enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
+  /** Best-effort removal of this device's factor (`CoreKitSession`). */
+  forgetDevice(): Promise<void>;
 }
 
 /**
@@ -271,6 +275,25 @@ class Web3AuthSession implements WebCoreKitSession {
     } finally {
       this.signedInEmail = null;
       await this.clearStore();
+    }
+  }
+
+  /**
+   * Drops this device's factor from the account's factor set. Best-effort by
+   * decision: it needs a live session and the network, and a forget has to
+   * complete offline — so nothing here may fail the local erase the logout
+   * beside it performs. A factor this call could not remove opens nothing once
+   * the store holding it is gone.
+   */
+  async forgetDevice(): Promise<void> {
+    try {
+      const stored = await this.coreKit.getDeviceFactor();
+      if (!stored) return;
+      const factorKey = new BN(stored, 'hex');
+      await this.coreKit.deleteFactor(Point.fromScalar(factorKey, factorKeyCurve), factorKey);
+      await this.coreKit.commitChanges();
+    } catch {
+      // Offline, or an account this session cannot re-sync: the erase stands.
     }
   }
 

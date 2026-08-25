@@ -381,6 +381,9 @@ mod tests {
         async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
             Err(SeamError::new("floor store unavailable"))
         }
+        async fn clear(&self) -> SeamResult<()> {
+            Err(SeamError::new("floor store unavailable"))
+        }
     }
 
     /// A floor store that answers the read-epoch floor and fails the per-name
@@ -401,6 +404,9 @@ mod tests {
             Err(SeamError::new("floor store unavailable"))
         }
         async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+        async fn clear(&self) -> SeamResult<()> {
             Err(SeamError::new("floor store unavailable"))
         }
     }

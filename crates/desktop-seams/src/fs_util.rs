@@ -114,6 +114,27 @@ pub(crate) fn list_file_names(dir: &Path) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
+/// Durably removes every file directly in `dir`, in-flight temps included
+/// ("forget this device"). Subdirectories are left alone.
+///
+/// Unlike [`list_file_names`], this does not skip temps: a temp still holds the
+/// bytes a store was in the middle of writing, so an erase that stepped over it
+/// would leave that record behind.
+pub(crate) fn empty_dir(dir: &Path) -> io::Result<()> {
+    // Collected first: removing during the walk mutates what it iterates.
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            names.push(entry.file_name());
+        }
+    }
+    for name in names {
+        remove_file_durable(&dir.join(name))?;
+    }
+    Ok(())
+}
+
 /// Barriers a directory so a create/rename/unlink inside it is durable
 /// before the next one is issued.
 #[cfg(unix)]

@@ -51,6 +51,16 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
   recoverWithPhrase(phrase: string): Promise<void>;
   logout(): Promise<void>;
   /**
+   * Forget this device: everything a logout does, and first the erase a logout
+   * deliberately does not do — the engine's durable seams, this device's Core
+   * Kit store and wrapping key, and a best-effort drop of its factor.
+   *
+   * Never reached from a logout, which is the whole point of the affordance
+   * (blueprint/web-client.md "Logout"). Offline-capable: the only network leg
+   * is the factor drop, whose failure the local erase does not wait on.
+   */
+  forgetDevice(): Promise<void>;
+  /**
    * Hands the engine its secret for a Core Kit session that outlived the page.
    * A no-op unless one is live, and it never rejects: nothing asked for it.
    * Every caller awaits the one attempt, so a host gating a route on "still
@@ -130,6 +140,42 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       await handOff();
     });
 
+  /**
+   * Ends the session on this device, optionally erasing what it leaves behind.
+   *
+   * Each half runs its erase before its own teardown — the engine's seam wipe
+   * rides the transport the facade logout closes, and the factor drop needs the
+   * Core Kit session the session logout ends — and runs that teardown even when
+   * the erase refused. Every leg runs: a refused engine zeroize must not strand
+   * the Core Kit session, and a failed Core Kit logout must not leave the host
+   * signed in. The first refusal is what the caller sees.
+   */
+  const endSession = (forget: boolean) =>
+    exclusively(async () => {
+      const outcomes = await Promise.allSettled([
+        (async () => {
+          try {
+            if (forget) await facade?.forgetDevice?.();
+          } finally {
+            await facade?.logout();
+          }
+        })(),
+        (async () => {
+          try {
+            if (forget) await session?.forgetDevice?.();
+          } finally {
+            await session?.logout();
+          }
+        })(),
+      ]);
+      secrets?.use(null);
+      restore = null;
+      account.signedOut();
+      afterLogout?.();
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed) throw failed.reason as Error;
+    });
+
   const unavailable = <T>(method: IdentityMethod): Promise<T> =>
     Promise.reject(new Error(`${method} sign-in is not available on this device`));
 
@@ -184,20 +230,16 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     logout() {
-      return exclusively(async () => {
-        // Every leg runs: a refused engine zeroize must not strand the Core Kit
-        // session, and a failed Core Kit logout must not leave the host signed in.
-        const outcomes = await Promise.allSettled([
-          facade?.logout() ?? Promise.resolve(),
-          session?.logout() ?? Promise.resolve(),
-        ]);
-        secrets?.use(null);
-        restore = null;
-        account.signedOut();
-        afterLogout?.();
-        const failed = outcomes.find((outcome) => outcome.status === 'rejected');
-        if (failed) throw failed.reason as Error;
-      });
+      return endSession(false);
+    },
+
+    forgetDevice() {
+      // Fail-closed: a host missing the seam wipe would otherwise get a plain
+      // logout under the name of an erase.
+      if (!facade?.forgetDevice) {
+        return Promise.reject(new Error('this device cannot be forgotten from here'));
+      }
+      return endSession(true);
     },
 
     resume() {

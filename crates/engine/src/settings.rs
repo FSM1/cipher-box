@@ -1511,6 +1511,10 @@ mod tests {
         ) -> crate::seams::SeamResult<u64> {
             Err(SeamError::new("unreadable"))
         }
+
+        async fn clear(&self) -> crate::seams::SeamResult<()> {
+            Err(SeamError::new("unreadable"))
+        }
     }
 
     /// Rule 8: the publish path refuses the very shapes `decide_placement`

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
 use crate::fs_util::{
-    atomic_write, ensure_dir, list_file_names, read_file_opt, remove_file_durable, seam_err,
-    to_hex, unique_component,
+    atomic_write, empty_dir, ensure_dir, list_file_names, read_file_opt, remove_file_durable,
+    seam_err, to_hex, unique_component,
 };
 
 /// Durable monotonic-max floor store backed by one small file per key
@@ -186,6 +186,23 @@ impl FloorStore for FileFloorStore {
         self.apply_raises(raises, "floor_store commit_floors")?;
         remove_file_durable(&intent_path)
             .map_err(|err| seam_err("floor_store clear intent", &err))?;
+        Ok(())
+    }
+
+    /// Intents go first: a clear interrupted after them has nothing left for
+    /// [`open`](Self::open)'s roll-forward replay to re-raise.
+    async fn clear(&self) -> SeamResult<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| SeamError::new("floor_store clear: floor write lock poisoned"))?;
+        for (dir, op) in [
+            (&self.intent_dir, "floor_store clear intents"),
+            (&self.epoch_dir, "floor_store clear epoch"),
+            (&self.seq_dir, "floor_store clear seq"),
+        ] {
+            empty_dir(dir).map_err(|err| seam_err(op, &err))?;
+        }
         Ok(())
     }
 }

@@ -218,6 +218,28 @@ export class OpfsStagingStore implements StagingStoreSeam {
     return keys;
   }
 
+  /**
+   * Drops the queue and every staged record, in-flight temps included — a temp
+   * holds the bytes a killed write was staging, so an erase that stepped over
+   * it would leave that record behind. The queue goes first: the reverse order
+   * would strand ops naming bytes that are already gone.
+   *
+   * IndexedDB resets a key generator only when its store is deleted, so
+   * clearing leaves op ids strictly increasing and unreused.
+   */
+  async clear(): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+    tx.objectStore(STAGING_OPS_STORE).clear();
+    await transactionDone(tx);
+
+    const dir = await this.stagedDir();
+    // Collected first: removing during the walk mutates what it iterates.
+    const names: string[] = [];
+    for await (const name of dir.keys()) names.push(name);
+    for (const name of names) await removeIfPresent(dir, name);
+  }
+
   async stagedBytesTotal(): Promise<number> {
     const dir = await this.stagedDir();
     let total = 0;

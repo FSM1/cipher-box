@@ -72,6 +72,7 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
     logins: [] as IdentityCredential[],
     exports: 0,
     logouts: 0,
+    forgets: 0,
     phrases: [] as string[],
   };
   let loggedIn = options.loggedIn ?? false;
@@ -101,6 +102,10 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
       loggedIn = false;
       return Promise.resolve();
     },
+    forgetDevice() {
+      calls.forgets += 1;
+      return Promise.resolve();
+    },
     _UNSAFE_exportTssKey() {
       calls.exports += 1;
       return Promise.resolve(SECRET_HEX);
@@ -111,7 +116,12 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
 }
 
 export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
-  const calls = { secrets: [] as Uint8Array[], accounts: [] as string[], logouts: 0 };
+  const calls = {
+    secrets: [] as Uint8Array[],
+    accounts: [] as string[],
+    logouts: 0,
+    forgets: 0,
+  };
   const facade: LoginFacade = {
     start(secret, accountId) {
       calls.secrets.push(new Uint8Array(secret).slice());
@@ -121,6 +131,10 @@ export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
     logout() {
       calls.logouts += 1;
       return overrides.logout?.() ?? Promise.resolve();
+    },
+    forgetDevice() {
+      calls.forgets += 1;
+      return overrides.forgetDevice?.() ?? Promise.resolve();
     },
   };
   return { facade, calls };

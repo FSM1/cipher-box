@@ -103,6 +103,28 @@ describe('buildCommand', () => {
     () =>
       buildCommand(permissiveWasm, descriptor as CommandDescriptor);
 
+  it('routes the device erase to its own builder, never to the logout beside it', () => {
+    const built: string[] = [];
+    const wasm = {
+      ...fakeWasmEnums,
+      Command: {
+        logout: () => {
+          built.push('logout');
+          return {};
+        },
+        forgetDevice: () => {
+          built.push('forgetDevice');
+          return {};
+        },
+      },
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, { kind: 'forgetDevice' });
+    buildCommand(wasm, { kind: 'logout' });
+
+    expect(built).toEqual(['forgetDevice', 'logout']);
+  });
+
   it('fails closed on an unknown command kind', () => {
     expect(refuses({ kind: 'telepathy' })).toThrow('unknown command kind: telepathy');
   });

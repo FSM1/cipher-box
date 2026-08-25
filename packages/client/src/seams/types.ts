@@ -30,6 +30,8 @@ export interface FloorStoreSeam {
   raiseEpochFloor(scopeId: Uint8Array, epoch: number): Promise<number>;
   sequenceFloor(ipnsName: Uint8Array): Promise<number | null>;
   raiseSequenceFloor(ipnsName: Uint8Array, sequence: number): Promise<number>;
+  /** Drops every floor in both namespaces ("forget this device"). */
+  clear(): Promise<void>;
 }
 
 /** Durable last-known-good record/metadata cache, ciphertext-only at rest. */
@@ -50,6 +52,11 @@ export interface StagingStoreSeam {
   removeStagedBytes(stagingKey: Uint8Array): Promise<void>;
   stagedKeys(): Promise<Uint8Array[]>;
   stagedBytesTotal(): Promise<number>;
+  /**
+   * Drops every queued op and every staged byte ("forget this device"). The id
+   * progression is not reset — ids stay strictly increasing and unreused.
+   */
+  clear(): Promise<void>;
 }
 
 /** Refresh-token persistence. Web is a no-op (the HTTP-only cookie rides `Http`). */

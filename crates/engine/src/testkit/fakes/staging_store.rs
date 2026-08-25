@@ -218,6 +218,13 @@ impl StagingStore for InMemoryStagingStore {
             .map(|bytes| bytes.len() as u64)
             .sum())
     }
+
+    async fn clear(&self) -> SeamResult<()> {
+        let mut inner = self.inner.lock().expect("lock");
+        inner.ops.clear();
+        inner.staged.clear();
+        Ok(())
+    }
 }
 
 /// One [`InMemoryStagingStore`] per conformance-kit [`Backing`]: what a kit

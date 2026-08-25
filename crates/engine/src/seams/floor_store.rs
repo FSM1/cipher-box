@@ -20,6 +20,9 @@ use super::SeamResult;
 /// Keys are opaque bytes chosen by the engine (scope identifiers for epoch
 /// floors, `ipnsName` bytes for sequence floors); the store never interprets
 /// them. Hosts: IndexedDB (web), local journal (desktop).
+///
+/// Floors survive logout by design; only [`clear`](FloorStore::clear)
+/// ("forget this device") drops them.
 pub trait FloorStore {
     /// The durable epoch floor for a scope, if one was ever raised.
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>>;
@@ -62,6 +65,14 @@ pub trait FloorStore {
         }
         Ok(())
     }
+
+    /// Drops every floor in both namespaces, durably ("forget this device").
+    ///
+    /// The one exit from the floor law's monotonic ratchet, and the reason it
+    /// is device-scoped: a cleared store re-seeds its floors from the record
+    /// plane on the next cold start, so a partial clear would leave the device
+    /// pinned above records it can no longer explain.
+    async fn clear(&self) -> SeamResult<()>;
 }
 
 /// Which of the two independent floor maps a [`FloorRaise`] targets. Identical

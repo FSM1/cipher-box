@@ -16,6 +16,7 @@
     "@cipherbox/client": "workspace:*",
     "@cipherbox/login": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
+    "@tkey/common-types": "^15.1.0",
     "@toruslabs/tss-dkls-lib": "^4.1.0",
     "@web3auth/mpc-core-kit": "^3.5.0",
     "bn.js": "^5.2.2",

@@ -59,4 +59,12 @@ pub trait StagingStore {
 
     /// Total staged payload bytes across all keys (budget input).
     async fn staged_bytes_total(&self) -> SeamResult<u64>;
+
+    /// Drops every queued op and every staged byte, durably
+    /// ("forget this device").
+    ///
+    /// The id progression is **not** reset: ids stay strictly increasing and
+    /// unreused across a clear, exactly as across a drain and reopen — the
+    /// engine reads id order as evidence about the queue.
+    async fn clear(&self) -> SeamResult<()>;
 }

@@ -1236,6 +1236,12 @@ impl Command {
         Self::wrap(facade::Command::Logout)
     }
 
+    /// Forget this device: end the session and erase every durable seam.
+    #[wasm_bindgen(js_name = forgetDevice)]
+    pub fn forget_device() -> Command {
+        Self::wrap(facade::Command::ForgetDevice)
+    }
+
     /// The stable command name (matches the builder's JS name), for
     /// diagnostics. Carries no payload.
     #[wasm_bindgen(getter)]
@@ -1454,6 +1460,7 @@ mod tests {
         let node = NodeId::from_bytes(&[0u8; 16]).unwrap();
         assert_eq!(Command::manual_refresh().name(), "manualRefresh");
         assert_eq!(Command::logout().name(), "logout");
+        assert_eq!(Command::forget_device().name(), "forgetDevice");
         assert_eq!(Command::set_focus(None).name(), "setFocus");
         assert_eq!(
             Command::create(&node, "f".into(), NodeKind::Folder).name(),

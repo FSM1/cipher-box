@@ -620,6 +620,10 @@ impl FloorStore for UnreadableFloors {
     async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
         Err(SeamError::new("floor store unreadable"))
     }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Err(SeamError::new("floor store unreadable"))
+    }
 }
 
 #[test]
@@ -1581,6 +1585,10 @@ impl FloorStore for StuckCounter {
 
     async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
         Ok(sequence.saturating_add(1))
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Ok(())
     }
 }
 

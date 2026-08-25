@@ -84,8 +84,8 @@ use crate::rotation::{
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
-    SeamSet, SeamTypes, StagingStore, UnixMillis,
+    BoxedTask, CredentialStore, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError,
+    SeamResult, SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -820,6 +820,17 @@ pub enum Command {
     },
     /// Log out: zeroize engine state; durable seams survive by design.
     Logout,
+    /// Forget this device: end the session and erase every durable seam —
+    /// floors, the op queue, staged bytes, the snapshot cache, and any
+    /// persisted refresh token.
+    ///
+    /// Device-scoped, never account-scoped: the seams never interpret their
+    /// contents, so there is no filter that could make a per-account erase
+    /// complete. Offline-capable — nothing here is a network call, and the
+    /// remote half (dropping this device's factor) is the host's, best-effort,
+    /// and may not abort this. Logout is never a trigger
+    /// (blueprint/web-client.md "Logout").
+    ForgetDevice,
 }
 
 impl Command {
@@ -848,6 +859,7 @@ impl Command {
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLogin { .. } => "siweLogin",
             Command::Logout => "logout",
+            Command::ForgetDevice => "forgetDevice",
         }
     }
 }
@@ -2983,6 +2995,34 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
+    /// [`Command::ForgetDevice`]: stop the session, then erase every durable
+    /// seam.
+    ///
+    /// The sweep is last, and the session is marked ended before it: a floor
+    /// raise or cache put from a pass still in flight would otherwise land
+    /// behind the erase and re-seed the device with state it just disowned.
+    ///
+    /// Every seam is attempted even after one refuses, and the first refusal is
+    /// what the caller sees. Stopping at it would leave the other three intact —
+    /// a partial erase is the outcome this ordering exists to avoid, not one to
+    /// fail toward.
+    async fn forget_device(&mut self) -> Result<(), EngineError> {
+        self.shut_down();
+        self.started = false;
+
+        let mut first = Ok(());
+        let mut charge = |outcome: SeamResult<()>| {
+            if first.is_ok() {
+                first = outcome.map_err(EngineError::from_seam);
+            }
+        };
+        charge(self.seams.staging_store.clear().await);
+        charge(self.seams.snapshot_cache.clear().await);
+        charge(self.seams.floor_store.clear().await);
+        charge(self.seams.credential_store.clear_refresh_token().await);
+        first
+    }
+
     /// Run the cold-start live-session data path — the ordered chain composed on
     /// top of the derived [`SessionIdentity`] (blueprint/engine.md cold-start
     /// sequence): vault-pointer resolve → floor cold-seed (fail-closed on
@@ -3842,6 +3882,7 @@ where {
                 self.rotate_now(node).await.map(|()| CommandOutcome::Done)
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
+            Command::ForgetDevice => self.forget_device().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
                 Ok(CommandOutcome::Done)
@@ -7500,6 +7541,114 @@ mod tests {
         );
     }
 
+    /// "Forget this device": the erase a logout deliberately does not do
+    /// (blueprint/web-client.md "Logout").
+    mod forget_device {
+        use super::*;
+
+        /// A started engine with something durable in every seam the erase
+        /// covers, and the device handles to read them back through.
+        fn loaded() -> (Engine<FakeSeamTypes>, FakeDevice, EventStream) {
+            let device = FakeWorld::new().device(b"alice-pk");
+            let (mut engine, events) = Engine::new(
+                device.seam_set(),
+                Box::new(SeededEntropy::new(42)),
+                SyncTimingProfile::CI,
+                ContentProfile::CI,
+                StoragePolicy::CI,
+                ApiBaseUrl::offline(),
+                GatewayConfig::disabled(),
+            );
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            block_on(async {
+                let floors = &device.floor_store;
+                floors.raise_epoch_floor(b"scope", 4).await.unwrap();
+                floors.raise_sequence_floor(b"name", 9).await.unwrap();
+                let staging = &device.staging_store;
+                staging.enqueue_op(b"queued-op").await.unwrap();
+                staging.put_staged_bytes(b"key", b"staged").await.unwrap();
+                device.snapshot_cache.put(b"key", b"sealed").await.unwrap();
+                device
+                    .credential_store
+                    .store_refresh_token(b"refresh")
+                    .await
+                    .unwrap();
+            });
+            (engine, device, events)
+        }
+
+        #[test]
+        fn forgetting_erases_every_durable_seam() {
+            let (mut engine, device, _events) = loaded();
+
+            assert_eq!(
+                block_on(engine.command(Command::ForgetDevice)),
+                Ok(CommandOutcome::Done)
+            );
+
+            block_on(async {
+                assert_eq!(
+                    device.floor_store.epoch_floor(b"scope").await.unwrap(),
+                    None
+                );
+                assert_eq!(
+                    device.floor_store.sequence_floor(b"name").await.unwrap(),
+                    None
+                );
+                assert!(device.staging_store.queued_ops().await.unwrap().is_empty());
+                assert!(device.staging_store.staged_keys().await.unwrap().is_empty());
+                assert_eq!(device.snapshot_cache.get(b"key").await.unwrap(), None);
+                assert_eq!(
+                    device.credential_store.load_refresh_token().await.unwrap(),
+                    None
+                );
+            });
+        }
+
+        /// The session ends with the erase, so no pass this device still has in
+        /// flight can re-seed the stores it just emptied.
+        #[test]
+        fn a_forgotten_device_has_no_session_left() {
+            let (mut engine, _device, _events) = loaded();
+
+            block_on(engine.command(Command::ForgetDevice)).unwrap();
+
+            assert_eq!(
+                block_on(engine.command(Command::ManualRefresh)),
+                Err(EngineError::NotStarted)
+            );
+        }
+
+        /// A refusing seam must not spare the rest, and must still reach the
+        /// caller: the erase is security-relevant, so a silent partial is the
+        /// one outcome neither half may produce.
+        #[test]
+        fn a_seam_that_refuses_the_erase_does_not_spare_the_others() {
+            let (mut engine, device, _events) = loaded();
+            device.floor_store.fail_clear();
+
+            assert!(matches!(
+                block_on(engine.command(Command::ForgetDevice)),
+                Err(EngineError::Seam { .. })
+            ));
+
+            block_on(async {
+                assert!(device.staging_store.queued_ops().await.unwrap().is_empty());
+                assert_eq!(device.snapshot_cache.get(b"key").await.unwrap(), None);
+                assert_eq!(
+                    device.credential_store.load_refresh_token().await.unwrap(),
+                    None,
+                    "a seam past the refusal is erased too"
+                );
+                assert_eq!(
+                    device.floor_store.epoch_floor(b"scope").await.unwrap(),
+                    Some(4),
+                    "only the seam that refused is left standing"
+                );
+            });
+        }
+    }
+
     /// A wired arm refuses with its own typed verdict, never by falling through
     /// the catch-all, and refuses before it reaches any key material.
     #[test]
@@ -7682,6 +7831,10 @@ mod tests {
         }
 
         async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
             Err(SeamError::new("floor store unavailable"))
         }
     }

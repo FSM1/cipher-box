@@ -37,6 +37,15 @@ export interface CoreKitSession extends LoginSecretExporter {
   /** The signed-in user's email, when the method carries one. */
   email(): string | null;
   logout(): Promise<void>;
+  /**
+   * Drops this device's factor from the account, so what the logout then erases
+   * locally cannot be re-derived here. Best-effort by decision: it needs a live
+   * session and the network, and a forget must complete offline. A factor left
+   * listed is unusable once the local erase lands; the device management that
+   * guarantees its removal is not landed. Absent on a host with no factor of
+   * its own.
+   */
+  forgetDevice?(): Promise<void>;
 }
 
 /**

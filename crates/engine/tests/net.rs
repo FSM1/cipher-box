@@ -539,6 +539,9 @@ impl FloorStore for FailingFloorStore {
     async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
         Ok(sequence)
     }
+    async fn clear(&self) -> SeamResult<()> {
+        Ok(())
+    }
 }
 
 #[test]

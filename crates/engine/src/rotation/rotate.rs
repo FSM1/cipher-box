@@ -425,6 +425,9 @@ mod tests {
         async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
             Err(SeamError::new("floor raise failed"))
         }
+        async fn clear(&self) -> SeamResult<()> {
+            Ok(())
+        }
     }
 
     struct Fixture {

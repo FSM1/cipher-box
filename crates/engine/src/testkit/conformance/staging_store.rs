@@ -180,6 +180,29 @@ where
         id_f > id_e,
         "an op id must never be reused, not even after the queue drains empty"
     );
+
+    // Clear ("forget this device") drops the queue and the staged bytes
+    // together, durably.
+    assert!(!drained.staged_keys().await.unwrap().is_empty());
+    drained.clear().await.unwrap();
+    assert!(drained.queued_ops().await.unwrap().is_empty());
+    assert!(drained.staged_keys().await.unwrap().is_empty());
+    assert_eq!(drained.staged_bytes_total().await.unwrap(), 0);
+
+    let after_clear = open(Backing::Ordering).await;
+    assert!(
+        after_clear.queued_ops().await.unwrap().is_empty(),
+        "a cleared op queue must stay cleared across reopen"
+    );
+    assert!(
+        after_clear.staged_keys().await.unwrap().is_empty(),
+        "cleared staged bytes must stay cleared across reopen"
+    );
+    let id_g = after_clear.enqueue_op(b"op-g").await.unwrap();
+    assert!(
+        id_g > id_f,
+        "a clear must not restart the id progression, any more than a drain does"
+    );
 }
 
 /// A put that returns `Err` over an existing record must leave the previous

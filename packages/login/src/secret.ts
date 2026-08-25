@@ -38,6 +38,13 @@ export interface LoginSecretExporter {
 export interface LoginFacade {
   start(secret: ArrayBuffer, accountId: string): Promise<void>;
   logout(): Promise<void>;
+  /**
+   * Erases the durable seams a logout keeps ("forget this device"). Absent on a
+   * host that erases them outside this seam — the desktop shell removes the
+   * account directory the engine's stores live in, which no facade command
+   * could do while that engine still holds them open.
+   */
+  forgetDevice?(): Promise<void>;
 }
 
 /** The secp256k1 scalar length `crates/engine/src/session.rs` requires. */

@@ -160,4 +160,31 @@ where
             "two raises on one key in a batch must settle at their maximum"
         );
     }
+
+    // Clear ("forget this device") drops both namespaces, durably — the one
+    // exit from the ratchet, so a floor left standing is a floor the device can
+    // no longer explain.
+    reopened.clear().await.unwrap();
+    assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), None);
+    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), None);
+    assert_eq!(reopened.sequence_floor(scope_a).await.unwrap(), None);
+    let after_clear = open().await;
+    assert_eq!(
+        after_clear.epoch_floor(scope_b).await.unwrap(),
+        None,
+        "clear must be durable"
+    );
+    assert_eq!(
+        after_clear.sequence_floor(scope_a).await.unwrap(),
+        None,
+        "clear must be durable across both namespaces"
+    );
+
+    // A cleared store still ratchets: the erase resets the floors, not the law.
+    assert_eq!(after_clear.raise_epoch_floor(scope_a, 4).await.unwrap(), 4);
+    assert_eq!(
+        after_clear.raise_epoch_floor(scope_a, 1).await.unwrap(),
+        4,
+        "a re-raised floor after a clear must still refuse to regress"
+    );
 }

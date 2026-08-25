@@ -6,7 +6,8 @@
  * fallback tier). Epoch floors and sequence floors are independent object
  * stores, so identical key bytes in the two namespaces never collide. Each
  * `raise*` is a read-modify-write inside one `readwrite` transaction, so the
- * stored floor is structurally incapable of regression.
+ * stored floor is structurally incapable of regression. Only
+ * {@link IdbFloorStore.clear} ("forget this device") drops them.
  */
 
 import { toHex } from './bytes.js';
@@ -70,5 +71,14 @@ export class IdbFloorStore implements FloorStoreSeam {
 
   raiseSequenceFloor(ipnsName: Uint8Array, sequence: number): Promise<number> {
     return this.raise(SEQUENCE_STORE, ipnsName, sequence);
+  }
+
+  /** Both namespaces in one transaction, so no floor outlives the other's erase. */
+  async clear(): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction([EPOCH_STORE, SEQUENCE_STORE], 'readwrite');
+    tx.objectStore(EPOCH_STORE).clear();
+    tx.objectStore(SEQUENCE_STORE).clear();
+    await transactionDone(tx);
   }
 }

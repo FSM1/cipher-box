@@ -208,6 +208,7 @@ export interface EngineWasm {
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
     siweLogin(message: string, signature: Uint8Array): WasmCommand;
     logout(): WasmCommand;
+    forgetDevice(): WasmCommand;
   };
   ByoIpfsConfig: new (
     endpoint: string,
