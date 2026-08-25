@@ -65,7 +65,7 @@ describe('grants', () => {
     expect(grantsFor(state, DOCS_KEY)).toEqual([
       { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
     ]);
-    expect(grantsFor(state, PHOTOS_KEY)).toEqual([]);
+    expect(grantsFor(state, PHOTOS_KEY)).toBeNull();
   });
 
   it('holds no row a later read of the same scope stopped reporting', () => {
@@ -95,10 +95,10 @@ describe('grants', () => {
     ]);
   });
 
-  it('has no rows for a scope no read has covered', () => {
+  it('answers with no ledger at all for a scope no read has covered', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'read']]));
 
-    expect(grantsFor(sharingStore.getState(), PHOTOS_KEY)).toEqual([]);
+    expect(grantsFor(sharingStore.getState(), PHOTOS_KEY)).toBeNull();
   });
 
   it('leaves every other scope reference-equal when one scope is re-read', () => {
@@ -123,6 +123,12 @@ describe('grants', () => {
 
     expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
   });
+
+  it('separates a first read that could not reach the root from a confirmed empty set', () => {
+    sharingStore.reported(view(DOCS, [1], null));
+
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBeNull();
+  });
 });
 
 describe('session', () => {
@@ -144,6 +150,6 @@ describe('session', () => {
 
     const state = sharingStore.getState();
     expect(state.contacts).toEqual([]);
-    expect(grantsFor(state, DOCS_KEY)).toEqual([]);
+    expect(grantsFor(state, DOCS_KEY)).toBeNull();
   });
 });

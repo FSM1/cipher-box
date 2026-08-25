@@ -41,7 +41,8 @@ function key(seed: number): string {
 /** The sharing state one vault holds, as the engine would answer a read with. */
 interface EngineState {
   contacts: number[];
-  grants: Map<string, Array<[number, Permission]>>;
+  /** A scope mapped to `null` is one whose root the engine could not reach. */
+  grants: Map<string, Array<[number, Permission]> | null>;
 }
 
 /**
@@ -70,10 +71,13 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
           })),
-          grants: rowsOf(scope).map(([seed, permission]) => ({
-            recipientIdentityPublicKey: identity(seed),
-            permission,
-          })),
+          grants:
+            state.grants.get(toHex(scope)) === null
+              ? null
+              : rowsOf(scope).map(([seed, permission]) => ({
+                  recipientIdentityPublicKey: identity(seed),
+                  permission,
+                })),
         })
     ),
     importContact: vi.fn((code: Uint8Array) => {
@@ -138,8 +142,11 @@ async function click(testId: string) {
   });
 }
 
-/** A vault whose engine already holds `contacts`, and `rows` on the folder. */
-function held(contacts: number[], rows: Array<[number, Permission]> = []) {
+/**
+ * A vault whose engine already holds `contacts`, and `rows` on the folder —
+ * `null` rows for a folder whose scope root the engine cannot reach.
+ */
+function held(contacts: number[], rows: Array<[number, Permission]> | null = []) {
   return { contacts, grants: new Map([[toHex(DOCS), rows]]) };
 }
 
@@ -154,6 +161,14 @@ describe('the grant list', () => {
     // The list is engine truth now, so nothing on screen limits it to this
     // session's own commands.
     expect(screen.queryByTestId('share-session-note')).toBeNull();
+  });
+
+  it('does not draw a scope the engine could not reach as one granted to nobody', async () => {
+    await share(sharingEngine({}, held([1], null)));
+
+    expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('share-no-grants')).toBeNull();
+    expect(screen.queryByTestId('share-grant-list')).toBeNull();
   });
 
   it('lists a grant this session never issued, because the engine holds it', async () => {

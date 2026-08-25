@@ -23,7 +23,7 @@ class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
   commands: CommandDescriptor[] = [];
   snapshots: Uint8Array[] = [];
-  sharingReads: Uint8Array[] = [];
+  sharingReads: Array<Uint8Array | null> = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
   opened: Uint8Array[] = [];
@@ -74,9 +74,9 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve(emptySnapshot(folder));
   }
 
-  sharing(scope: Uint8Array): Promise<SharingDescriptor> {
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     this.sharingReads.push(scope);
-    return Promise.resolve(emptySharing(scope));
+    return Promise.resolve(emptySharing(scope ?? undefined));
   }
 
   siweChallenge(): Promise<string> {
@@ -289,6 +289,18 @@ describe('EngineFacade', () => {
     const content = await facade.download(node);
     expect([...new Uint8Array(content)]).toEqual([1, 2, 3]);
     expect(transport.downloads).toEqual([node]);
+  });
+
+  it('forwards a sharing read, and a null scope as the vault root', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const scope = new Uint8Array(16).fill(4);
+
+    const view = await facade.sharing(scope);
+    expect(view.scope).toBe(scope);
+
+    await facade.sharing(null);
+    expect(transport.sharingReads).toEqual([scope, null]);
   });
 
   it('reads the SIWE nonce over the transport rather than the API', async () => {

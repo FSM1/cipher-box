@@ -610,11 +610,9 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
     assert!(inbox(&fx.recipient_device).is_empty(), "and shares nothing");
 }
 
-/// The promotion the grant arm actually performs: an ordinary folder becomes a
-/// scope root for the first time, against the production publisher. The base is
-/// the folder's own child record — there is no scope root to republish over —
-/// and the minted root must open under the fresh derivation the grantee will
-/// hold, or their first read fails.
+/// A first promotion against the production publisher: the minted scope root
+/// must open under the fresh derivation the grantee holds, or their first read
+/// fails.
 #[test]
 fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
     let mut fx = GrantScenario::new();

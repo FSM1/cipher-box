@@ -3797,11 +3797,6 @@ where {
             .ok_or(EngineError::NotStarted)
     }
 
-    /// The imported contact a grant or revoke names, or a fail-closed refusal.
-    ///
-    /// The recipient's encryption subkey is only usable because a verified
-    /// binding signature tied it to this identity key at import — a key taken
-    /// from the command instead would let a host wrap a grant to anyone.
     /// This session's contact book over the staging store — the one place the
     /// three-seam construction lives.
     fn contact_store<'a>(
@@ -3815,6 +3810,11 @@ where {
         )
     }
 
+    /// The imported contact a grant or revoke names, or a fail-closed refusal.
+    ///
+    /// The recipient's encryption subkey is only usable because a verified
+    /// binding signature tied it to this identity key at import — a key taken
+    /// from the command instead would let a host wrap a grant to anyone.
     async fn recipient_contact(
         &self,
         session: &SessionIdentity,

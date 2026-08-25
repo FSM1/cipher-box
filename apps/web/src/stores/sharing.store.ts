@@ -35,8 +35,6 @@ export interface SharingState {
   readonly grants: ReadonlyMap<string, readonly GrantRow[]>;
 }
 
-const EMPTY: readonly GrantRow[] = Object.freeze([]);
-
 let state: SharingState = frozen([], new Map());
 const listeners = new Set<() => void>();
 
@@ -102,11 +100,14 @@ export const sharingStore = {
 };
 
 /**
- * The rows the engine last reported for the scope with this hex node id. Hex
- * because that is how the UI already addresses a node (`lib/nodeId.ts`), so a
- * render costs no re-encode. Empty until a read lands, and empty afterwards for
- * a scope whose record commits no grant.
+ * The rows the engine last reported for the scope with this hex node id, or
+ * `null` where no read has yet returned a ledger for it. Hex because that is how
+ * the UI already addresses a node (`lib/nodeId.ts`), so a render costs no
+ * re-encode.
+ *
+ * An empty array is the engine's own answer that the scope commits no grant;
+ * `null` is the absence of an answer, which a render must not spell as one.
  */
-export function grantsFor(current: SharingState, scopeKey: string): readonly GrantRow[] {
-  return current.grants.get(scopeKey) ?? EMPTY;
+export function grantsFor(current: SharingState, scopeKey: string): readonly GrantRow[] | null {
+  return current.grants.get(scopeKey) ?? null;
 }

@@ -151,7 +151,9 @@ describe('grant commands', () => {
 
     await expect(result.current.grant(CONTACT, 'read')).resolves.toBe(false);
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
+    // A refused grant re-reads nothing, so the scope still has no ledger at all
+    // — not an empty one, which would claim the engine answered.
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBeNull();
     await waitFor(() => expect(result.current.error).toBe('recipient is the owner'));
   });
 

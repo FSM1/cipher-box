@@ -28,8 +28,10 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const [recipient, setRecipient] = useState('');
   const [permission, setPermission] = useState<Permission>('read');
 
+  // `null` is "no ledger read yet", which the list must not draw as "granted to
+  // nobody" — the two differ to an owner deciding whether to grant again.
   const rows = grantsFor(state, row.key);
-  const granted = new Set(rows.map((entry) => entry.contact.key));
+  const granted = new Set((rows ?? []).map((entry) => entry.contact.key));
   const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
   const busy = actions.busy !== null;
@@ -74,7 +76,11 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
       ) : (
         <div className="dialog-content" data-testid="share-dialog">
           <p className="dialog-label">shared with</p>
-          {rows.length === 0 ? (
+          {rows === null ? (
+            <p className="sharing-note" data-testid="share-grants-unavailable">
+              {'// grants unavailable'}
+            </p>
+          ) : rows.length === 0 ? (
             <p className="sharing-note" data-testid="share-no-grants">
               {'// nothing granted here'}
             </p>
