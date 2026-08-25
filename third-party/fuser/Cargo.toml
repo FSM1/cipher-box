@@ -8,6 +8,10 @@
 # links, not a crate under development here. Every dependency is scoped to
 # `cfg(unix)` because the crate body is: on Windows `lib.rs` compiles empty.
 #
+# The libfuse2 mount path (`src/mnt/fuse2.rs`) carries two lint fixes on top of
+# upstream: it is the path FUSE-T links, so it compiles for the first time with
+# the macOS adapter, and the pinned toolchain's clippy refuses it as-shipped.
+#
 # A workspace member, so it resolves through the one root `Cargo.lock` the
 # product links — a second lockfile would drift and the socket-read patch's
 # regression test would then run against a graph nothing ships. The general

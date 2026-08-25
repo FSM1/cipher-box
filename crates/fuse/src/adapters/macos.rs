@@ -14,10 +14,22 @@ use fuser::MountOption;
 use crate::adapter::HostCapabilities;
 use crate::adapters::fuse::{FuseMount, MountProfile};
 
-/// The one option this backend cannot be mounted without: smbfs otherwise
+/// FUSE-T defaults to its NFS backend, which is abandoned unconditionally
+/// (FSM1/cipher-box-next#32) — and which serves no notifications at all, so a
+/// mount that silently landed on it would cache a revoked vault forever.
+const SMB_BACKEND: &str = "backend=smb";
+
+/// The one option the SMB backend cannot be mounted without: smbfs otherwise
 /// imposes a 3 s attribute floor and keeps cached data indefinitely
 /// (blueprint/desktop.md "Freshness").
 const NO_ATTR_CACHE: &str = "noattrcache";
+
+/// Names cross the smbfs client in the encoding the client chose, and the
+/// engine stores them as entered. Without this, a name typed on macOS would be
+/// stored decomposed and the same name typed anywhere else composed — two
+/// stored spellings the engine's comparator does not fold together
+/// (blueprint/desktop.md "Names and attributes").
+const NFC_NAMES: &str = "nfc";
 
 /// Mount at `mountpoint`, which must already exist.
 pub fn mount(mountpoint: &Path) -> io::Result<FuseMount> {
@@ -32,7 +44,9 @@ fn profile() -> MountProfile {
     MountProfile {
         options: vec![
             MountOption::FSName("cipherbox".to_owned()),
+            MountOption::CUSTOM(SMB_BACKEND.to_owned()),
             MountOption::CUSTOM(NO_ATTR_CACHE.to_owned()),
+            MountOption::CUSTOM(NFC_NAMES.to_owned()),
             MountOption::DefaultPermissions,
             MountOption::NoSuid,
             MountOption::NoExec,
@@ -85,10 +99,30 @@ mod tests {
     }
 
     /// Uninvalidated cached data on this backend never revalidates, so a mount
-    /// that could not push would be serving a stale vault forever.
+    /// that could not push would be serving a stale vault forever — and FUSE-T
+    /// serves notifications on the SMB backend only, so the declared capability
+    /// and the selected backend are one claim, not two.
     #[test]
-    fn the_backend_pushes_invalidation() {
-        assert!(profile().capabilities.push_invalidation);
+    fn the_backend_pushes_invalidation_and_is_the_one_that_can() {
+        let profile = profile();
+        assert!(profile.capabilities.push_invalidation);
+        assert!(
+            profile
+                .options
+                .contains(&MountOption::CUSTOM(SMB_BACKEND.to_owned())),
+            "FUSE-T mounts its notification-less NFS backend unless told otherwise"
+        );
+    }
+
+    /// One spelling of a name reaches the engine from every platform, or the
+    /// strict comparator sees two names where a user sees one.
+    #[test]
+    fn names_arrive_composed() {
+        assert!(
+            profile()
+                .options
+                .contains(&MountOption::CUSTOM(NFC_NAMES.to_owned()))
+        );
     }
 
     /// The smbfs client walks a directory in one pass and never resumes at a

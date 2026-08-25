@@ -1277,6 +1277,45 @@ fn a_write_past_the_addressable_end_is_refused_rather_than_wrapped() {
     );
 }
 
+/// Every other test frames the mount at 16 bytes. Production frames it at the
+/// content plane's chunk — 1_048_536, deliberately not a power of two — and
+/// that is the stride a spill file's slots are laid out on, so offset
+/// arithmetic that only holds for small aligned blocks shows up here and
+/// nowhere else (blueprint/desktop.md "Reads, writes, and the never-block
+/// law").
+#[test]
+fn a_write_at_production_framing_round_trips_across_its_block_boundaries() {
+    let block = CacheBudget::PRODUCTION.block_bytes() as usize;
+    let mut core = OperationCore::new(
+        started_engine().0,
+        RecordingAdapter::push_capable(),
+        CacheBudget::PRODUCTION,
+        spill_area(),
+    );
+    let handle = writing_handle(&mut core);
+
+    // Starts inside the first slot, covers a whole one, ends inside the third.
+    let at = (block / 2) as u64;
+    let plaintext: Vec<u8> = (0..block * 2 + 5).map(|byte| (byte % 251) as u8).collect();
+    assert_eq!(
+        block_on(core.write(handle, at, &plaintext)).expect("the write lands") as usize,
+        plaintext.len()
+    );
+
+    assert_eq!(
+        block_on(core.read(handle, at, plaintext.len() as u32)).expect("the read"),
+        plaintext,
+        "a slot stride that is off by a byte reads back shifted plaintext"
+    );
+    assert!(
+        block_on(core.read(handle, 0, at as u32))
+            .expect("the read")
+            .iter()
+            .all(|byte| *byte == 0),
+        "the hole ahead of the write reads as zeros, never as another slot"
+    );
+}
+
 #[test]
 fn the_bytes_a_handle_wrote_read_back_through_it() {
     let (mut core, _adapter) = mount();

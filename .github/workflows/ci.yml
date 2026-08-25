@@ -764,6 +764,23 @@ jobs:
           key: macos-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: macos-cargo-
 
+      # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
+      # it compiles at all (blueprint/desktop.md "Backends"). Pinned by version
+      # and digest: the installer is a third-party release, and a silently
+      # replaced one would be running as root on the runner.
+      - name: Provision FUSE-T
+        env:
+          FUSE_T_VERSION: "1.2.7"
+          FUSE_T_SHA256: 6a29c747e61a86a405a189efc3de42812d73147135f93a1bb0624c1e7b90e654
+        run: |
+          set -euo pipefail
+          command -v pkg-config >/dev/null || brew install pkg-config
+          curl -fsSL --retry 3 -o /tmp/fuse-t.pkg \
+            "https://github.com/macos-fuse-t/fuse-t/releases/download/${FUSE_T_VERSION}/fuse-t-macos-installer-${FUSE_T_VERSION}.pkg"
+          echo "${FUSE_T_SHA256}  /tmp/fuse-t.pkg" | shasum -a 256 -c -
+          sudo installer -pkg /tmp/fuse-t.pkg -target /
+          pkg-config --exists fuse-t
+
       - name: Cargo check (workspace)
         run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
