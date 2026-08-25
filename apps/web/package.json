@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm build:wasm && tsc -b && vite",
-    "build": "pnpm build:wasm && pnpm csp:caddy && pnpm build:bundle",
+    "build": "pnpm build:wasm && pnpm build:bundle",
     "build:wasm": "node scripts/build-wasm.mjs",
     "csp:caddy": "tsx scripts/write-csp-caddy.ts",
     "build:bundle": "tsc -b && vite build",

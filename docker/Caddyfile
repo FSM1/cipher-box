@@ -22,8 +22,6 @@ app-staging.cipherbox.cc {
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
 	root * /srv/web
 
-	# Generated from apps/web/src/csp.ts, which serves the same headers from the
-	# dev and preview servers. Never hand-edit the snippet.
 	import /etc/caddy/csp.caddy
 
 	# Fingerprinted assets must 404 when absent; the SPA fallback would otherwise

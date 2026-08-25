@@ -1,8 +1,8 @@
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { CADDY_SNIPPET_FILE, caddySecurityHeaders } from '../src/csp';
+import { CADDY_SECURITY_HEADERS } from '../src/csp';
 
-const target = fileURLToPath(new URL(`../../../docker/${CADDY_SNIPPET_FILE}`, import.meta.url));
+const target = fileURLToPath(new URL('../../../docker/csp.caddy', import.meta.url));
 
-await writeFile(target, caddySecurityHeaders(), 'utf8');
+await writeFile(target, CADDY_SECURITY_HEADERS, 'utf8');

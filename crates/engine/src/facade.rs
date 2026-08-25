@@ -4647,7 +4647,6 @@ where {
             &records.links,
             &current.commitment,
             &target.scope.scope_id,
-            &target.scope.ipns_name,
         )
         .spent;
         if dead.is_empty() {
@@ -5975,7 +5974,6 @@ where {
                 &records.links,
                 &current.commitment,
                 &target.scope.scope_id,
-                &target.scope.ipns_name,
             )
         });
         // One committed record is the live link; two have no defined cut, so the
