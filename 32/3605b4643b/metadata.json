@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "323605b4643b",
+  "strategy": "manual-commit",
+  "branch": "feat/keyring-seam-dead-letter-bounds",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "crates/desktop-seams/tests/conformance.rs",
+    "crates/desktop-seams/tests/credential_offload.rs",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/storage_policy.rs",
+    "crates/engine/src/sync/drain.rs",
+    "crates/engine/src/sync/staging.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/32/3605b4643b/0/metadata.json",
+      "transcript": "/32/3605b4643b/0/full.jsonl",
+      "compact_transcript": "/32/3605b4643b/0/transcript.jsonl",
+      "content_hash": "/32/3605b4643b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 121862,
+    "cache_read_tokens": 4507905,
+    "output_tokens": 56187,
+    "api_call_count": 40
+  }
+}
