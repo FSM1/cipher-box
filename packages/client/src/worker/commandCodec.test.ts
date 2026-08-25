@@ -780,41 +780,53 @@ describe('readSnapshot', () => {
 });
 
 describe('readSharing', () => {
+  const links = { live: true, expired: false, expiresAt: 1_700_000_000_000n, spent: 2 };
   const view = {
     scope: new Uint8Array(16).fill(3),
     contacts: [{ identityPublicKey: new Uint8Array([1]) }],
-    grants: [
-      {
-        recipientIdentityPublicKey: new Uint8Array([2]),
-        permission: fakeWasmEnums.Permission.Read,
-      },
-    ],
-    canMintShare: false,
-    inviteLinks: { live: true, expiresAt: 1_700_000_000_000n, spent: 2 },
+    state: {
+      grants: [
+        {
+          recipientIdentityPublicKey: new Uint8Array([2]),
+          permission: fakeWasmEnums.Permission.Read,
+        },
+      ],
+      canMintShare: false,
+      inviteLinks: links,
+    },
   };
 
   it('carries the scope, its grants and its link standing through unchanged', () => {
     expect(readSharing(fakeWasm, view)).toEqual({
       scope: view.scope,
       contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey }],
-      grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
-      canMintShare: false,
-      inviteLinks: { live: true, expiresAt: 1_700_000_000_000n, spent: 2 },
+      state: {
+        grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
+        canMintShare: false,
+        inviteLinks: links,
+      },
     });
   });
 
   it('reads a link with no deadline as null, never as a deadline', () => {
-    const open = { ...view, inviteLinks: { ...view.inviteLinks, expiresAt: undefined } };
+    const open = {
+      ...view,
+      state: { ...view.state, inviteLinks: { ...links, expiresAt: undefined } },
+    };
 
-    expect(readSharing(fakeWasm, open).inviteLinks?.expiresAt).toBeNull();
+    expect(readSharing(fakeWasm, open).state?.inviteLinks?.expiresAt).toBeNull();
   });
 
-  it('reads an unreachable scope as absent, never as one carrying no link', () => {
-    const unreachable = { ...view, grants: undefined, inviteLinks: undefined };
+  it('reads unreadable link records as absent while the grants still stand', () => {
+    const unreadable = { ...view, state: { ...view.state, inviteLinks: undefined } };
 
-    const descriptor = readSharing(fakeWasm, unreachable);
-    expect(descriptor.grants).toBeNull();
-    expect(descriptor.inviteLinks).toBeNull();
+    const state = readSharing(fakeWasm, unreadable).state;
+    expect(state?.grants).toHaveLength(1);
+    expect(state?.inviteLinks).toBeNull();
+  });
+
+  it('reads an unreachable scope as absent, never as one granting nothing', () => {
+    expect(readSharing(fakeWasm, { ...view, state: undefined }).state).toBeNull();
   });
 });
 

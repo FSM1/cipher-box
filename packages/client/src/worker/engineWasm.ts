@@ -117,17 +117,23 @@ export interface WasmSharingGrant {
 /** wasm-bindgen `SharingInviteLinks` — a scope's invite-link standing. */
 export interface WasmSharingInviteLinks {
   readonly live: boolean;
+  readonly expired: boolean;
   readonly expiresAt?: bigint;
   readonly spent: number;
+}
+
+/** wasm-bindgen `ScopeSharing` — what one scope's own record says. */
+export interface WasmScopeSharing {
+  readonly grants: readonly WasmSharingGrant[];
+  readonly canMintShare: boolean;
+  readonly inviteLinks?: WasmSharingInviteLinks;
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
 export interface WasmSharingView {
   readonly scope: Uint8Array;
   readonly contacts: readonly WasmSharingContact[];
-  readonly grants?: readonly WasmSharingGrant[];
-  readonly canMintShare: boolean;
-  readonly inviteLinks?: WasmSharingInviteLinks;
+  readonly state?: WasmScopeSharing;
 }
 
 /** wasm-bindgen `ReceivedShareRow` — one share this vault accepted. */

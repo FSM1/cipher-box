@@ -74,6 +74,7 @@ export type {
   SharingContactDescriptor,
   SharingGrantDescriptor,
   SharingInviteLinksDescriptor,
+  ScopeSharingDescriptor,
   WriteTarget,
   WriteHandle,
   StreamHandle,

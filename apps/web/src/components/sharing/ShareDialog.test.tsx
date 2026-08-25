@@ -23,6 +23,13 @@ const MINTED_FRAGMENT = 'a-minted-fragment';
 /** The identity a converted claim lands in the ledger under. */
 const CLAIMANT_SEED = 5;
 
+const NO_LINKS: SharingInviteLinksDescriptor = {
+  live: false,
+  expired: false,
+  expiresAt: null,
+  spent: 0,
+};
+
 const folder: ListingRow = {
   id: DOCS,
   key: toHex(DOCS),
@@ -50,7 +57,8 @@ interface EngineState {
   contacts: number[];
   /** A scope mapped to `null` is one whose root the engine could not reach. */
   grants: Map<string, Array<[number, Permission]> | null>;
-  links: SharingInviteLinksDescriptor;
+  /** `null` for an owner whose link records the engine could not open. */
+  links: SharingInviteLinksDescriptor | null;
   /** A share of the folder mints a scope at it, which a second share cannot. */
   mintable: boolean;
 }
@@ -64,7 +72,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
   const state: EngineState = {
     contacts: held.contacts ?? [],
     grants: held.grants ?? new Map(),
-    links: held.links ?? { live: false, expiresAt: null, spent: 0 },
+    links: held.links === undefined ? NO_LINKS : held.links,
     mintable: held.mintable ?? true,
   };
   const answer = <T,>(name: string, value: T) =>
@@ -83,15 +91,17 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
           })),
-          grants:
+          state:
             state.grants.get(toHex(scope)) === null
               ? null
-              : rowsOf(scope).map(([seed, permission]) => ({
-                  recipientIdentityPublicKey: identity(seed),
-                  permission,
-                })),
-          canMintShare: state.grants.get(toHex(scope)) !== null && state.mintable,
-          inviteLinks: state.grants.get(toHex(scope)) === null ? null : { ...state.links },
+              : {
+                  grants: rowsOf(scope).map(([seed, permission]) => ({
+                    recipientIdentityPublicKey: identity(seed),
+                    permission,
+                  })),
+                  canMintShare: state.mintable,
+                  inviteLinks: state.links === null ? null : { ...state.links },
+                },
         })
     ),
     importContact: vi.fn((code: Uint8Array) => {
@@ -121,22 +131,25 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         kind: 'inviteLinkMinted' as const,
         fragment: MINTED_FRAGMENT,
       }).then((outcome) => {
-        state.links = { live: true, expiresAt: expiresAt ?? null, spent: state.links.spent };
+        state.links = { ...(state.links ?? NO_LINKS), live: true, expiresAt: expiresAt ?? null };
         state.mintable = false;
         return outcome;
       })
     ),
-    // A landed cut forgets its own record; what a prune drops is a record the
-    // commitment never carried, or one a failed cut left behind.
     revokeInviteLink: vi.fn(() =>
       answer('revokeInviteLink', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...state.links, live: false, expiresAt: null };
+        state.links = {
+          ...(state.links ?? NO_LINKS),
+          live: false,
+          expired: false,
+          expiresAt: null,
+        };
         return outcome;
       })
     ),
     pruneInviteLinks: vi.fn(() =>
       answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...state.links, spent: 0 };
+        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
         return outcome;
       })
     ),
@@ -193,9 +206,9 @@ async function click(testId: string) {
 function held(
   contacts: number[],
   rows: Array<[number, Permission]> | null = [],
-  links?: Partial<EngineState>
+  rest: Partial<Pick<EngineState, 'links' | 'mintable'>> = {}
 ) {
-  return { contacts, grants: new Map([[toHex(DOCS), rows]]), ...links };
+  return { contacts, grants: new Map([[toHex(DOCS), rows]]), ...rest };
 }
 
 afterEach(() => sharingStore.clear());
@@ -443,7 +456,11 @@ describe('the invite link', () => {
 });
 
 describe('a link the engine already holds', () => {
-  const live = { live: true, expiresAt: SEVEN_DAYS_ON, spent: 0 };
+  const live: SharingInviteLinksDescriptor = {
+    ...NO_LINKS,
+    live: true,
+    expiresAt: SEVEN_DAYS_ON,
+  };
 
   it('draws the standing of a link this session never minted', async () => {
     await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
@@ -500,10 +517,20 @@ describe('a link the engine already holds', () => {
     expect(screen.queryByTestId('share-prune-links')).toBeNull();
   });
 
-  it('draws no standing at all for a scope root the engine could not reach', async () => {
-    await share(sharingEngine({}, held([], null)));
+  it('says the standing is unknown when the owner’s link records would not open', async () => {
+    await share(sharingEngine({}, held([], [], { links: null })));
 
     expect(screen.getByTestId('share-links-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+
+  it('draws no link section at all for a scope root the engine could not reach', async () => {
+    await share(sharingEngine({}, held([], null)));
+
+    // The grant list already reports the one failure; a second note would read
+    // as a second thing having gone wrong.
+    expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
+    expect(screen.queryByTestId('share-links-unavailable')).toBeNull();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 });

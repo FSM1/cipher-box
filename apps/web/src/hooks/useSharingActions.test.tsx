@@ -10,7 +10,7 @@ import type {
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
-import { grantsFor, sharingFor, sharingStore } from '../stores/sharing.store';
+import { sharingFor, sharingStore, type GrantRow } from '../stores/sharing.store';
 import { useSharingActions, type SharingCommand } from './useSharingActions';
 
 const DOCS = new Uint8Array(16).fill(7);
@@ -21,22 +21,31 @@ const CODE = new Uint8Array([0xab, 0xcd]);
 const CONTACT = { key: toHex(IDENTITY), identityPublicKey: IDENTITY };
 const FRAGMENT = 'a-bearer-fragment';
 const DEADLINE = 1_700_000_000_000n;
-const NO_LINKS: SharingInviteLinksDescriptor = { live: false, expiresAt: null, spent: 0 };
+const NO_LINKS: SharingInviteLinksDescriptor = {
+  live: false,
+  expired: false,
+  expiresAt: null,
+  spent: 0,
+};
+
+function grantsFor(scopeKey: string): readonly GrantRow[] | null {
+  return sharingFor(sharingStore.getState(), scopeKey)?.grants ?? null;
+}
 
 /** One engine sharing read: the book always holds the one contact under test. */
-function view(
-  grants: Permission[],
-  links: SharingInviteLinksDescriptor = NO_LINKS
-): SharingDescriptor {
+function view(grants: Permission[], links: SharingInviteLinksDescriptor): SharingDescriptor {
   return {
     scope: DOCS,
     contacts: [{ identityPublicKey: IDENTITY }],
-    grants: grants.map((permission) => ({
-      recipientIdentityPublicKey: IDENTITY,
-      permission,
-    })),
-    canMintShare: grants.length === 0 && !links.live,
-    inviteLinks: links,
+    state: {
+      grants: grants.map((permission) => ({
+        recipientIdentityPublicKey: IDENTITY,
+        permission,
+      })),
+      // A share of the folder mints a scope at it, which a second share cannot.
+      canMintShare: grants.length === 0 && !links.live,
+      inviteLinks: links,
+    },
   };
 }
 
@@ -85,8 +94,6 @@ function sharingEngine(
       }
       return answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: FRAGMENT });
     }),
-    // A landed cut forgets its own record; what a prune drops is a record the
-    // commitment never carried, or one a failed cut left behind.
     revokeInviteLink: vi.fn(() => {
       if (refusals.revokeInviteLink === undefined) {
         links.live = false;
@@ -131,7 +138,7 @@ describe('reading', () => {
 
     expect(engine.facade.sharing).toHaveBeenCalledWith(DOCS);
     expect(sharingStore.getState().contacts).toEqual([CONTACT]);
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
+    expect(grantsFor(DOCS_KEY)).toEqual([]);
   });
 
   it('reports a refused read in the engine words, storing nothing', async () => {
@@ -177,9 +184,7 @@ describe('grant commands', () => {
     await expect(result.current.grant(CONTACT, 'write')).resolves.toBe(true);
 
     expect(engine.facade.grant).toHaveBeenCalledWith(DOCS, IDENTITY, 'write');
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
-      { contact: CONTACT, permission: 'write' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'write' }]);
   });
 
   it('lists no row for a grant the engine refused', async () => {
@@ -190,7 +195,7 @@ describe('grant commands', () => {
 
     // A refused grant re-reads nothing, so the scope still has no ledger at all
     // — not an empty one, which would claim the engine answered.
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBeNull();
+    expect(grantsFor(DOCS_KEY)).toBeNull();
     await waitFor(() => expect(result.current.error).toBe('recipient is the owner'));
   });
 
@@ -202,7 +207,7 @@ describe('grant commands', () => {
     await expect(result.current.revoke(CONTACT)).resolves.toBe(true);
 
     expect(engine.facade.revoke).toHaveBeenCalledWith(DOCS, IDENTITY);
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
+    expect(grantsFor(DOCS_KEY)).toEqual([]);
   });
 
   it('keeps the row a refused revoke left standing in the ledger', async () => {
@@ -212,9 +217,7 @@ describe('grant commands', () => {
 
     await expect(result.current.revoke(CONTACT)).resolves.toBe(false);
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
-      { contact: CONTACT, permission: 'read' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
     await waitFor(() => expect(result.current.error).toBe('the publish was refused'));
   });
 
@@ -226,9 +229,7 @@ describe('grant commands', () => {
     await expect(result.current.downgrade(CONTACT)).resolves.toBe(true);
 
     expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, IDENTITY);
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
-      { contact: CONTACT, permission: 'read' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
   });
 
   it('keeps the write grant a refused downgrade left standing', async () => {
@@ -238,9 +239,7 @@ describe('grant commands', () => {
 
     await expect(result.current.downgrade(CONTACT)).resolves.toBe(false);
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
-      { contact: CONTACT, permission: 'write' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'write' }]);
   });
 });
 
@@ -254,7 +253,7 @@ describe('invite link commands', () => {
     await expect(result.current.createInviteLink('read', DEADLINE)).resolves.toBe(FRAGMENT);
 
     expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE);
-    expect(linksNow()).toEqual({ live: true, expiresAt: DEADLINE, spent: 0 });
+    expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
   });
 
   it('hands back no fragment for a mint the engine refused', async () => {
@@ -276,7 +275,7 @@ describe('invite link commands', () => {
     await expect(result.current.revokeInviteLink()).resolves.toBe(true);
 
     expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS);
-    expect(linksNow()).toEqual({ live: false, expiresAt: null, spent: 0 });
+    expect(linksNow()).toEqual(NO_LINKS);
   });
 
   it('keeps the link standing when the engine refused to cut it', async () => {
@@ -286,11 +285,11 @@ describe('invite link commands', () => {
 
     await expect(result.current.revokeInviteLink()).resolves.toBe(false);
 
-    expect(linksNow()).toEqual({ live: true, expiresAt: DEADLINE, spent: 0 });
+    expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
   });
 
   it('drops the spent records the engine pruned', async () => {
-    const engine = sharingEngine({}, { live: false, expiresAt: null, spent: 2 });
+    const engine = sharingEngine({}, { live: false, expired: false, expiresAt: null, spent: 2 });
     const { result } = mount(engine.client);
 
     await expect(result.current.pruneInviteLinks()).resolves.toBe(true);
@@ -307,8 +306,6 @@ describe('invite link commands', () => {
     await expect(result.current.convertInviteClaims()).resolves.toBe(true);
 
     expect(engine.facade.convertInviteClaims).toHaveBeenCalledWith(DOCS);
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
-      { contact: CONTACT, permission: 'read' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
   });
 });

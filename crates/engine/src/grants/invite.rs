@@ -809,6 +809,47 @@ pub fn link_binds_scope(
     })
 }
 
+/// This owner's link records at one scope, split by whether the scope's own
+/// commitment still carries them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeLinks {
+    /// Records the commitment still carries — claimable, and what a revoke cuts.
+    pub committed: Vec<RecordedInvite>,
+    /// Records it has dropped — cut, or superseded — and what a prune drops.
+    pub spent: BTreeSet<[u8; 32]>,
+}
+
+/// Split this owner's records for the scope root at `scope_root_name`.
+///
+/// A record that does not re-derive its own tag from this owner's half of the
+/// pairwise ECDH is neither half of the split: it is not this owner's record at
+/// this scope, so it is neither cuttable nor prunable here.
+pub fn partition_scope_links(
+    owner_enc_secret: &X25519Secret,
+    links: &[RecordedInvite],
+    commitment: &GrantSetCommitment,
+    scope_root_name: &[u8],
+) -> ScopeLinks {
+    let carried: BTreeSet<[u8; 32]> = commitment.entries.iter().map(|entry| entry.tag).collect();
+    let mut split = ScopeLinks {
+        committed: Vec::new(),
+        spent: BTreeSet::new(),
+    };
+    // Both halves are this owner's records, so every one pays the ECDH; only
+    // which half it lands in is a lookup.
+    for link in links
+        .iter()
+        .filter(|link| link_binds_scope(owner_enc_secret, link, scope_root_name))
+    {
+        if carried.contains(&link.tag) {
+            split.committed.push(*link);
+        } else {
+            split.spent.insert(link.tag);
+        }
+    }
+    split
+}
+
 /// The one live link the owner recorded at `scope` — the link a revoke cuts.
 ///
 /// Owner-only, and only a link the owner recorded **and** the owner-signed

@@ -1,12 +1,22 @@
 import { toHex } from '@cipherbox/client';
-import type { Permission, SharingDescriptor } from '@cipherbox/client';
+import type {
+  Permission,
+  SharingDescriptor,
+  SharingInviteLinksDescriptor,
+} from '@cipherbox/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { grantsFor, sharingFor, sharingStore } from './sharing.store';
+import { sharingFor, sharingStore, type GrantRow } from './sharing.store';
 
 const DOCS = new Uint8Array(16).fill(7);
 const PHOTOS = new Uint8Array(16).fill(9);
 const DOCS_KEY = toHex(DOCS);
 const PHOTOS_KEY = toHex(PHOTOS);
+const NO_LINKS: SharingInviteLinksDescriptor = {
+  live: false,
+  expired: false,
+  expiresAt: null,
+  spent: 0,
+};
 
 function identity(seed: number): Uint8Array {
   return new Uint8Array(33).fill(seed);
@@ -16,28 +26,40 @@ function key(seed: number): string {
   return toHex(identity(seed));
 }
 
+function grantsFor(scopeKey: string): readonly GrantRow[] | null {
+  return sharingFor(sharingStore.getState(), scopeKey)?.grants ?? null;
+}
+
 /**
  * One engine sharing read: `contacts` by seed, `grants` by seed and permission.
- * A `null` ledger is a scope the read could not reach, which withholds the link
- * standing with it.
+ * A `null` ledger is a scope the read could not reach.
  */
 function view(
   scope: Uint8Array,
   contacts: number[],
-  grants: Array<[number, Permission]> | null = []
+  grants: Array<[number, Permission]> | null = [],
+  scopeState: Partial<{
+    canMintShare: boolean;
+    inviteLinks: SharingInviteLinksDescriptor | null;
+  }> = {}
 ): SharingDescriptor {
   return {
     scope,
     contacts: contacts.map((seed) => ({
       identityPublicKey: identity(seed),
     })),
-    grants:
-      grants?.map(([seed, permission]) => ({
-        recipientIdentityPublicKey: identity(seed),
-        permission,
-      })) ?? null,
-    canMintShare: grants !== null && grants.length === 0,
-    inviteLinks: grants === null ? null : { live: false, expiresAt: null, spent: 0 },
+    state:
+      grants === null
+        ? null
+        : {
+            grants: grants.map(([seed, permission]) => ({
+              recipientIdentityPublicKey: identity(seed),
+              permission,
+            })),
+            canMintShare: true,
+            inviteLinks: NO_LINKS,
+            ...scopeState,
+          },
   };
 }
 
@@ -67,11 +89,10 @@ describe('grants', () => {
   it('lists the rows the engine reported under the scope it read', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
 
-    const state = sharingStore.getState();
-    expect(grantsFor(state, DOCS_KEY)).toEqual([
+    expect(grantsFor(DOCS_KEY)).toEqual([
       { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
     ]);
-    expect(grantsFor(state, PHOTOS_KEY)).toBeNull();
+    expect(grantsFor(PHOTOS_KEY)).toBeNull();
   });
 
   it('holds no row a later read of the same scope stopped reporting', () => {
@@ -87,7 +108,7 @@ describe('grants', () => {
     );
     sharingStore.reported(view(DOCS, [1, 2], [[2, 'read']]));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+    expect(grantsFor(DOCS_KEY)).toEqual([
       { contact: { key: key(2), identityPublicKey: identity(2) }, permission: 'read' },
     ]);
   });
@@ -96,7 +117,7 @@ describe('grants', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
     sharingStore.reported(view(DOCS, [1], [[1, 'read']]));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+    expect(grantsFor(DOCS_KEY)).toEqual([
       { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'read' },
     ]);
   });
@@ -104,22 +125,22 @@ describe('grants', () => {
   it('answers with no ledger at all for a scope no read has covered', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'read']]));
 
-    expect(grantsFor(sharingStore.getState(), PHOTOS_KEY)).toBeNull();
+    expect(grantsFor(PHOTOS_KEY)).toBeNull();
   });
 
   it('leaves every other scope reference-equal when one scope is re-read', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'read']]));
-    const docs = grantsFor(sharingStore.getState(), DOCS_KEY);
+    const docs = grantsFor(DOCS_KEY);
     sharingStore.reported(view(PHOTOS, [1], [[1, 'write']]));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBe(docs);
+    expect(grantsFor(DOCS_KEY)).toBe(docs);
   });
 
   it('keeps the rows standing when a read could not reach the scope root', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
     sharingStore.reported(view(DOCS, [1], null));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+    expect(grantsFor(DOCS_KEY)).toEqual([
       { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
     ]);
   });
@@ -127,52 +148,50 @@ describe('grants', () => {
   it('reports the emptiness of a scope that commits no grant', () => {
     sharingStore.reported(view(DOCS, [1]));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([]);
+    expect(grantsFor(DOCS_KEY)).toEqual([]);
   });
 
   it('separates a first read that could not reach the root from a confirmed empty set', () => {
     sharingStore.reported(view(DOCS, [1], null));
 
-    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBeNull();
+    expect(grantsFor(DOCS_KEY)).toBeNull();
   });
 });
 
 describe('invite links', () => {
-  const linked = (spent: number, live = true): SharingDescriptor => ({
-    ...view(DOCS, [1], [[1, 'read']]),
-    canMintShare: false,
-    inviteLinks: { live, expiresAt: 1_700_000_000_000n, spent },
-  });
+  const LIVE: SharingInviteLinksDescriptor = {
+    live: true,
+    expired: false,
+    expiresAt: 1_700_000_000_000n,
+    spent: 2,
+  };
+  const linked = () => view(DOCS, [1], [[1, 'read']], { canMintShare: false, inviteLinks: LIVE });
 
   it('holds the standing the engine reported alongside that scope’s grants', () => {
-    sharingStore.reported(linked(2));
+    sharingStore.reported(linked());
 
     expect(sharingFor(sharingStore.getState(), DOCS_KEY)).toMatchObject({
       canMintShare: false,
-      inviteLinks: { live: true, expiresAt: 1_700_000_000_000n, spent: 2 },
+      inviteLinks: LIVE,
     });
   });
 
   it('keeps the standing that stood when a read could not reach the scope root', () => {
-    sharingStore.reported(linked(2));
+    sharingStore.reported(linked());
     sharingStore.reported(view(DOCS, [1], null));
 
-    expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toEqual({
-      live: true,
-      expiresAt: 1_700_000_000_000n,
-      spent: 2,
-    });
+    expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toEqual(LIVE);
   });
 
   it('answers with no standing at all for a scope no read has covered', () => {
-    sharingStore.reported(linked(0));
+    sharingStore.reported(linked());
 
     expect(sharingFor(sharingStore.getState(), PHOTOS_KEY)).toBeNull();
   });
 
   it('takes fresh grants from a read whose link records the engine could not open', () => {
-    sharingStore.reported(linked(2));
-    sharingStore.reported({ ...view(DOCS, [1], []), inviteLinks: null });
+    sharingStore.reported(linked());
+    sharingStore.reported(view(DOCS, [1], [], { inviteLinks: null }));
 
     const docs = sharingFor(sharingStore.getState(), DOCS_KEY);
     expect(docs?.grants).toEqual([]);
@@ -200,6 +219,6 @@ describe('session', () => {
 
     const state = sharingStore.getState();
     expect(state.contacts).toEqual([]);
-    expect(grantsFor(state, DOCS_KEY)).toBeNull();
+    expect(grantsFor(DOCS_KEY)).toBeNull();
   });
 });

@@ -882,6 +882,13 @@ impl SharingInviteLinks {
         self.inner.expires_at.map(|deadline| deadline.0)
     }
 
+    /// Whether the live link's deadline has passed, decided on the engine's
+    /// clock so a host never compares the deadline against its own.
+    #[wasm_bindgen(getter)]
+    pub fn expired(&self) -> bool {
+        self.inner.expired
+    }
+
     /// The records at this scope its commitment no longer carries — what a prune
     /// drops.
     #[wasm_bindgen(getter)]
@@ -893,6 +900,49 @@ impl SharingInviteLinks {
 impl SharingInviteLinks {
     /// Wraps an engine invite-link standing. Never exported to JS.
     pub fn from_facade(inner: facade::SharingInviteLinks) -> Self {
+        Self { inner }
+    }
+}
+
+/// What one scope's own record says about sharing, when the read reached it.
+#[wasm_bindgen]
+pub struct ScopeSharing {
+    inner: facade::ScopeSharing,
+}
+
+#[wasm_bindgen]
+impl ScopeSharing {
+    /// The grants the scope root's ledger commits, ordered as it commits them.
+    #[wasm_bindgen(getter)]
+    pub fn grants(&self) -> Vec<SharingGrant> {
+        self.inner
+            .grants
+            .iter()
+            .cloned()
+            .map(SharingGrant::from_facade)
+            .collect()
+    }
+
+    /// Whether a further share of this scope would be accepted.
+    #[wasm_bindgen(getter, js_name = canMintShare)]
+    pub fn can_mint_share(&self) -> bool {
+        self.inner.can_mint_share
+    }
+
+    /// This owner's invite links at the scope, or `undefined` when the read could
+    /// not open those records.
+    #[wasm_bindgen(getter, js_name = inviteLinks)]
+    pub fn invite_links(&self) -> Option<SharingInviteLinks> {
+        self.inner
+            .invite_links
+            .clone()
+            .map(SharingInviteLinks::from_facade)
+    }
+}
+
+impl ScopeSharing {
+    /// Wraps an engine scope sharing state. Never exported to JS.
+    pub fn from_facade(inner: facade::ScopeSharing) -> Self {
         Self { inner }
     }
 }
@@ -923,34 +973,12 @@ impl SharingView {
             .collect()
     }
 
-    /// The grants standing on `scope`, or `undefined` when the read could not
-    /// reach the scope root — the distinction the facade `SharingView` draws.
+    /// What the scope's own record says about sharing, or `undefined` when the
+    /// read could not reach the scope root — the distinction the facade
+    /// `SharingView` draws.
     #[wasm_bindgen(getter)]
-    pub fn grants(&self) -> Option<Vec<SharingGrant>> {
-        self.inner.grants.as_ref().map(|grants| {
-            grants
-                .iter()
-                .cloned()
-                .map(SharingGrant::from_facade)
-                .collect()
-        })
-    }
-
-    /// Whether a further share of this scope would be accepted — false wherever
-    /// the read could not settle it, so a host offers a mint only on a plain yes.
-    #[wasm_bindgen(getter, js_name = canMintShare)]
-    pub fn can_mint_share(&self) -> bool {
-        self.inner.can_mint_share
-    }
-
-    /// This owner's invite links at the scope, or `undefined` when the read could
-    /// not reach them.
-    #[wasm_bindgen(getter, js_name = inviteLinks)]
-    pub fn invite_links(&self) -> Option<SharingInviteLinks> {
-        self.inner
-            .invite_links
-            .clone()
-            .map(SharingInviteLinks::from_facade)
+    pub fn state(&self) -> Option<ScopeSharing> {
+        self.inner.state.clone().map(ScopeSharing::from_facade)
     }
 }
 

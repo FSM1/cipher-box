@@ -103,9 +103,11 @@ export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDes
   return {
     scope,
     contacts: [],
-    grants: [],
-    canMintShare: true,
-    inviteLinks: { live: false, expiresAt: null, spent: 0 },
+    state: {
+      grants: [],
+      canMintShare: true,
+      inviteLinks: { live: false, expired: false, expiresAt: null, spent: 0 },
+    },
   };
 }
 

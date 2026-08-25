@@ -533,8 +533,9 @@ impl GrantScenario {
     fn granted_to(&self) -> Vec<Vec<u8>> {
         block_on(self.engine.sharing(self.folder))
             .expect("a sharing read")
-            .grants
+            .state
             .expect("the shared scope root resolved")
+            .grants
             .into_iter()
             .map(|grant| grant.recipient_identity_public_key)
             .collect()
@@ -733,7 +734,7 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
         "the imported contact is offered as a recipient with no re-import"
     );
     assert_eq!(
-        before.grants,
+        before.state.map(|state| state.grants),
         Some(Vec::new()),
         "an ordinary folder is not a scope root, so nothing is granted at it — \
          reported as an empty list, never as an unreachable one"
@@ -743,7 +744,7 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
 
     let after = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
     assert_eq!(after.scope, fx.folder);
-    let rows = after.grants.expect("the granted scope root resolved");
+    let rows = after.state.expect("the granted scope root resolved").grants;
     assert_eq!(rows.len(), 1, "the granted scope commits one row");
     assert_eq!(
         rows[0].recipient_identity_public_key, recipient_pk,
@@ -758,7 +759,7 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
         fx.world.record_store.fail_endpoint(&endpoint);
     }
     let offline = block_on(fx.engine.sharing(fx.folder)).expect("the contact book is local");
-    assert_eq!(offline.grants, None);
+    assert!(offline.state.is_none());
     assert_eq!(offline.contacts.len(), 1);
 
     assert_eq!(
@@ -798,8 +799,9 @@ fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
 
     let rows = block_on(engine.sharing(ROOT))
         .expect("a sharing read")
-        .grants
-        .expect("the vault root resolved");
+        .state
+        .expect("the vault root resolved")
+        .grants;
 
     let named: Vec<Vec<u8>> = rows
         .iter()
@@ -837,19 +839,18 @@ fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
     let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
     let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
 
-    let plain = block_on(engine.sharing(folder)).expect("a sharing read");
+    let plain = block_on(engine.sharing(folder))
+        .expect("a sharing read")
+        .state
+        .expect("a node that is not a scope root settles the read");
     assert!(plain.can_mint_share);
-    assert_eq!(plain.grants, Some(Vec::new()));
-    assert_eq!(
-        plain.invite_links,
-        Some(SharingInviteLinks {
-            live: false,
-            expires_at: None,
-            spent: 0,
-        })
-    );
+    assert_eq!(plain.grants, Vec::new());
+    assert_eq!(plain.invite_links, Some(SharingInviteLinks::default()));
 
-    let scope = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    let scope = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved");
     assert!(
         !scope.can_mint_share,
         "a node that already names a scope refuses the mint, so a host must not offer it"
@@ -873,19 +874,22 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     record_links(&alice, &[link.link]);
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
-    let view = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    let view = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
     assert_eq!(
         view.invite_links,
         Some(SharingInviteLinks {
             live: true,
             expires_at: Some(deadline),
+            expired: false,
             spent: 0,
         })
     );
 
     let named: Vec<Vec<u8>> = view
         .grants
-        .expect("the scope root resolved")
         .into_iter()
         .map(|grant| grant.recipient_identity_public_key)
         .collect();
@@ -899,15 +903,59 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
         Ok(CommandOutcome::Done)
     );
-    let revoked = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    let revoked = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
     assert_eq!(
         revoked.invite_links,
-        Some(SharingInviteLinks {
-            live: false,
-            expires_at: None,
-            spent: 0,
-        }),
+        Some(SharingInviteLinks::default()),
         "the cut landed and took the record with it, so there is nothing left to prune"
+    );
+}
+
+/// The deadline is the engine's verdict to render, not a timestamp for a host to
+/// race its own clock against: a link past its deadline is still the one a revoke
+/// cuts, and reads back as live and expired together.
+#[test]
+fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
+    let deadline = UnixMillis(60_000);
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let link = expiring_invite_link_at_root(0x6a, Some(deadline));
+    seed_vault(&world, &blocks, vec![link.row.clone()]);
+    let alice = world.device(b"alice");
+    record_links(&alice, &[link.link]);
+    let (engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+
+    let before = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
+    assert_eq!(
+        before.invite_links,
+        Some(SharingInviteLinks {
+            live: true,
+            expires_at: Some(deadline),
+            expired: false,
+            spent: 0,
+        })
+    );
+
+    // The claim path refuses at the deadline, so the read reports it there too.
+    world.scheduler.advance_to(deadline);
+    let after = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
+    assert_eq!(
+        after.invite_links,
+        Some(SharingInviteLinks {
+            live: true,
+            expires_at: Some(deadline),
+            expired: true,
+            spent: 0,
+        })
     );
 }
 
@@ -924,12 +972,16 @@ fn the_sharing_read_counts_the_records_a_prune_would_drop() {
     record_links(&alice, &[invite_link_at_root(0x5f).link]);
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
-    let view = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    let view = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
     assert_eq!(
         view.invite_links,
         Some(SharingInviteLinks {
             live: false,
             expires_at: None,
+            expired: false,
             spent: 1,
         })
     );
@@ -945,12 +997,10 @@ fn the_sharing_read_counts_the_records_a_prune_would_drop() {
     assert_eq!(
         block_on(engine.sharing(ROOT))
             .expect("a sharing read")
+            .state
+            .expect("the scope root resolved")
             .invite_links,
-        Some(SharingInviteLinks {
-            live: false,
-            expires_at: None,
-            spent: 0,
-        })
+        Some(SharingInviteLinks::default())
     );
 }
 

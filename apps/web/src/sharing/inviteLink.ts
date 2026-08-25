@@ -1,3 +1,7 @@
+import type { SharingInviteLinksDescriptor } from '@cipherbox/client';
+import type { ScopeSharing } from '../stores/sharing.store';
+import { formatDate, MAX_DATE_MILLIS } from '../utils/format';
+
 /** The claim route, so the mint and the router name one destination. */
 export const INVITE_ROUTE = '/invite';
 
@@ -29,12 +33,33 @@ export function expiryAt(lifetime: LinkLifetime, now: number): bigint | undefine
 }
 
 /**
- * How a live link's deadline reads to its owner. A deadline already behind
- * `now` is drawn as expired rather than as a date: the link stops being
- * claimable, and only a revoke or a prune clears the row it left.
+ * How the engine's link standing reads to its owner. Whether the deadline has
+ * passed is the engine's verdict, read against its own clock — this only draws
+ * it.
  */
-export function expiryLabel(expiresAt: bigint | null, now: number): string {
-  if (expiresAt === null) return 'never expires';
-  const deadline = Number(expiresAt);
-  return deadline <= now ? 'expired' : `expires ${new Date(deadline).toLocaleDateString()}`;
+export function expiryLabel(links: SharingInviteLinksDescriptor): string {
+  if (links.expired) return 'expired';
+  if (links.expiresAt === null) return 'never expires';
+  return links.expiresAt > MAX_DATE_MILLIS
+    ? 'expires beyond any date'
+    : `expires ${formatDate(Number(links.expiresAt))}`;
+}
+
+/** Which of the owner's four link situations a scope is in. */
+export type InviteLinkState =
+  | { kind: 'unavailable' }
+  | { kind: 'live'; links: SharingInviteLinksDescriptor }
+  | { kind: 'mintable' }
+  | { kind: 'refused' };
+
+/**
+ * A scope the engine reached carries a live link, takes a mint, or takes
+ * neither. `unavailable` is the owner's link records refusing to open, which a
+ * render must not spell as "no link here".
+ */
+export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
+  const links = scope.inviteLinks;
+  if (links === null) return { kind: 'unavailable' };
+  if (links.live) return { kind: 'live', links };
+  return scope.canMintShare ? { kind: 'mintable' } : { kind: 'refused' };
 }

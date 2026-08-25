@@ -81,25 +81,25 @@ export const sharingStore = {
    *
    * A view whose scope the engine could not reach leaves that scope as it stood
    * — last-known-good, never an empty list a render would read as "shared with
-   * nobody". One resolve settles the scope, so an unreachable read withholds the
-   * mint verdict with the grants.
+   * nobody".
    */
   reported(view: SharingDescriptor): void {
     const scopes = new Map(state.scopes);
-    if (view.grants !== null) {
+    if (view.state !== null) {
       scopes.set(
         toHex(view.scope),
         Object.freeze({
           grants: Object.freeze(
-            view.grants.map((grant) =>
+            view.state.grants.map((grant) =>
               Object.freeze({
                 contact: contactOf(grant.recipientIdentityPublicKey),
                 permission: grant.permission,
               })
             )
           ),
-          canMintShare: view.canMintShare,
-          inviteLinks: view.inviteLinks === null ? null : Object.freeze(view.inviteLinks),
+          canMintShare: view.state.canMintShare,
+          inviteLinks:
+            view.state.inviteLinks === null ? null : Object.freeze(view.state.inviteLinks),
         })
       );
     }
@@ -126,9 +126,4 @@ export const sharingStore = {
  */
 export function sharingFor(current: SharingState, scopeKey: string): ScopeSharing | null {
   return current.scopes.get(scopeKey) ?? null;
-}
-
-/** An empty array is the engine's own answer that the scope commits no grant. */
-export function grantsFor(current: SharingState, scopeKey: string): readonly GrantRow[] | null {
-  return sharingFor(current, scopeKey)?.grants ?? null;
 }

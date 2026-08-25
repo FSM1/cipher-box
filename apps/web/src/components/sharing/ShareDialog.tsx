@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
-import {
-  expiryAt,
-  expiryLabel,
-  inviteUrl,
-  LINK_LIFETIMES,
-  type LinkLifetime,
-} from '../../sharing/inviteLink';
+import { expiryAt, inviteUrl, type LinkLifetime } from '../../sharing/inviteLink';
 import { sharingFor, sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
 import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 import { Modal } from '../ui/Modal';
 import { ContactImportForm } from './ContactImportForm';
+import { InviteLinkPanel, SpentLinkRecords } from './InviteLinkPanel';
 
 interface ShareDialogProps {
   /** The scope root being shared. */
@@ -48,7 +43,6 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   // again.
   const scope = sharingFor(state, row.key);
   const rows = scope?.grants ?? null;
-  const links = scope?.inviteLinks ?? null;
   const granted = new Set((rows ?? []).map((entry) => entry.contact.key));
   const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
@@ -202,80 +196,19 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
             </div>
           )}
 
-          {links === null ? (
-            <p className="sharing-note" data-testid="share-links-unavailable">
-              {'// link standing unavailable'}
-            </p>
-          ) : links.live ? (
-            <div className="dialog-content" data-testid="share-live-link">
-              <p className="sharing-note" data-testid="share-live-link-expiry">
-                {`// a link stands here — ${expiryLabel(links.expiresAt, Date.now())}`}
-              </p>
-              <button
-                type="button"
-                className="dialog-button"
-                onClick={() => void actions.convertInviteClaims()}
-                disabled={busy}
-                data-testid="share-convert-claims"
-              >
-                {actions.busy === 'convertInviteClaims' ? 'converting...' : 'convert claims'}
-              </button>
-              <button
-                type="button"
-                className="dialog-button dialog-button--danger"
-                onClick={() => void actions.revokeInviteLink()}
-                disabled={busy}
-                data-testid="share-revoke-link"
-              >
-                {actions.busy === 'revokeInviteLink' ? 'revoking...' : 'revoke link'}
-              </button>
-            </div>
-          ) : scope?.canMintShare === true ? (
-            <div className="dialog-content">
-              <label className="dialog-label" htmlFor="share-link-lifetime">
-                link expires
-              </label>
-              <select
-                id="share-link-lifetime"
-                className="dialog-input"
-                value={lifetime}
-                onChange={(event) => setLifetime(event.target.value as LinkLifetime)}
-                disabled={busy}
-              >
-                {Object.keys(LINK_LIFETIMES).map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="dialog-button"
-                onClick={mintLink}
-                disabled={busy}
-                data-testid="share-mint-link"
-              >
-                {actions.busy === 'createInviteLink' ? 'minting...' : 'mint invite link'}
-              </button>
-            </div>
-          ) : (
-            <p className="sharing-note" data-testid="share-no-mint">
-              {'// this folder is already shared, so no further link can be minted here'}
-            </p>
-          )}
-
-          {links !== null && links.spent > 0 && (
-            <button
-              type="button"
-              className="dialog-button"
-              onClick={() => void actions.pruneInviteLinks()}
-              disabled={busy}
-              data-testid="share-prune-links"
-            >
-              {actions.busy === 'pruneInviteLinks'
-                ? 'pruning...'
-                : `forget ${links.spent} spent link record${links.spent === 1 ? '' : 's'}`}
-            </button>
+          {/* A read that never reached the scope has already said so above. */}
+          {scope !== null && (
+            <>
+              <InviteLinkPanel
+                scope={scope}
+                actions={actions}
+                busy={busy}
+                lifetime={lifetime}
+                onLifetime={setLifetime}
+                onMint={mintLink}
+              />
+              <SpentLinkRecords scope={scope} actions={actions} busy={busy} />
+            </>
           )}
 
           <div className="dialog-actions">
