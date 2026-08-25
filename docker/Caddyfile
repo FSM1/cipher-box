@@ -22,12 +22,9 @@ app-staging.cipherbox.cc {
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
 	root * /srv/web
 
-	# Every directive is explained at apps/web/src/csp.ts, which serves the same
-	# policy from the dev and preview servers and holds this one to it.
-	header {
-		Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
-		X-Content-Type-Options nosniff
-	}
+	# Generated from apps/web/src/csp.ts, which serves the same headers from the
+	# dev and preview servers. Never hand-edit the snippet.
+	import /etc/caddy/csp.caddy
 
 	# Fingerprinted assets must 404 when absent; the SPA fallback would otherwise
 	# answer a missing script or wasm module with a 200 text/html index.html.

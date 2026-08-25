@@ -110,6 +110,7 @@ services:
       - '443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./csp.caddy:/etc/caddy/csp.caddy
       - ./certs:/etc/caddy/certs
       - /opt/cipherbox/web:/srv/web:ro
       - caddy_data:/data

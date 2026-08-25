@@ -258,7 +258,7 @@ jobs:
           username: ${{ vars.USER }}
           key: ${{ secrets.SSH_KEY }}
           fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
-          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
+          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/csp.caddy,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
           target: /opt/cipherbox
           strip_components: 0
 

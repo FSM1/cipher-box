@@ -1,0 +1,6 @@
+# Generated from apps/web/src/csp.ts. Run `pnpm --filter @cipherbox/web csp:caddy` to update.
+header {
+	Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+	X-Content-Type-Options "nosniff"
+	Cross-Origin-Opener-Policy "same-origin-allow-popups"
+}

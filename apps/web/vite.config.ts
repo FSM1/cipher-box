@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 import { build, loadEnv, type Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
-import { CONTENT_SECURITY_POLICY, DEV_CONTENT_SECURITY_POLICY } from './src/csp';
+import { DEV_SECURITY_HEADERS, SERVED_SECURITY_HEADERS } from './src/csp';
 import { missingDeployEnv, shipsE2eHook } from './src/engine/config';
 
 const OUT_DIR = fileURLToPath(new URL('dist', import.meta.url));
@@ -118,24 +118,10 @@ export default defineConfig({
     },
   },
   define: { global: 'globalThis' },
-  server: {
-    headers: {
-      'Content-Security-Policy': DEV_CONTENT_SECURITY_POLICY,
-      'X-Content-Type-Options': 'nosniff',
-      // The Web3Auth login popup posts its result back to the opener.
-      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
-      // Lets the dev worker at /src/sw.ts claim the root scope it needs.
-      'Service-Worker-Allowed': '/',
-    },
-  },
+  server: { headers: { ...DEV_SECURITY_HEADERS } },
   // The built bundle is what the e2e suite drives, so it is served under the
-  // policy staging serves rather than under none.
-  preview: {
-    headers: {
-      'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-      'X-Content-Type-Options': 'nosniff',
-    },
-  },
+  // headers staging serves rather than under none.
+  preview: { headers: { ...SERVED_SECURITY_HEADERS } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

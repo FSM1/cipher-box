@@ -25,6 +25,8 @@ test('the release bundle registers the built service worker', async ({ page }) =
 test('the served bundle cannot be framed', async ({ page }) => {
   const response = await page.goto('/');
   expect(response?.headers()['content-security-policy']).toContain("frame-ancestors 'none'");
+  // A cross-origin opener otherwise keeps a handle on this window.
+  expect(response?.headers()['cross-origin-opener-policy']).toBe('same-origin-allow-popups');
 
   // Blocked, the frame is replaced by an opaque-origin error page, so its
   // document stops being reachable from a parent on its own origin.

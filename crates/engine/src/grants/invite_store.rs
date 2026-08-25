@@ -66,7 +66,7 @@ use super::invite::{CLAIM_ID_LEN, ConvertedClaimRecord, RecordedInvite};
 pub const INVITE_RECORDS_PREFIX: &[u8] = b"cbx/iv/";
 
 /// The stored-body grammar version this build writes and can read.
-const INVITE_RECORDS_V: u64 = 2;
+const INVITE_RECORDS_V: u64 = 3;
 
 /// The frozen bound on recorded links, enforced release-active in both codec
 /// directions (AGENTS.md rule 8). One record per live link across every scope
@@ -388,6 +388,7 @@ fn encode_records(records: &InviteRecords) -> Result<Vec<u8>, InviteRecordsCodec
             }
             m.insert("expiresAt", Value::Unsigned(deadline.0));
         }
+        m.insert("scopeId", Value::Bytes(link.scope_id.to_vec()));
         m.insert("tag", Value::Bytes(link.tag.to_vec()));
         encoded.push(Value::Map(m));
     }
@@ -432,7 +433,13 @@ fn decode_records(bytes: &[u8]) -> Result<InviteRecords, InviteRecordsCodecError
         let record = item.as_map()?;
         reject_unknown(
             record,
-            &["ephemeralEncPk", "ephemeralIdentityPk", "expiresAt", "tag"],
+            &[
+                "ephemeralEncPk",
+                "ephemeralIdentityPk",
+                "expiresAt",
+                "scopeId",
+                "tag",
+            ],
         )?;
         let expires_at = match record.get("expiresAt") {
             None => None,
@@ -446,6 +453,7 @@ fn decode_records(bytes: &[u8]) -> Result<InviteRecords, InviteRecordsCodecError
             return Err(InviteRecordsCodecError::DuplicateTag);
         }
         links.push(RecordedInvite {
+            scope_id: fixed::<16>(req(record, "scopeId")?, "scopeId")?,
             tag,
             ephemeral_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
                 req(record, "ephemeralIdentityPk")?,
@@ -478,6 +486,7 @@ mod tests {
 
     fn record(byte: u8, expires_at: Option<UnixMillis>) -> RecordedInvite {
         RecordedInvite {
+            scope_id: [byte ^ 0x33; 16],
             tag: [byte; 32],
             ephemeral_identity_pk: [byte ^ 0x0f; IDENTITY_PUBLIC_LEN],
             ephemeral_enc_pk: [byte ^ 0xf0; SECRET_LEN],
@@ -749,6 +758,7 @@ mod tests {
                 "ephemeralIdentityPk",
                 Value::Bytes(link.ephemeral_identity_pk.to_vec()),
             );
+            m.insert("scopeId", Value::Bytes(link.scope_id.to_vec()));
             m.insert("tag", Value::Bytes(link.tag.to_vec()));
             Value::Map(m)
         };
@@ -911,6 +921,7 @@ mod tests {
             Value::Bytes(vec![0x02; IDENTITY_PUBLIC_LEN]),
         );
         m.insert("expiresAt", Value::Unsigned(0));
+        m.insert("scopeId", Value::Bytes(vec![0x04; 16]));
         m.insert("tag", Value::Bytes(vec![0x03; 32]));
         let mut body = Map::new();
         body.insert("claims", Value::Array(vec![]));
@@ -959,6 +970,7 @@ mod tests {
                             "ephemeralIdentityPk",
                             Value::Bytes(link.ephemeral_identity_pk.to_vec()),
                         );
+                        m.insert("scopeId", Value::Bytes(link.scope_id.to_vec()));
                         m.insert("tag", Value::Bytes(link.tag.to_vec()));
                         Value::Map(m)
                     })
@@ -1012,6 +1024,28 @@ mod tests {
             Value::Bytes(vec![0x02; IDENTITY_PUBLIC_LEN]),
         );
         m.insert("extra", Value::Unsigned(1));
+        m.insert("scopeId", Value::Bytes(vec![0x04; 16]));
+        m.insert("tag", Value::Bytes(vec![0x03; 32]));
+        let mut body = Map::new();
+        body.insert("claims", Value::Array(vec![]));
+        body.insert("links", Value::Array(vec![Value::Map(m)]));
+        body.insert("v", Value::Unsigned(INVITE_RECORDS_V));
+        assert!(matches!(
+            decode_records(&encode_fixed_depth(&Value::Map(body))),
+            Err(InviteRecordsCodecError::Codec(_))
+        ));
+    }
+
+    /// The scope a record was minted over is what attributes it, so a record
+    /// without one is refused rather than read as belonging to every scope.
+    #[test]
+    fn a_record_without_a_scope_id_is_refused() {
+        let mut m = Map::new();
+        m.insert("ephemeralEncPk", Value::Bytes(vec![0x01; SECRET_LEN]));
+        m.insert(
+            "ephemeralIdentityPk",
+            Value::Bytes(vec![0x02; IDENTITY_PUBLIC_LEN]),
+        );
         m.insert("tag", Value::Bytes(vec![0x03; 32]));
         let mut body = Map::new();
         body.insert("claims", Value::Array(vec![]));

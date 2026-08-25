@@ -12,5 +12,5 @@
     { "path": "../../packages/client/tsconfig.build.json" },
     { "path": "../../packages/login/tsconfig.build.json" }
   ],
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "scripts", "vite.config.ts"]
 }

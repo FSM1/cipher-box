@@ -4646,6 +4646,7 @@ where {
             session.enc_subkey(),
             &records.links,
             &current.commitment,
+            &target.scope.scope_id,
             &target.scope.ipns_name,
         )
         .spent;
@@ -5973,6 +5974,7 @@ where {
                 session.enc_subkey(),
                 &records.links,
                 &current.commitment,
+                &target.scope.scope_id,
                 &target.scope.ipns_name,
             )
         });
