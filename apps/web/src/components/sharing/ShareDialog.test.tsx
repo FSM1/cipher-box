@@ -16,6 +16,9 @@ import { ShareDialog } from './ShareDialog';
 const DOCS = new Uint8Array(16).fill(7);
 const CODE_HEX = '00ff10';
 
+/** Stands in for the engine's opaque capability; the UI reads none of it. */
+const MINTED_FRAGMENT = 'a-minted-fragment';
+
 const folder: ListingRow = {
   id: DOCS,
   key: toHex(DOCS),
@@ -101,6 +104,9 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         );
         return outcome;
       })
+    ),
+    createInviteLink: vi.fn((_scope: Uint8Array, _permission: Permission) =>
+      answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: MINTED_FRAGMENT })
     ),
     downgrade: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
       answer('downgrade', { kind: 'done' as const }).then((outcome) => {
@@ -299,5 +305,57 @@ describe('the import step', () => {
 
     expect(screen.getByTestId('share-dialog')).toBeTruthy();
     expect(screen.queryByTestId('dialog-error')).toBeNull();
+  });
+});
+
+describe('the invite link', () => {
+  it('frames the engine fragment into the claim URL, in the URL fragment', async () => {
+    const engine = await share();
+
+    await click('share-mint-link');
+
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read');
+    const url = new URL(screen.getByTestId<HTMLInputElement>('invite-link-url').value);
+    expect(url.pathname).toBe('/invite');
+    expect(url.hash).toBe(`#${MINTED_FRAGMENT}`);
+    // A fragment reaches no server; a query string would.
+    expect(url.search).toBe('');
+    expect(screen.getByTestId('invite-link-bearer')).toBeTruthy();
+  });
+
+  it('copies the whole link, capability included', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    await share();
+    await click('share-mint-link');
+
+    await click('invite-link-copy');
+
+    expect(writeText).toHaveBeenCalledWith(
+      screen.getByTestId<HTMLInputElement>('invite-link-url').value
+    );
+    expect(screen.getByTestId('invite-link-copy').textContent).toBe('copied');
+  });
+
+  it("renders the engine's refusal of a write link instead of a link", async () => {
+    const refusal = new EngineRequestError('write-links-need-a-write-scope-cut', 'unsupported');
+    await share(sharingEngine({ createInviteLink: refusal }));
+    fireEvent.change(screen.getByLabelText('permission'), { target: { value: 'write' } });
+
+    await click('share-mint-link');
+
+    expect(screen.getByTestId('dialog-error').textContent).toBe(
+      'write-links-need-a-write-scope-cut'
+    );
+    expect(screen.queryByTestId('invite-link-url')).toBeNull();
+    expect(screen.getByTestId('share-mint-link')).toBeTruthy();
+  });
+
+  it('holds a shown link against a dismissal that would discard it', async () => {
+    await share();
+
+    await click('share-mint-link');
+
+    expect(screen.getByLabelText('close').hasAttribute('disabled')).toBe(true);
   });
 });

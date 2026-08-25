@@ -13,7 +13,13 @@ import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
 /** Which call is in flight, or `null` when the sharing surface is idle. */
-export type SharingCommand = 'read' | 'importContact' | 'grant' | 'revoke' | 'downgrade';
+export type SharingCommand =
+  | 'read'
+  | 'importContact'
+  | 'grant'
+  | 'revoke'
+  | 'downgrade'
+  | 'createInviteLink';
 
 export interface SharingActions {
   busy: SharingCommand | null;
@@ -27,6 +33,12 @@ export interface SharingActions {
   grant(contact: VerifiedContact, permission: Permission): Promise<boolean>;
   revoke(contact: VerifiedContact): Promise<boolean>;
   downgrade(contact: VerifiedContact): Promise<boolean>;
+  /**
+   * Mints a link over this scope, resolving with the engine's fragment — the
+   * whole bearer capability — or `null` where the engine refused. The caller
+   * frames it into a URL and puts it nowhere durable.
+   */
+  createInviteLink(permission: Permission): Promise<string | null>;
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -77,6 +89,21 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
           await facade.downgrade(target, contact.identityPublicKey);
           await read(facade);
         }),
+      [run, read, target]
+    ),
+    createInviteLink: useCallback(
+      async (permission) => {
+        // The mint cuts a fresh scope at this node, so the ledger the dialog
+        // renders is a different one afterwards. A minted link is handed back
+        // even when that re-read fails: the capability already exists, and
+        // swallowing it strands the scope it opens.
+        const minted: { fragment: string | null } = { fragment: null };
+        await run('createInviteLink', async (facade) => {
+          minted.fragment = (await facade.createInviteLink(target, permission)).fragment;
+          await read(facade);
+        });
+        return minted.fragment;
+      },
       [run, read, target]
     ),
   };

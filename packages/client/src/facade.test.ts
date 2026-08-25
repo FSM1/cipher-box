@@ -263,17 +263,28 @@ describe('EngineFacade', () => {
 
   it('spells an omitted invite deadline as a link that never expires', async () => {
     const transport = new FakeTransport();
+    transport.outcome = { kind: 'inviteLinkMinted', fragment: 'opaque-capability' };
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16);
 
-    await facade.createInviteLink(node, 'read');
+    const minted = await facade.createInviteLink(node, 'read');
     await facade.createInviteLink(node, 'write', 1_800_000_000_000n);
 
+    expect(minted.fragment).toBe('opaque-capability');
     expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', expiresAt: null });
     expect(transport.commands[1]).toMatchObject({
       kind: 'createInviteLink',
       expiresAt: 1_800_000_000_000n,
     });
+  });
+
+  it('refuses an answer to a mint that carries no link', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.createInviteLink(new Uint8Array(16), 'read')).rejects.toThrow(
+      'create invite link answered done'
+    );
   });
 
   it('delegates the stream trio to the transport, window intact', async () => {

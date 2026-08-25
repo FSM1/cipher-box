@@ -43,6 +43,11 @@ describe('App routes', () => {
     expect(await screen.findByRole('heading', { name: 'CipherBox' })).toBeDefined();
   });
 
+  it('serves the invite claim route to a signed-out tab, so the link survives', () => {
+    renderAt('/invite');
+    expect(screen.getByTestId('invite-claim')).toBeDefined();
+  });
+
   it('sends an unknown path back to login', () => {
     renderAt('/nope');
     expect(screen.getByRole('heading', { name: 'CipherBox' })).toBeDefined();
