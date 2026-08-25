@@ -1,5 +1,6 @@
 //! Desktop [`StagingStore`]: the v1 write journal generalized to every op.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -123,23 +124,29 @@ impl StagingStore for FileStagingStore {
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
         let names = list_file_names(&self.ops_dir)
             .map_err(|err| seam_err("staging_store queued_ops", &err))?;
-        let mut ops = Vec::new();
+        // Keyed by parsed id, not by listed name: `op_path` zero-pads and
+        // `parse_op_id` does not, so `ops/1.op` and `ops/00…01.op` both name op 1.
+        // Reading the re-derived canonical path keeps every returned entry one
+        // `remove_op` can delete, and one entry per id keeps a single durable op
+        // from draining as two. Ascending id order is FIFO order.
+        let mut ops = BTreeMap::new();
         for name in names {
             let Some(id) = parse_op_id(&name) else {
                 continue;
             };
-            // Re-derived from the parsed id, not joined from the listed name:
-            // `op_path` zero-pads and `parse_op_id` does not, so a name that is
-            // not the canonical one would yield an entry `remove_op` could never
-            // delete — a queue head that never drains.
+            if ops.contains_key(&id) {
+                continue;
+            }
             if let Some(bytes) = read_file_opt(&self.op_path(id))
                 .map_err(|err| seam_err("staging_store queued_ops read", &err))?
             {
-                ops.push((OpId(id), bytes));
+                ops.insert(id, bytes);
             }
         }
-        ops.sort_by_key(|(id, _)| *id);
-        Ok(ops)
+        Ok(ops
+            .into_iter()
+            .map(|(id, bytes)| (OpId(id), bytes))
+            .collect())
     }
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {

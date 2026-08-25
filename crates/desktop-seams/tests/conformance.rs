@@ -365,6 +365,33 @@ fn staging_store_budget_and_gc_set_agree_on_foreign_sidecars() {
     });
 }
 
+/// A noncanonical `ops/` filename parses to the same id as the zero-padded one
+/// the store writes, so a queue keyed by listed name would hand the engine one
+/// durable op twice — and the drain would replay it as two.
+#[test]
+fn staging_store_queues_one_entry_per_op_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        let op_id = store.enqueue_op(b"the-one-op").await.unwrap();
+
+        // A short-named twin of the canonical record, the way a foreign writer
+        // or a hand-edited store would leave one.
+        std::fs::write(
+            path.join("ops").join(format!("{}.op", op_id.0)),
+            b"the-one-op",
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.queued_ops().await.unwrap(),
+            vec![(op_id, b"the-one-op".to_vec())],
+            "two names for one id must queue one op"
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Network seams — driven on a Tokio current-thread runtime (reqwest needs the
 // reactor). RecordTransport has a kit; Http does not (pure passthrough), so a

@@ -154,7 +154,7 @@ impl Preservation {
 /// Keep one dead letter's op record after it leaves the durable queue, so orphan
 /// GC keeps the blocks it names and the version stays openable.
 ///
-/// Preserves only a version whose root still **opens** ([`version_is_openable`]).
+/// Preserves only a version whose root still **opens** ([`open_version`]).
 /// A root the store cannot produce, or that no longer addresses to its own CID,
 /// names blocks nothing can ever map — and the old check, root key present and
 /// its bytes untrusted, kept exactly those forever. That is
@@ -177,37 +177,39 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
         .ok_or_else(|| SeamError::new("preserve_dead_letter: unreadable preserved record"))?;
     let root = record_content_root_cid(record)
         .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
-    let mut appended_bytes = 0;
-    if let Some(root) = &root {
-        let Some(bytes) = version_is_openable(store, root).await? else {
-            return Ok(Preservation::ContentGone);
-        };
-        appended_bytes = bytes;
-    }
+    let opened = match &root {
+        Some(root) => match open_version(store, root).await? {
+            Some(opened) => Some(opened),
+            None => return Ok(Preservation::ContentGone),
+        },
+        None => None,
+    };
     if kept.iter().any(|held| held == record) {
         return Ok(Preservation::Kept);
     }
+    let staged: HashSet<Vec<u8>> = store.staged_keys().await?.into_iter().collect();
+    let appended_bytes = opened.map_or(0, |(manifest, root_len)| {
+        version_bytes(&manifest, root_len, &staged)
+    });
     kept.push(record.to_vec());
-    evict_over_budget(store, &mut kept, appended_bytes, preserved_budget).await;
+    let evicted =
+        evict_over_budget(store, &mut kept, appended_bytes, preserved_budget, &staged).await;
+    // The shortened list must be durable before a byte of an evicted version is
+    // released: `put_staged_bytes` replaces failure-atomically, so a failed write
+    // leaves the *old* list — which still names those versions — and it must not
+    // be left naming blocks that are already gone. The reverse order costs a lost
+    // release at worst, which orphan GC reclaims.
     write_preserved_dead_letters(store, &kept).await?;
+    for root in evicted {
+        release_version_blocks(store, &root).await;
+    }
     Ok(Preservation::Kept)
 }
 
-/// Whether `root_cid`'s version is still coherent, given the store's current key
-/// set: the leaves it has left form a **suffix** of the manifest.
-///
-/// The upload loop releases each leaf as it confirms, strictly in file order, so
-/// the blocks legitimately gone from a version are always a prefix — a leaf
-/// missing from the *middle* was released by nothing and is the condition the
-/// loop itself already reads as loss. Such a version can never be reassembled,
-/// and keeping it only spends the staging budget forever, since the root's own
-/// presence satisfies the prune.
-///
-/// Whether the version's root still opens, answering with its staged byte total
-/// so one read serves both the verdict and the budget. `None` when the root is
-/// gone or fails its own CID — the manifest is the only map from a `contentCid`
-/// to the blocks under it, so without it the version is unreadable however many
-/// leaves survive.
+/// The version at `root_cid` when its root still opens: the decoded manifest and
+/// the root block's own staged length. `None` when the root is gone or fails its
+/// own CID — the manifest is the only map from a `contentCid` to the blocks under
+/// it, so without it the version is unreadable however many leaves survive.
 ///
 /// A root that addresses correctly but this build cannot **decode** is neither:
 /// a newer build's format is a version this session cannot interpret, not one
@@ -222,10 +224,10 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
 /// ([`UPLOAD_MARK_KEY`]), so which leaves are absent is only decidable against
 /// that mark — which is single-slot and keyed to the head op, and so is gone by
 /// the time a dead letter is judged.
-async fn version_is_openable<S: StagingStore>(
+async fn open_version<S: StagingStore>(
     store: &S,
     root_cid: &[u8],
-) -> SeamResult<Option<u64>> {
+) -> SeamResult<Option<(RootManifest, usize)>> {
     let Some(root_block) = store.staged_bytes(root_cid).await? else {
         return Ok(None);
     };
@@ -235,40 +237,57 @@ async fn version_is_openable<S: StagingStore>(
     let manifest = decode_root(&root_block).map_err(|_| {
         SeamError::new("preserved dead letter: root manifest is not one this build decodes")
     })?;
-    Ok(Some(version_bytes(&manifest, root_block.len())))
+    Ok(Some((manifest, root_block.len())))
 }
 
-/// The staged bytes one version occupies: every leaf's sealed length plus the
-/// root block's, arithmetic off the manifest rather than a read per leaf.
-fn version_bytes(manifest: &RootManifest, root_block_len: usize) -> u64 {
+/// The staged bytes one version still occupies: the root block, plus the sealed
+/// length of every leaf `staged` shows the store **still holds**. A leaf the
+/// upload loop released as it confirmed has already left staging, and charging it
+/// would evict a neighbouring dead letter to reclaim space nothing is using.
+///
+/// Per-leaf plaintext is arithmetic off the manifest rather than a read per leaf:
+/// [`decode_root`] holds the leaf count to `ceil(size / chunk_size)` at a nonzero
+/// `chunk_size`, so every leaf but the last is exactly one chunk.
+fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &HashSet<Vec<u8>>) -> u64 {
+    let last = manifest.leaf_cids.len().saturating_sub(1);
     manifest
-        .size
-        .saturating_add((manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD))
-        .saturating_add(root_block_len as u64)
+        .leaf_cids
+        .iter()
+        .enumerate()
+        .filter(|(_, cid)| staged.contains(cid.as_slice()))
+        .map(|(index, _)| {
+            let plaintext = if index == last {
+                manifest
+                    .size
+                    .saturating_sub(manifest.chunk_size.saturating_mul(last as u64))
+            } else {
+                manifest.chunk_size
+            };
+            plaintext.saturating_add(SEALED_LEAF_OVERHEAD)
+        })
+        .fold(root_block_len as u64, u64::saturating_add)
 }
 
 /// The staged bytes one preserved record's version occupies. Zero for a record
 /// naming no content, or a root the store lost.
-async fn preserved_version_bytes<S: StagingStore>(store: &S, record: &[u8]) -> u64 {
+async fn preserved_version_bytes<S: StagingStore>(
+    store: &S,
+    record: &[u8],
+    staged: &HashSet<Vec<u8>>,
+) -> u64 {
     let Ok(Some(root)) = record_content_root_cid(record) else {
         return 0;
     };
-    let Ok(Some(root_block)) = store.staged_bytes(&root).await else {
+    let Ok(Some((manifest, root_len))) = open_version(store, &root).await else {
         return 0;
     };
-    if verify_cid(&root, &root_block).is_err() {
-        return 0;
-    }
-    let Ok(manifest) = decode_root(&root_block) else {
-        return 0;
-    };
-    version_bytes(&manifest, root_block.len())
+    version_bytes(&manifest, root_len, staged)
 }
 
-/// Trim `kept` to the count and byte ceilings, dropping oldest first and
-/// releasing each evicted version's blocks so the budget is freed at once
-/// rather than a GC pass later. The list is append-ordered, so its head is the
-/// oldest entry.
+/// Trim `kept` to the count and byte ceilings, dropping oldest first, and hand
+/// back the root of each version evicted so the caller can release its blocks
+/// once the shortened list is durable. The list is append-ordered, so its head is
+/// the oldest entry.
 ///
 /// The newest entry always survives, even alone over the byte ceiling: it is the
 /// one the user is about to be told about, and a single version is already
@@ -278,12 +297,13 @@ async fn evict_over_budget<S: StagingStore>(
     kept: &mut Vec<Vec<u8>>,
     appended_bytes: u64,
     budget: u64,
-) {
+    staged: &HashSet<Vec<u8>>,
+) -> Vec<Vec<u8>> {
     let mut sizes = Vec::with_capacity(kept.len());
     for record in &kept[..kept.len() - 1] {
-        sizes.push(preserved_version_bytes(store, record).await);
+        sizes.push(preserved_version_bytes(store, record, staged).await);
     }
-    // The caller just sized the appended record's root; no need to read it again.
+    // The caller just sized the appended record's version; no need to read it again.
     sizes.push(appended_bytes);
     let mut total = sizes.iter().copied().fold(0u64, u64::saturating_add);
     let mut evicted = 0usize;
@@ -294,11 +314,9 @@ async fn evict_over_budget<S: StagingStore>(
         total = total.saturating_sub(sizes[evicted]);
         evicted += 1;
     }
-    for record in kept.drain(..evicted) {
-        if let Ok(Some(root)) = record_content_root_cid(&record) {
-            release_version_blocks(store, &root).await;
-        }
-    }
+    kept.drain(..evicted)
+        .filter_map(|record| record_content_root_cid(&record).ok().flatten())
+        .collect()
 }
 
 /// The dead letters the store holds. `None` when the record is present but not
@@ -444,7 +462,7 @@ async fn prune_preserved_dead_letters<S: StagingStore>(store: &S) {
         let Ok(Some(root)) = record_content_root_cid(record) else {
             continue;
         };
-        match version_is_openable(store, &root).await {
+        match open_version(store, &root).await {
             Ok(Some(_)) => live.push(record.clone()),
             Ok(None) => {}
             // A store that cannot answer decides nothing: keep the entry and let
@@ -600,6 +618,11 @@ mod tests {
             .put_staged_bytes(&staged.root_cid, root_block)
             .await
             .unwrap();
+    }
+
+    /// The store's staged keys, the way [`preserve_dead_letter`] reads them.
+    async fn staged_key_set<S: StagingStore>(store: &S) -> HashSet<Vec<u8>> {
+        store.staged_keys().await.unwrap().into_iter().collect()
     }
 
     /// A `StagedContent` naming a root the test staged by hand.
@@ -986,7 +1009,7 @@ mod tests {
             let foreign_cid = compute_cid(DAG_ROOT_CODEC, foreign);
             store.put_staged_bytes(&foreign_cid, foreign).await.unwrap();
             assert!(
-                version_is_openable(&store, &foreign_cid).await.is_err(),
+                open_version(&store, &foreign_cid).await.is_err(),
                 "an undecodable root is refused, never answered as a lost version"
             );
 
@@ -1071,6 +1094,7 @@ mod tests {
             let one_version = preserved_version_bytes(
                 &store,
                 &encode_op_record(seal(1), &content_op(1, first.clone())).unwrap(),
+                &staged_key_set(&store).await,
             )
             .await;
             // Room for one version and no more, so the second admission must
@@ -1098,6 +1122,100 @@ mod tests {
             assert!(
                 store.staged_bytes(&first_root_cid).await.unwrap().is_none(),
                 "the evicted version's blocks leave the staging budget"
+            );
+        });
+    }
+
+    /// The eviction and the list that stops naming the evicted entry must not
+    /// come apart: a failed list write leaves the *old* list durable, and that
+    /// list still promises every version in it.
+    #[test]
+    fn a_failed_preserved_write_leaves_the_evicted_versions_blocks_alone() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (first_blocks, first_root, first) =
+                framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &first_blocks, &first_root, &first).await;
+            let first_root_cid = first.root_cid.clone();
+            let first_record = encode_op_record(seal(1), &content_op(1, first)).unwrap();
+            preserve_dead_letter(&store, &first_record, ROOMY)
+                .await
+                .unwrap();
+
+            let (second_blocks, second_root, second) =
+                framed_keyed(b"another forty bytes of content ----------", 11);
+            put_blocks(&store, &second_blocks, &second_root, &second).await;
+            let second_record = encode_op_record(seal(2), &content_op(2, second)).unwrap();
+            // The list write that would drop the first entry fails; the second
+            // admission is over a ceiling of zero, so it would otherwise evict.
+            store.interrupt_staged_write_after(PRESERVED_DEAD_LETTERS_KEY, 0);
+
+            assert!(
+                preserve_dead_letter(&store, &second_record, 0)
+                    .await
+                    .is_err(),
+                "a lost list write is not a success"
+            );
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![first_record],
+                "the old list survives, still naming the first version"
+            );
+            assert!(
+                store.staged_bytes(&first_root_cid).await.unwrap().is_some(),
+                "so its blocks must survive with it"
+            );
+        });
+    }
+
+    /// A leaf the upload loop released on confirmation has left staging. Charging
+    /// it would evict a recoverable neighbour to reclaim space nothing is using.
+    #[test]
+    fn a_released_leaf_is_not_charged_against_the_byte_ceiling() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (first_blocks, first_root, first) =
+                framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &first_blocks, &first_root, &first).await;
+            let first_root_cid = first.root_cid.clone();
+            let first_record = encode_op_record(seal(1), &content_op(1, first)).unwrap();
+
+            let (second_blocks, second_root, second) =
+                framed_keyed(b"another forty bytes of content ----------", 11);
+            put_blocks(&store, &second_blocks, &second_root, &second).await;
+            let second_record = encode_op_record(seal(2), &content_op(2, second)).unwrap();
+
+            // The second version confirmed and released every leaf but its last,
+            // so what it still occupies is the root plus that one leaf.
+            for block in &second_blocks[..second_blocks.len() - 1] {
+                store.remove_staged_bytes(&block.cid).await.unwrap();
+            }
+            // Measured off the blocks themselves, not the accounting under test:
+            // exactly what the two versions still occupy, so charging the released
+            // leaves puts the pair over and evicts the first.
+            let ceiling = first_blocks
+                .iter()
+                .chain(second_blocks.last())
+                .map(|block| block.sealed.len() as u64)
+                .sum::<u64>()
+                + first_root.len() as u64
+                + second_root.len() as u64;
+
+            preserve_dead_letter(&store, &first_record, ceiling)
+                .await
+                .unwrap();
+            preserve_dead_letter(&store, &second_record, ceiling)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![first_record, second_record],
+                "the released leaves left room for both"
+            );
+            assert!(
+                store.staged_bytes(&first_root_cid).await.unwrap().is_some(),
+                "and the older version keeps its blocks"
             );
         });
     }
