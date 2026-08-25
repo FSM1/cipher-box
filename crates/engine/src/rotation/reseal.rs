@@ -42,8 +42,9 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
     StructureSigInput, WriteBody, encode_write_body, is_write_body_over_bound, open_ascent_link,
-    open_history_link, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
-    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
+    open_history_link, open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob,
+    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
+    sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -885,10 +886,13 @@ pub fn reseal_scope_root<E: Entropy>(
 /// [`ResealSeeds`], never from the payload under test, so the ascent arm cannot
 /// drift from the seed and epoch the rest of the section is minted at.
 ///
-/// The mirror stops one axis short of the gate's: seal and open derive the
-/// ascent keypair from the single `parent_node_seed` this re-seal was handed, so
-/// a caller that threads the wrong ancestor seed passes here and is caught only
-/// by a reader, which derives its own from cached state.
+/// The mirror covers the seed and epoch, not the ancestor: seal and open derive
+/// the ascent keypair from the single `parent_node_seed` this re-seal was handed,
+/// so authenticating that seed is the caller's. The threading site that mints
+/// descendant roots does it by recovering each parent's seed from the record it
+/// publishes (`rotation/cascade.rs::published_seed`); a rotator anchored at one
+/// root reads it from the parent its own walk gated
+/// (`net/rotation.rs::RotationAncestry`).
 ///
 /// The gate compares the read key the recovered seed derives; comparing the seed
 /// is the same predicate one derivation earlier.
@@ -904,6 +908,28 @@ fn verify_ascent_link(
         return Err(ResealError::AscentLinkMismatch);
     }
     Ok(())
+}
+
+/// The override seed a re-sealed section's own owner blob carries, opened as an
+/// owner reader opens it.
+///
+/// The one produce-side read-back of a `reseal_scope_root` output: a section
+/// that will not reopen under the owner key the adoption gate re-derives can
+/// never be signed (release-active, AGENTS.md rule 8).
+pub fn published_override_seed(
+    owner_enc_secret: &X25519Secret,
+    v: u64,
+    scope_id: [u8; 16],
+    read_epoch: u64,
+    section: &GrantSection,
+) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+    let blob = &section.owner_blob;
+    let ctx = ctx_for(v, scope_id, read_epoch, STRUCT_TAG_OWNER_BLOB);
+    let payload = open_owner_blob(owner_enc_secret, &blob.enc, &ctx, &blob.ciphertext).ok()?;
+    // The AAD binds the epoch; the payload carries its own copy, and the two
+    // disagreeing is a seed recovered for an epoch it does not belong to
+    // (`net/adopter.rs::open_write_scope_seed_at` splits it the same way).
+    (payload.epoch == read_epoch).then(|| Zeroizing::new(*payload.override_seed()))
 }
 
 /// The AAD context for a scope-root structure: `id == scope == scope_id` (a

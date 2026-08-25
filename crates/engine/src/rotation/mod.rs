@@ -55,7 +55,7 @@ pub use eager_set::{
 };
 pub use reseal::{
     AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
-    WriteHistory, reseal_scope_root, seed_at_epoch,
+    WriteHistory, published_override_seed, reseal_scope_root, seed_at_epoch,
 };
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
 pub use rotate::{
@@ -63,9 +63,10 @@ pub use rotate::{
     ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{
-    RepointChannel, RepublishedNode, ResumedWriteWave, RotateScopeWritePlan, WritePublishError,
-    WriteRotateError, WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver,
-    WriteWavePublisher, build_repoint_object, derive_write_name, rotate_scope_write,
+    RepointChannel, RepublishedNode, ResumedRoot, ResumedWriteWave, RotateScopeWritePlan,
+    WritePublishError, WriteRotateError, WriteRotationOutcome, WriteScopeNode,
+    WriteSubtreeResolver, WriteWavePublisher, build_repoint_object, derive_write_name,
+    rotate_scope_write,
 };
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
