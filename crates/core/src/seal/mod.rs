@@ -38,7 +38,8 @@ pub use content_key::{
 };
 pub use envelope::{
     CRITICAL_KEY_PREFIX, CarriedCut, Envelope, MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES,
-    UNCUTTABLE_KEYS, decode_envelope, encode_envelope, encode_envelope_within, grant_section_bytes,
+    MAX_READ_SEALED_BYTES, READ_SEALED_ENVELOPE_HEADROOM_BYTES, UNCUTTABLE_KEYS, decode_envelope,
+    encode_envelope, encode_envelope_within, envelope_over_bound, grant_section_bytes,
     has_grant_section, open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{

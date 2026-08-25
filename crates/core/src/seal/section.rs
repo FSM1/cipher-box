@@ -295,8 +295,10 @@ pub const MAX_GRANT_BLOBS: usize = 1024;
 /// the carried critical fields
 /// [`MAX_CRITICAL_CARRIED_BYTES`](super::MAX_CRITICAL_CARRIED_BYTES) budgets.
 ///
-/// A band left for those fields, not a proof they fit: `readSealed` carries no
-/// byte bound of its own, so the whole-record ceiling stays the real backstop.
+/// A band left for those fields, not a proof they fit: `readSealed` is bounded
+/// against the block ceiling rather than against this band, so a maximal section
+/// and a maximal read-body are not jointly reachable and the envelope's own
+/// total stays the backstop that refuses the combination.
 pub const GRANT_SECTION_ENVELOPE_HEADROOM_BYTES: usize = 48 * 1024;
 
 /// The frozen bound on a grant section's **total encoded size**.

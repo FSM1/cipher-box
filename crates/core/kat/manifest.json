@@ -196,6 +196,9 @@
       "grantSection",
       "writeSealed"
     ],
+    "envelopeMaxBytes": 2097152,
+    "readSealedMaxBytes": 2064384,
+    "readSealedEnvelopeHeadroomBytes": 32768,
     "seal": {
       "file": "vectors/seal/seal.json",
       "count": 3

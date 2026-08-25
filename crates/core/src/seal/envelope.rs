@@ -15,7 +15,7 @@
 use zeroize::Zeroize;
 
 use crate::codec::{Map, Value, decode, encode, encoded_key_len, encoded_len};
-use crate::error::CodecError;
+use crate::error::{CodecError, Malformed};
 use crate::suite::aead::{KEY_LEN, NONCE_LEN};
 
 use super::aad::{AadContext, STRUCT_TAG_READ_BODY};
@@ -51,12 +51,21 @@ const EPOCH_TAG_KNOWN: &[&str] = &["epoch", "scope"];
 
 /// Decode a plaintext envelope (strict det-CBOR; unknown fields preserved).
 pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
+    // Before the codec walks anything: the carried set is attacker-sized and
+    // preserved by construction, so the raw total is the only cap on the walk.
+    assert_within_bound(ENVELOPE_SIZE_CHECK, bytes.len(), MAX_BLOCK_BYTES)?;
     let value = decode(bytes)?;
     let map = value.as_map()?;
 
     let v = req(map, "v")?.as_unsigned()?;
     let id = bytes_fixed::<16>(req(map, "id")?, "id")?;
-    let read_sealed = req(map, "readSealed")?.as_bytes()?.to_vec();
+    let raw_read_sealed = req(map, "readSealed")?.as_bytes()?;
+    assert_within_bound(
+        READ_SEALED_SIZE_CHECK,
+        raw_read_sealed.len(),
+        MAX_READ_SEALED_BYTES,
+    )?;
+    let read_sealed = raw_read_sealed.to_vec();
 
     let epoch_tag = req(map, "epochTag")?.as_map()?;
     let scope = bytes_fixed::<16>(req(epoch_tag, "scope")?, "scope")?;
@@ -169,6 +178,53 @@ fn entry_cost(key: &str, value: &Value) -> Option<usize> {
 /// under; `crates/engine`'s content limits alias it rather than restate it.
 pub const MAX_BLOCK_BYTES: usize = 2 * 1024 * 1024;
 
+/// The frozen envelope framing reserved above [`MAX_READ_SEALED_BYTES`]: the
+/// typed fields around the sealed read-body, the `readSealed` key, and the
+/// critical-carried budget that draws from the same band.
+pub const READ_SEALED_ENVELOPE_HEADROOM_BYTES: usize = 32 * 1024;
+
+/// The frozen bound on `readSealed`'s length.
+///
+/// The sealed read-body is the envelope's one attacker-sized typed field, and
+/// unlike the carried set it is uncuttable: a reader that meets an over-long one
+/// has already been handed the bytes. Bounding it lets the refusal name the
+/// field that broke rather than reporting only that the record was too big.
+///
+/// Its **floor** is honest use — `seal_read_body` mints whatever a folder's
+/// child listing needs, so a bound near the framing headroom would refuse
+/// folders this codec's own encoder produces. Its **ceiling** is the block every
+/// envelope must fit, less the framing around the field, which is what the
+/// headroom reserves.
+pub const MAX_READ_SEALED_BYTES: usize = MAX_BLOCK_BYTES - READ_SEALED_ENVELOPE_HEADROOM_BYTES;
+
+/// Carried critical fields are part of that framing, so a maximal critical set
+/// must leave room for the envelope's typed fields beside it.
+const _: () = assert!(MAX_CRITICAL_CARRIED_BYTES < READ_SEALED_ENVELOPE_HEADROOM_BYTES);
+
+/// The collection label the `readSealed` bound's refusal reports.
+const READ_SEALED_SIZE_CHECK: &str = "readSealed";
+
+/// The collection label the envelope's total-size refusal reports.
+const ENVELOPE_SIZE_CHECK: &str = "envelope";
+
+/// The `(size, limit)` an envelope's own byte-bound refusal reports — its total
+/// against [`MAX_BLOCK_BYTES`], or `readSealed` against [`MAX_READ_SEALED_BYTES`]
+/// — or `None` for any other error. Both share `too-many-structures` with every
+/// collection bound, so a consumer that must charge a head-size refusal apart
+/// from an encoder fault reads it here.
+pub fn envelope_over_bound(e: &CodecError) -> Option<(usize, usize)> {
+    match e {
+        CodecError::Malformed(Malformed::TooManyStructures {
+            collection,
+            count,
+            limit,
+        }) if *collection == ENVELOPE_SIZE_CHECK || *collection == READ_SEALED_SIZE_CHECK => {
+            Some((*count, *limit))
+        }
+        _ => None,
+    }
+}
+
 /// What an [`encode_envelope_within`] cut destroyed: the carried keys it
 /// dropped, in the order it dropped them. Empty when nothing was cut.
 ///
@@ -191,16 +247,16 @@ pub fn encode_envelope_within(
     env: &mut Envelope,
     limit: usize,
 ) -> Result<(Vec<u8>, CarriedCut), CodecError> {
-    let block = encode_envelope(env)?;
-    let Some(excess) = block.len().checked_sub(limit) else {
-        return Ok((block, CarriedCut::new()));
-    };
-    let cut = cut_carried_unknown(env, excess);
-    if cut.is_empty() {
-        return Ok((block, cut));
-    }
+    // Measured, never encoded first: the carried set runs to the block ceiling,
+    // which [`encode_envelope`] refuses at, so encoding before the cut would
+    // turn the truncation this function exists to perform into a refusal.
+    let len = encoded_len(&envelope_value(env)?)?;
     // One pass, not a fixpoint: a cut covers the whole excess in value bytes
     // alone, and dropping an entry frees its key and framing on top of that.
+    let cut = match len.checked_sub(limit) {
+        Some(excess) => cut_carried_unknown(env, excess),
+        None => CarriedCut::new(),
+    };
     Ok((encode_envelope(env)?, cut))
 }
 
@@ -265,15 +321,33 @@ fn entry_costs(
 
 /// Encode an envelope to its canonical det-CBOR plaintext.
 ///
-/// Release-active and symmetric with [`decode_envelope`] on the critical-bytes
-/// budget, so a release build never mints a record its own decoder refuses
-/// (AGENTS.md encode/decode symmetry rule).
+/// Release-active and symmetric with [`decode_envelope`] on `readSealed`, the
+/// critical-bytes budget and the block ceiling, so a release build never mints a
+/// record its own decoder refuses (AGENTS.md encode/decode symmetry rule).
 pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
+    let value = envelope_value(env)?;
+    // Measured rather than encoded first: an over-bound envelope never
+    // materializes the buffer it would only be refused for. The decoder gets the
+    // total for free and so checks it first; a record over the total *and*
+    // otherwise malformed therefore reports the other defect from this side.
+    assert_within_bound(ENVELOPE_SIZE_CHECK, encoded_len(&value)?, MAX_BLOCK_BYTES)?;
+    encode(&value)
+}
+
+/// The envelope's canonical value, with the release-active guards every encode
+/// path shares. Split out so [`encode_envelope_within`] can measure a candidate
+/// before the cut without minting the buffer.
+fn envelope_value(env: &Envelope) -> Result<Value, CodecError> {
     // [`merge_unknown`] skips a carried key that collides with a typed one, so
     // without this the block would decode back to a different envelope than the
     // one encoded — and a cut would budget for bytes never on the wire.
     assert_unknown_disjoint(&env.unknown, ENVELOPE_KNOWN)?;
     assert_unknown_disjoint(&env.epoch_tag_unknown, EPOCH_TAG_KNOWN)?;
+    assert_within_bound(
+        READ_SEALED_SIZE_CHECK,
+        env.read_sealed.len(),
+        MAX_READ_SEALED_BYTES,
+    )?;
     assert_within_bound(
         CRITICAL_CARRIED_CHECK,
         critical_carried_len(env.unknown.entries(), env.epoch_tag_unknown.entries()),
@@ -290,7 +364,7 @@ pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
     m.insert("epochTag", Value::Map(epoch_tag));
     m.insert("readSealed", Value::Bytes(env.read_sealed.clone()));
     merge_unknown(&mut m, &env.unknown);
-    encode(&Value::Map(m))
+    Ok(Value::Map(m))
 }
 
 /// Seal a read-body into a fresh envelope under the read key + injected nonce.
@@ -582,6 +656,20 @@ mod truncation_tests {
         fields.entries().iter().map(|(k, _)| k.as_str()).collect()
     }
 
+    /// Bytes built through the raw codec, for the defects [`encode_envelope`]
+    /// now refuses to mint.
+    fn raw_envelope(defect: &dyn Fn(&mut Map)) -> Vec<u8> {
+        let mut m = decode(
+            &encode_envelope(&envelope(PreservedFields::new(), PreservedFields::new())).unwrap(),
+        )
+        .unwrap()
+        .as_map()
+        .unwrap()
+        .clone();
+        defect(&mut m);
+        encode(&Value::Map(m)).unwrap()
+    }
+
     /// Each case states the set it wants to survive rather than a number that
     /// drifts with the typed fields.
     fn limit_carrying(unknown: PreservedFields, epoch_tag_unknown: PreservedFields) -> usize {
@@ -794,20 +882,12 @@ mod truncation_tests {
             "encode refuses, release-active"
         );
 
-        // The same bytes on the wire: built through the raw codec, since the
-        // envelope encoder now refuses to mint them.
-        let mut m = decode(
-            &encode_envelope(&envelope(PreservedFields::new(), PreservedFields::new())).unwrap(),
-        )
-        .unwrap()
-        .as_map()
-        .unwrap()
-        .clone();
-        m.insert(
-            marked.as_str(),
-            Value::Bytes(vec![0xab; MAX_CRITICAL_CARRIED_BYTES]),
-        );
-        let bytes = encode(&Value::Map(m)).unwrap();
+        let bytes = raw_envelope(&|m| {
+            m.insert(
+                marked.as_str(),
+                Value::Bytes(vec![0xab; MAX_CRITICAL_CARRIED_BYTES]),
+            )
+        });
         assert_eq!(
             decode_envelope(&bytes).unwrap_err().check(),
             "too-many-structures",
@@ -900,6 +980,93 @@ mod truncation_tests {
             "too-many-structures",
             "one byte past the budget refuses"
         );
+    }
+
+    /// The sealed read-body is uncuttable, so no truncation reaches it: over its
+    /// bound the record is refused at both ends.
+    #[test]
+    fn a_read_sealed_past_its_bound_is_refused_symmetrically() {
+        let over = MAX_READ_SEALED_BYTES + 1;
+        let mut env = envelope(PreservedFields::new(), PreservedFields::new());
+        env.read_sealed = vec![0xab; over];
+        let refused = encode_envelope(&env).unwrap_err();
+        assert_eq!(refused.check(), "too-many-structures");
+        assert_eq!(
+            envelope_over_bound(&refused),
+            Some((over, MAX_READ_SEALED_BYTES)),
+            "encode refuses on the field's own bound, release-active"
+        );
+
+        // The same bytes on the wire: built through the raw codec, since the
+        // envelope encoder now refuses to mint them.
+        let bytes = raw_envelope(&|m| m.insert("readSealed", Value::Bytes(vec![0xab; over])));
+        assert_eq!(
+            envelope_over_bound(&decode_envelope(&bytes).unwrap_err()),
+            Some((over, MAX_READ_SEALED_BYTES)),
+            "decode refuses the same bytes on the same bound"
+        );
+    }
+
+    /// The bound admits its last byte and refuses the next — the boundary is
+    /// where a second implementation reading the frozen number goes wrong.
+    #[test]
+    fn the_read_sealed_bound_admits_exactly_its_last_byte() {
+        let mut env = envelope(PreservedFields::new(), PreservedFields::new());
+        env.read_sealed = vec![0xab; MAX_READ_SEALED_BYTES];
+        let bytes = encode_envelope(&env).expect("exactly at the bound encodes");
+        assert_eq!(decode_envelope(&bytes).expect("and decodes"), env);
+    }
+
+    /// A block past the ceiling every read enforces is refused at both ends, so
+    /// no release build hands back a record its own decoder always rejects.
+    #[test]
+    fn an_envelope_past_the_block_ceiling_is_refused_symmetrically() {
+        let env = envelope(fields(&[("bulk", MAX_BLOCK_BYTES)]), PreservedFields::new());
+        let refused = encode_envelope(&env).unwrap_err();
+        assert_eq!(refused.check(), "too-many-structures");
+        let (size, limit) = envelope_over_bound(&refused).expect("encode refuses, release-active");
+        assert!(size > MAX_BLOCK_BYTES);
+        assert_eq!(limit, MAX_BLOCK_BYTES);
+
+        let bytes = raw_envelope(&|m| m.insert("bulk", Value::Bytes(vec![0xab; MAX_BLOCK_BYTES])));
+        assert_eq!(
+            envelope_over_bound(&decode_envelope(&bytes).unwrap_err()),
+            Some((bytes.len(), MAX_BLOCK_BYTES)),
+            "decode refuses the same bytes on the same bound"
+        );
+    }
+
+    /// The predicate the engine charges a head-size refusal on must not swallow
+    /// the other verdicts the envelope codec raises.
+    #[test]
+    fn a_refusal_that_is_not_a_size_bound_is_not_charged_as_one() {
+        let marked = format!("{CRITICAL_KEY_PREFIX}pad");
+        for carried in [
+            fields(&[("v", 8)]),
+            fields(&[(marked.as_str(), MAX_CRITICAL_CARRIED_BYTES)]),
+        ] {
+            let env = envelope(carried, PreservedFields::new());
+            assert_eq!(
+                envelope_over_bound(&encode_envelope(&env).unwrap_err()),
+                None
+            );
+        }
+    }
+
+    /// The block ceiling must not turn the truncation law into a refusal: a
+    /// carried set arrives off a resolved record, so anyone who can publish at a
+    /// name could otherwise stop every later publish there.
+    #[test]
+    fn a_carried_set_past_the_block_ceiling_is_still_cut_rather_than_refused() {
+        let mut env = envelope(
+            fields(&[("bulk", MAX_BLOCK_BYTES), ("keepMe", 32)]),
+            PreservedFields::new(),
+        );
+        let (block, cut) =
+            encode_envelope_within(&mut env, MAX_BLOCK_BYTES).expect("cut, never refused");
+        assert!(block.len() <= MAX_BLOCK_BYTES);
+        assert_eq!(cut, vec!["bulk".to_owned()]);
+        assert_eq!(keys(&env.unknown), vec!["keepMe"]);
     }
 
     /// Marked and unmarked keys interleave in one canonical map: the encoder

@@ -25,8 +25,8 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
     ReadBody, Version, decode_grant_section, encode_envelope_within, encode_grant_section,
-    grant_section_bytes, has_grant_section, is_grant_section_over_bound, seal_read_body,
-    set_grant_section, verify_grant_set_bound,
+    envelope_over_bound, grant_section_bytes, has_grant_section, is_grant_section_over_bound,
+    seal_read_body, set_grant_section, verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -66,14 +66,15 @@ pub enum AuthorError {
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
-    /// The encoded head block exceeds the ceiling every block read enforces
-    /// ([`MAX_RESOLVED_RECORD_BYTES`]). Publishing it would sign a pointer to a
-    /// block this build's own reader always refuses, leaving the node
+    /// The encoded head exceeds a frozen size ceiling — the whole block against
+    /// [`MAX_RESOLVED_RECORD_BYTES`], or its sealed read-body against the
+    /// codec's own `MAX_READ_SEALED_BYTES`. Publishing it would sign a pointer
+    /// to a block this build's own reader always refuses, leaving the node
     /// permanently unopenable.
     HeadTooLarge {
-        /// The encoded block's size.
+        /// The refused size.
         size: usize,
-        /// The enforced ceiling.
+        /// The ceiling it met.
         limit: usize,
     },
     /// The authored grant section is past the codec's frozen total bound
@@ -290,8 +291,17 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
 /// Encode the authored envelope within the ceiling every block read enforces
 /// ([`encode_envelope_within`] owns what a cut may take).
 fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
-    let (block, cut) = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
-        .map_err(AuthorError::Seal)?;
+    // The codec's own envelope bounds sit at or under this ceiling, so an
+    // over-bound head is the refusal this crate already names; folding it into
+    // the generic encode error would charge a blocked publish as an encoder
+    // fault and dead-letter it under the wrong reason.
+    let (block, cut) =
+        encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES).map_err(|e| {
+            match envelope_over_bound(&e) {
+                Some((size, limit)) => AuthorError::HeadTooLarge { size, limit },
+                None => AuthorError::Seal(e),
+            }
+        })?;
     if block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(AuthorError::HeadTooLarge {
             size: block.len(),
@@ -387,8 +397,8 @@ mod tests {
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{
-        GrantSetEntry, Permission, STRUCT_TAG_WRITE_BODY, StructureSigInput, decode_envelope,
-        encode_grant_section, open_read_body, sign_grant_set, sign_structure,
+        GrantSetEntry, MAX_READ_SEALED_BYTES, Permission, STRUCT_TAG_WRITE_BODY, StructureSigInput,
+        decode_envelope, encode_grant_section, open_read_body, sign_grant_set, sign_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -794,7 +804,7 @@ mod tests {
             matches!(
                 author_child_envelope(authoring(&folder_past_the_read_cap(), PreservedFields::new()))
                     .unwrap_err(),
-                AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+                AuthorError::HeadTooLarge { limit, .. } if limit == MAX_READ_SEALED_BYTES
             ),
             "an over-cap head must fail closed on the produce side"
         );
@@ -863,7 +873,7 @@ mod tests {
             .collect();
         assert!(matches!(
             author_child_envelope(authoring(&folder_past_the_read_cap(), carried)).unwrap_err(),
-            AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+            AuthorError::HeadTooLarge { limit, .. } if limit == MAX_READ_SEALED_BYTES
         ));
     }
 
