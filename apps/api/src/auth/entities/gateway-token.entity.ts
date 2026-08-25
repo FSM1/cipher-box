@@ -23,7 +23,6 @@ export class GatewayToken {
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
-  /** The refresh family this token's session belongs to. */
   @Column({ name: 'family_id', type: 'uuid' })
   familyId: string;
 

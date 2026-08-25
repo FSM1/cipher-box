@@ -43,11 +43,9 @@ export const THROTTLE_SURFACES = {
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
   /**
-   * The gateway front's forward_auth leg: roughly one call per leaf block, and
-   * once that front exists they all arrive from its single address, so this
-   * bucket is shared by every member reading at once. Sized far above the read
-   * cadence — the point is that an unauthenticated, database-touching surface
-   * has a ceiling at all, not that this number is the right one for the front.
+   * The gateway front's forward_auth leg: one bucket shared by every member
+   * reading at once, since the calls all arrive from that front's address. A
+   * ceiling on an unauthenticated, database-touching surface, not a tuned value.
    */
   gatewayVerify: { default: { limit: 6_000, ttl: 60_000 } },
   /**
