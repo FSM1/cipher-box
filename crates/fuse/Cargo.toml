@@ -27,18 +27,32 @@ getrandom.workspace = true
 # technology answers its kernel from.
 libc = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# The one vendored copy, carrying the socket-read patch (blueprint/desktop.md
-# "Backends"). Default features select the pure-Rust `fusermount3` mount path,
-# so building the adapter needs no libfuse3 headers.
-fuser = { path = "../../third-party/fuser", default-features = false }
-# The kernel session thread hands operations to the engine task over these —
+# Both FUSE backends — libfuse3 on Linux, FUSE-T's libfuse2 shim on macOS —
+# speak the FUSE wire through the one vendored `fuser`, so the session plumbing
+# they share is built for both.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# The session thread hands operations to the engine task over these —
 # runtime-agnostic, matching the engine's own event stream.
 futures-channel.workspace = true
 futures-core.workspace = true
 # The mount's own uid/gid, without `unsafe` — the crate forbids it. Same
 # version fuser already resolves, so this costs no extra tree.
 nix = { version = "0.29", features = ["user"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The one vendored copy, carrying the socket-read patch (blueprint/desktop.md
+# "Backends"). Default features select the pure-Rust `fusermount3` mount path,
+# so building the adapter needs no libfuse3 headers.
+fuser = { path = "../../third-party/fuser", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The pure-Rust mount path is `fusermount3`, Linux only, so macOS links a
+# libfuse ABI: the vendored build script probes `fuse-t.pc` ahead of `fuse.pc`
+# so FUSE-T wins over macFUSE whenever both are installed (blueprint/desktop.md
+# "Backends" — macFUSE stays rejected).
+fuser = { path = "../../third-party/fuser", default-features = false, features = [
+  "libfuse",
+] }
 
 [dev-dependencies]
 # Self dev-dependency enables `test-kit` for this crate's own tests without

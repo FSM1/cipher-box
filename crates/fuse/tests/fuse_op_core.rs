@@ -52,6 +52,7 @@ impl RecordingAdapter {
         Self::declaring(HostCapabilities {
             push_invalidation: true,
             attribute_cache: true,
+            case_insensitive_lookup: false,
         })
     }
 
@@ -903,12 +904,85 @@ fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
     );
 }
 
+/// A host that presents names case-insensitively — the Windows convention —
+/// resolves a respelling to the child stored as entered, and the listing keeps
+/// showing the stored spelling (blueprint/desktop.md "Names and attributes").
+#[test]
+fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
+    let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
+        push_invalidation: true,
+        attribute_cache: true,
+        case_insensitive_lookup: true,
+    }));
+    let created = block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+
+    let found = block_on(core.lookup(ROOT_INO, "REPORT.TXT")).expect("the respelling resolves");
+    assert_eq!(found.node, created.0.node);
+    assert_eq!(
+        block_on(core.readdir(ROOT_INO))
+            .expect("listing")
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>(),
+        vec!["Report.txt".to_owned()],
+        "the stored name is never mutated by how it was looked up"
+    );
+}
+
+/// Case-sensitive presentation is the unix convention, and it has to hold for
+/// every operation that names an existing node — a mount whose `lookup` says a
+/// respelling does not exist must not delete through it.
+#[test]
+fn a_case_sensitive_host_resolves_no_respelling_at_all() {
+    let (mut core, _adapter) = mount();
+    block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+    assert_eq!(
+        block_on(core.unlink(ROOT_INO, "REPORT.TXT")),
+        Err(VfsError::NotFound)
+    );
+    assert_eq!(
+        block_on(core.rename(ROOT_INO, "REPORT.TXT", ROOT_INO, "other.txt")),
+        Err(VfsError::NotFound)
+    );
+    block_on(core.lookup(ROOT_INO, "Report.txt")).expect("the stored spelling resolves");
+}
+
+/// Presentation is not collision policy: however a host spells a lookup, two
+/// names that fold together are one name to the engine's strict comparator, on
+/// every platform, so a folder committed anywhere mounts everywhere.
+#[test]
+fn the_strict_comparator_decides_collisions_whatever_the_host_presents() {
+    for case_insensitive_lookup in [true, false] {
+        let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
+            push_invalidation: true,
+            attribute_cache: true,
+            case_insensitive_lookup,
+        }));
+        block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+        assert_eq!(
+            block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).err(),
+            Some(VfsError::AlreadyExists),
+            "case-insensitive presentation: {case_insensitive_lookup}"
+        );
+        assert_eq!(
+            block_on(core.mkdir(ROOT_INO, "REPORT.TXT")).err(),
+            Some(VfsError::AlreadyExists)
+        );
+    }
+}
+
 #[test]
 fn a_noattrcache_mount_keeps_its_entry_cache_and_loses_only_the_attribute_one() {
     let (with_attrs, _adapter) = mount();
     let suppressed = mount_with(RecordingAdapter::declaring(HostCapabilities {
         push_invalidation: true,
         attribute_cache: false,
+        case_insensitive_lookup: false,
     }));
 
     assert!(
@@ -928,6 +1002,7 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
     let without_push = mount_with(RecordingAdapter::declaring(HostCapabilities {
         push_invalidation: false,
         attribute_cache: true,
+        case_insensitive_lookup: false,
     }));
 
     assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
@@ -2497,6 +2572,7 @@ mod published {
             RecordingAdapter::declaring(HostCapabilities {
                 push_invalidation: false,
                 attribute_cache: true,
+                case_insensitive_lookup: false,
             }),
         );
         let ino = mount.ino;

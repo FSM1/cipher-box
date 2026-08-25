@@ -23,12 +23,17 @@ mod error;
 mod handle;
 mod inode;
 mod name;
+mod ntstatus;
 mod ops;
 mod spill;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use adapters::fuse::{FuseInvalidator, FuseMount};
 #[cfg(target_os = "linux")]
 pub use adapters::linux;
+#[cfg(target_os = "macos")]
+pub use adapters::macos;
 pub use cache::CacheBudget;
 #[cfg(unix)]
 pub use errno::errno_of;
@@ -36,5 +41,6 @@ pub use error::{OverBudgetCause, RefusedBudget, VfsError};
 pub use handle::{Access, HandleId, HandleTable, OpenFile};
 pub use inode::{InodeTable, ROOT_INO};
 pub use name::{MAX_NAME_BYTES, NameError, is_emittable, is_platform_junk, validate_name};
+pub use ntstatus::{NtStatus, ntstatus_of};
 pub use ops::{Attributes, DirEntry, OperationCore};
 pub use spill::SpillArea;

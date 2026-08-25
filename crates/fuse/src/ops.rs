@@ -274,8 +274,29 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
         self.ttl_check(Some(parent_node));
-        let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let meta = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         Ok(self.attributes(&meta))
+    }
+
+    /// Find `name` under `parent` as the host presents names — the one rule
+    /// every operation that names an existing node resolves through.
+    ///
+    /// Case-insensitive presentation is the Windows convention and resolves to
+    /// the child stored as entered; every other host matches the stored name
+    /// exactly. Collisions are not on this axis: the engine's one strict
+    /// comparator decides them at create and at merge on every platform, so a
+    /// folder committed anywhere mounts everywhere (blueprint/desktop.md "Names
+    /// and attributes").
+    fn resolve(&self, view: &EngineView, parent: NodeId, name: &str) -> Option<NodeAttrs> {
+        if self.adapter.capabilities().case_insensitive_lookup {
+            view.lookup(parent, name)
+        } else {
+            view.children(parent)
+                .into_iter()
+                .find(|child| child.name == name)
+        }
     }
 
     /// Read one node's attributes.
@@ -353,7 +374,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
         let new_parent_node = self.directory(&view, new_parent)?;
-        let source = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let source = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         if contains(&view, source.id, new_parent_node) {
             return Err(VfsError::Invalid);
         }
@@ -963,7 +986,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ) -> Result<(), VfsError> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
-        let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        let meta = self
+            .resolve(&view, parent_node, name)
+            .ok_or(VfsError::NotFound)?;
         removable(&view, &meta, expected)?;
         self.delete(&view, meta.id).await?;
         self.entry_changed(parent, name);
