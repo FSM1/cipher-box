@@ -10,15 +10,13 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::suite::ecdsa::EcdsaVerifier;
-use cipherbox_core::suite::secret::SECRET_LEN;
-
 use super::fanout::fanout_get_verify;
 use super::rotation::OwnerScopeKeys;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
-use crate::sync::pointer::{PointerFetch, open_repoint, scope_pointer_name};
+use crate::sync::pointer::{PointerFetch, open_repoint};
+use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
 /// The record-plane [`PointerFetch`]: resolves pointer names over the borrowed
 /// [`RecordTransport`] seam. Holds no key material — a pure function of the
@@ -61,9 +59,9 @@ pub(crate) enum PointerConsultError {
 /// `Superseded` verdict and the focus tick's polled leg — so the trust rules a
 /// consult enforces cannot differ between them.
 pub(crate) struct PointerConsult<'a> {
-    /// Derives the scope-pointer name (owner-only material, never published).
-    pub owner_pointer_seed: &'a [u8; SECRET_LEN],
-    /// The per-scope `pointer-read-key` derivation, and no wider capability.
+    /// The scope-pointer **name** and `pointer-read-key` derivations, and no
+    /// wider capability: `ownerPointerSeed` also derives the pointer record's
+    /// signing key, and a read holds nothing it could sign with.
     pub scope_keys: &'a dyn OwnerScopeKeys,
     /// The owner identity every re-point payload is signed under.
     pub owner_identity: &'a EcdsaVerifier,
@@ -80,7 +78,7 @@ impl PointerConsult<'_> {
         floors: &F,
         scope_id: &[u8; 16],
     ) -> Result<Option<IpnsName>, PointerConsultError> {
-        let pointer = scope_pointer_name(self.owner_pointer_seed, scope_id);
+        let pointer = self.scope_keys.pointer_name(scope_id);
         let block = match RecordPointerFetch::new(transport).fetch(&pointer).await {
             Ok(Some(block)) => block,
             Ok(None) => return Ok(None),
@@ -95,13 +93,9 @@ impl PointerConsult<'_> {
             &block,
         )
         .map_err(|_| PointerConsultError::Rejected)?;
-        // The scope pointer is the write-epoch floor's only owner-vouched
-        // source at every scope, the vault anchor included: `RepointChannel`
-        // has no vault-pointer arm, so only provisioning ever writes that plane
-        // and it does so once, at the genesis epoch. A vouched epoch below the
-        // floor is therefore a rollback, not staleness (rule 6). Should the
-        // vault pointer ever re-point, this stage needs the read stage's
-        // narrowing in `floor::repoint_regression`, inverted.
+        // This plane is the write epoch's only owner-vouched clock, so an epoch
+        // below the floor is a rollback, not staleness (rule 6); why the
+        // vault-pointer plane is measured differently is `floor::PointerPlane`.
         if floor::write_epoch_regression(floors, scope_id, repoint.write_epoch)
             .await
             .map_err(|_| PointerConsultError::Unavailable)?
@@ -129,7 +123,11 @@ mod tests {
     use crate::sync::pointer::{
         PointerError, SessionRole, resolve_vault_pointer, seal_repoint, vault_pointer_name,
     };
-    use crate::testkit::fakes::InMemoryRecordStore;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+    use zeroize::Zeroizing;
+
+    use crate::sync::pointer::scope_pointer_name;
+    use crate::testkit::fakes::{InMemoryFloorStore, InMemoryRecordStore};
     use crate::testkit::{SeededEntropy, block_on};
 
     const SECRET: &[u8] = b"login-secret-fixture-bytes";
@@ -175,6 +173,79 @@ mod tests {
     fn record_for(index: u64, block: &[u8], sequence: u64) -> Vec<u8> {
         let signer = kdf::vault_pointer_index(SECRET, index);
         IpnsRecord::create_v2(&signer, block, sequence, TTL_NANOS, EOL).marshal()
+    }
+
+    /// The consult's read arm: the scope pointer's **name** and its read key,
+    /// and nothing a record at that name could be signed with.
+    struct ConsultKeys;
+
+    fn owner_seed() -> cipherbox_core::suite::secret::SecretBytes {
+        kdf::owner_pointer_seed(SECRET)
+    }
+
+    impl OwnerScopeKeys for ConsultKeys {
+        fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+            kdf::pseudonym_sign(&[0x11; 32], scope_id)
+        }
+
+        fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; 32]> {
+            Zeroizing::new(*kdf::pointer_read_key(owner_seed().as_bytes(), scope_id).as_bytes())
+        }
+
+        fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+            scope_pointer_name(owner_seed().as_bytes(), scope_id)
+        }
+    }
+
+    /// The consult resolves exactly the name its scope keys name, reports the
+    /// owner-vouched root it carries, and advances the write-epoch floor on
+    /// sight — with no seed in hand to sign that pointer with.
+    #[test]
+    fn a_consult_reports_the_root_the_named_pointer_vouches() {
+        let eps = endpoints(1);
+        let store = InMemoryRecordStore::new(eps.clone());
+        let floors = InMemoryFloorStore::default();
+        let owner = owner_signer();
+        let moved = vault_pointer_name(b"moved-root-seed", 0);
+        let block = seal_block(
+            &owner,
+            4,
+            &RepointObject {
+                scope_id: ROOT_SCOPE,
+                current_root: moved.clone(),
+                write_epoch: 3,
+                min_read_epoch: 1,
+                prev_root: None,
+            },
+        );
+        let record = IpnsRecord::create_v2(
+            &kdf::scope_pointer(owner_seed().as_bytes(), &ROOT_SCOPE),
+            &block,
+            1,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        store.seed_record(
+            &eps[0],
+            ConsultKeys.pointer_name(&ROOT_SCOPE).as_str(),
+            record,
+        );
+
+        let consult = PointerConsult {
+            scope_keys: &ConsultKeys,
+            owner_identity: &owner.verifying_key(),
+            payload_version: PAYLOAD_VERSION,
+        };
+        assert_eq!(
+            block_on(consult.run(&store, &floors, &ROOT_SCOPE)),
+            Ok(Some(moved)),
+            "the consult answers with the root its own pointer name vouches"
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&floors, &ROOT_SCOPE)).unwrap(),
+            Some(3),
+        );
     }
 
     fn endpoints(n: usize) -> Vec<EndpointId> {

@@ -599,9 +599,14 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
         assert_eq!(adopted.index, 0);
         // The vault pointer is the root anchor: cold-seed through the same
         // checked, fail-closed seam production's `cold_start` uses.
-        floor::cold_seed_checked(&floors, &adopted.repoint, &ROOT_SCOPE)
-            .await
-            .unwrap();
+        floor::cold_seed_checked(
+            &floors,
+            &adopted.repoint,
+            &ROOT_SCOPE,
+            floor::PointerPlane::VaultPointer,
+        )
+        .await
+        .unwrap();
 
         // Now the revocation floor is seeded: an old-epoch record (epoch 3 < 5)
         // would fail the gate's epoch stage — cold start no longer adopts blindly.

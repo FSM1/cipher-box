@@ -68,10 +68,10 @@ use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
-    PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch,
-    ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
+    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate,
+    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold,
+    resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -1905,9 +1905,11 @@ pub(crate) fn emit_trust_violation(
 const NOT_A_SCOPE_ROOT: &str = "sharing-target-is-not-a-scope-root";
 
 /// One tick's pointer-consult window: the scopes due this pass
-/// ([`consult_scopes_due`]) and the clock the stamps are taken from.
+/// ([`consult_scopes_due`]), which of them is the vault anchor, and the clock
+/// the stamps are taken from.
 struct ConsultWindow {
     scopes: Vec<NodeId>,
+    anchor: NodeId,
     now: UnixMillis,
 }
 
@@ -1919,6 +1921,10 @@ struct ConsultWindow {
 /// leaves the read epoch untouched, so the sweep's event-driven consult never
 /// fires for it. An unavailable pointer leaves the stamp unset, so the next tick
 /// retries rather than waiting out the interval.
+///
+/// Returns the vault anchor's owner-vouched current root when this pass
+/// consulted one, so the tick polls the root a re-point moved the vault to
+/// rather than the name cold start opened with.
 async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     transport: &T,
     floors: &F,
@@ -1926,36 +1932,39 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     events: &mpsc::UnboundedSender<Event>,
     consulted: &RefCell<BTreeMap<NodeId, UnixMillis>>,
     window: ConsultWindow,
-) {
+) -> Option<IpnsName> {
     // The pass owns a copy for exactly its own duration, on the same terms as
     // the tick's enc subkey: teardown empties the cell.
-    let Some(keys) = keys.borrow().clone() else {
-        return;
-    };
+    let keys = keys.borrow().clone()?;
+    let mut anchor_root = None;
     for scope in window.scopes {
         let consult = PointerConsult {
-            owner_pointer_seed: keys.scope_keys.pointer_seed(),
             scope_keys: &keys.scope_keys,
             owner_identity: &keys.owner_identity,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
         match consult.run(transport, floors, &scope.0).await {
-            Err(PointerConsultError::Unavailable) => {}
-            outcome => {
-                // A verdict is stable, so a refusal is stamped like a clean
-                // consult: re-polling a rolled-back pointer every tick would
-                // repeat its abuse event forever without changing it.
+            Err(PointerConsultError::Unavailable) => continue,
+            // A verdict is stable, so a refusal is stamped like a clean
+            // consult: re-polling a rolled-back pointer every tick would
+            // repeat its abuse event forever without changing it.
+            Err(PointerConsultError::Rejected) => {
                 consulted.borrow_mut().insert(scope, window.now);
-                if outcome.is_err() {
-                    emit_trust_violation(
-                        events,
-                        &hex_lower(&scope.0),
-                        "scope pointer unauthenticated, or vouched below the write-epoch floor",
-                    );
+                emit_trust_violation(
+                    events,
+                    &hex_lower(&scope.0),
+                    "scope pointer unauthenticated, or vouched below the write-epoch floor",
+                );
+            }
+            Ok(current_root) => {
+                consulted.borrow_mut().insert(scope, window.now);
+                if scope == window.anchor {
+                    anchor_root = current_root;
                 }
             }
         }
     }
+    anchor_root
 }
 
 /// Project a scope root's grant ledger for a host: the recipient label and the
@@ -3154,7 +3163,7 @@ where {
                         // the rotation read it under.
                         ancestry: RotationAncestry::default()
                             .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
-                        owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
+                        pointer_consult: PointerConsultArm::Permitted,
                         payload_version: POINTER_PAYLOAD_VERSION,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
@@ -3284,6 +3293,10 @@ where {
         let manual = self.manual_refresh.clone();
 
         Some(Box::new(move |root_name: IpnsName| {
+            // Reassigned by the anchor's pointer consult below: a re-point moves
+            // the vault's root, and every leg of the pass that sights it must
+            // read and publish at the moved name.
+            let mut root_name = root_name;
             manual.arm();
             let spawn_on = scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
@@ -3320,7 +3333,10 @@ where {
                             &profile,
                         ),
                     };
-                    consult_pointers(
+                    // The anchor's pointer is the only owner-vouched plane
+                    // naming the vault's current root, so a re-point published
+                    // by another device moves this pass onto the moved root.
+                    if let Some(current_root) = consult_pointers(
                         &transport,
                         &floors,
                         &consult_keys,
@@ -3328,10 +3344,14 @@ where {
                         &pointer_consulted,
                         ConsultWindow {
                             scopes: consult_targets,
+                            anchor: NodeId(root_id),
                             now,
                         },
                     )
-                    .await;
+                    .await
+                    {
+                        root_name = current_root;
+                    }
                     // Before the steady-state hold consults them: a floor raised
                     // since the last pass revokes the seeds this pass would
                     // otherwise read and seal under. The floors it reports stamp
@@ -3793,7 +3813,12 @@ where {
         }
         let parent = self.vault_root_scope()?;
         let current = self
-            .owner_rotation_net(api, keys, RotationAncestry::default(), None)
+            .owner_rotation_net(
+                api,
+                keys,
+                RotationAncestry::default(),
+                PointerConsultArm::Refused,
+            )
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
@@ -3832,7 +3857,7 @@ where {
         api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'a>,
         ancestry: RotationAncestry,
-        owner_pointer_seed: Option<&'a [u8; 32]>,
+        pointer_consult: PointerConsultArm,
     ) -> OwnerNet<'a, T> {
         OwnerRotationNet {
             transport: &self.seams.record_transport,
@@ -3845,7 +3870,7 @@ where {
             entropy: &self.entropy,
             keys,
             ancestry,
-            owner_pointer_seed,
+            pointer_consult,
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
@@ -3937,7 +3962,12 @@ where {
             .await?;
 
         self.bounded_rotation(async || {
-            let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+            let net = self.owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            );
             let current = net
                 .resolve_anchored(&target.scope)
                 .await
@@ -4052,7 +4082,12 @@ where {
             .await?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
         let current = self
-            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
@@ -4175,9 +4210,6 @@ where {
 
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
-        // The converge pass consults the scope pointer, which only this seed
-        // names.
-        let owner_pointer_seed = session.owner_pointer_seed();
         let net = self.owner_rotation_net(
             api,
             OwnerRotationKeys {
@@ -4186,7 +4218,8 @@ where {
                 scope_keys: &scope_keys,
             },
             RotationAncestry::default(),
-            Some(owner_pointer_seed.as_bytes()),
+            // The converge pass consults the scope pointer.
+            PointerConsultArm::Permitted,
         );
         let current = net
             .resolve_vault_root(&parent)
@@ -4388,7 +4421,12 @@ where {
             .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
             .await?;
         let current = self
-            .owner_rotation_net(api, owner_keys(), target.ancestry(), None)
+            .owner_rotation_net(
+                api,
+                owner_keys(),
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
@@ -4516,7 +4554,12 @@ where {
         let target = self
             .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
             .await?;
-        let net = self.owner_rotation_net(api, owner_keys(), target.ancestry(), None);
+        let net = self.owner_rotation_net(
+            api,
+            owner_keys(),
+            target.ancestry(),
+            PointerConsultArm::Refused,
+        );
         let mut current = net
             .resolve_anchored(&target.scope)
             .await
@@ -5661,7 +5704,7 @@ where {
             Err(_) => return None,
         };
         let current = self
-            .owner_rotation_net(api, keys(), target.ancestry(), None)
+            .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
             .ok()?;
@@ -8331,6 +8374,15 @@ mod tests {
             (fx.head_block, fx.head_cid_str, fx.name)
         }
 
+        /// A root record published at `node_id`'s derived write name, signed by
+        /// that name's own key — the shape a write rotation moves a root into.
+        fn root_record_at_node(node_id: [u8; 16], head_cid_str: &str, sequence: u64) -> Vec<u8> {
+            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &node_id);
+            let signer = kdf::ipns_keypair(write_seed.as_bytes());
+            let value = format!("/ipfs/{head_cid_str}");
+            IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
+        }
+
         fn root_record(head_cid_str: &str, sequence: u64) -> Vec<u8> {
             let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0);
             let signer = kdf::ipns_keypair(write_seed.as_bytes());
@@ -8867,6 +8919,98 @@ mod tests {
             assert!(
                 engine.pointer_consulted.borrow().contains_key(&ROOT),
                 "the pass stamped the consult, so the interval damper can pace it",
+            );
+        }
+
+        /// The anchor's scope pointer is the only owner-vouched plane naming the
+        /// vault's current root. A pass that sights a re-point reports the moved
+        /// root, so the rest of the pass reads and publishes there rather than at
+        /// the name cold start opened with.
+        #[test]
+        fn the_anchor_consult_reports_the_root_its_pointer_vouches() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+
+            let moved = child_name();
+            seed_scope_pointer(&device, &moved, EPOCH + 1);
+            let (events, _rx) = mpsc::unbounded();
+            let consult = |anchor| {
+                block_on(consult_pointers(
+                    &device.record_store,
+                    &device.floor_store,
+                    &engine.sweep_keys,
+                    &events,
+                    &RefCell::new(BTreeMap::new()),
+                    ConsultWindow {
+                        scopes: vec![ROOT],
+                        anchor,
+                        now: UnixMillis(0),
+                    },
+                ))
+            };
+
+            assert_eq!(
+                consult(ROOT),
+                Some(moved),
+                "the anchor's re-point names the root the pass must poll"
+            );
+            assert_eq!(
+                consult(NodeId([0x9e; 16])),
+                None,
+                "a shared scope's root is its own, and never the vault's"
+            );
+        }
+
+        /// And the pass acts on it: every later leg — the gated resolve, the
+        /// held set the liveness loop renews, the drain — addresses the moved
+        /// root, not the name cold start opened with.
+        #[test]
+        fn a_tick_that_sights_a_repoint_resolves_the_moved_root() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_, head_cid, root_name) = owner_root();
+            let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            assert_eq!(
+                engine.held_records.borrow()[&ROOT.0].routing_key,
+                root_name.as_str(),
+                "cold start opened at the name the vault pointer gave it"
+            );
+
+            // The anchor's pointer names a moved root, and a record answers there.
+            let moved = child_name();
+            seed_scope_pointer(&device, &moved, EPOCH + 1);
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    moved.as_str(),
+                    root_record_at_node(CHILD_ID, &head_cid, 1),
+                );
+            }
+            let _ = drain(&mut events);
+            tick(&world, &device, &mut tasks);
+
+            // The record answering there is bound to the name it moved off, so
+            // the gate refuses it — and names what this pass resolved.
+            let abuse: Vec<String> = drain(&mut events)
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::AttributableAbuse { description } => Some(description),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(abuse.len(), 1, "one verdict on the one root resolved");
+            assert!(
+                abuse[0].contains(moved.as_str()),
+                "the pass resolved the root its anchor pointer named: {}",
+                abuse[0]
+            );
+            assert_ne!(
+                engine.held_records.borrow()[&ROOT.0].routing_key,
+                moved.as_str(),
+                "and a gate refusal holds nothing (fail-closed)"
             );
         }
 

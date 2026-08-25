@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::facade::{Event, NodeId};
 use crate::gate::GateRejection;
-use crate::gate::floor::{self, ColdSeedError, FloorRegression};
+use crate::gate::floor::{self, ColdSeedError, FloorRegression, PointerPlane};
 use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
@@ -209,12 +209,17 @@ where
 
     // Step 2 — floor cold-seed, fail-closed on regression: a re-point that would
     // move either floor backward is a rolled-back pointer, a trust violation.
-    floor::cold_seed_checked(floors, &adoption.repoint, &params.root_scope_id)
-        .await
-        .map_err(|e| match e {
-            ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),
-            ColdSeedError::Regression(reg) => ColdStartError::FloorRegression(reg),
-        })?;
+    floor::cold_seed_checked(
+        floors,
+        &adoption.repoint,
+        &params.root_scope_id,
+        PointerPlane::VaultPointer,
+    )
+    .await
+    .map_err(|e| match e {
+        ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),
+        ColdSeedError::Regression(reg) => ColdStartError::FloorRegression(reg),
+    })?;
 
     // Step 3 + 5 — current root name adoption through the gated, cache-first
     // resolve: last-known-good rehydrates the first paint (step 5) while the
@@ -561,6 +566,46 @@ mod tests {
             );
             assert_eq!(out.root_resolve, Some(RootResolve::NoUpdate));
             assert_eq!(events, vec![Event::SnapshotUpdated]);
+        });
+    }
+
+    /// A root-scope write rotation raises the durable write-epoch floor through
+    /// the scope-pointer plane, which the write-once vault pointer does not
+    /// track. The boot after it must still adopt: refusing a vault's own genesis
+    /// anchor is a fail-closed verdict on entirely honest state.
+    #[test]
+    fn a_boot_after_a_root_write_rotation_adopts_rather_than_failing_closed() {
+        block_on(async {
+            let pointers = ScriptedPointers::default();
+            let root_name = IpnsName::from_public_key(&root_signer().verifying_key());
+            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 1, 1));
+
+            let floors = InMemoryFloorStore::default();
+            // What a root write rotation leaves behind: its scope pointer's
+            // write epoch, sighted by the focus tick's polled consult.
+            floor::advance_write_epoch_on_sight(&floors, &ROOT_SCOPE, 4)
+                .await
+                .unwrap();
+
+            let (out, events) = run(
+                &pointers,
+                &ScriptedAdopter::adopting(),
+                &floors,
+                &transport_with_root_record(&root_name),
+                &InMemorySnapshotCache::default(),
+                &pending_create(),
+            )
+            .await;
+            let out = out.expect("the genesis vault pointer rolled back no plane it writes");
+            assert_eq!(out.root_resolve, Some(RootResolve::Adopted));
+            assert_eq!(events, vec![Event::SnapshotUpdated]);
+            assert_eq!(
+                floor::write_epoch_floor(&floors, &ROOT_SCOPE)
+                    .await
+                    .unwrap(),
+                Some(4),
+                "and the monotonic-max seed leaves the higher floor standing"
+            );
         });
     }
 

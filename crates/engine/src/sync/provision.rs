@@ -48,7 +48,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
-use crate::gate::floor::{self, ColdSeedError, FloorRegression};
+use crate::gate::floor::{self, ColdSeedError, FloorRegression, PointerPlane};
 use crate::net::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -386,10 +386,11 @@ where
     let root_name = derive_write_name(&write_scope_seed, &scope_id);
 
     // 5) The re-point object the vault pointer will carry, and the floors it
-    //    vouches — seeded BEFORE anything is published, so a durable floor
-    //    already above the genesis epoch stops the run rather than signing a
-    //    pointer at a root its own floor law rejects. Later sessions reach this
-    //    same state through `cold_start`'s cold-seed.
+    //    vouches — seeded BEFORE anything is published, so a durable read-epoch
+    //    floor already above the genesis epoch stops the run rather than signing
+    //    a pointer at a root its own floor law rejects. Read under the same
+    //    plane `cold_start` reads it under, so mint and boot cannot disagree
+    //    about what this pointer is allowed to vouch.
     let repoint = RepointObject {
         scope_id,
         current_root: root_name.clone(),
@@ -397,7 +398,7 @@ where
         min_read_epoch: GENESIS_EPOCH,
         prev_root: None,
     };
-    floor::cold_seed_checked(floors, &repoint, &scope_id)
+    floor::cold_seed_checked(floors, &repoint, &scope_id, PointerPlane::VaultPointer)
         .await
         .map_err(|e| match e {
             ColdSeedError::Seam(seam) => ProvisionError::Seam(seam),
@@ -1504,26 +1505,48 @@ mod tests {
         );
     }
 
-    /// An account whose durable floors already sit above the genesis epoch has
-    /// published past what a first run can mint. Provisioning it would sign a
-    /// pointer at a root the floor law rejects, so it refuses before publishing
-    /// anything.
+    /// An account whose durable **read**-epoch floor already sits above the
+    /// genesis epoch has published past what a first run can mint. Provisioning
+    /// it would sign a pointer rolling the revocation boundary back, so it
+    /// refuses before publishing anything.
     #[test]
-    fn floors_above_the_genesis_epoch_refuse_before_any_publish() {
+    fn a_read_epoch_floor_above_genesis_refuses_before_any_publish() {
         let session = session();
         let floors = InMemoryFloorStore::default();
-        block_on(floor::advance_write_epoch_on_sight(&floors, &SCOPE, 9)).expect("floor raise");
+        block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("floor raise");
         let net = Network::default();
         let err =
             run(&session, &FakePublisher::new(&net), &floors, 9).expect_err("not a first run");
         assert_eq!(
             err,
-            ProvisionError::FloorRegression(FloorRegression::WriteEpoch {
+            ProvisionError::FloorRegression(FloorRegression::ReadEpoch {
                 floor: 9,
                 vouched: GENESIS_EPOCH,
             }),
         );
         assert!(net.effects.borrow().is_empty(), "nothing published");
+    }
+
+    /// The write-epoch floor is not that evidence. The vault pointer this mint
+    /// signs does not author that clock ([`PointerPlane`]), and the boot that
+    /// reads the pointer back no longer measures it against that floor — so
+    /// barring the mint here would refuse state this build's own cold start
+    /// adopts (AGENTS.md rule 8's symmetry, on the plane that has the rule).
+    #[test]
+    fn a_raised_write_epoch_floor_does_not_bar_a_first_run_mint() {
+        let session = session();
+        let floors = InMemoryFloorStore::default();
+        block_on(floor::advance_write_epoch_on_sight(&floors, &SCOPE, 9)).expect("floor raise");
+        let net = Network::default();
+
+        let vault = mint(&session, &FakePublisher::new(&net), &floors, 9);
+
+        assert_eq!(vault.repoint.write_epoch, GENESIS_EPOCH);
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&floors, &SCOPE)).unwrap(),
+            Some(9),
+            "the monotonic-max seed leaves the higher floor standing",
+        );
     }
 
     /// A read rotation republishes the scope root at this same derived name at a

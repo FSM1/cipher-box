@@ -90,6 +90,23 @@ impl core::fmt::Display for FloorRegression {
 
 impl std::error::Error for FloorRegression {}
 
+/// Which pointer plane vouched the re-point under test (blueprint/engine.md
+/// "Pointer planes").
+///
+/// The two planes carry the same `writeEpoch` field under different authority:
+/// only one of them is a clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerPlane {
+    /// The indexed vault pointer — the cold-start anchor. Each index is
+    /// published exactly once, at first-run mint, and nothing re-points it, so
+    /// its `writeEpoch` is a genesis seed rather than a clock. Give this plane a
+    /// re-point arm and [`repoint_regression`]'s write stage must run on it too.
+    VaultPointer,
+    /// The scope pointer — re-pointed by every write rotation, and the
+    /// write-epoch floor's only owner-vouched clock (#38 D4).
+    ScopePointer,
+}
+
 /// A cold-seed failure: a host floor-store I/O error (availability), or a
 /// fail-closed [`FloorRegression`] (a trust violation).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,12 +327,18 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// durable floor is an unambiguous rollback. At a shared scope a grantee's
 /// legitimate lazy rotation unseal-advances that same floor *past* the
 /// owner-authored `minReadEpoch`, so the identical comparison would
-/// false-positive into a self-inflicted bricked boot. The write-epoch stage
-/// stays unconditional.
+/// false-positive into a self-inflicted bricked boot.
+///
+/// The write-epoch stage is narrowed on the other axis: the scope pointer is the
+/// only plane that advances a write epoch, so a re-point read off the write-once
+/// [`PointerPlane::VaultPointer`] carries a genesis seed that the scope-pointer
+/// plane has legitimately outrun. Measuring the two against one floor refuses a
+/// vault's own honest state on the boot after its first root write rotation.
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
     session_root_scope_id: &[u8; 16],
+    plane: PointerPlane,
 ) -> SeamResult<Option<FloorRegression>> {
     if repoint.scope_id == *session_root_scope_id
         && let Some(floor) = read_epoch_floor(floors, &repoint.scope_id).await?
@@ -326,7 +349,12 @@ pub async fn repoint_regression<F: FloorStore>(
             vouched: repoint.min_read_epoch,
         }));
     }
-    write_epoch_regression(floors, &repoint.scope_id, repoint.write_epoch).await
+    match plane {
+        PointerPlane::ScopePointer => {
+            write_epoch_regression(floors, &repoint.scope_id, repoint.write_epoch).await
+        }
+        PointerPlane::VaultPointer => Ok(None),
+    }
 }
 
 /// The durable write-epoch floor an owner-vouched `write_epoch` would roll back,
@@ -361,8 +389,9 @@ pub async fn cold_seed_checked<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
     session_root_scope_id: &[u8; 16],
+    plane: PointerPlane,
 ) -> Result<(), ColdSeedError> {
-    if let Some(regression) = repoint_regression(floors, repoint, session_root_scope_id)
+    if let Some(regression) = repoint_regression(floors, repoint, session_root_scope_id, plane)
         .await
         .map_err(ColdSeedError::Seam)?
     {
@@ -604,15 +633,25 @@ mod tests {
         let floors = InMemoryFloorStore::default();
         block_on(async {
             // A fresh (unseeded) scope adopts the owner-vouched anchor.
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), &SCOPE)
-                .await
-                .unwrap();
+            cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 3),
+                &SCOPE,
+                PointerPlane::VaultPointer,
+            )
+            .await
+            .unwrap();
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
             assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
             // Re-seeding at or above the floor advances monotonically.
-            cold_seed_checked(&floors, &repoint(SCOPE, 7, 3), &SCOPE)
-                .await
-                .unwrap();
+            cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 7, 3),
+                &SCOPE,
+                PointerPlane::VaultPointer,
+            )
+            .await
+            .unwrap();
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(7));
         });
     }
@@ -621,13 +660,23 @@ mod tests {
     fn cold_seed_checked_rejects_a_read_epoch_regression_fail_closed() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), &SCOPE)
-                .await
-                .unwrap();
+            cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 3),
+                &SCOPE,
+                PointerPlane::VaultPointer,
+            )
+            .await
+            .unwrap();
             // A rolled-back re-point vouching a lower minReadEpoch is fail-closed.
-            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 3), &SCOPE)
-                .await
-                .expect_err("read-epoch regression is a trust violation");
+            let err = cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 4, 3),
+                &SCOPE,
+                PointerPlane::VaultPointer,
+            )
+            .await
+            .expect_err("read-epoch regression is a trust violation");
             assert_eq!(
                 err,
                 ColdSeedError::Regression(FloorRegression::ReadEpoch {
@@ -644,12 +693,22 @@ mod tests {
     fn cold_seed_checked_rejects_a_write_epoch_regression_fail_closed() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 6), &SCOPE)
-                .await
-                .unwrap();
-            let err = cold_seed_checked(&floors, &repoint(SCOPE, 5, 4), &SCOPE)
-                .await
-                .expect_err("write-epoch regression is a trust violation");
+            cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 6),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .unwrap();
+            let err = cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 4),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect_err("write-epoch regression is a trust violation");
             assert_eq!(
                 err,
                 ColdSeedError::Regression(FloorRegression::WriteEpoch {
@@ -680,9 +739,14 @@ mod tests {
 
             // A shared-scope cold-seed vouching minReadEpoch 4 (< floor 9) is the
             // normal steady state — it must NOT fire the read-epoch check.
-            cold_seed_checked(&floors, &repoint(SHARED_SCOPE, 4, 2), &SCOPE)
-                .await
-                .expect("shared-scope cold-seed never runs the read-epoch check");
+            cold_seed_checked(
+                &floors,
+                &repoint(SHARED_SCOPE, 4, 2),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect("shared-scope cold-seed never runs the read-epoch check");
             // The monotonic-max floor is unmoved by the lower vouched read epoch;
             // the write-epoch floor still seeds.
             assert_eq!(
@@ -695,9 +759,14 @@ mod tests {
             );
 
             // The identical input at the vault anchor IS a fail-closed rollback.
-            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 2), &SCOPE)
-                .await
-                .expect_err("the read-epoch check is sound and active at the root anchor");
+            let err = cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 4, 2),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect_err("the read-epoch check is sound and active at the root anchor");
             assert_eq!(
                 err,
                 ColdSeedError::Regression(FloorRegression::ReadEpoch {
@@ -717,9 +786,14 @@ mod tests {
     fn cold_seed_checked_shared_scope_seeds_a_fresh_read_epoch_floor() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SHARED_SCOPE, 5, 3), &SCOPE)
-                .await
-                .expect("a fresh shared scope seeds without running the read-epoch check");
+            cold_seed_checked(
+                &floors,
+                &repoint(SHARED_SCOPE, 5, 3),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect("a fresh shared scope seeds without running the read-epoch check");
             assert_eq!(
                 read_epoch_floor(&floors, &SHARED_SCOPE).await.unwrap(),
                 Some(5)
@@ -731,18 +805,74 @@ mod tests {
         });
     }
 
-    /// The write-epoch check stays unconditionally active — a shared-scope
-    /// cold-seed still fails closed on a write-epoch rollback.
+    /// The vault pointer is written once per index and never re-pointed, so its
+    /// genesis `writeEpoch` is a seed rather than a rollback of the plane that
+    /// raised the floor. Measuring the two planes against one bar fails the boot
+    /// after a vault's first root write rotation, on entirely honest state.
+    #[test]
+    fn cold_seed_checked_never_bars_the_vault_pointer_on_a_raised_write_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            // A root write rotation's scope-pointer consult raised the floor.
+            advance_write_epoch_on_sight(&floors, &SCOPE, 6)
+                .await
+                .unwrap();
+
+            cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 1),
+                &SCOPE,
+                PointerPlane::VaultPointer,
+            )
+            .await
+            .expect("the genesis vault pointer never rolled back the plane it does not write");
+            assert_eq!(
+                write_epoch_floor(&floors, &SCOPE).await.unwrap(),
+                Some(6),
+                "the monotonic-max raise leaves the higher floor standing"
+            );
+
+            // The identical numbers on the advancing plane stay fail-closed.
+            let err = cold_seed_checked(
+                &floors,
+                &repoint(SCOPE, 5, 1),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect_err("a scope pointer below the floor it authors is a rollback");
+            assert_eq!(
+                err,
+                ColdSeedError::Regression(FloorRegression::WriteEpoch {
+                    floor: 6,
+                    vouched: 1
+                })
+            );
+        });
+    }
+
+    /// The write-epoch check stays active at every scope on the advancing plane
+    /// — a shared-scope cold-seed still fails closed on a write-epoch rollback.
     #[test]
     fn cold_seed_checked_shared_scope_still_rejects_a_write_epoch_regression() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SHARED_SCOPE, 5, 6), &SCOPE)
-                .await
-                .unwrap();
-            let err = cold_seed_checked(&floors, &repoint(SHARED_SCOPE, 5, 4), &SCOPE)
-                .await
-                .expect_err("write-epoch regression is fail-closed for every role");
+            cold_seed_checked(
+                &floors,
+                &repoint(SHARED_SCOPE, 5, 6),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .unwrap();
+            let err = cold_seed_checked(
+                &floors,
+                &repoint(SHARED_SCOPE, 5, 4),
+                &SCOPE,
+                PointerPlane::ScopePointer,
+            )
+            .await
+            .expect_err("write-epoch regression is fail-closed for every role");
             assert_eq!(
                 err,
                 ColdSeedError::Regression(FloorRegression::WriteEpoch {

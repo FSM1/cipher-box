@@ -69,5 +69,5 @@ pub use retire::{
 pub use revival::{ReviveError, ReviveRequest, revive};
 pub use rotation::{
     GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
-    WriteWaveNet,
+    PointerConsultArm, WriteWaveNet,
 };

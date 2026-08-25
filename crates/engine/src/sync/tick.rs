@@ -103,19 +103,25 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
 }
 
 /// The scope pointers a tick consults, in deterministic order: the vault
-/// anchor's first, then each open shared scope's, deduplicated.
+/// anchor's first ([`FocusTarget::VaultPointer`]), then each open shared
+/// scope's, deduplicated.
 ///
 /// The anchor rides every tick because a **write-only** rotation leaves the read
 /// epoch untouched, so it mints no superseded scope root for the sweep's
 /// event-driven consult to notice — this polled leg is the only path that
 /// advances the anchor scope's write-epoch floor in-session, and with it evicts
-/// the `writeScopeSeed` that rotation retired (#38 D4).
+/// the `writeScopeSeed` that rotation retired (#38 D4). It is also the only
+/// owner-vouched plane naming the vault's current root, so the pass that sights
+/// a re-point resolves the moved root rather than the retired name.
 pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
-    let mut scopes = vec![snapshot.root];
+    let mut scopes = Vec::new();
     for target in focus_set(snapshot, focus) {
-        if let FocusTarget::ScopePointer(scope) = target
-            && !scopes.contains(&scope)
-        {
+        let scope = match target {
+            FocusTarget::VaultPointer => snapshot.root,
+            FocusTarget::ScopePointer(scope) => scope,
+            FocusTarget::MailboxPoll | FocusTarget::Folder(_) => continue,
+        };
+        if !scopes.contains(&scope) {
             scopes.push(scope);
         }
     }

@@ -49,6 +49,7 @@ use crate::content::Gateway;
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
+use crate::gate::floor::PointerPlane;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger,
@@ -97,6 +98,24 @@ pub trait OwnerScopeKeys {
     /// `pointer-read-key` for this scope — the stable key each grant blob
     /// carries.
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]>;
+
+    /// This scope's pointer **name** — the read edge of `scope-pointer`, so a
+    /// consult can address the plane without holding the seed that also derives
+    /// its Ed25519 signing key.
+    fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName;
+}
+
+/// Whether a rotation pass may run the sweep's scope-pointer consult
+/// (`crate::sync::pointer` "Consult discipline: polled, not fallback").
+///
+/// A pass that runs no sweep refuses one rather than skipping it, so an arm
+/// with no pointer plane to read cannot silently acquire one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerConsultArm {
+    /// The sweep's consult may run.
+    Permitted,
+    /// No sweep runs on this pass; a consult is refused.
+    Refused,
 }
 
 /// The owner-arm rotation seams over the live net plane.
@@ -123,12 +142,9 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub keys: OwnerRotationKeys<'a>,
     /// The ancestor seeds every interior scope root's gated read needs.
     pub ancestry: RotationAncestry,
-    /// Derives the scope pointer's name for the sweep's consult (owner-only
-    /// material, never published). `None` on a pass that runs no sweep, so an
-    /// arm that needs neither the pointer nor its signing key is never handed
-    /// the seed that derives both (store the narrowest derived capability); a
-    /// consult without it refuses rather than skipping.
-    pub owner_pointer_seed: Option<&'a [u8; SECRET_LEN]>,
+    /// Whether this pass may run the sweep's scope-pointer consult
+    /// ([`PointerConsultArm`]). A pass that runs no sweep refuses one.
+    pub pointer_consult: PointerConsultArm,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
     /// The record a re-key is about to replace, handed from the resolve that
@@ -1670,11 +1686,10 @@ where
         &self,
         scope_id: &[u8; 16],
     ) -> Result<Option<Vec<u8>>, SweepResolveFailure> {
-        let seed = self
-            .owner_pointer_seed
-            .ok_or(SweepResolveFailure::Unavailable)?;
+        if self.pointer_consult == PointerConsultArm::Refused {
+            return Err(SweepResolveFailure::Unavailable);
+        }
         PointerConsult {
-            owner_pointer_seed: seed,
             scope_keys: self.keys.scope_keys,
             owner_identity: self.keys.identity,
             payload_version: self.payload_version,
@@ -2971,9 +2986,14 @@ where
     ) -> Result<(), WritePublishError> {
         // The produce side of the gate's own rule, run against the same
         // predicate the cold seed consumes it with, so the two cannot drift.
-        match floor::repoint_regression(self.floors, repoint, &self.session_root_scope_id)
-            .await
-            .map_err(|_| WritePublishError::NotLanded)?
+        match floor::repoint_regression(
+            self.floors,
+            repoint,
+            &self.session_root_scope_id,
+            PointerPlane::ScopePointer,
+        )
+        .await
+        .map_err(|_| WritePublishError::NotLanded)?
         {
             Some(_) => Err(WritePublishError::Rejected),
             None => Ok(()),
@@ -3071,6 +3091,10 @@ mod tests {
 
         fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
             Zeroizing::new(*kdf::pointer_read_key(&OWNER_POINTER_SEED, scope_id).as_bytes())
+        }
+
+        fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+            scope_pointer_name(&OWNER_POINTER_SEED, scope_id)
         }
     }
     const FRESH_SEED: [u8; 32] = [0xf0; 32];
@@ -3324,7 +3348,7 @@ mod tests {
                     scope_keys: &OwnerSeeds,
                 },
                 ancestry,
-                owner_pointer_seed: Some(&OWNER_POINTER_SEED),
+                pointer_consult: PointerConsultArm::Permitted,
                 payload_version: PAYLOAD_VERSION,
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
@@ -3415,6 +3439,21 @@ mod tests {
         );
         let child_ref = child_ref(CHILD_SCOPE, &child);
         (child, child_ref, grandchild)
+    }
+
+    /// A pass that runs no sweep has no pointer plane to read, and refuses the
+    /// consult rather than skipping it — the gate that outlived narrowing the
+    /// consult from the `ownerPointerSeed` to the pointer name alone.
+    #[test]
+    fn a_refused_arm_never_consults_a_pointer() {
+        let harness = Harness::plain();
+        let mut net = harness.net(&[]);
+        net.pointer_consult = PointerConsultArm::Refused;
+
+        assert!(matches!(
+            block_on(net.consult_pointer(&SCOPE)),
+            Err(SweepResolveFailure::Unavailable)
+        ));
     }
 
     #[test]
@@ -5333,6 +5372,10 @@ mod tests {
 
         fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
             Zeroizing::new(*kdf::pointer_read_key(&OWNER_POINTER_SEED, scope_id).as_bytes())
+        }
+
+        fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+            scope_pointer_name(&OWNER_POINTER_SEED, scope_id)
         }
     }
 

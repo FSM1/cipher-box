@@ -1,6 +1,7 @@
 //! The owner's production [`OwnerScopeKeys`] arm over the session identity
 //! (blueprint/engine.md "Rotation primitives").
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
@@ -8,6 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::net::rotation::OwnerScopeKeys;
 use crate::session::SessionIdentity;
+use crate::sync::pointer::scope_pointer_name;
 
 /// The two per-scope owner derivations a re-seal needs, resolved off the live
 /// session.
@@ -33,14 +35,17 @@ impl OwnerScopeKeys for OwnerSessionKeys<'_> {
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*self.session.pointer_read_key(scope_id).as_bytes())
     }
+
+    fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+        scope_pointer_name(self.session.owner_pointer_seed().as_bytes(), scope_id)
+    }
 }
 
-/// The same two derivations over **owned** seeds, for the spawned sweep task,
+/// The same derivations over **owned** seeds, for the spawned sweep task,
 /// which is polled after every borrow of the session has ended.
 ///
 /// Two seeds and no wider capability: the login secret and the identity signer
-/// stay behind. It also carries the `ownerPointerSeed` itself, which the sweep's
-/// pointer consult needs to derive a superseded root's scope-pointer name.
+/// stay behind.
 pub(crate) struct OwnerSeedKeys {
     pseudonym_seed: SecretBytes,
     pointer_seed: SecretBytes,
@@ -53,11 +58,6 @@ impl OwnerSeedKeys {
             pointer_seed: session.owner_pointer_seed(),
         }
     }
-
-    /// The scope-pointer derivation input the sweep's consult needs.
-    pub(crate) fn pointer_seed(&self) -> &[u8; SECRET_LEN] {
-        self.pointer_seed.as_bytes()
-    }
 }
 
 impl OwnerScopeKeys for OwnerSeedKeys {
@@ -67,6 +67,10 @@ impl OwnerScopeKeys for OwnerSeedKeys {
 
     fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
         Zeroizing::new(*kdf::pointer_read_key(self.pointer_seed.as_bytes(), scope_id).as_bytes())
+    }
+
+    fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+        scope_pointer_name(self.pointer_seed.as_bytes(), scope_id)
     }
 }
 
@@ -173,15 +177,29 @@ mod tests {
         }
     }
 
-    /// The seed the sweep's pointer consult derives its name from is the
-    /// session's own, not a per-scope key derived from it.
+    /// The name the sweep's pointer consult addresses is the one the session's
+    /// own pointer seed derives, not one from a per-scope key derived from it.
     #[test]
-    fn the_owned_arm_carries_the_sessions_pointer_seed() {
+    fn the_owned_arm_names_the_sessions_scope_pointer() {
         let session = session();
         let owned = OwnerSeedKeys::of(&session);
-        assert!(ct_eq(
-            owned.pointer_seed(),
-            kdf::owner_pointer_seed(&SECRET).as_bytes(),
-        ));
+        assert_eq!(
+            owned.pointer_name(&SCOPE),
+            scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE),
+        );
+    }
+
+    /// A consult holds no value a scope-pointer record could be signed with:
+    /// the name is the only pointer edge either arm exposes.
+    #[test]
+    fn both_arms_name_one_scope_pointer_per_scope() {
+        let session = session();
+        let borrowed = OwnerSessionKeys::new(&session);
+        let owned = OwnerSeedKeys::of(&session);
+
+        for scope in [[0x00u8; 16], SCOPE, [0xff; 16]] {
+            assert_eq!(borrowed.pointer_name(&scope), owned.pointer_name(&scope));
+        }
+        assert_ne!(owned.pointer_name(&SCOPE), owned.pointer_name(&[0x33; 16]));
     }
 }
