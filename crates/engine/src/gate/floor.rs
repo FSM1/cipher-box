@@ -323,15 +323,30 @@ pub async fn repoint_regression<F: FloorStore>(
             vouched: repoint.min_read_epoch,
         }));
     }
-    if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id).await?
-        && repoint.write_epoch < floor
-    {
-        return Ok(Some(FloorRegression::WriteEpoch {
+    write_epoch_regression(floors, &repoint.scope_id, repoint.write_epoch).await
+}
+
+/// The durable write-epoch floor an owner-vouched `write_epoch` would roll
+/// back, if any — the write half of [`repoint_regression`], reachable on its
+/// own so a caller that must not run the read stage cannot reach that stage by
+/// accident.
+///
+/// Unconditional wherever it runs: only an owner-authored write rotation moves
+/// this floor from the record plane, so no honest read-side advance can push it
+/// past a value the owner vouched. Which *pointer plane* a caller reads is a
+/// separate question — see [`crate::net::rotation::OwnerRotationNet`]'s consult.
+pub async fn write_epoch_regression<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    write_epoch: u64,
+) -> SeamResult<Option<FloorRegression>> {
+    Ok(write_epoch_floor(floors, scope_id)
+        .await?
+        .filter(|floor| write_epoch < *floor)
+        .map(|floor| FloorRegression::WriteEpoch {
             floor,
-            vouched: repoint.write_epoch,
-        }));
-    }
-    Ok(None)
+            vouched: write_epoch,
+        }))
 }
 
 /// Cold-seed a scope's floors **fail-closed on regression** (the floor law) —

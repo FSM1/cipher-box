@@ -141,6 +141,7 @@ where
                 .under_parent_node_seed(self.scope_id, self.parent_node_seed),
             owner_pointer_seed: Some(self.owner_pointer_seed),
             payload_version: self.payload_version,
+            session_root_scope_id: self.session_root_scope_id,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
         }

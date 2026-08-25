@@ -60,7 +60,8 @@ use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    PointerConsult, PointerConsultError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch,
+    ResolveOutcome, RootAdopter,
     VaultProvisionNet, assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
     refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
@@ -103,9 +104,10 @@ use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
+use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, focus_folders, focus_folders_due, focus_window_expired,
-    on_access_refresh_due, resolve_mode, run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, consult_scopes, focus_folders, focus_folders_due,
+    focus_window_expired, on_access_refresh_due, pointer_consult_due, resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1757,6 +1759,68 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
 /// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
 /// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
 /// classification; neither carries key material.
+/// One tick's pointer-consult window: the scopes to consult, the session anchor
+/// that scopes the write-epoch regression stage, and the clock its interval
+/// damper reads.
+struct ConsultWindow<'a> {
+    scopes: Vec<NodeId>,
+    session_root_scope_id: [u8; 16],
+    now: UnixMillis,
+    profile: &'a SyncTimingProfile,
+}
+
+/// The focus tick's polled scope-pointer consults (`crate::sync::pointer`:
+/// "Consult discipline: polled, not fallback").
+///
+/// Each consult advances the scope's write-epoch floor on sight, which is what
+/// evicts the `writeScopeSeed` a write-only rotation retired — that rotation
+/// leaves the read epoch untouched, so the sweep's event-driven consult never
+/// fires for it. A refusal is a trust verdict and is surfaced; an unavailable
+/// pointer leaves the stamp unset, so the next tick retries rather than waiting
+/// out the interval.
+async fn consult_pointers<T: RecordTransport, F: FloorStore>(
+    transport: &T,
+    floors: &F,
+    keys: &RefCell<Option<Rc<SweepKeys>>>,
+    events: &mpsc::UnboundedSender<Event>,
+    consulted: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    window: ConsultWindow<'_>,
+) {
+    // The pass owns a copy for exactly its own duration, on the same terms as
+    // the tick's enc subkey: teardown empties the cell.
+    let Some(keys) = keys.borrow().clone() else {
+        return;
+    };
+    for scope in window.scopes {
+        let last_consulted = consulted.borrow().get(&scope).copied();
+        let due = pointer_consult_due(window.now, last_consulted, window.profile);
+        if should_consult(false, due, false) != Some(ConsultReason::FocusTick) {
+            continue;
+        }
+        let consult = PointerConsult {
+            owner_pointer_seed: keys.scope_keys.pointer_seed(),
+            scope_keys: &keys.scope_keys,
+            owner_identity: &keys.owner_identity,
+            payload_version: POINTER_PAYLOAD_VERSION,
+            session_root_scope_id: window.session_root_scope_id,
+        };
+        match consult.run(transport, floors, &scope.0).await {
+            Ok(_) => {
+                consulted.borrow_mut().insert(scope, window.now);
+            }
+            Err(PointerConsultError::Rejected) => {
+                let _ = events.unbounded_send(Event::AttributableAbuse {
+                    description: format!(
+                        "scope pointer for {}: unauthenticated, or vouched below the write-epoch floor",
+                        hex_lower(&scope.0)
+                    ),
+                });
+            }
+            Err(PointerConsultError::Unavailable) => {}
+        }
+    }
+}
+
 pub(crate) fn emit_trust_violation(
     events: &mpsc::UnboundedSender<Event>,
     routing_key: &str,
@@ -2249,6 +2313,11 @@ pub struct Engine<T: SeamTypes> {
     /// staleness threshold renders state already held instead of re-probing the
     /// record plane (blueprint/engine.md: refresh on access past the threshold).
     focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
+    /// When each scope's pointer was last consulted, so the polled consult runs
+    /// at [`SyncTimingProfile::pointer_consult_interval`] rather than at the
+    /// poll cadence. In-memory: a floor only ever moves up, so a restart's first
+    /// tick re-consults and re-derives it.
+    pointer_consulted: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -2309,7 +2378,9 @@ pub struct Engine<T: SeamTypes> {
     sweep_tasks: RefCell<Option<SweepTaskFactory>>,
     /// What a spawned sweep opens and signs with, shared with every task it
     /// produces and emptied on drop — the tasks read through this cell, so
-    /// teardown revokes the material instead of waiting out the last pass.
+    /// teardown revokes the material instead of waiting out the last pass. The
+    /// tick's polled pointer consult reads the same cell rather than holding a
+    /// second copy of the two owner seeds.
     sweep_keys: Rc<RefCell<Option<Rc<SweepKeys>>>>,
     /// Where this session's bytes go, decided at [`start`](Self::start) from the
     /// vault settings load and re-decided by a settings save, and shared with
@@ -2369,6 +2440,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
+                pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2514,7 +2586,8 @@ impl<T: SeamTypes> Engine<T> {
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
-        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
+        *self.sweep_tasks.borrow_mut() =
+            self.build_sweep_task_factory(api.clone(), root_scope_id);
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         if let Some(root_name) = root_name {
             self.open_tick_loop(root_name);
@@ -2650,6 +2723,9 @@ impl<T: SeamTypes> Engine<T> {
             if let Ok(mut seeds) = seeds.try_borrow_mut() {
                 seeds.clear();
             }
+        }
+        if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
+            consulted.clear();
         }
     }
 
@@ -2863,6 +2939,7 @@ where {
     fn build_sweep_task_factory(
         &self,
         api: Rc<ApiClient<T::Http, T::CredentialStore>>,
+        root_scope_id: [u8; 16],
     ) -> Option<SweepTaskFactory>
     where
         T::Http: Clone + 'static,
@@ -2923,6 +3000,7 @@ where {
                             .under_parent_node_seed(scope.scope_id, parent_node_seed.as_deref()),
                         owner_pointer_seed: Some(keys.scope_keys.pointer_seed()),
                         payload_version: POINTER_PAYLOAD_VERSION,
+                        session_root_scope_id: root_scope_id,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
                     };
@@ -3038,6 +3116,8 @@ where {
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
+        let pointer_consulted = self.pointer_consulted.clone();
+        let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
@@ -3068,6 +3148,24 @@ where {
                     let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
                         return TickControl::Stop;
                     };
+                    // The polled pointer consult (#38 D4), ahead of the floor
+                    // refresh below so a write epoch this pass sights evicts the
+                    // seed it retired in the same pass.
+                    let consult_targets = consult_scopes(&base.borrow(), &focus.borrow());
+                    consult_pointers(
+                        &transport,
+                        &floors,
+                        &consult_keys,
+                        &events,
+                        &pointer_consulted,
+                        ConsultWindow {
+                            scopes: consult_targets,
+                            session_root_scope_id: root_id,
+                            now: scheduler.now(),
+                            profile: &profile,
+                        },
+                    )
+                    .await;
                     // Before the steady-state hold consults them: a floor raised
                     // since the last pass revokes the seeds this pass would
                     // otherwise read and seal under. The floors it reports stamp
@@ -3575,6 +3673,7 @@ where {
             ancestry,
             owner_pointer_seed,
             payload_version: POINTER_PAYLOAD_VERSION,
+            session_root_scope_id: self.snapshot.borrow().root.0,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
         }

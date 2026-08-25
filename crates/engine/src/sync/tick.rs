@@ -101,6 +101,41 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .collect()
 }
 
+/// The scope pointers a tick consults, in deterministic order: the vault
+/// anchor's first, then each open shared scope's, deduplicated.
+///
+/// The anchor rides every tick because a **write-only** rotation leaves the read
+/// epoch untouched, so it mints no superseded scope root for the sweep's
+/// event-driven consult to notice — this polled leg is the only path that
+/// advances the anchor scope's write-epoch floor in-session, and with it evicts
+/// the `writeScopeSeed` that rotation retired (#38 D4).
+pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
+    let mut scopes = vec![snapshot.root];
+    for target in focus_set(snapshot, focus) {
+        if let FocusTarget::ScopePointer(scope) = target
+            && !scopes.contains(&scope)
+        {
+            scopes.push(scope);
+        }
+    }
+    scopes
+}
+
+/// Whether [`SyncTimingProfile::pointer_consult_interval`] has elapsed since
+/// this scope's last consult — the polled discipline's damper, so a poll cadence
+/// shorter than the interval does not re-resolve every pointer every tick. A
+/// scope no pass has consulted is due at once.
+pub fn pointer_consult_due(
+    now: UnixMillis,
+    last_consulted: Option<UnixMillis>,
+    profile: &SyncTimingProfile,
+) -> bool {
+    last_consulted.is_none_or(|last| {
+        now.0.saturating_sub(last.0)
+            >= crate::sync::duration_millis(profile.pointer_consult_interval)
+    })
+}
+
 /// The focus window's folders due for an on-access refresh: those no pass has
 /// touched inside the staleness threshold ([`on_access_refresh_due`]). The poll
 /// leg refreshes the whole window regardless; this is the navigation leg's
