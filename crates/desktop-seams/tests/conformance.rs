@@ -4,12 +4,11 @@
 //! durability tests the kits do not cover (StagingStore crash-ordering and
 //! id-watermark durability).
 //!
-//! CredentialStore CI story: the OS keyring is unavailable on headless CI,
-//! so the automated gate runs the kit against the feature-gated
-//! [`FileCredentialStore`] test double; the real
+//! CredentialStore runs the kit twice: against the feature-gated
+//! [`FileCredentialStore`] double, and — in the `real_keyring_*` tests — against
+//! the production
 //! [`KeyringCredentialStore`](cipherbox_desktop_seams::KeyringCredentialStore)
-//! is exercised by the `#[ignore]`d `real_keyring_*` tests, run by hand on a
-//! machine with a keyring (see the report).
+//! on whichever OS backend the host provides.
 
 use cipherbox_desktop_seams::{
     FileCredentialStore, FileFloorStore, FileSnapshotCache, FileStagingStore, ReqwestHttp,
@@ -581,11 +580,8 @@ fn credential_store_persists_last_account_id() {
 //
 // `#[ignore]`d so a plain `cargo test` skips them: the Linux backend needs a
 // session bus and an unlocked Secret Service provider, which a developer shell
-// need not have. Every `Cargo Check & Test` gate runs them explicitly with
-// `-- --ignored`, so all three platforms are covered on every PR — the file
-// double these tests sit beside proves only that the kit is satisfiable.
-// Locally: `cargo test -p cipherbox-desktop-seams --test conformance --
-// --ignored`.
+// need not have. Run them with
+// `cargo test -p cipherbox-desktop-seams --test conformance -- --ignored`.
 // ---------------------------------------------------------------------------
 
 #[test]

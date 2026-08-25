@@ -3555,7 +3555,7 @@ where {
                             gateway: &gateway,
                             placement: &decision,
                             profile: &profile,
-                            storage_policy: &storage_policy,
+                            preserved_budget_bytes: storage_policy.preserved_budget_bytes(),
                             content_profile: &content_profile,
                             entropy: &entropy,
                             base: &base,

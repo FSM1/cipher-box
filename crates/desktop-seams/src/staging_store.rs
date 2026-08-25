@@ -128,7 +128,11 @@ impl StagingStore for FileStagingStore {
             let Some(id) = parse_op_id(&name) else {
                 continue;
             };
-            if let Some(bytes) = read_file_opt(&self.ops_dir.join(&name))
+            // Re-derived from the parsed id, not joined from the listed name:
+            // `op_path` zero-pads and `parse_op_id` does not, so a name that is
+            // not the canonical one would yield an entry `remove_op` could never
+            // delete — a queue head that never drains.
+            if let Some(bytes) = read_file_opt(&self.op_path(id))
                 .map_err(|err| seam_err("staging_store queued_ops read", &err))?
             {
                 ops.push((OpId(id), bytes));

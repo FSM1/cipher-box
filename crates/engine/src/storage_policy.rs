@@ -120,21 +120,26 @@ impl StoragePolicy {
         headroom: Headroom::Measured,
     };
 
-    /// The slice of the staging budget preserved dead letters may hold.
+    /// The slice of the staging budget preserved dead letters may hold — one
+    /// version may still exceed it, since the newest is never evicted.
     ///
-    /// A preserved version's blocks are staged bytes like any other, so without
-    /// a ceiling of their own each preserved loser permanently shrinks what
-    /// `beginWrite` can admit — a device losing races through an outage ends up
-    /// refusing every new upload with nothing but dead letters to show for the
-    /// budget. This is the share it can lose that way.
+    /// Derived rather than stored: every other budget here is a field, but
+    /// `StoragePolicy` is routinely built by struct-update from `CI`, and a
+    /// field would keep that constant's value while `staging_budget_bytes` was
+    /// overridden.
     #[must_use]
     pub fn preserved_budget_bytes(&self) -> u64 {
         percent_of(self.staging_budget_bytes, PRESERVED_PERCENT)
     }
 }
 
-/// Percent of the staging budget preserved dead letters may hold. Leaves the
-/// larger share for live writes on any device, measured or small.
+/// Percent of the staging budget preserved dead letters may hold.
+///
+/// A preserved version's blocks are staged bytes like any other, so without a
+/// ceiling of their own each preserved loser permanently shrinks what
+/// `beginWrite` can admit — a device losing races through an outage ends up
+/// refusing every new upload with nothing but dead letters to show for the
+/// budget. A quarter leaves the larger share for live writes on any device.
 const PRESERVED_PERCENT: u32 = 25;
 
 /// `bytes * percent / 100` in u128, so a large headroom cannot wrap.

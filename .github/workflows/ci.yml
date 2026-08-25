@@ -529,11 +529,9 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
-      # The production CredentialStore against the real Secret Service, which
-      # ships on Linux desktops but is absent from a bare runner: gnome-keyring
-      # provides it, and an empty password unlocks the throwaway login keyring
-      # the daemon creates. The macOS and Windows legs run the same tests
-      # against their own native backends.
+      # The Secret Service ships on Linux desktops but is absent from a bare
+      # runner: gnome-keyring provides it, and an empty password unlocks the
+      # throwaway login keyring the daemon creates.
       - name: Real OS keyring credential seam
         run: |
           sudo apt-get update
@@ -788,9 +786,6 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
-      # The production CredentialStore against the real Apple Keychain: the
-      # runner's login keychain is already unlocked, and each test takes a
-      # nonced service name so nothing collides or persists.
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
 
@@ -821,8 +816,6 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
-      # The production CredentialStore against the real Windows Credential
-      # Manager, which needs no session unlock on a runner.
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
 
