@@ -153,25 +153,23 @@ describe('buildCommand', () => {
     const FRAGMENT = 'placeholder-invite-fragment';
     const node = new Uint8Array(16).fill(7);
 
-    /** Records what each invite builder was called with. */
+    /** Records every builder call by name, whichever builder the arm reaches for. */
     const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
       const calls: Record<string, unknown[][]> = {};
-      const record =
-        (name: string) =>
-        (...args: unknown[]): object => {
-          (calls[name] ??= []).push(args);
-          return {};
-        };
       const wasm = {
         ...fakeWasmEnums,
         NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
-        Command: {
-          createInviteLink: record('createInviteLink'),
-          revokeInviteLink: record('revokeInviteLink'),
-          pruneInviteLinks: record('pruneInviteLinks'),
-          claimInviteLink: record('claimInviteLink'),
-          convertInviteClaims: record('convertInviteClaims'),
-        },
+        Command: new Proxy(
+          {},
+          {
+            get:
+              (_target, name: string) =>
+              (...args: unknown[]): object => {
+                (calls[name] ??= []).push(args);
+                return {};
+              },
+          }
+        ),
       } as unknown as EngineWasm;
       return { wasm, calls };
     };
@@ -239,17 +237,27 @@ describe('buildCommand', () => {
       ).toThrow('invalid request field expiresAt: string');
     });
 
-    it('rejects a zero or negative link deadline the engine would refuse', () => {
-      const { wasm, calls } = spyWasm();
-      const refusesDeadline =
-        (expiresAt: bigint): (() => unknown) =>
-        () =>
-          buildCommand(wasm, { kind: 'createInviteLink', node, permission: 'read', expiresAt });
+    it.each([0n, -1n, 2n ** 64n])(
+      'rejects the out-of-range link deadline %s the engine would refuse',
+      (expiresAt) => {
+        const { wasm, calls } = spyWasm();
 
-      expect(refusesDeadline(0n)).toThrow('invalid request field expiresAt: bigint');
-      expect(refusesDeadline(-1n)).toThrow('invalid request field expiresAt: bigint');
-      // Refused before the node was minted, so no wasm handle is stranded.
-      expect(calls.createInviteLink).toBeUndefined();
+        expect(() =>
+          buildCommand(wasm, { kind: 'createInviteLink', node, permission: 'read', expiresAt })
+        ).toThrow('invalid request field expiresAt: bigint');
+        // Refused before the node was minted, so no wasm handle is stranded.
+        expect(calls.NodeId).toBeUndefined();
+        expect(calls.createInviteLink).toBeUndefined();
+      }
+    );
+
+    it('refuses a fragment past the length a real one can reach', () => {
+      const { wasm, calls } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, { kind: 'claimInviteLink', fragment: 'A'.repeat(4097) })
+      ).toThrow('invalid request field fragment: string');
+      expect(calls.claimInviteLink).toBeUndefined();
     });
 
     it('rejects a claim fragment that is not a string', () => {

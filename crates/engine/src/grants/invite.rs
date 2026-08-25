@@ -348,8 +348,6 @@ pub struct InviteFragment {
     pub scope_root_name: Vec<u8>,
 }
 
-/// Every way a fragment can fail to open collapses to one refusal, whatever
-/// reported it.
 fn malformed_fragment<E>(_: E) -> InviteError {
     InviteError::MalformedFragment
 }
@@ -357,9 +355,6 @@ fn malformed_fragment<E>(_: E) -> InviteError {
 impl InviteFragment {
     /// Encode to the text a URL fragment carries: strict det-CBOR under
     /// base64url, which needs no percent-encoding.
-    ///
-    /// Refuses a blob past [`MAX_INVITE_FRAGMENT_BYTES`] rather than handing out
-    /// a link [`Self::decode`] always rejects (AGENTS.md rule 8).
     pub fn encode(&self) -> Result<Zeroizing<String>, InviteError> {
         let mut m = Map::new();
         m.insert(
@@ -371,17 +366,22 @@ impl InviteFragment {
             Value::Bytes(self.owner_contact_code.clone()),
         );
         m.insert("scopeRootName", Value::Bytes(self.scope_root_name.clone()));
-        let blob = Zeroizing::new(encode_fixed_depth(&Value::Map(m)));
+        // The tree holds a verbatim copy of the capability and this codec is its
+        // terminal owner (`crates/core/src/codec/scrub.rs`). Wiped after the
+        // encode, since the mark makes every later encode refuse it.
+        let mut tree = Value::Map(m);
+        let blob = Zeroizing::new(encode_fixed_depth(&tree));
+        tree.zeroize_bytes();
         if blob.len() > MAX_INVITE_FRAGMENT_BYTES {
             return Err(InviteError::FragmentTooLarge);
         }
         Ok(Zeroizing::new(FRAGMENT_B64.encode(blob.as_slice())))
     }
 
-    /// Decode a fragment a bearer handed in. Every failure is the same refusal:
-    /// the text is oversize, is not base64url, is not strict det-CBOR, or does
-    /// not carry the three fields at their fixed shapes.
+    /// Decode a fragment a bearer handed in.
     pub fn decode(fragment: &str) -> Result<Self, InviteError> {
+        // Ahead of the base64 allocation, so an oversize fragment is refused
+        // before it is materialised.
         if fragment.len() > MAX_FRAGMENT_TEXT_LEN {
             return Err(InviteError::FragmentTooLarge);
         }
@@ -389,8 +389,15 @@ impl InviteFragment {
         if blob.len() > MAX_INVITE_FRAGMENT_BYTES {
             return Err(InviteError::FragmentTooLarge);
         }
-        let value = decode(&blob).map_err(malformed_fragment)?;
-        let map = value.as_map().map_err(malformed_fragment)?;
+        let mut tree = decode(&blob).map_err(malformed_fragment)?;
+        // Wiped on every exit of the read, terminal owner as above.
+        let parsed = Self::from_tree(&tree);
+        tree.zeroize_bytes();
+        parsed
+    }
+
+    fn from_tree(tree: &Value) -> Result<Self, InviteError> {
+        let map = tree.as_map().map_err(malformed_fragment)?;
         let field = |name: &'static str| -> Result<Vec<u8>, InviteError> {
             Ok(req(map, name)
                 .map_err(malformed_fragment)?
@@ -571,7 +578,7 @@ impl OwnerAuthority<'_> {
     /// Fail closed unless this caller's identity key signed the committed set it
     /// is about to change. Every commitment change is owner-only, and
     /// `mint_invite_grant` gets that from its arguments where these two do not.
-    pub(super) fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
+    pub fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
         verify_grant_set(
             &self.identity_signer.verifying_key(),
             scope.commitment,
@@ -2207,10 +2214,7 @@ mod tests {
         }
     }
 
-    /// The bound is enforced on both sides of the same wire: a claim refuses an
-    /// oversize fragment, so a mint must refuse to hand one out rather than
-    /// publish a link whose own claim path always rejects it (AGENTS.md rule 8).
-    /// Release-active, so a release build cannot mint one either.
+    /// Both sides of the same wire (AGENTS.md rule 8).
     #[test]
     fn an_oversize_fragment_is_refused_at_both_ends() {
         let oversize = InviteFragment {

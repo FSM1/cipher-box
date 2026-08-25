@@ -218,7 +218,12 @@ export class EngineFacade {
     return this.command({ kind: 'pruneInviteLinks', node });
   }
 
-  /** Claims a link from its URL fragment — `location.hash.slice(1)`, verbatim. */
+  /**
+   * Claims a link from its URL fragment — `location.hash.slice(1)`, verbatim.
+   * The fragment is the whole bearer capability, so clear it from the address
+   * bar (`history.replaceState`) before awaiting this: a hash survives in
+   * session-restore state and in the back/forward entry.
+   */
   claimInviteLink(fragment: string): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'claimInviteLink', fragment });
   }

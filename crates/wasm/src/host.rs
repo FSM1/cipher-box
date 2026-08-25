@@ -688,9 +688,8 @@ mod tests {
         assert!(field(&crossed(Outcome::Done), "scopeId").is_undefined());
     }
 
-    /// A minted link crosses as one opaque fragment the host moves between a
-    /// URL and `claimInviteLink` — never as the parts it is built from, which
-    /// would put the host back in the business of composing link material.
+    /// A minted link crosses as one opaque fragment, never as the parts it is
+    /// built from.
     #[wasm_bindgen_test]
     fn a_minted_link_crosses_as_one_opaque_fragment() {
         let minted = crossed(minted_link());

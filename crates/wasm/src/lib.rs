@@ -476,8 +476,8 @@ impl CommandOutcome {
     }
 
     /// `inviteLinkMinted`: the link's whole URL fragment — the bearer
-    /// capability, opaque to the host, which puts it after a `#` and hands the
-    /// same characters back to `claimInviteLink`; otherwise `undefined`.
+    /// capability, handed back verbatim to `claimInviteLink`; otherwise
+    /// `undefined`.
     #[wasm_bindgen(getter)]
     pub fn fragment(&self) -> Option<String> {
         self.link().map(|link| link.fragment.to_string())
@@ -1050,8 +1050,7 @@ impl Command {
         })
     }
 
-    /// Claim an invite link from the fragment its URL carries. The fragment is
-    /// the bearer capability: pass it verbatim, never parsed or logged.
+    /// Claim an invite link from the fragment its URL carries, verbatim.
     #[wasm_bindgen(js_name = claimInviteLink)]
     pub fn claim_invite_link(fragment: String) -> Command {
         Self::wrap(facade::Command::ClaimInviteLink {

@@ -48,13 +48,8 @@ pub struct InviteMintPlan<'a> {
 }
 
 /// A minted link as the host must present it: one opaque URL fragment
-/// ([`InviteFragment`]) and nothing else.
-///
-/// The engine encodes the fragment and the claim arm decodes it, so the host
-/// composes no link material and parses none — it puts these characters after a
-/// `#` and hands the same characters back (blueprint/engine.md "Invites").
-/// Assembling the URL around them is the host's, since the engine knows no
-/// origin.
+/// ([`InviteFragment`]) and nothing else. Assembling the URL around it is the
+/// host's, since the engine knows no origin.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MintedInviteLink {
     /// The link's URL fragment — **the whole bearer capability**. A host puts it
@@ -132,8 +127,8 @@ where
     )
     .map_err(InviteMintError::Mint)?;
 
-    // Encoded before anything publishes: a fragment that will not encode is a
-    // link nobody could claim, and refusing it here leaves nothing behind.
+    // Before anything publishes: refusing a fragment that will not encode
+    // leaves nothing behind.
     let fragment = InviteFragment {
         invite_secret: invitee.secret().clone(),
         owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
@@ -476,7 +471,6 @@ mod tests {
         let [record] = f.recovered()[..] else {
             panic!("one link was minted");
         };
-        // Only the claim path opens a fragment; the host moves it unread.
         let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
         let invitee =
             EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
