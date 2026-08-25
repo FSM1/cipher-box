@@ -153,12 +153,21 @@ describe('buildCommand', () => {
     const FRAGMENT = 'placeholder-invite-fragment';
     const node = new Uint8Array(16).fill(7);
 
-    /** Records every builder call by name, whichever builder the arm reaches for. */
+    /**
+     * Records every builder call by name, whichever builder the arm reaches
+     * for. `NodeId.fromBytes` records too: minting a handle is what a refusal
+     * after it would strand, so the guard against that has to see the call.
+     */
     const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
       const calls: Record<string, unknown[][]> = {};
       const wasm = {
         ...fakeWasmEnums,
-        NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+        NodeId: {
+          fromBytes: (bytes: Uint8Array) => {
+            (calls.NodeId ??= []).push([bytes]);
+            return { bytes };
+          },
+        },
         Command: new Proxy(
           {},
           {
