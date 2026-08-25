@@ -178,10 +178,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        if floor::sequence_floor(self.floors, &share.scope_root_name)
-            .await
-            .is_ok_and(|floor| floor.is_some_and(|floor| verified.sequence < floor))
-        {
+        let Ok(sequence_floor) = floor::sequence_floor(self.floors, &share.scope_root_name).await
+        else {
+            return unresolved;
+        };
+        if sequence_floor.is_some_and(|floor| verified.sequence < floor) {
             return unresolved;
         }
         let Ok(candidate) =
@@ -382,75 +383,121 @@ mod tests {
         }
     }
 
+    /// A floor store that answers the read-epoch floor and fails the per-name
+    /// sequence floor — the shape that reaches the replay-bar rung.
+    struct UnreadableSequenceFloor;
+
+    impl FloorStore for UnreadableSequenceFloor {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+        async fn sequence_floor(&self, _name: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::new("sequence floor unavailable"))
+        }
+        async fn raise_sequence_floor(&self, _name: &[u8], _seq: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+        async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+    }
+
+    /// The published scope root and a record plane serving it — everything a
+    /// resolve needs except the floor store under test.
+    struct ServedScopeRoot {
+        fixture: OwnerRootFixture,
+        records: InMemoryRecordStore,
+        http: ScriptedHttp,
+        gateway: Gateway,
+    }
+
+    impl ServedScopeRoot {
+        fn new(sharer: &EcdsaSigner) -> ServedScopeRoot {
+            let fixture = published(sharer, &[&my_enc().public()]);
+            let endpoint = EndpointId::new("e0");
+            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
+            records.seed_record(
+                &endpoint,
+                fixture.name.as_str(),
+                IpnsRecord::create_v2(
+                    &kdf::ipns_keypair(
+                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                    ),
+                    format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+                    1,
+                    2_000_000_000,
+                    "2099-01-01T00:00:00Z",
+                )
+                .marshal(),
+            );
+            ServedScopeRoot {
+                fixture,
+                records,
+                http: ScriptedHttp::default(),
+                gateway: Gateway {
+                    accelerator: None,
+                    public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                },
+            }
+        }
+
+        fn resolve<F: FloorStore>(&self, floors: &F, sharer: &EcdsaSigner) -> ResolutionClass {
+            self.http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: self.fixture.head_block.clone(),
+            });
+            classify(&block_on(
+                ReceivedShareStatus {
+                    transport: &self.records,
+                    gateway: &self.gateway,
+                    http: &self.http,
+                    floors,
+                    enc_secret: &my_enc(),
+                }
+                .facts(
+                    &bookmark(),
+                    &sharer.verifying_key(),
+                    &sharer_enc().public(),
+                ),
+            ))
+        }
+    }
+
     /// The epoch-lag rung is measured against a floor read from the host. With
     /// no floor the rung can never fire, so a failed read must reach "no
     /// verdict" rather than the `Granted` this very record would otherwise earn.
     #[test]
     fn a_floor_the_host_cannot_read_reaches_no_verdict() {
         let sharer = sharer_signer();
-        let fixture = published(&sharer, &[&my_enc().public()]);
-        let endpoint = EndpointId::new("e0");
-        let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
-        store.seed_record(
-            &endpoint,
-            fixture.name.as_str(),
-            IpnsRecord::create_v2(
-                &kdf::ipns_keypair(
-                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                ),
-                format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                1,
-                2_000_000_000,
-                "2099-01-01T00:00:00Z",
-            )
-            .marshal(),
-        );
-        let http = ScriptedHttp::default();
-        let gateway = Gateway {
-            accelerator: None,
-            public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
-        };
-
-        let readable = InMemoryFloorStore::default();
+        let served = ServedScopeRoot::new(&sharer);
 
         // The same resolve against a readable floor store is `Granted` — the
         // record, the commitment and the blob are all in order.
-        http.enqueue_response(HttpResponse {
-            status: 200,
-            headers: Vec::new(),
-            body: fixture.head_block.clone(),
-        });
-        let granted = block_on(
-            ReceivedShareStatus {
-                transport: &store,
-                gateway: &gateway,
-                http: &http,
-                floors: &readable,
-                enc_secret: &my_enc(),
-            }
-            .facts(&bookmark(), &sharer.verifying_key(), &sharer_enc().public()),
-        );
-        assert_eq!(classify(&granted), ResolutionClass::Granted);
-
-        http.enqueue_response(HttpResponse {
-            status: 200,
-            headers: Vec::new(),
-            body: fixture.head_block.clone(),
-        });
-        let unreadable = block_on(
-            ReceivedShareStatus {
-                transport: &store,
-                gateway: &gateway,
-                http: &http,
-                floors: &UnreadableFloors,
-                enc_secret: &my_enc(),
-            }
-            .facts(&bookmark(), &sharer.verifying_key(), &sharer_enc().public()),
+        assert_eq!(
+            served.resolve(&InMemoryFloorStore::default(), &sharer),
+            ResolutionClass::Granted
         );
         assert_eq!(
-            classify(&unreadable),
+            served.resolve(&UnreadableFloors, &sharer),
             ResolutionClass::Unresolvable,
             "an unread floor is availability, never a verdict"
+        );
+    }
+
+    /// The replay bar is what keeps a suppressing relay from re-serving the
+    /// record that still committed this device and pinning the verdict at
+    /// `Granted`, so a sequence floor the host cannot read is absence too.
+    #[test]
+    fn an_unreadable_sequence_floor_reaches_no_verdict() {
+        let sharer = sharer_signer();
+        assert_eq!(
+            ServedScopeRoot::new(&sharer).resolve(&UnreadableSequenceFloor, &sharer),
+            ResolutionClass::Unresolvable,
+            "an unread replay bar is availability, never a verdict"
         );
     }
 

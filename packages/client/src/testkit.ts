@@ -456,7 +456,6 @@ export class FakeEngineTransport implements EngineTransport {
   readonly commandTransfers: Transferable[][] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly sharingReads: Array<Uint8Array | null> = [];
-  /** How many received-share reads this transport served. */
   receivedShareReads = 0;
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
