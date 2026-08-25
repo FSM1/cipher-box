@@ -404,7 +404,7 @@ impl Blocks {
         }
         if url.ends_with("/auth/login") {
             return ok(format!(
-                r#"{{"accessToken":"jwt-1","refreshToken":"{}","isNewUser":true}}"#,
+                r#"{{"accessToken":"jwt-1","refreshToken":"{}","gatewayToken":"gw-1","isNewUser":true}}"#,
                 "a".repeat(64)
             )
             .into_bytes());

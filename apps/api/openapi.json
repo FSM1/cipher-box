@@ -291,6 +291,33 @@
         ]
       }
     },
+    "/auth/gateway/verify": {
+      "get": {
+        "operationId": "GatewayController_verify",
+        "parameters": [
+          {
+            "name": "authorization",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The token names a live session"
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked token"
+          }
+        },
+        "summary": "Verify a read accelerator token for the gateway front (forward_auth)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/auth/.well-known/jwks.json": {
       "get": {
         "operationId": "IdentityController_jwks",
@@ -1455,6 +1482,10 @@
             "type": "string",
             "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
           },
+          "gatewayToken": {
+            "type": "string",
+            "description": "Opaque read-scoped pseudonym for the read accelerator, rotating with the access token"
+          },
           "isNewUser": {
             "type": "boolean",
             "description": "True when this login created the account implicitly"
@@ -1462,7 +1493,8 @@
         },
         "required": [
           "accessToken",
-          "refreshToken"
+          "refreshToken",
+          "gatewayToken"
         ]
       },
       "SiweChallengeResponseDto": {
@@ -1547,6 +1579,10 @@
             "type": "string",
             "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
           },
+          "gatewayToken": {
+            "type": "string",
+            "description": "Opaque read-scoped pseudonym for the read accelerator, rotating with the access token"
+          },
           "isNewUser": {
             "type": "boolean",
             "description": "True when this login created the account implicitly"
@@ -1563,6 +1599,7 @@
         "required": [
           "accessToken",
           "refreshToken",
+          "gatewayToken",
           "publicKey",
           "privateKey"
         ]

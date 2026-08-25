@@ -9,10 +9,13 @@ import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import { GatewayTokenService } from './gateway-token.service';
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
+  /** The read accelerator's opaque pseudonym, minted by GatewayTokenService. */
+  gatewayToken: string;
 }
 
 export interface ScopedToken {
@@ -42,6 +45,9 @@ const MAX_SCOPED_TTL_SECONDS = 3600;
  * Presenting an already-used token is reuse detection — the whole family is
  * hard-deleted (every descendant dies with it), forcing a fresh login.
  * Logout and revocation are hard deletes, never soft flags.
+ *
+ * A third credential rides the same rotation: the read accelerator's opaque
+ * pseudonym, minted per family so it dies with the session that owns it.
  */
 @Injectable()
 export class TokenService {
@@ -53,6 +59,7 @@ export class TokenService {
     private readonly jwtService: JwtService,
     private readonly clock: Clock,
     private readonly entropy: Entropy,
+    private readonly gatewayTokenService: GatewayTokenService,
     configService: ConfigService,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>
@@ -68,9 +75,11 @@ export class TokenService {
 
   /** Issue an access JWT and start a fresh refresh-token family. */
   async createTokenPair(userId: string, publicKey: string): Promise<TokenPair> {
+    const familyId = this.entropy.randomUuid();
     const accessToken = await this.signAccessToken(userId, publicKey);
-    const refreshToken = await this.mintRefreshToken(userId, this.entropy.randomUuid());
-    return { accessToken, refreshToken };
+    const refreshToken = await this.mintRefreshToken(userId, familyId);
+    const gatewayToken = await this.gatewayTokenService.mintForFamily(userId, familyId);
+    return { accessToken, refreshToken, gatewayToken };
   }
 
   /**
@@ -145,7 +154,11 @@ export class TokenService {
     const publicKey = await publicKeyByUserId(existing.userId);
     const accessToken = await this.signAccessToken(existing.userId, publicKey);
     const refreshToken = await this.mintRefreshToken(existing.userId, existing.familyId);
-    return { accessToken, refreshToken };
+    const gatewayToken = await this.gatewayTokenService.mintForFamily(
+      existing.userId,
+      existing.familyId
+    );
+    return { accessToken, refreshToken, gatewayToken };
   }
 
   /** Hard-delete every refresh token the user holds (logout everywhere). */

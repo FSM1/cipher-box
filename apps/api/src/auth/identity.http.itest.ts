@@ -28,6 +28,8 @@ import { IdentityTokenService } from './services/identity-token.service';
 import { MailProvider } from './services/mail.provider';
 import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
+import { GatewayToken } from './entities/gateway-token.entity';
+import { GatewayTokenService } from './services/gateway-token.service';
 import { TokenService } from './services/token.service';
 
 /**
@@ -68,12 +70,13 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, IdentitySubject],
+      entities: [User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject],
       controllers: [AuthController, IdentityController],
       providers: [
         AuthService,
         TestAuthService,
         TokenService,
+        GatewayTokenService,
         ChallengeService,
         IdentityService,
         SiweService,

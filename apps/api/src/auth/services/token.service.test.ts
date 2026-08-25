@@ -5,24 +5,46 @@ import type { Repository } from 'typeorm';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import type { GatewayTokenService } from './gateway-token.service';
 import { TokenService } from './token.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const PUBLIC_KEY = '02'.padEnd(66, 'c');
 const publicKeyByUserId = async (): Promise<string> => PUBLIC_KEY;
 
+/**
+ * Records the `(userId, familyId)` each mint was asked for — the binding this
+ * suite asserts. The pseudonym's own storage is SQL, covered by
+ * gateway-token.service.itest.ts against a real database.
+ */
+class RecordingGatewayTokens {
+  readonly minted: Array<{ userId: string; familyId: string }> = [];
+
+  async mintForFamily(userId: string, familyId: string): Promise<string> {
+    this.minted.push({ userId, familyId });
+    return this.minted.length.toString(16).padStart(64, '0');
+  }
+}
+
+function asGatewayTokenService(recorder: RecordingGatewayTokens): GatewayTokenService {
+  return recorder as unknown as GatewayTokenService;
+}
+
 describe('TokenService refresh rotation', () => {
   let clock: FakeClock;
   let repo: FakeRepository<RefreshToken>;
+  let gatewayTokens: RecordingGatewayTokens;
   let service: TokenService;
 
   beforeEach(() => {
     clock = new FakeClock();
     repo = new FakeRepository<RefreshToken>();
+    gatewayTokens = new RecordingGatewayTokens();
     service = new TokenService(
       new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } }),
       clock,
       new FakeEntropy(),
+      asGatewayTokenService(gatewayTokens),
       fakeConfig({}).service,
       repo as unknown as Repository<RefreshToken>
     );
@@ -35,6 +57,34 @@ describe('TokenService refresh rotation', () => {
     expect(repo.rows).toHaveLength(1);
     expect(repo.rows[0].tokenHash).not.toBe(pair.refreshToken);
     expect(repo.rows[0].usedAt).toBeNull();
+  });
+
+  it('mints the gateway pseudonym against the family the login started', async () => {
+    const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
+
+    expect(pair.gatewayToken).not.toBe(pair.refreshToken);
+    expect(pair.gatewayToken).not.toBe(pair.accessToken);
+    expect(gatewayTokens.minted).toEqual([{ userId: USER_ID, familyId: repo.rows[0].familyId }]);
+  });
+
+  it('rotation re-mints the pseudonym into the same family, so it dies with the session', async () => {
+    const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
+    const familyId = repo.rows[0].familyId;
+
+    const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
+
+    expect(rotated.gatewayToken).not.toBe(pair.gatewayToken);
+    expect(gatewayTokens.minted).toEqual([
+      { userId: USER_ID, familyId },
+      { userId: USER_ID, familyId },
+    ]);
+  });
+
+  it('mints no pseudonym for a refresh it refuses', async () => {
+    await expect(service.rotate('f'.repeat(64), publicKeyByUserId)).rejects.toThrow(
+      UnauthorizedException
+    );
+    expect(gatewayTokens.minted).toHaveLength(0);
   });
 
   it('rotates: old token becomes used, successor joins the same family', async () => {
@@ -111,6 +161,7 @@ describe('TokenService scoped tokens', () => {
       jwtService,
       new FakeClock(),
       new FakeEntropy(),
+      asGatewayTokenService(new RecordingGatewayTokens()),
       fakeConfig(config).service,
       repo as unknown as Repository<RefreshToken>
     );

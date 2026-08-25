@@ -12,11 +12,14 @@ import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-in
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
+import { GatewayToken } from './entities/gateway-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
+import { GatewayController } from './gateway.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { ChallengeService } from './services/challenge.service';
+import { GatewayTokenService } from './services/gateway-token.service';
 import { IdentityService } from './services/identity.service';
 import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
@@ -64,12 +67,13 @@ describe('auth HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken],
-      controllers: [AuthController],
+      entities: [User, AuthMethod, RefreshToken, GatewayToken],
+      controllers: [AuthController, GatewayController],
       providers: [
         AuthService,
         TestAuthService,
         TokenService,
+        GatewayTokenService,
         ChallengeService,
         IdentityService,
         SiweService,
@@ -248,6 +252,73 @@ describe('auth HTTP flows (real Postgres)', () => {
         .set('Cookie', 'refreshToken=not-64-hex-chars')
         .send({})
         .expect(401);
+    });
+  });
+
+  describe('read accelerator token', () => {
+    const verify = (token?: string) => {
+      const call = request(http()).get('/auth/gateway/verify');
+      return token === undefined ? call : call.set('Authorization', `Bearer ${token}`);
+    };
+
+    it('mints a pseudonym at login that is neither the access nor the refresh token', async () => {
+      const { loginRes } = await identityLogin();
+
+      expect(loginRes.body.gatewayToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(loginRes.body.gatewayToken).not.toBe(loginRes.body.refreshToken);
+      expect(loginRes.body.gatewayToken).not.toBe(loginRes.body.accessToken);
+      await verify(loginRes.body.gatewayToken).expect(204);
+    });
+
+    it('refuses the session access token at the gateway leg', async () => {
+      const { loginRes } = await identityLogin();
+      await verify(loginRes.body.accessToken).expect(401);
+    });
+
+    it('refuses a missing, malformed, or unminted credential', async () => {
+      await verify().expect(401);
+      await request(http())
+        .get('/auth/gateway/verify')
+        .set('Authorization', 'a'.repeat(64))
+        .expect(401);
+      await verify('not-a-gateway-token').expect(401);
+      await verify('c'.repeat(64)).expect(401);
+    });
+
+    it('rotates on refresh, and the superseded pseudonym stops verifying', async () => {
+      const { loginRes } = await identityLogin();
+      const rotated = await request(http())
+        .post('/auth/refresh')
+        .send({ refreshToken: loginRes.body.refreshToken })
+        .expect(200);
+
+      expect(rotated.body.gatewayToken).not.toBe(loginRes.body.gatewayToken);
+      await verify(rotated.body.gatewayToken).expect(204);
+      await verify(loginRes.body.gatewayToken).expect(401);
+    });
+
+    it('dies with the session at logout', async () => {
+      const { loginRes } = await identityLogin();
+      await request(http())
+        .post('/auth/logout')
+        .set('Authorization', `Bearer ${loginRes.body.accessToken}`)
+        .expect(200);
+
+      await verify(loginRes.body.gatewayToken).expect(401);
+    });
+
+    it('dies with the family that reuse detection revokes', async () => {
+      const { loginRes } = await identityLogin();
+      const rotated = await request(http())
+        .post('/auth/refresh')
+        .send({ refreshToken: loginRes.body.refreshToken })
+        .expect(200);
+      await request(http())
+        .post('/auth/refresh')
+        .send({ refreshToken: loginRes.body.refreshToken })
+        .expect(401);
+
+      await verify(rotated.body.gatewayToken).expect(401);
     });
   });
 

@@ -2475,10 +2475,13 @@ pub struct Engine<T: SeamTypes> {
     /// Read by the cold-start [`RootAdopter`] and the resolve-tick driver's
     /// per-pass adopter.
     gateway: Gateway,
-    /// The session access token, shared by the API client [`start`](Self::start)
-    /// builds and the read accelerator's gateway leg — the accelerator is
-    /// CipherBox's own token-authed gateway, so the session is what gates it.
-    /// One cell for both: clearing it de-authenticates the API client too.
+    /// The session access token, shared with the API client
+    /// [`start`](Self::start) builds so teardown here reaches it.
+    session_bearer: SessionBearer,
+    /// The read accelerator's opaque pseudonym, shared by that same client and
+    /// the gateway leg. Read-scoped and unlinkable to the account, so an
+    /// `Authorization` header observed at the gateway tier buys neither the API
+    /// surface nor an identity.
     accelerator_bearer: SessionBearer,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
@@ -2625,6 +2628,7 @@ impl<T: SeamTypes> Engine<T> {
         gateway: GatewayConfig,
     ) -> (Self, EventStream) {
         let (events, receiver) = mpsc::unbounded();
+        let session_bearer = SessionBearer::default();
         let accelerator_bearer = SessionBearer::default();
         (
             Self {
@@ -2639,6 +2643,7 @@ impl<T: SeamTypes> Engine<T> {
                 cancels: Rc::new(RefCell::new(UploadCancels::default())),
                 api_base_url,
                 gateway: gateway.into_gateway(accelerator_bearer.clone()),
+                session_bearer,
                 accelerator_bearer,
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
@@ -2716,7 +2721,7 @@ impl<T: SeamTypes> Engine<T> {
                 self.seams.credential_store.clone(),
                 base_url.unwrap_or_default().to_owned(),
             )
-            .with_session_bearer(self.accelerator_bearer.clone()),
+            .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone()),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -2901,6 +2906,7 @@ impl<T: SeamTypes> Engine<T> {
         // Sealed, not cleared: the gateway clone a parked tick holds shares this
         // cell, and a refresh still on the wire would re-arm a plain clear
         // (security rule 7).
+        self.session_bearer.seal();
         self.accelerator_bearer.seal();
         // Every parked manual refresh fails now: no pass is left to answer it.
         self.manual_refresh.close();
@@ -3096,6 +3102,7 @@ impl<T: SeamTypes> Engine<T> {
         self.session = None;
         *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
+        self.session_bearer.clear();
         self.accelerator_bearer.clear();
     }
 
@@ -6598,7 +6605,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         // The vacancy probe answers, so the mint proceeds — and then the
         // head-block upload has no route, exactly as an unreachable API leaves it.
@@ -6640,7 +6647,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         // The vacancy probe answers, then the head-block upload has no route.
         device
@@ -6680,7 +6687,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         device
             .http
@@ -6764,7 +6771,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         // A configured base URL means the empty pointer chain provisions.
         serve_provisioning(&device);
@@ -6791,11 +6798,12 @@ mod tests {
         assert_eq!(login_body["signature"], expected);
     }
 
-    /// The read accelerator is CipherBox's own token-authed gateway, so the
-    /// credential it presents is the session's — bound by login rather than
-    /// configured, and gone with the engine.
+    /// The read accelerator is CipherBox's own token-authed gateway, and what
+    /// gates it is the login-minted pseudonym — never the access JWT, which
+    /// reaches the whole API surface. Both are bound by login rather than
+    /// configured, and both are gone with the engine.
     #[test]
-    fn login_binds_the_session_token_to_the_accelerator_and_shutdown_drops_it() {
+    fn login_binds_the_pseudonym_to_the_accelerator_and_shutdown_drops_both() {
         let device = FakeWorld::new().device(b"alice-pk");
         let (mut engine, _events) = Engine::new(
             device.seam_set(),
@@ -6810,6 +6818,7 @@ mod tests {
             },
         );
         let accelerator_bearer = engine.accelerator_bearer.clone();
+        let session_bearer = engine.session_bearer.clone();
         assert!(!accelerator_bearer.is_held(), "no credential before login");
 
         device.http.enqueue_response(json_response(
@@ -6818,7 +6827,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
         ));
         serve_provisioning(&device);
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
@@ -6832,8 +6841,13 @@ mod tests {
             .peek();
         assert_eq!(
             held.as_deref().map(String::as_str),
+            Some("gw-a"),
+            "the accelerator leg presents the read-scoped pseudonym"
+        );
+        assert_eq!(
+            session_bearer.peek().as_deref().map(String::as_str),
             Some("jwt-1"),
-            "the accelerator leg presents the session access token"
+            "the API leg keeps the access JWT, which the gateway tier never sees"
         );
 
         drop(engine);
@@ -6841,6 +6855,7 @@ mod tests {
             !accelerator_bearer.is_held(),
             "a parked tick's gateway clone outlives the engine; the token must not"
         );
+        assert!(!session_bearer.is_held(), "the access JWT goes with it");
     }
 
     #[test]
@@ -6887,7 +6902,7 @@ mod tests {
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-siwe", "refreshToken": "b".repeat(64) }),
+            json!({ "accessToken": "jwt-siwe", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
         ));
 
         let signature = vec![0xDE, 0xAD, 0xBE, 0xEF];

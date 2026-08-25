@@ -115,8 +115,8 @@ impl EngineHandle {
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
     /// is configured from `acceleratorBaseUrl` and `publicGateways` — the
-    /// accelerator's credential is the engine's session token, so there is no
-    /// host-supplied bearer to pass.
+    /// accelerator's credential is the read-scoped pseudonym login mints, so
+    /// there is no host-supplied bearer to pass.
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,

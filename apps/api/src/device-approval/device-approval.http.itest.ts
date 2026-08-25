@@ -7,6 +7,8 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IdentityTokenService } from '../auth/services/identity-token.service';
+import { GatewayToken } from '../auth/entities/gateway-token.entity';
+import { GatewayTokenService } from '../auth/services/gateway-token.service';
 import { TokenService } from '../auth/services/token.service';
 import { Clock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
@@ -85,13 +87,14 @@ describe('device-approval HTTP surface (real Postgres)', () => {
       // The rendezvous surfaces cap at 3 requests/min; the throttler is not under
       // test here and would 429 valid steps of the lifecycle.
       withOps: false,
-      entities: [User, AccountDevice, DeviceApproval, RefreshToken],
+      entities: [User, AccountDevice, DeviceApproval, RefreshToken, GatewayToken],
       controllers: [DeviceController, DeviceApprovalSessionController, DeviceApprovalController],
       providers: [
         AccountDeviceService,
         DeviceApprovalService,
         IdentityTokenService,
         TokenService,
+        GatewayTokenService,
         JwtAuthGuard,
         { provide: Clock, useValue: clock },
         { provide: Entropy, useClass: SystemEntropy },

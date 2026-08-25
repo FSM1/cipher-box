@@ -53,6 +53,12 @@ export class TokenResponseDto {
   })
   refreshToken!: string;
 
+  @ApiProperty({
+    description:
+      'Opaque read-scoped pseudonym for the read accelerator, rotating with the access token',
+  })
+  gatewayToken!: string;
+
   @ApiPropertyOptional({ description: 'True when this login created the account implicitly' })
   isNewUser?: boolean;
 }
