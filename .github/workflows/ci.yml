@@ -592,9 +592,13 @@ jobs:
 
       # The vendored fuser is its own workspace root, so `-p` cannot reach it.
       # Its socket-read patch travels with the regression test blueprint/
-      # desktop.md commits to, and this is where that test fires.
+      # desktop.md commits to, and this is where that test fires. The one
+      # upstream test that mounts a real filesystem is skipped: this job is
+      # kernel-free by design.
       - name: Vendored fuser socket-read patch
-        run: cargo test --manifest-path third-party/fuser/Cargo.toml
+        run: |
+          cargo test --manifest-path third-party/fuser/Cargo.toml -- \
+            --skip mnt::test::mount_unmount
 
   # The WASM parity gate. Runs the core KAT + property suite in three shapes —
   # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped

@@ -187,19 +187,19 @@ mod tests {
     #[test]
     fn a_message_split_across_reads_is_reassembled_whole() {
         let (kernel, us) = UnixStream::pair().expect("socketpair");
-        // Wider than a socket buffer hands over in one piece, which is the
-        // condition FUSE-T write-heavy traffic hits.
-        let sent = message(512 * 1024);
+        let sent = message(64 * 1024);
+        let (head, tail) = sent.split_at(1024);
+        let (head, tail) = (head.to_vec(), tail.to_vec());
 
-        let writer = {
-            let sent = sent.clone();
-            std::thread::spawn(move || {
-                let mut kernel = kernel;
-                for fragment in sent.chunks(4096) {
-                    kernel.write_all(fragment).expect("fragment");
-                }
-            })
-        };
+        let writer = std::thread::spawn(move || {
+            let mut kernel = kernel;
+            kernel.write_all(&head).expect("head");
+            // The reader is now parked on the rest of the message. Stock fuser
+            // takes the head alone and calls it a whole request; the patched
+            // read knows from the header how much is still coming.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            kernel.write_all(&tail).expect("tail");
+        });
 
         let mut buffer = vec![0u8; sent.len() + 4096];
         let taken = receive_framed(us.as_fd(), &mut buffer).expect("receive");

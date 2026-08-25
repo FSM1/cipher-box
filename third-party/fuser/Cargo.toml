@@ -84,5 +84,9 @@ serde = { version = "1.0.102", features = ["std", "derive"], optional = true }
 smallvec = "1.6.1"
 zerocopy = { version = "0.8", features = ["derive"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+# The mount-option unit tests want a throwaway directory.
+tempfile = "3"
+
 [target.'cfg(unix)'.build-dependencies]
 pkg-config = { version = "0.3.14", optional = true }

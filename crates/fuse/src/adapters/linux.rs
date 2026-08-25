@@ -560,14 +560,17 @@ async fn answer<T: SeamTypes>(
             // One lifetime covers the name binding and the attributes both, so
             // a provisional size holds the whole reply down to zero.
             Ok(attrs) => reply.entry(
-                &ttls.attr_for(attrs.size),
+                &ttls.attr_for(attrs.kind, attrs.size),
                 &file_attr(&attrs, owner),
                 GENERATION,
             ),
             Err(refusal) => reply.error(errno_of(&refusal)),
         },
         KernelOp::GetAttr { ino, reply } => match core.getattr(ino).await {
-            Ok(attrs) => reply.attr(&ttls.attr_for(attrs.size), &file_attr(&attrs, owner)),
+            Ok(attrs) => reply.attr(
+                &ttls.attr_for(attrs.kind, attrs.size),
+                &file_attr(&attrs, owner),
+            ),
             Err(refusal) => reply.error(errno_of(&refusal)),
         },
         KernelOp::SetSize {
@@ -583,7 +586,10 @@ async fn answer<T: SeamTypes>(
                 return;
             }
             match core.getattr(ino).await {
-                Ok(attrs) => reply.attr(&ttls.attr_for(attrs.size), &file_attr(&attrs, owner)),
+                Ok(attrs) => reply.attr(
+                    &ttls.attr_for(attrs.kind, attrs.size),
+                    &file_attr(&attrs, owner),
+                ),
                 Err(refusal) => reply.error(errno_of(&refusal)),
             }
         }
@@ -605,7 +611,7 @@ async fn answer<T: SeamTypes>(
             reply,
         } => match core.create(parent, &name, access).await {
             Ok((attrs, handle)) => reply.created(
-                &ttls.attr_for(attrs.size),
+                &ttls.attr_for(attrs.kind, attrs.size),
                 &file_attr(&attrs, owner),
                 GENERATION,
                 handle.0,
@@ -619,7 +625,7 @@ async fn answer<T: SeamTypes>(
             reply,
         } => match core.mkdir(parent, &name).await {
             Ok(attrs) => reply.entry(
-                &ttls.attr_for(attrs.size),
+                &ttls.attr_for(attrs.kind, attrs.size),
                 &file_attr(&attrs, owner),
                 GENERATION,
             ),
@@ -694,8 +700,11 @@ async fn open_handle<T: SeamTypes>(
     truncate: bool,
 ) -> Result<HandleId, VfsError> {
     let handle = core.open(ino, access).await?;
-    if truncate {
-        core.truncate(ino, 0, Some(handle)).await?;
+    if truncate && let Err(refusal) = core.truncate(ino, 0, Some(handle)).await {
+        // The kernel never learns this handle's number, so nothing will ever
+        // release it; the failed open has to give back what it took.
+        let _ = core.release(handle).await;
+        return Err(refusal);
     }
     Ok(handle)
 }

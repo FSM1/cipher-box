@@ -8,7 +8,7 @@
 use core::time::Duration;
 
 use cipherbox_core::codec::RedactedText;
-use cipherbox_engine::SyncTimingProfile;
+use cipherbox_engine::{NodeKind, SyncTimingProfile};
 
 /// What the core tells an adapter has changed, so the kernel's cache for it
 /// stops being trusted.
@@ -91,18 +91,19 @@ impl CacheTtls {
         }
     }
 
-    /// How long the kernel may cache the attributes of a node this mount is
-    /// reporting at `size`.
+    /// How long the kernel may cache the attributes of a node of `kind` this
+    /// mount is reporting at `size`.
     ///
-    /// A size the content plane has not projected yet is provisional: an
-    /// adapter must put *some* number in the reply, and a kernel that caches a
+    /// A *file* size the content plane has not projected yet is provisional: an
+    /// adapter must put some number in the reply, and a kernel that caches a
     /// zero there stops reading at byte zero — the shape `cp` turns into an
-    /// empty copy of a real file. So a provisional reply is never cached, and
-    /// the projection's own push invalidation corrects it.
-    pub fn attr_for(&self, size: Option<u64>) -> Duration {
-        match size {
-            Some(_) => self.attr,
-            None => Duration::ZERO,
+    /// empty copy of a real file. A provisional reply is therefore never
+    /// cached, and the projection's own push invalidation corrects it. A folder
+    /// has no content size to be provisional about.
+    pub fn attr_for(&self, kind: NodeKind, size: Option<u64>) -> Duration {
+        match (kind, size) {
+            (NodeKind::Folder, _) | (NodeKind::File, Some(_)) => self.attr,
+            (NodeKind::File, None) => Duration::ZERO,
         }
     }
 }
@@ -202,11 +203,19 @@ mod tests {
     /// A projected size is as trustworthy as any other attribute; an
     /// unprojected one is a placeholder, and a cached placeholder is the bug.
     #[test]
-    fn only_a_projected_size_earns_an_attribute_lifetime() {
+    fn only_a_projected_file_size_earns_an_attribute_lifetime() {
         let ttls = CacheTtls::for_host(&caps(true), &SyncTimingProfile::PRODUCTION);
-        assert_eq!(ttls.attr_for(Some(4096)), ttls.attr);
-        assert!(ttls.attr_for(Some(0)) > Duration::ZERO);
-        assert_eq!(ttls.attr_for(None), Duration::ZERO);
+        assert_eq!(ttls.attr_for(NodeKind::File, Some(4096)), ttls.attr);
+        assert!(ttls.attr_for(NodeKind::File, Some(0)) > Duration::ZERO);
+        assert_eq!(ttls.attr_for(NodeKind::File, None), Duration::ZERO);
+    }
+
+    /// A folder never carries a content size, so treating its absence as
+    /// provisional would leave every directory permanently uncacheable.
+    #[test]
+    fn a_folder_is_cacheable_without_a_size() {
+        let ttls = CacheTtls::for_host(&caps(true), &SyncTimingProfile::PRODUCTION);
+        assert_eq!(ttls.attr_for(NodeKind::Folder, None), ttls.attr);
     }
 
     /// A mount whose kernel keeps no attribute cache has nothing to time
@@ -220,7 +229,9 @@ mod tests {
             },
             &SyncTimingProfile::PRODUCTION,
         );
-        assert_eq!(ttls.attr_for(Some(4096)), Duration::ZERO);
-        assert_eq!(ttls.attr_for(None), Duration::ZERO);
+        for kind in [NodeKind::File, NodeKind::Folder] {
+            assert_eq!(ttls.attr_for(kind, Some(4096)), Duration::ZERO);
+            assert_eq!(ttls.attr_for(kind, None), Duration::ZERO);
+        }
     }
 }
