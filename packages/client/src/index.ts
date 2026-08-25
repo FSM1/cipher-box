@@ -73,6 +73,7 @@ export type {
   SharingDescriptor,
   SharingContactDescriptor,
   SharingGrantDescriptor,
+  SharingInviteLinksDescriptor,
   WriteTarget,
   WriteHandle,
   StreamHandle,

@@ -860,6 +860,43 @@ impl SharingGrant {
     }
 }
 
+/// The invite-link standing this owner has on the scope a [`SharingView`] reads.
+#[wasm_bindgen]
+pub struct SharingInviteLinks {
+    inner: facade::SharingInviteLinks,
+}
+
+#[wasm_bindgen]
+impl SharingInviteLinks {
+    /// Whether the scope carries one live link — the link a revoke cuts and a
+    /// conversion converts against.
+    #[wasm_bindgen(getter)]
+    pub fn live(&self) -> bool {
+        self.inner.live
+    }
+
+    /// The live link's deadline in Unix millis (a `u64`, crossing as a
+    /// `bigint`), absent where it does not expire or where no link is live.
+    #[wasm_bindgen(getter, js_name = expiresAt)]
+    pub fn expires_at(&self) -> Option<u64> {
+        self.inner.expires_at.map(|deadline| deadline.0)
+    }
+
+    /// The records at this scope its commitment no longer carries — what a prune
+    /// drops.
+    #[wasm_bindgen(getter)]
+    pub fn spent(&self) -> u32 {
+        self.inner.spent
+    }
+}
+
+impl SharingInviteLinks {
+    /// Wraps an engine invite-link standing. Never exported to JS.
+    pub fn from_facade(inner: facade::SharingInviteLinks) -> Self {
+        Self { inner }
+    }
+}
+
 /// A key-free read of one scope's sharing state: this vault's whole verified
 /// contact book, and the grants the scope's own record commits.
 #[wasm_bindgen]
@@ -897,6 +934,23 @@ impl SharingView {
                 .map(SharingGrant::from_facade)
                 .collect()
         })
+    }
+
+    /// Whether a further share of this scope would be accepted — false wherever
+    /// the read could not settle it, so a host offers a mint only on a plain yes.
+    #[wasm_bindgen(getter, js_name = canMintShare)]
+    pub fn can_mint_share(&self) -> bool {
+        self.inner.can_mint_share
+    }
+
+    /// This owner's invite links at the scope, or `undefined` when the read could
+    /// not reach them.
+    #[wasm_bindgen(getter, js_name = inviteLinks)]
+    pub fn invite_links(&self) -> Option<SharingInviteLinks> {
+        self.inner
+            .invite_links
+            .clone()
+            .map(SharingInviteLinks::from_facade)
     }
 }
 

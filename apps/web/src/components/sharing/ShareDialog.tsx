@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
-import { expiryAt, inviteUrl, LINK_LIFETIMES, type LinkLifetime } from '../../sharing/inviteLink';
-import { grantsFor, sharingStore } from '../../stores/sharing.store';
+import {
+  expiryAt,
+  expiryLabel,
+  inviteUrl,
+  LINK_LIFETIMES,
+  type LinkLifetime,
+} from '../../sharing/inviteLink';
+import { sharingFor, sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
 import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 import { Modal } from '../ui/Modal';
@@ -37,9 +43,12 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   // can name again — and `busy` is itself the render-late value that misses it.
   const minting = useRef(false);
 
-  // `null` is "no ledger read yet", which the list must not draw as "granted to
-  // nobody" — the two differ to an owner deciding whether to grant again.
-  const rows = grantsFor(state, row.key);
+  // `null` is "no read reached this scope yet", which the list must not draw as
+  // "granted to nobody" — the two differ to an owner deciding whether to grant
+  // again.
+  const scope = sharingFor(state, row.key);
+  const rows = scope?.grants ?? null;
+  const links = scope?.inviteLinks ?? null;
   const granted = new Set((rows ?? []).map((entry) => entry.contact.key));
   const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
@@ -184,7 +193,44 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           </select>
 
           <p className="dialog-label">invite link</p>
-          {link === null ? (
+          {link !== null && (
+            <div className="dialog-content" data-testid="invite-link">
+              <CopyableValue value={link} label="invite link" />
+              <p className="sharing-note" data-testid="invite-link-bearer">
+                {'// whoever holds this link claims it — hand it over like a key'}
+              </p>
+            </div>
+          )}
+
+          {links === null ? (
+            <p className="sharing-note" data-testid="share-links-unavailable">
+              {'// link standing unavailable'}
+            </p>
+          ) : links.live ? (
+            <div className="dialog-content" data-testid="share-live-link">
+              <p className="sharing-note" data-testid="share-live-link-expiry">
+                {`// a link stands here — ${expiryLabel(links.expiresAt, Date.now())}`}
+              </p>
+              <button
+                type="button"
+                className="dialog-button"
+                onClick={() => void actions.convertInviteClaims()}
+                disabled={busy}
+                data-testid="share-convert-claims"
+              >
+                {actions.busy === 'convertInviteClaims' ? 'converting...' : 'convert claims'}
+              </button>
+              <button
+                type="button"
+                className="dialog-button dialog-button--danger"
+                onClick={() => void actions.revokeInviteLink()}
+                disabled={busy}
+                data-testid="share-revoke-link"
+              >
+                {actions.busy === 'revokeInviteLink' ? 'revoking...' : 'revoke link'}
+              </button>
+            </div>
+          ) : scope?.canMintShare === true ? (
             <div className="dialog-content">
               <label className="dialog-label" htmlFor="share-link-lifetime">
                 link expires
@@ -213,12 +259,23 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               </button>
             </div>
           ) : (
-            <div className="dialog-content" data-testid="invite-link">
-              <CopyableValue value={link} label="invite link" />
-              <p className="sharing-note" data-testid="invite-link-bearer">
-                {'// whoever holds this link claims it — hand it over like a key'}
-              </p>
-            </div>
+            <p className="sharing-note" data-testid="share-no-mint">
+              {'// this folder is already shared, so no further link can be minted here'}
+            </p>
+          )}
+
+          {links !== null && links.spent > 0 && (
+            <button
+              type="button"
+              className="dialog-button"
+              onClick={() => void actions.pruneInviteLinks()}
+              disabled={busy}
+              data-testid="share-prune-links"
+            >
+              {actions.busy === 'pruneInviteLinks'
+                ? 'pruning...'
+                : `forget ${links.spent} spent link record${links.spent === 1 ? '' : 's'}`}
+            </button>
           )}
 
           <div className="dialog-actions">

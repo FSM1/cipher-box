@@ -549,5 +549,14 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
         recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
         permission: permissionFrom(wasm, grant.permission),
       })) ?? null,
+    canMintShare: view.canMintShare,
+    inviteLinks:
+      view.inviteLinks === undefined
+        ? null
+        : {
+            live: view.inviteLinks.live,
+            expiresAt: view.inviteLinks.expiresAt ?? null,
+            spent: view.inviteLinks.spent,
+          },
   };
 }

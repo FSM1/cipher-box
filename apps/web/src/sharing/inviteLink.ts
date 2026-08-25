@@ -27,3 +27,14 @@ export function expiryAt(lifetime: LinkLifetime, now: number): bigint | undefine
   const days = LINK_LIFETIMES[lifetime];
   return days === null ? undefined : BigInt(now + days * 86_400_000);
 }
+
+/**
+ * How a live link's deadline reads to its owner. A deadline already behind
+ * `now` is drawn as expired rather than as a date: the link stops being
+ * claimable, and only a revoke or a prune clears the row it left.
+ */
+export function expiryLabel(expiresAt: bigint | null, now: number): string {
+  if (expiresAt === null) return 'never expires';
+  const deadline = Number(expiresAt);
+  return deadline <= now ? 'expired' : `expires ${new Date(deadline).toLocaleDateString()}`;
+}

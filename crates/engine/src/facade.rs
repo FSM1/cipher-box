@@ -355,6 +355,24 @@ impl fmt::Debug for SharingGrant {
     }
 }
 
+/// The invite-link standing this owner has at one scope, as a host renders the
+/// link half of a share dialog. Nothing here is key material: the link's own
+/// bytes stay in the owner's records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharingInviteLinks {
+    /// The scope carries exactly one link the owner recorded **and** its own
+    /// owner-signed commitment still carries — the link
+    /// [`Command::RevokeInviteLink`] cuts and [`Command::ConvertInviteClaims`]
+    /// converts against.
+    pub live: bool,
+    /// The live link's deadline in Unix millis, or `None` where it does not
+    /// expire or where there is no live link.
+    pub expires_at: Option<UnixMillis>,
+    /// This owner's records at the scope that its commitment no longer carries —
+    /// what [`Command::PruneInviteLinks`] drops.
+    pub spent: u32,
+}
+
 /// A key-free read of the sharing state a host renders for one scope: this
 /// vault's whole verified contact book, and the grants the scope's own record
 /// commits — the same altitude as [`SnapshotView`], and the read that lets a UI
@@ -370,6 +388,15 @@ pub struct SharingView {
     /// not paint as "shared with nobody". Empty is the answer for a node that is
     /// not a scope root: nothing is granted there.
     pub grants: Option<Vec<SharingGrant>>,
+    /// Whether a further share of `scope` — a grant or an invite link — would be
+    /// accepted: a share mints a fresh scope at the node and refuses one that
+    /// already names a scope. False wherever this read could not settle it, so a
+    /// host offers a mint only on a plain yes.
+    pub can_mint_share: bool,
+    /// The invite links this owner recorded at `scope`, absent where this read
+    /// could not reach the scope root or could not open those records — never an
+    /// empty standing a host would draw as "no link here".
+    pub invite_links: Option<SharingInviteLinks>,
 }
 
 /// One share this vault accepted, as a host renders it at `/shared`
@@ -2007,6 +2034,39 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     anchor_root
 }
 
+/// The three sharing fields one resolve settles, before they are split across a
+/// [`SharingView`].
+struct ScopeSharing {
+    can_mint_share: bool,
+    grants: Option<Vec<SharingGrant>>,
+    invite_links: Option<SharingInviteLinks>,
+}
+
+impl ScopeSharing {
+    /// A scope root this read could not reach: every field withheld.
+    fn unreached() -> Self {
+        Self {
+            can_mint_share: false,
+            grants: None,
+            invite_links: None,
+        }
+    }
+
+    /// A node that is not a scope root: nothing is shared there, and a share may
+    /// still mint one.
+    fn unshared() -> Self {
+        Self {
+            can_mint_share: true,
+            grants: Some(Vec::new()),
+            invite_links: Some(SharingInviteLinks {
+                live: false,
+                expires_at: None,
+                spent: 0,
+            }),
+        }
+    }
+}
+
 /// Project a scope root's grant ledger for a host: the recipient label and the
 /// committed permission, and nothing the ledger's sealed half carries.
 ///
@@ -2016,13 +2076,13 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
 /// ledger to the owner-signed commitment; this holds each row's recipient label
 /// to the owner's own binding signature, filing one it cannot vouch for under
 /// [`UNATTESTED_IDENTITY_PK`] rather than naming a party the owner never signed.
-fn project_grant_ledger(
+fn project_grant_ledger<'a>(
     owner_identity: &EcdsaVerifier,
     scope_root_ipns_name: &[u8],
-    ledger: &[GrantLedgerEntry],
+    ledger: impl IntoIterator<Item = &'a GrantLedgerEntry>,
 ) -> Vec<SharingGrant> {
     ledger
-        .iter()
+        .into_iter()
         .map(|entry| SharingGrant {
             recipient_identity_public_key: if row_is_owner_attested(
                 owner_identity,
@@ -5754,29 +5814,33 @@ where {
                 identity_public_key: contact.identity_pk().to_sec1().to_vec(),
             })
             .collect();
+        let sharing = self.scope_sharing(session, scope_root).await;
         Ok(SharingView {
             scope: scope_root,
             contacts,
-            grants: self.scope_grants(session, scope_root).await,
+            grants: sharing.grants,
+            can_mint_share: sharing.can_mint_share,
+            invite_links: sharing.invite_links,
         })
     }
 
-    /// The grant ledger `scope_root`'s record commits, projected key-free, or
-    /// `None` when this read could not reach it.
+    /// Everything one resolve of `scope_root` settles for [`Self::sharing`]: the
+    /// grant ledger its record commits projected key-free, this owner's invite
+    /// links there, and whether a further share would be accepted.
     ///
     /// The authority for what is a scope root is the vault root's owner-signed
     /// direct-child-scope index, which [`owner_scope`](Self::owner_scope) owns —
-    /// so a node it does not name is `Some(vec![])`: nothing is granted there.
-    /// A read reports, it does not repair, so an index miss refuses rather than
-    /// reaching for a derived name ([`UnindexedScope`]).
-    /// A resolve that failed is `None`, never an empty list, so a host cannot
-    /// paint "shared with nobody" over a subtree it simply could not read.
-    async fn scope_grants(
-        &self,
-        session: &SessionIdentity,
-        scope_root: NodeId,
-    ) -> Option<Vec<SharingGrant>> {
-        let api = self.api.as_ref()?;
+    /// so a node it does not name is `Some(vec![])`: nothing is granted there,
+    /// and a share may still mint one. A read reports, it does not repair, so an
+    /// index miss refuses rather than reaching for a derived name
+    /// ([`UnindexedScope`]).
+    /// A resolve that failed withholds every field, so a host cannot paint
+    /// "shared with nobody" over a subtree it simply could not read, nor offer a
+    /// mint the engine would refuse.
+    async fn scope_sharing(&self, session: &SessionIdentity, scope_root: NodeId) -> ScopeSharing {
+        let Some(api) = self.api.as_ref() else {
+            return ScopeSharing::unreached();
+        };
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let keys = || OwnerRotationKeys {
@@ -5797,23 +5861,84 @@ where {
             Ok(target) => target,
             Err(EngineError::UnsupportedTarget {
                 check: NOT_A_SCOPE_ROOT,
-            }) => return Some(Vec::new()),
-            Err(_) => return None,
+            }) => return ScopeSharing::unshared(),
+            Err(_) => return ScopeSharing::unreached(),
         };
-        let current = self
+        let Ok(current) = self
             .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
             .resolve_anchored(&target.scope)
             .await
-            .ok()?;
+        else {
+            return ScopeSharing::unreached();
+        };
         // Fail closed on a ledger the owner's commitment does not commit: the
         // write body it rides in is authored by any committed writer, so the row
         // set is only as trustworthy as the epoch-free commitment over it.
-        enforce_committed_ledger(&current.commitment, &current.grant_ledger).ok()?;
-        Some(project_grant_ledger(
-            &owner_identity,
-            &target.scope.ipns_name,
-            &current.grant_ledger,
-        ))
+        if enforce_committed_ledger(&current.commitment, &current.grant_ledger).is_err() {
+            return ScopeSharing::unreached();
+        }
+
+        // A link store this could not open is absence, not "no links": the grant
+        // half of the read still stands.
+        let records = self.invite_store(session).load().await.ok();
+        let live = records.as_ref().and_then(|records| {
+            let commitment_sig = parsed_commitment_sig(&current.commitment_sig).ok()?;
+            locate_invite_link(
+                &OwnerAuthority {
+                    identity_signer: session.identity(),
+                    enc_secret: session.enc_subkey(),
+                },
+                &CommittedScope {
+                    scope_id: &target.scope.scope_id,
+                    commitment: &current.commitment,
+                    commitment_sig: &commitment_sig,
+                    ledger: &current.grant_ledger,
+                },
+                &records.links,
+            )
+            .ok()
+            .copied()
+        });
+        let invite_links = records.as_ref().map(|records| {
+            let committed: BTreeSet<[u8; 32]> = current
+                .commitment
+                .entries
+                .iter()
+                .map(|entry| entry.tag)
+                .collect();
+            let spent = records
+                .links
+                .iter()
+                // Membership first: it costs a lookup, where binding the record
+                // to this scope costs an ECDH.
+                .filter(|link| {
+                    !committed.contains(&link.tag)
+                        && link_binds_scope(session.enc_subkey(), link, &target.scope.ipns_name)
+                })
+                .count();
+            SharingInviteLinks {
+                live: live.is_some(),
+                expires_at: live.and_then(|link| link.expires_at),
+                spent: u32::try_from(spent).unwrap_or(u32::MAX),
+            }
+        });
+
+        ScopeSharing {
+            // A share mints a fresh scope at the node, so one that already is a
+            // scope root refuses it.
+            can_mint_share: false,
+            // A link renders as a link, never as a grant row keyed by the
+            // ephemeral identity only the fragment holder answers for.
+            grants: Some(project_grant_ledger(
+                &owner_identity,
+                &target.scope.ipns_name,
+                current
+                    .grant_ledger
+                    .iter()
+                    .filter(|entry| live.is_none_or(|link| entry.tag != link.tag)),
+            )),
+            invite_links,
+        }
     }
 
     /// Read one file node's full plaintext content (blueprint/engine.md

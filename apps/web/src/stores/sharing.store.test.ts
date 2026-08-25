@@ -1,7 +1,7 @@
 import { toHex } from '@cipherbox/client';
 import type { Permission, SharingDescriptor } from '@cipherbox/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { grantsFor, sharingStore } from './sharing.store';
+import { grantsFor, sharingFor, sharingStore } from './sharing.store';
 
 const DOCS = new Uint8Array(16).fill(7);
 const PHOTOS = new Uint8Array(16).fill(9);
@@ -16,7 +16,11 @@ function key(seed: number): string {
   return toHex(identity(seed));
 }
 
-/** One engine sharing read: `contacts` by seed, `grants` by seed and permission. */
+/**
+ * One engine sharing read: `contacts` by seed, `grants` by seed and permission.
+ * A `null` ledger is a scope the read could not reach, which withholds the link
+ * standing with it.
+ */
 function view(
   scope: Uint8Array,
   contacts: number[],
@@ -32,6 +36,8 @@ function view(
         recipientIdentityPublicKey: identity(seed),
         permission,
       })) ?? null,
+    canMintShare: grants !== null && grants.length === 0,
+    inviteLinks: grants === null ? null : { live: false, expiresAt: null, spent: 0 },
   };
 }
 
@@ -128,6 +134,50 @@ describe('grants', () => {
     sharingStore.reported(view(DOCS, [1], null));
 
     expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBeNull();
+  });
+});
+
+describe('invite links', () => {
+  const linked = (spent: number, live = true): SharingDescriptor => ({
+    ...view(DOCS, [1], [[1, 'read']]),
+    canMintShare: false,
+    inviteLinks: { live, expiresAt: 1_700_000_000_000n, spent },
+  });
+
+  it('holds the standing the engine reported alongside that scope’s grants', () => {
+    sharingStore.reported(linked(2));
+
+    expect(sharingFor(sharingStore.getState(), DOCS_KEY)).toMatchObject({
+      canMintShare: false,
+      inviteLinks: { live: true, expiresAt: 1_700_000_000_000n, spent: 2 },
+    });
+  });
+
+  it('keeps the standing that stood when a read could not reach the scope root', () => {
+    sharingStore.reported(linked(2));
+    sharingStore.reported(view(DOCS, [1], null));
+
+    expect(sharingFor(sharingStore.getState(), DOCS_KEY)?.inviteLinks).toEqual({
+      live: true,
+      expiresAt: 1_700_000_000_000n,
+      spent: 2,
+    });
+  });
+
+  it('answers with no standing at all for a scope no read has covered', () => {
+    sharingStore.reported(linked(0));
+
+    expect(sharingFor(sharingStore.getState(), PHOTOS_KEY)).toBeNull();
+  });
+
+  it('takes fresh grants from a read whose link records the engine could not open', () => {
+    sharingStore.reported(linked(2));
+    sharingStore.reported({ ...view(DOCS, [1], []), inviteLinks: null });
+
+    const docs = sharingFor(sharingStore.getState(), DOCS_KEY);
+    expect(docs?.grants).toEqual([]);
+    // The standing is unknown now, which a render must not draw as "no link".
+    expect(docs?.inviteLinks).toBeNull();
   });
 });
 

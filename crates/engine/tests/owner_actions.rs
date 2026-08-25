@@ -46,8 +46,8 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, Engine, EngineError,
     EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, ResealSeeds,
-    ScopeRootIdentity, SharePointer, StoragePolicy, SyncTimingProfile, WriteHistory, post_sealed,
-    reseal_scope_root,
+    ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile,
+    WriteHistory, post_sealed, reseal_scope_root,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -402,6 +402,11 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
 /// An invite link over the vault root's scope: the row the owner commits, and
 /// the record that is the owner's only authority for calling that row a link.
 fn invite_link_at_root(secret_byte: u8) -> MintedInvite {
+    expiring_invite_link_at_root(secret_byte, None)
+}
+
+/// [`invite_link_at_root`] carrying a deadline.
+fn expiring_invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>) -> MintedInvite {
     let invitee = EphemeralInvitee::from_secret(&[secret_byte; 32]).expect("a valid scalar");
     mint_invite_grant(
         &owner_identity(),
@@ -410,7 +415,7 @@ fn invite_link_at_root(secret_byte: u8) -> MintedInvite {
         &SCOPE,
         &WRITE_SCOPE_SEED,
         CorePermission::Read,
-        None,
+        expires_at,
     )
     .expect("a contributory invitee key")
 }
@@ -817,6 +822,135 @@ fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
                 .to_vec()
         ),
         "an unverifiable owner signature must not lend a key the owner's word"
+    );
+}
+
+/// A share mints a fresh scope at the node, so a node that is not one yet is
+/// exactly where a host may still offer the mint — and nothing is shared there
+/// to report, by grant or by link.
+#[test]
+fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks, Vec::new());
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
+
+    let plain = block_on(engine.sharing(folder)).expect("a sharing read");
+    assert!(plain.can_mint_share);
+    assert_eq!(plain.grants, Some(Vec::new()));
+    assert_eq!(
+        plain.invite_links,
+        Some(SharingInviteLinks {
+            live: false,
+            expires_at: None,
+            spent: 0,
+        })
+    );
+
+    let scope = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    assert!(
+        !scope.can_mint_share,
+        "a node that already names a scope refuses the mint, so a host must not offer it"
+    );
+}
+
+/// The link half of a share dialog: the deadline the owner minted, read back
+/// from the owner's own record rather than the ledger's forgeable hint. The
+/// link's row is not a grant — its recipient is a throwaway identity only the
+/// fragment holder answers for — so it renders as the link it is and nowhere
+/// else.
+#[test]
+fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
+    let deadline = UnixMillis(1_800_000_000_000);
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let link = expiring_invite_link_at_root(0x4e, Some(deadline));
+    let grantee = recipient_row_at_root();
+    seed_vault(&world, &blocks, vec![link.row.clone(), grantee.clone()]);
+    let alice = world.device(b"alice");
+    record_links(&alice, &[link.link]);
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+
+    let view = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    assert_eq!(
+        view.invite_links,
+        Some(SharingInviteLinks {
+            live: true,
+            expires_at: Some(deadline),
+            spent: 0,
+        })
+    );
+
+    let named: Vec<Vec<u8>> = view
+        .grants
+        .expect("the scope root resolved")
+        .into_iter()
+        .map(|grant| grant.recipient_identity_public_key)
+        .collect();
+    assert_eq!(
+        named,
+        vec![grantee.ledger_entry.recipient_identity_pk.to_vec()],
+        "the grant list is the personal grants, with the link's own row filtered out"
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    let revoked = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    assert_eq!(
+        revoked.invite_links,
+        Some(SharingInviteLinks {
+            live: false,
+            expires_at: None,
+            spent: 0,
+        }),
+        "the cut landed and took the record with it, so there is nothing left to prune"
+    );
+}
+
+/// A record the scope's own commitment no longer carries is spent: a mint whose
+/// publish failed, or a cut whose record outlived it. The read reports exactly
+/// what a prune would drop, so a host can offer the reclaim without guessing.
+#[test]
+fn the_sharing_read_counts_the_records_a_prune_would_drop() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let grantee = recipient_row_at_root();
+    seed_vault(&world, &blocks, vec![grantee]);
+    let alice = world.device(b"alice");
+    record_links(&alice, &[invite_link_at_root(0x5f).link]);
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+
+    let view = block_on(engine.sharing(ROOT)).expect("a sharing read");
+    assert_eq!(
+        view.invite_links,
+        Some(SharingInviteLinks {
+            live: false,
+            expires_at: None,
+            spent: 1,
+        })
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::PruneInviteLinks { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    assert!(
+        recorded_links(&alice).is_empty(),
+        "the count the read reported is the count the prune dropped"
+    );
+    assert_eq!(
+        block_on(engine.sharing(ROOT))
+            .expect("a sharing read")
+            .invite_links,
+        Some(SharingInviteLinks {
+            live: false,
+            expires_at: None,
+            spent: 0,
+        })
     );
 }
 

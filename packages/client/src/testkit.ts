@@ -100,7 +100,13 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
 
 /** A minimal empty sharing descriptor for transport-plumbing assertions. */
 export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDescriptor {
-  return { scope, contacts: [], grants: [] };
+  return {
+    scope,
+    contacts: [],
+    grants: [],
+    canMintShare: true,
+    inviteLinks: { live: false, expiresAt: null, spent: 0 },
+  };
 }
 
 const notStubbed = (method: string): Promise<never> =>

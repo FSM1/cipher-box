@@ -109,6 +109,8 @@ describe('EngineProvider', () => {
         },
       ],
       grants: [],
+      canMintShare: true,
+      inviteLinks: { live: false, expiresAt: null, spent: 0 },
     });
 
     unmount();

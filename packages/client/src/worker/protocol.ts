@@ -140,6 +140,22 @@ export interface SharingGrantDescriptor {
 }
 
 /**
+ * A scope's invite links, as data (mirrors `SharingInviteLinks`). Never the
+ * capability: the engine hands out a link's fragment once, at the mint.
+ */
+export interface SharingInviteLinksDescriptor {
+  /** The scope carries a live link — the one a revoke cuts and claims convert against. */
+  live: boolean;
+  /**
+   * The live link's Unix-millis deadline; `null` where it does not expire or
+   * where there is no live link.
+   */
+  expiresAt: bigint | null;
+  /** The owner's records here that the scope's commitment no longer carries — what a prune drops. */
+  spent: number;
+}
+
+/**
  * One scope's sharing state, as data (mirrors the facade `SharingView`).
  * A wire projection of view state the engine owns, not the forbidden
  * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
@@ -150,6 +166,10 @@ export interface SharingDescriptor {
   contacts: SharingContactDescriptor[];
   /** `null` when the read could not reach the scope root — see `SharingView`. */
   grants: SharingGrantDescriptor[] | null;
+  /** A further share of this scope would be accepted; false wherever the read could not settle it. */
+  canMintShare: boolean;
+  /** `null` where the read could not reach the scope root or open the owner's link records. */
+  inviteLinks: SharingInviteLinksDescriptor | null;
 }
 
 /**
