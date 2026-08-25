@@ -25,13 +25,12 @@ export interface VaultWarning {
   detail: string | null;
 }
 
-/** Whether the vault is also projected as a filesystem, and where. */
-export interface MountStatus {
-  /** The mount point, once a mount is live. */
-  path: string | null;
-  /** Why there is no mount. A mount failure never fails the session. */
-  refusal: string | null;
-}
+/**
+ * Whether the vault is also projected as a filesystem, and where. Exactly one
+ * of the two is set: a mount with no path could not be opened, and a session
+ * with no mount and no reason is the silent failure this line prevents.
+ */
+export type MountStatus = { path: string; refusal: null } | { path: null; refusal: string };
 
 export interface VaultStatus {
   /** Items directly under the vault root. */

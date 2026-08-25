@@ -13,8 +13,7 @@ use crate::engine::DesktopSeamTypes;
 /// here, so the line says what is missing rather than what to try.
 const NO_ADAPTER: &str = "CipherBox does not mount your vault on this platform yet";
 
-/// One decoded kernel request. There is no mount to decode one from, so there
-/// is no value of this type — the wake source that would carry one never fires.
+/// One decoded kernel request. There is no mount to decode one from.
 pub enum KernelOp {}
 
 /// The session's engine, held where a mounted platform holds an operation core.

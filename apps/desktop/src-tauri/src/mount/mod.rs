@@ -1,15 +1,9 @@
 //! The vault's mount across the session lifecycle (blueprint/desktop.md
 //! "Lifecycle").
 //!
-//! A mount failure never fails the session: the engine is started and the
-//! sign-in verdict returned before this module runs, so all it decides is
-//! whether the vault is *also* projected as a filesystem — and it says why it
-//! is not when it is not.
-//!
-//! [`Projection`] owns the session's engine from then on: mounted, it holds the
-//! operation core the engine lives inside; unmounted, it holds the engine
-//! directly. A platform `crates/fuse` has no host adapter for gets the second
-//! shape and nothing else changes.
+//! [`Projection`] owns the session's engine: mounted, it holds the operation
+//! core the engine lives inside; unmounted, it holds the engine directly. A
+//! platform `crates/fuse` has no host adapter for takes the second shape.
 
 use serde::Serialize;
 

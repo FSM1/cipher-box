@@ -300,16 +300,20 @@ fn open_private(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Owner-only: the one rule every directory CipherBox makes for itself carries,
+/// whether it holds sealed spill blocks or is a mount point about to hold
+/// plaintext.
 #[cfg(unix)]
-fn restrict_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn restrict_dir(dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
-/// Off unix the directory keeps the permissions it was created with; it holds
-/// nothing but sealed blocks, for the reason given on `open_private`.
+/// Off unix the directory keeps the permissions it was created with; the spill
+/// area holds nothing but sealed blocks, for the reason given on
+/// `open_private`.
 #[cfg(not(unix))]
-fn restrict_dir(_dir: &Path) -> io::Result<()> {
+pub(crate) fn restrict_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 

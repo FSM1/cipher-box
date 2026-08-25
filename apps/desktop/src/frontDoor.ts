@@ -243,11 +243,11 @@ function vault(model: ShellModel): HTMLElement {
  * A refusal is an error rather than a muted note: a member who thinks the mount
  * is there works in a folder nothing is watching.
  */
-function mountLine({ path, refusal }: MountStatus): HTMLElement {
-  if (path !== null) {
-    return text('p', `Mounted at ${path}`, { class: 'muted', 'data-vault': 'mount' });
+function mountLine(mount: MountStatus): HTMLElement {
+  if (mount.path !== null) {
+    return text('p', `Mounted at ${mount.path}`, { class: 'muted', 'data-vault': 'mount' });
   }
-  return text('p', refusal ?? 'Your vault is not mounted on this device', {
+  return text('p', mount.refusal, {
     class: 'error',
     role: 'alert',
     'data-vault': 'mount-refused',

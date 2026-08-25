@@ -37,9 +37,8 @@ base64.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
 
-# The filesystem the engine is projected through. Only the platforms
-# `crates/fuse` ships a host adapter for take it; the rest run the session with
-# no mount (`src/mount/detached.rs`).
+# The filesystem the engine is projected through. A platform with no host
+# adapter runs the session with no mount (`src/mount/detached.rs`).
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 cipherbox-fuse.workspace = true
 

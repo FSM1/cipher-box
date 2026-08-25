@@ -74,9 +74,7 @@ pub struct VaultStatus {
     pub provisioned: bool,
     /// Conditions the engine raised that no snapshot carries.
     pub warnings: Vec<VaultWarning>,
-    /// Whether the vault is also projected as a filesystem, and where. A mount
-    /// failure never fails the session, so a signed-in status carries the
-    /// refusal rather than the sign-in refusing.
+    /// Whether the vault is also projected as a filesystem, and where.
     pub mount: MountStatus,
 }
 
@@ -225,13 +223,12 @@ impl EngineHost {
     /// has joined, and a directory removed under a running engine would be
     /// rebuilt by the next write.
     pub fn forget_device(&self) -> Result<(), String> {
-        let account_dir = match self.live.lock() {
-            Ok(live) => live.as_ref().map(|live| live.account_dir.clone()),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .as_ref()
-                .map(|live| live.account_dir.clone()),
-        };
+        let account_dir = self
+            .live
+            .lock()
+            .map_err(|_| POISONED)?
+            .as_ref()
+            .map(|live| live.account_dir.clone());
         self.log_out();
         let Some(account_dir) = account_dir else {
             return Err(NO_SESSION.to_owned());
@@ -285,12 +282,14 @@ impl EngineHost {
         secret: Zeroizing<Vec<u8>>,
         session: SessionEnv,
     ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
-        let account_dir = account_data_dir(&session.data_local_dir, &account_id(&secret)?)
-            .map_err(|error| error.to_string())?;
         let mut live = self.live.lock().map_err(|_| POISONED)?;
         if live.is_some() {
             return Err(ALREADY_LIVE.to_owned());
         }
+        // Past the slot check: naming the account is a scalar multiplication,
+        // and a refused second start has no account to name.
+        let account_dir = account_data_dir(&session.data_local_dir, &account_id(&secret)?)
+            .map_err(|error| error.to_string())?;
 
         let (requests, inbox) = mpsc::unbounded_channel();
         let (verdict, started) = oneshot::channel();
@@ -369,8 +368,8 @@ fn host_engine(
                 return;
             }
         };
-        // The sign-in verdict is settled before the mount is attempted, so a
-        // mount failure has no way to fail the session it reports itself in.
+        // Settled before the mount is attempted: that is what leaves a mount
+        // failure no way to fail the session it reports itself in.
         let _ = verdict.send(Ok(()));
 
         let projection = Projection::open(engine, &session.home_dir, &account_dir);
@@ -430,7 +429,7 @@ async fn start_engine(
 enum Woke {
     /// The host asked for something, or closed the channel — logout or quit.
     Request(Option<Request>),
-    /// The engine emitted, or stopped emitting.
+    /// The engine emitted, or dropped its stream.
     Event(Option<Event>),
     /// The kernel asked the mount for something.
     Op(KernelOp),
@@ -446,22 +445,16 @@ async fn serve(
     changed: Box<dyn Fn() + Send>,
 ) {
     let mut warnings = Warnings::default();
-    // A stream that has ended is polled out of the select rather than left in
-    // it: `None` is immediately ready, and a branch that is always ready would
-    // starve the other two.
-    let mut emitting = true;
     loop {
-        // Scoped so every wake source's borrow of the projection is released
-        // before the arm that answers takes its own.
-        let woke = {
-            tokio::select! {
-                request = inbox.recv() => Woke::Request(request),
-                event = events.next(), if emitting => Woke::Event(event),
-                op = projection.next_op() => Woke::Op(op),
-            }
+        let woke = tokio::select! {
+            request = inbox.recv() => Woke::Request(request),
+            event = events.next() => Woke::Event(event),
+            op = projection.next_op() => Woke::Op(op),
         };
         match woke {
-            Woke::Request(None) => break,
+            // The host closed the channel, or the engine stopped emitting —
+            // which it only does by dropping, and this loop is what holds it.
+            Woke::Request(None) | Woke::Event(None) => break,
             Woke::Request(Some(Request::Status(reply))) => {
                 let _ = reply.send(status(&mut projection, &warnings).await);
             }
@@ -471,7 +464,6 @@ async fn serve(
             Woke::Request(Some(Request::ForgetCredentials)) => {
                 let _ = credentials.clear_refresh_token().await;
             }
-            Woke::Event(None) => emitting = false,
             Woke::Event(Some(event)) => {
                 warnings.record(&event);
                 projection.absorb(&event).await;

@@ -10,7 +10,7 @@ use fuser::MountOption;
 use crate::adapter::HostCapabilities;
 use crate::adapters::fuse::{FuseMount, MountProfile};
 
-/// Mount at `mountpoint`, which must already exist.
+/// Mount at `mountpoint`, which is prepared first.
 pub fn mount(mountpoint: &Path) -> io::Result<FuseMount> {
     FuseMount::at(mountpoint, profile())
 }
