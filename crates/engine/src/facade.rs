@@ -2027,13 +2027,9 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
 /// nothing: the commitment anchor and the blinded tag are both contact-held, so
 /// there is no verified identity left to hold the record to.
 async fn refresh_received_shares<T, H, F, St, E>(
-    transport: &T,
-    gateway: &Gateway,
-    http: &H,
-    floors: &F,
+    status: &ReceivedShareStatus<'_, T, H, F>,
     staging: &St,
     entropy: &RefCell<E>,
-    enc_secret: &X25519Secret,
     resolutions: &RefCell<BTreeMap<Vec<u8>, ResolutionClass>>,
 ) where
     T: RecordTransport,
@@ -2042,6 +2038,7 @@ async fn refresh_received_shares<T, H, F, St, E>(
     St: StagingStore,
     E: Entropy,
 {
+    let enc_secret = status.enc_secret;
     let Ok(received) = StagingReceivedShareStore::new(staging, enc_secret, entropy)
         .load()
         .await
@@ -2053,13 +2050,6 @@ async fn refresh_received_shares<T, H, F, St, E>(
         .await
     else {
         return;
-    };
-    let status = ReceivedShareStatus {
-        transport,
-        gateway,
-        http,
-        floors,
-        enc_secret,
     };
     let mut resolved = BTreeMap::new();
     for share in received.iter() {
@@ -3598,13 +3588,15 @@ where {
                     // only loop a grantee runs, so a bookmarked shared scope is
                     // re-classified here or nowhere.
                     refresh_received_shares(
-                        &transport,
-                        &gateway,
-                        &http,
-                        &floors,
+                        &ReceivedShareStatus {
+                            transport: &transport,
+                            gateway: &gateway,
+                            http: &http,
+                            floors: &floors,
+                            enc_secret: &enc_subkey,
+                        },
                         &staging,
                         &entropy,
-                        &enc_subkey,
                         &received_resolution,
                     )
                     .await;
@@ -9025,6 +9017,35 @@ mod tests {
         /// Publish an owner-signed re-point at `SCOPE`'s **scope**-pointer name
         /// vouching `write_epoch` — the plane a write-only rotation re-points,
         /// and the one the polled consult reads.
+        use cipherbox_core::seal::Permission as CorePermission;
+        use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+        use cipherbox_core::suite::secret::SecretBytes;
+
+        use crate::grants::ReceivedSharesList;
+
+        /// A shared scope this session has accepted, whose scope root nothing on
+        /// the record plane answers for.
+        const SHARED_SCOPE: [u8; 16] = [0x7d; 16];
+
+        /// Persist one received-share bookmark into this device's durable list,
+        /// the state an accept leaves behind.
+        fn bookmark_a_received_share(device: &FakeDevice) {
+            let enc_secret = kdf::enc_subkey(&CAP_SECRET);
+            let entropy = RefCell::new(SeededEntropy::new(11));
+            let store =
+                StagingReceivedShareStore::new(&device.staging_store, &enc_secret, &entropy);
+            let mut list = ReceivedSharesList::new();
+            list.reconcile(crate::grants::ReceivedShare {
+                scope_root_name: child_name().as_str().as_bytes().to_vec(),
+                scope_id: SHARED_SCOPE,
+                sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+                display_name: "shared-folder".to_owned(),
+                permission: CorePermission::Read,
+                pointer_read_key: SecretBytes::new([0x9a; 32]),
+            });
+            block_on(store.persist(&list)).expect("the list persists");
+        }
+
         fn seed_scope_pointer(device: &FakeDevice, root_name: &IpnsName, write_epoch: u64) {
             let owner_seed = kdf::owner_pointer_seed(&CAP_SECRET);
             let read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &SCOPE);
@@ -9180,6 +9201,37 @@ mod tests {
                 engine.held_records.borrow()[&ROOT.0].routing_key,
                 moved.as_str(),
                 "and a gate refusal holds nothing (fail-closed)"
+            );
+        }
+
+        /// The `/shared` read: the durable bookmark's key-free fields, and the
+        /// verdict only a pass that actually resolved the scope root can supply.
+        /// A share nothing has resolved yet reports no verdict at all — a host
+        /// must not paint that as "still granted".
+        #[test]
+        fn received_shares_carry_no_verdict_until_a_pass_reaches_one() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            bookmark_a_received_share(&device);
+
+            let before = block_on(engine.received_shares()).expect("the list reads");
+            assert_eq!(before.len(), 1);
+            assert_eq!(before[0].display_name, "shared-folder");
+            assert_eq!(before[0].scope, NodeId(SHARED_SCOPE));
+            assert_eq!(before[0].permission, Permission::Read);
+            assert_eq!(
+                before[0].resolution, None,
+                "no pass has resolved this scope root yet"
+            );
+
+            tick(&world, &device, &mut tasks);
+
+            let after = block_on(engine.received_shares()).expect("the list reads");
+            assert_eq!(
+                after[0].resolution,
+                Some(ResolutionClass::Unresolvable),
+                "a scope root nothing answers at is unresolvable, never a revocation",
             );
         }
 

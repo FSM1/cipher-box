@@ -363,6 +363,14 @@ describe('EngineFacade', () => {
     expect(transport.sharingReads).toEqual([scope, null]);
   });
 
+  it('forwards a received-shares read', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await facade.receivedShares();
+    expect(transport.receivedShareReads).toBe(1);
+  });
+
   it('reads the SIWE nonce over the transport rather than the API', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
