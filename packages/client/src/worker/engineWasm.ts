@@ -108,14 +108,13 @@ export interface WasmSharingContact {
 export interface WasmSharingGrant {
   readonly recipientIdentityPublicKey: Uint8Array;
   readonly permission: number;
-  readonly expiresAt?: bigint;
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
 export interface WasmSharingView {
   readonly scope: Uint8Array;
   readonly contacts: readonly WasmSharingContact[];
-  readonly grants: readonly WasmSharingGrant[];
+  readonly grants?: readonly WasmSharingGrant[];
 }
 
 /** wasm-bindgen `EngineHandle` — the one engine instance. */

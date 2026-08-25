@@ -965,10 +965,9 @@ where
         let source = self
             .swept_scope(parent)
             .map_err(|_| RotationPublishError::Rejected)?;
-        // The base is the node's own record as this pass gates it inside the
-        // scope it is leaving. A node that already answers as a scope root is
-        // not a promotion, and one whose record does not gate is refused rather
-        // than republished under a body this pass invented.
+        // A node that already answers as a scope root is not a promotion, and
+        // one whose record does not gate is refused rather than republished
+        // under a body this pass invented ([`ScopeRootPromoter`]).
         let current = match self.resolve_child(parent, node).await {
             Ok(SweptChild::Interior(current)) => current,
             Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
@@ -982,13 +981,7 @@ where
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
         };
-        // Floor law item 3's mint source: nothing else ever seeds a freshly
-        // minted scope's write-epoch floor, and the root's own owner-write-blob
-        // binds that floor as AAD. The value is the parent's own durable write
-        // floor, so this reaches no epoch the device did not already hold, and
-        // the scope id is minted here — no other pass can hold its lease, so the
-        // raise cannot defer under the publish that follows it.
-        floor::advance_write_epoch_on_sight(self.floors, &record.scope_id, record.write_epoch)
+        floor::seed_write_epoch_on_mint(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
         self.root_publish()
@@ -998,11 +991,15 @@ where
 }
 
 /// Carry a sweep read verdict into the promotion's publish arm on rule 6's
-/// axis: only a transport stall is retryable.
+/// axis: only a transport stall is retryable. Exhaustive, so a new verdict has
+/// to be classified rather than defaulting to a trust refusal.
 fn promote_verdict(failure: SweepResolveFailure) -> RotationPublishError {
     match failure {
         SweepResolveFailure::Unavailable => RotationPublishError::NotPublished,
-        _ => RotationPublishError::Rejected,
+        SweepResolveFailure::Rejected
+        | SweepResolveFailure::Superseded
+        | SweepResolveFailure::Unreadable
+        | SweepResolveFailure::ConflictingChildLabel => RotationPublishError::Rejected,
     }
 }
 

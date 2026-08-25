@@ -17,7 +17,6 @@
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
-use core::num::NonZeroU64;
 use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -93,7 +92,7 @@ use crate::sync::drain::{Drain, DrainReport, DrainScope, published_op_mark};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pointer::{ConsultReason, PointerFetch, should_consult};
+use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
@@ -109,8 +108,8 @@ use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, consult_scopes, focus_folders, focus_folders_due,
-    focus_window_expired, on_access_refresh_due, pointer_consult_due, resolve_mode, run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_folders,
+    focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -339,9 +338,6 @@ pub struct SharingGrant {
     pub recipient_identity_public_key: Vec<u8>,
     /// The permission the scope root commits for this recipient.
     pub permission: Permission,
-    /// The row's advisory expiry in Unix millis, if it carries one. Not a
-    /// capability boundary — no owner signature covers it.
-    pub expires_at: Option<u64>,
 }
 
 impl fmt::Debug for SharingGrant {
@@ -352,7 +348,6 @@ impl fmt::Debug for SharingGrant {
                 &RedactedBytes::of(&self.recipient_identity_public_key),
             )
             .field("permission", &self.permission)
-            .field("expires_at", &self.expires_at)
             .finish()
     }
 }
@@ -367,9 +362,11 @@ pub struct SharingView {
     pub scope: NodeId,
     /// Every contact this vault has imported, ordered as the book stores them.
     pub contacts: Vec<SharingContact>,
-    /// The grants standing on `scope`, ordered as the ledger commits them.
-    /// Empty for a node that is not a scope root — nothing is granted there.
-    pub grants: Vec<SharingGrant>,
+    /// The grants standing on `scope`, ordered as the ledger commits them, or
+    /// `None` when this read could not reach the scope root — absence a host must
+    /// not paint as "shared with nobody". Empty is the answer for a node that is
+    /// not a scope root: nothing is granted there.
+    pub grants: Option<Vec<SharingGrant>>,
 }
 
 /// One retained dead-lettered op and why it will never publish. The reason is
@@ -1839,14 +1836,28 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
 /// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
 /// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
 /// classification; neither carries key material.
-/// One tick's pointer-consult window: the scopes to consult, the session anchor
-/// that scopes the write-epoch regression stage, and the clock its interval
-/// damper reads.
-struct ConsultWindow<'a> {
+pub(crate) fn emit_trust_violation(
+    events: &mpsc::UnboundedSender<Event>,
+    routing_key: &str,
+    detail: impl fmt::Display,
+) {
+    let _ = events.unbounded_send(Event::AttributableAbuse {
+        description: format!("{routing_key}: {detail}"),
+    });
+}
+
+/// What [`Engine::sharing`] calls a node the vault root's committed child-scope
+/// index does not name — not an error to the caller, which reads it as "no scope
+/// root here, so nothing is granted".
+const NOT_A_SCOPE_ROOT: &str = "sharing-target-is-not-a-scope-root";
+
+/// One tick's pointer-consult window: the scopes due this pass
+/// ([`consult_scopes_due`]), the session anchor that scopes the write-epoch
+/// regression stage, and the clock the stamps are taken from.
+struct ConsultWindow {
     scopes: Vec<NodeId>,
     session_root_scope_id: [u8; 16],
     now: UnixMillis,
-    profile: &'a SyncTimingProfile,
 }
 
 /// The focus tick's polled scope-pointer consults (`crate::sync::pointer`:
@@ -1855,16 +1866,15 @@ struct ConsultWindow<'a> {
 /// Each consult advances the scope's write-epoch floor on sight, which is what
 /// evicts the `writeScopeSeed` a write-only rotation retired — that rotation
 /// leaves the read epoch untouched, so the sweep's event-driven consult never
-/// fires for it. A refusal is a trust verdict and is surfaced; an unavailable
-/// pointer leaves the stamp unset, so the next tick retries rather than waiting
-/// out the interval.
+/// fires for it. An unavailable pointer leaves the stamp unset, so the next tick
+/// retries rather than waiting out the interval.
 async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     transport: &T,
     floors: &F,
     keys: &RefCell<Option<Rc<SweepKeys>>>,
     events: &mpsc::UnboundedSender<Event>,
     consulted: &RefCell<BTreeMap<NodeId, UnixMillis>>,
-    window: ConsultWindow<'_>,
+    window: ConsultWindow,
 ) {
     // The pass owns a copy for exactly its own duration, on the same terms as
     // the tick's enc subkey: teardown empties the cell.
@@ -1872,11 +1882,6 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
         return;
     };
     for scope in window.scopes {
-        let last_consulted = consulted.borrow().get(&scope).copied();
-        let due = pointer_consult_due(window.now, last_consulted, window.profile);
-        if should_consult(false, due, false) != Some(ConsultReason::FocusTick) {
-            continue;
-        }
         let consult = PointerConsult {
             owner_pointer_seed: keys.scope_keys.pointer_seed(),
             scope_keys: &keys.scope_keys,
@@ -1885,18 +1890,20 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
             session_root_scope_id: window.session_root_scope_id,
         };
         match consult.run(transport, floors, &scope.0).await {
-            Ok(_) => {
-                consulted.borrow_mut().insert(scope, window.now);
-            }
-            Err(PointerConsultError::Rejected) => {
-                let _ = events.unbounded_send(Event::AttributableAbuse {
-                    description: format!(
-                        "scope pointer for {}: unauthenticated, or vouched below the write-epoch floor",
-                        hex_lower(&scope.0)
-                    ),
-                });
-            }
             Err(PointerConsultError::Unavailable) => {}
+            outcome => {
+                // A verdict is stable, so a refusal is stamped like a clean
+                // consult: re-polling a rolled-back pointer every tick would
+                // repeat its abuse event forever without changing it.
+                consulted.borrow_mut().insert(scope, window.now);
+                if outcome.is_err() {
+                    emit_trust_violation(
+                        events,
+                        &hex_lower(&scope.0),
+                        "scope pointer unauthenticated, or vouched below the write-epoch floor",
+                    );
+                }
+            }
         }
     }
 }
@@ -1909,19 +1916,8 @@ fn project_grant_ledger(ledger: &[GrantLedgerEntry]) -> Vec<SharingGrant> {
         .map(|entry| SharingGrant {
             recipient_identity_public_key: entry.recipient_identity_pk.to_vec(),
             permission: entry.permission.into(),
-            expires_at: entry.expires_at.map(NonZeroU64::get),
         })
         .collect()
-}
-
-pub(crate) fn emit_trust_violation(
-    events: &mpsc::UnboundedSender<Event>,
-    routing_key: &str,
-    detail: impl fmt::Display,
-) {
-    let _ = events.unbounded_send(Event::AttributableAbuse {
-        description: format!("{routing_key}: {detail}"),
-    });
 }
 
 /// The record bytes already held for `name` under `node`, when the scope seeds
@@ -3243,7 +3239,20 @@ where {
                     // The polled pointer consult (#38 D4), ahead of the floor
                     // refresh below so a write epoch this pass sights evicts the
                     // seed it retired in the same pass.
-                    let consult_targets = consult_scopes(&base.borrow(), &focus.borrow());
+                    let now = scheduler.now();
+                    // A manual refresh resolves nocache everywhere, so it
+                    // consults every scope in the window rather than waiting out
+                    // the interval the poll leg is paced by.
+                    let consult_targets = match mode {
+                        ResolveMode::NoCache => consult_scopes(&base.borrow(), &focus.borrow()),
+                        ResolveMode::CacheFirst => consult_scopes_due(
+                            &base.borrow(),
+                            &focus.borrow(),
+                            &pointer_consulted.borrow(),
+                            now,
+                            &profile,
+                        ),
+                    };
                     consult_pointers(
                         &transport,
                         &floors,
@@ -3253,8 +3262,7 @@ where {
                         ConsultWindow {
                             scopes: consult_targets,
                             session_root_scope_id: root_id,
-                            now: scheduler.now(),
-                            profile: &profile,
+                            now,
                         },
                     )
                     .await;
@@ -3785,6 +3793,19 @@ where {
     /// The recipient's encryption subkey is only usable because a verified
     /// binding signature tied it to this identity key at import — a key taken
     /// from the command instead would let a host wrap a grant to anyone.
+    /// This session's contact book over the staging store — the one place the
+    /// three-seam construction lives.
+    fn contact_store<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+    ) -> StagingContactStore<'a, T::StagingStore, Box<dyn Entropy>> {
+        StagingContactStore::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+    }
+
     async fn recipient_contact(
         &self,
         session: &SessionIdentity,
@@ -3796,16 +3817,9 @@ where {
                 .map_err(|_| EngineError::MalformedInput {
                     check: "recipient-identity-key-length",
                 })?;
-        resolve_recipient(
-            &StagingContactStore::new(
-                &self.seams.staging_store,
-                session.enc_subkey(),
-                &self.entropy,
-            ),
-            &identity_pk,
-        )
-        .await
-        .map_err(EngineError::from_contact_store)
+        resolve_recipient(&self.contact_store(session), &identity_pk)
+            .await
+            .map_err(EngineError::from_contact_store)
     }
 
     /// Re-drive `attempt` under the rotation caller contract's bound
@@ -5208,42 +5222,52 @@ where {
     ///
     /// A node the vault root's committed child-scope index does not name is not
     /// a scope root, and nothing is granted at it: the grant list is empty, and
-    /// that emptiness is the answer, not an unknown.
+    /// that emptiness is the answer. A node this vault does not hold at all is
+    /// [`EngineError::UnknownNode`], and a scope root this read could not reach
+    /// leaves `grants` absent rather than empty.
     pub async fn sharing(&self, scope_root: NodeId) -> Result<SharingView, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let contacts = StagingContactStore::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        )
-        .contacts()
-        .await
-        .map_err(EngineError::from_contact_store)?
-        .into_iter()
-        .map(|contact| SharingContact {
-            identity_public_key: contact.identity_pk().to_sec1().to_vec(),
-            encryption_public_key: contact.enc_subkey().to_bytes().to_vec(),
-        })
-        .collect();
+        // A node this vault does not hold is a caller error, and must not read
+        // back as the empty grant list a node that is simply not a scope root
+        // answers with.
+        {
+            let base = self.snapshot.borrow();
+            if scope_root != base.root && !base.contains(scope_root) {
+                return Err(EngineError::UnknownNode);
+            }
+        }
+        let contacts = self
+            .contact_store(session)
+            .contacts()
+            .await
+            .map_err(EngineError::from_contact_store)?
+            .into_iter()
+            .map(|contact| SharingContact {
+                identity_public_key: contact.identity_pk().to_sec1().to_vec(),
+                encryption_public_key: contact.enc_subkey().to_bytes().to_vec(),
+            })
+            .collect();
         Ok(SharingView {
             scope: scope_root,
             contacts,
-            grants: self.scope_grants(session, scope_root).await?,
+            grants: self.scope_grants(session, scope_root).await,
         })
     }
 
-    /// The grant ledger `scope_root`'s record commits, projected key-free.
+    /// The grant ledger `scope_root`'s record commits, projected key-free, or
+    /// `None` when this read could not reach it.
     ///
     /// The authority for what is a scope root is the vault root's owner-signed
-    /// direct-child-scope index — the same authority
-    /// [`owner_scope`](Self::owner_scope) reads — so a node it does not name
-    /// carries no grants.
+    /// direct-child-scope index, which [`owner_scope`](Self::owner_scope) owns —
+    /// so a node it does not name is `Some(vec![])`: nothing is granted there.
+    /// A resolve that failed is `None`, never an empty list, so a host cannot
+    /// paint "shared with nobody" over a subtree it simply could not read.
     async fn scope_grants(
         &self,
         session: &SessionIdentity,
         scope_root: NodeId,
-    ) -> Result<Vec<SharingGrant>, EngineError> {
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+    ) -> Option<Vec<SharingGrant>> {
+        let api = self.api.as_ref()?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let keys = || OwnerRotationKeys {
@@ -5251,37 +5275,22 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
-        let parent = self.vault_root_scope()?;
-        let current = self
-            .owner_rotation_net(api, keys(), RotationAncestry::default(), None)
-            .resolve_vault_root(&parent)
+        let target = match self
+            .owner_scope(scope_root, api, keys(), NOT_A_SCOPE_ROOT)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
-        if scope_root.0 == parent.scope_id {
-            return Ok(project_grant_ledger(&current.grant_ledger));
-        }
-        let Some(scope) = current
-            .direct_child_scope_index
-            .iter()
-            .find(|child| child.scope_id == scope_root.0)
-            .cloned()
-        else {
-            return Ok(Vec::new());
+        {
+            Ok(target) => target,
+            Err(EngineError::UnsupportedTarget {
+                check: NOT_A_SCOPE_ROOT,
+            }) => return Some(Vec::new()),
+            Err(_) => return None,
         };
-        let parent_node_seed =
-            Zeroizing::new(*kdf::node_seed(&current.override_seed, &scope_root.0).as_bytes());
-        let target = self
-            .owner_rotation_net(
-                api,
-                keys(),
-                RotationAncestry::default()
-                    .under_parent_node_seed(scope_root.0, Some(&parent_node_seed)),
-                None,
-            )
-            .resolve_anchored(&scope)
+        let current = self
+            .owner_rotation_net(api, keys(), target.ancestry(), None)
+            .resolve_anchored(&target.scope)
             .await
-            .map_err(EngineError::from_resolve_failure)?;
-        Ok(project_grant_ledger(&target.grant_ledger))
+            .ok()?;
+        Some(project_grant_ledger(&current.grant_ledger))
     }
 
     /// Read one file node's full plaintext content (blueprint/engine.md
@@ -8409,8 +8418,6 @@ mod tests {
             );
         }
 
-        /// The write-epoch floor is the same rule on the seed the drain mints
-        /// every new node's name and signer from.
         /// Publish an owner-signed re-point at `SCOPE`'s **scope**-pointer name
         /// vouching `write_epoch` — the plane a write-only rotation re-points,
         /// and the one the polled consult reads.
@@ -8480,6 +8487,8 @@ mod tests {
             );
         }
 
+        /// The write-epoch floor is the same rule on the seed the drain mints
+        /// every new node's name and signer from.
         #[test]
         fn a_write_epoch_floor_rise_evicts_the_cached_scope_write_seed() {
             let world = FakeWorld::new();

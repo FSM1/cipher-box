@@ -127,17 +127,9 @@ export interface SharingContactDescriptor {
 
 /** One grant a scope's ledger commits, as data (mirrors `SharingGrant`). */
 export interface SharingGrantDescriptor {
-  /**
-   * Joins the row to a contact by identity key. All-zero for a row the owner
-   * could not vouch for, which joins to no contact.
-   */
+  /** Joins the row to a contact by identity key. */
   recipientIdentityPublicKey: Uint8Array;
   permission: Permission;
-  /**
-   * Advisory expiry in Unix millis, `null` when the row carries none. Not a
-   * capability boundary — no owner signature covers it.
-   */
-  expiresAt: bigint | null;
 }
 
 /**
@@ -149,8 +141,8 @@ export interface SharingDescriptor {
   scope: Uint8Array;
   /** This vault's whole contact book, re-verified from each stored code. */
   contacts: SharingContactDescriptor[];
-  /** Empty for a node that is not a scope root — nothing is granted there. */
-  grants: SharingGrantDescriptor[];
+  /** `null` when the read could not reach the scope root — see `SharingView`. */
+  grants: SharingGrantDescriptor[] | null;
 }
 
 /** Where a version's bytes are pinned (mirrors the facade `PinMode`). */

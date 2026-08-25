@@ -27,7 +27,6 @@ function view(grants: Permission[]): SharingDescriptor {
     grants: grants.map((permission) => ({
       recipientIdentityPublicKey: IDENTITY,
       permission,
-      expiresAt: null,
     })),
   };
 }

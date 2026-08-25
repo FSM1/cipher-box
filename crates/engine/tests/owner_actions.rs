@@ -682,21 +682,40 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
         vec![recipient_pk.clone()],
         "the imported contact is offered as a recipient with no re-import"
     );
-    assert!(
-        before.grants.is_empty(),
-        "an ordinary folder is not a scope root, so nothing is granted at it"
+    assert_eq!(
+        before.grants,
+        Some(Vec::new()),
+        "an ordinary folder is not a scope root, so nothing is granted at it — \
+         reported as an empty list, never as an unreachable one"
     );
 
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
 
     let after = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
     assert_eq!(after.scope, fx.folder);
-    assert_eq!(after.grants.len(), 1, "the granted scope commits one row");
+    let rows = after.grants.expect("the granted scope root resolved");
+    assert_eq!(rows.len(), 1, "the granted scope commits one row");
     assert_eq!(
-        after.grants[0].recipient_identity_public_key, recipient_pk,
+        rows[0].recipient_identity_public_key, recipient_pk,
         "the row names the recipient the grant went to"
     );
-    assert_eq!(after.grants[0].permission, Permission::Read);
+    assert_eq!(rows[0].permission, Permission::Read);
+
+    // Absence is not emptiness: an unreachable record plane withholds the grant
+    // list rather than reporting a shared folder as shared with nobody, and the
+    // durable contact book answers regardless.
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world.record_store.fail_endpoint(&endpoint);
+    }
+    let offline = block_on(fx.engine.sharing(fx.folder)).expect("the contact book is local");
+    assert_eq!(offline.grants, None);
+    assert_eq!(offline.contacts.len(), 1);
+
+    assert_eq!(
+        block_on(fx.engine.sharing(NodeId([0xEE; 16]))),
+        Err(EngineError::UnknownNode),
+        "a node this vault does not hold is a caller error, not an empty list"
+    );
     assert_eq!(
         block_on(floor::write_epoch_floor(
             &fx.owner_device.floor_store,

@@ -475,10 +475,10 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
       identityPublicKey: contact.identityPublicKey,
       encryptionPublicKey: contact.encryptionPublicKey,
     })),
-    grants: view.grants.map((grant) => ({
-      recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
-      permission: permissionFrom(wasm, grant.permission),
-      expiresAt: grant.expiresAt ?? null,
-    })),
+    grants:
+      view.grants?.map((grant) => ({
+        recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
+        permission: permissionFrom(wasm, grant.permission),
+      })) ?? null,
   };
 }

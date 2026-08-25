@@ -861,7 +861,7 @@ pub struct SharingGrant {
 #[wasm_bindgen]
 impl SharingGrant {
     /// The recipient's secp256k1 identity key, which joins the row to a
-    /// [`SharingContact`]. All-zero for a row the owner could not vouch for.
+    /// [`SharingContact`].
     #[wasm_bindgen(getter, js_name = recipientIdentityPublicKey)]
     pub fn recipient_identity_public_key(&self) -> Vec<u8> {
         self.inner.recipient_identity_public_key.clone()
@@ -871,13 +871,6 @@ impl SharingGrant {
     #[wasm_bindgen(getter)]
     pub fn permission(&self) -> Permission {
         self.inner.permission.into()
-    }
-
-    /// The row's advisory expiry in Unix millis (a `bigint`), or `undefined`.
-    /// Not a capability boundary — no owner signature covers it.
-    #[wasm_bindgen(getter, js_name = expiresAt)]
-    pub fn expires_at(&self) -> Option<u64> {
-        self.inner.expires_at
     }
 }
 
@@ -914,16 +907,17 @@ impl SharingView {
             .collect()
     }
 
-    /// The grants standing on `scope`, ordered as the ledger commits them.
-    /// Empty for a node that is not a scope root — nothing is granted there.
+    /// The grants standing on `scope`, or `undefined` when the read could not
+    /// reach the scope root — the distinction the facade `SharingView` draws.
     #[wasm_bindgen(getter)]
-    pub fn grants(&self) -> Vec<SharingGrant> {
-        self.inner
-            .grants
-            .iter()
-            .cloned()
-            .map(SharingGrant::from_facade)
-            .collect()
+    pub fn grants(&self) -> Option<Vec<SharingGrant>> {
+        self.inner.grants.as_ref().map(|grants| {
+            grants
+                .iter()
+                .cloned()
+                .map(SharingGrant::from_facade)
+                .collect()
+        })
     }
 }
 

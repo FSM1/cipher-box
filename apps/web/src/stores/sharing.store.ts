@@ -67,20 +67,26 @@ export const sharingStore = {
    * Takes the view the engine reported: the contact book replaces the held one,
    * and the view's scope takes its rows. Every other scope keeps what its own
    * read left, since this view speaks for one scope only.
+   *
+   * A view whose `grants` the engine could not reach leaves that scope's rows
+   * as they stood — last-known-good, never an empty list a render would read as
+   * "shared with nobody".
    */
   reported(view: SharingDescriptor): void {
     const grants = new Map(state.grants);
-    grants.set(
-      toHex(view.scope),
-      Object.freeze(
-        view.grants.map((grant) =>
-          Object.freeze({
-            contact: contactOf(grant.recipientIdentityPublicKey),
-            permission: grant.permission,
-          })
+    if (view.grants !== null) {
+      grants.set(
+        toHex(view.scope),
+        Object.freeze(
+          view.grants.map((grant) =>
+            Object.freeze({
+              contact: contactOf(grant.recipientIdentityPublicKey),
+              permission: grant.permission,
+            })
+          )
         )
-      )
-    );
+      );
+    }
     publish(
       frozen(
         view.contacts.map((contact) => contactOf(contact.identityPublicKey)),

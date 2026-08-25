@@ -100,14 +100,9 @@ impl PointerConsult<'_> {
         .map_err(|_| PointerConsultError::Rejected)?;
         // Away from the vault anchor the scope pointer is the write-epoch
         // floor's only owner-vouched source, so a vouched epoch below it is a
-        // rolled-back re-point — a trust verdict, never staleness (rule 6).
-        //
-        // At the anchor that floor also answers to the vault-pointer chain,
-        // whose index bump (the pointer-key-compromise recovery) can carry it
-        // past a still-honest scope pointer; refusing there would hard-fail on
-        // honest state, so the anchor keeps the monotonic-max no-op — the same
-        // narrowing `floor::repoint_regression` applies to its read stage,
-        // inverted.
+        // rollback, not staleness (rule 6). The anchor's floor also answers to
+        // the vault-pointer chain, so the two can legitimately diverge there —
+        // the read stage's narrowing in `floor::repoint_regression`, inverted.
         if *scope_id != self.session_root_scope_id
             && floor::write_epoch_regression(floors, scope_id, repoint.write_epoch)
                 .await

@@ -34,8 +34,6 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
   const busy = actions.busy !== null;
 
-  // `reload` changes identity only when the scope or the engine client does, so
-  // this reads once per scope and again once the engine is there to answer.
   const { reload } = actions;
   useEffect(() => {
     void reload();

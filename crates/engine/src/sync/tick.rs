@@ -17,6 +17,7 @@ use crate::facade::NodeId;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{Scheduler, UnixMillis};
 use crate::sync::model::Snapshot;
+use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
 /// The open focus of the UI: the folder in view and any open shared scopes.
@@ -121,19 +122,38 @@ pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
     scopes
 }
 
-/// Whether [`SyncTimingProfile::pointer_consult_interval`] has elapsed since
-/// this scope's last consult — the polled discipline's damper, so a poll cadence
-/// shorter than the interval does not re-resolve every pointer every tick. A
-/// scope no pass has consulted is due at once.
-pub fn pointer_consult_due(
+/// The scope pointers this tick consults: those in the window
+/// ([`consult_scopes`]) whose [`SyncTimingProfile::pointer_consult_interval`]
+/// has elapsed, so a poll cadence shorter than the interval does not re-resolve
+/// every pointer every tick. A scope no pass has consulted is due at once.
+///
+/// Routes [`ConsultReason::FocusTick`] and nothing else: cold start is the boot
+/// anchor's reason and on-access is the navigation leg's, neither of which the
+/// tick decides.
+pub fn consult_scopes_due(
+    snapshot: &Snapshot,
+    focus: &FocusWindow,
+    last_consulted: &BTreeMap<NodeId, UnixMillis>,
     now: UnixMillis,
-    last_consulted: Option<UnixMillis>,
     profile: &SyncTimingProfile,
-) -> bool {
-    last_consulted.is_none_or(|last| {
-        now.0.saturating_sub(last.0)
-            >= crate::sync::duration_millis(profile.pointer_consult_interval)
-    })
+) -> Vec<NodeId> {
+    consult_scopes(snapshot, focus)
+        .into_iter()
+        .filter(|scope| {
+            let due = last_consulted
+                .get(scope)
+                .is_none_or(|last| elapsed_at_least(now, *last, profile.pointer_consult_interval));
+            should_consult(false, due, false) == Some(ConsultReason::FocusTick)
+        })
+        .collect()
+}
+
+/// Whether `interval` has fully elapsed between `since` and `now` — the one
+/// comparison every timing bar in this module is stated over. Saturating, so a
+/// clock that stepped backwards reads as no time passed rather than as an
+/// enormous gap.
+fn elapsed_at_least(now: UnixMillis, since: UnixMillis, interval: Duration) -> bool {
+    now.0.saturating_sub(since.0) >= crate::sync::duration_millis(interval)
 }
 
 /// The focus window's folders due for an on-access refresh: those no pass has
@@ -168,9 +188,7 @@ pub fn focus_window_expired(
     touched: Option<UnixMillis>,
     profile: &SyncTimingProfile,
 ) -> bool {
-    touched.is_some_and(|last| {
-        now.0.saturating_sub(last.0) >= crate::sync::duration_millis(profile.focus_horizon)
-    })
+    touched.is_some_and(|last| elapsed_at_least(now, last, profile.focus_horizon))
 }
 
 /// Whether a cached folder outside the focus window is due for an on-access
@@ -181,7 +199,7 @@ pub fn on_access_refresh_due(
     last_refreshed: UnixMillis,
     profile: &SyncTimingProfile,
 ) -> bool {
-    now.0.saturating_sub(last_refreshed.0) >= crate::sync::duration_millis(profile.stale_after)
+    elapsed_at_least(now, last_refreshed, profile.stale_after)
 }
 
 /// A tick loop's control signal.
@@ -316,27 +334,20 @@ mod tests {
     fn a_consult_is_due_once_the_interval_has_fully_elapsed() {
         let profile = SyncTimingProfile::PRODUCTION;
         let interval = crate::sync::duration_millis(profile.pointer_consult_interval);
-        let last = UnixMillis(1_000);
+        let snap = Snapshot::new(id(0));
+        let focus = FocusWindow::default();
+        let due = |now: u64, stamped: Option<u64>| {
+            let mut last = BTreeMap::new();
+            if let Some(at) = stamped {
+                last.insert(id(0), UnixMillis(at));
+            }
+            !consult_scopes_due(&snap, &focus, &last, UnixMillis(now), &profile).is_empty()
+        };
 
-        assert!(
-            pointer_consult_due(UnixMillis(u64::MAX), None, &profile),
-            "a scope no pass has consulted is due at once",
-        );
-        assert!(!pointer_consult_due(
-            UnixMillis(1_000),
-            Some(last),
-            &profile
-        ));
-        assert!(!pointer_consult_due(
-            UnixMillis(1_000 + interval - 1),
-            Some(last),
-            &profile
-        ));
-        assert!(pointer_consult_due(
-            UnixMillis(1_000 + interval),
-            Some(last),
-            &profile
-        ));
+        assert!(due(u64::MAX, None), "a scope no pass has consulted is due");
+        assert!(!due(1_000, Some(1_000)));
+        assert!(!due(1_000 + interval - 1, Some(1_000)));
+        assert!(due(1_000 + interval, Some(1_000)));
     }
 
     #[test]

@@ -20,7 +20,7 @@ function key(seed: number): string {
 function view(
   scope: Uint8Array,
   contacts: number[],
-  grants: Array<[number, Permission]> = []
+  grants: Array<[number, Permission]> | null = []
 ): SharingDescriptor {
   return {
     scope,
@@ -28,11 +28,11 @@ function view(
       identityPublicKey: identity(seed),
       encryptionPublicKey: new Uint8Array(32).fill(seed),
     })),
-    grants: grants.map(([seed, permission]) => ({
-      recipientIdentityPublicKey: identity(seed),
-      permission,
-      expiresAt: null,
-    })),
+    grants:
+      grants?.map(([seed, permission]) => ({
+        recipientIdentityPublicKey: identity(seed),
+        permission,
+      })) ?? null,
   };
 }
 
@@ -108,6 +108,15 @@ describe('grants', () => {
     sharingStore.reported(view(PHOTOS, [1], [[1, 'write']]));
 
     expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toBe(docs);
+  });
+
+  it('keeps the rows standing when a read could not reach the scope root', () => {
+    sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
+    sharingStore.reported(view(DOCS, [1], null));
+
+    expect(grantsFor(sharingStore.getState(), DOCS_KEY)).toEqual([
+      { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
+    ]);
   });
 
   it('reports the emptiness of a scope that commits no grant', () => {

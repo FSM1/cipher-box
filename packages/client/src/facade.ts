@@ -72,8 +72,7 @@ export class EngineFacade {
 
   /**
    * Reads the vault's verified contact book and the grants `scope`'s own record
-   * commits — the vault root's for `null`. A node that is not a scope root
-   * carries no grants, and that emptiness is the answer.
+   * commits — the vault root's for `null`.
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
     return this.transport.sharing(scope);

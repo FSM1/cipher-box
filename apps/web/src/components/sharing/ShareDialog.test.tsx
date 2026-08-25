@@ -74,7 +74,6 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           grants: rowsOf(scope).map(([seed, permission]) => ({
             recipientIdentityPublicKey: identity(seed),
             permission,
-            expiresAt: null,
           })),
         })
     ),
