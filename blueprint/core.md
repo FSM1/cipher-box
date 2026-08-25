@@ -194,18 +194,28 @@ node UUID.
   `seal_read_body` mints whatever a folder's child listing needs, so a bound near
   the framing headroom would refuse folders this codec's own encoder produces,
   the produce-side wedge one layer up that the grant section's floor also
-  avoids. Decode and encode refuse an over-bound envelope, on either bound, with
+  avoids.
+  **What each bound is charged against is part of the frozen number**, because
+  the bounds around it disagree: `seal.envelopeMaxBytes` is charged on the
+  **whole encoded envelope**, det-CBOR head included; `seal.readSealedMaxBytes`
+  on the **byte-string payload alone**, its head excluded, as
+  `grant.grantSectionMaxBytes` also is; `seal.criticalCarriedMaxBytes` on the
+  encoded cost of each entry, **key and framing included**. An implementation
+  that picks a neighbouring convention refuses at a byte this one accepts, and a
+  head published in that few-byte window is a node the other client can never
+  open — so the charge is stated here rather than left to be inferred.
+  Decode and encode refuse an over-bound envelope, on any of these bounds, with
   the same `too-many-structures` verdict, release-active on the encode side; the
-  values are frozen in the KAT manifest (`seal.envelopeMaxBytes`,
-  `seal.readSealedMaxBytes`) rather than in two-megabyte reject vectors. The
-  block ceiling never turns the carried set's **truncate, never refuse** law into
-  a refusal: an encode within a limit measures its candidate and cuts before it
-  mints anything, so only what the uncuttable fields alone overflow is refused.
+  values are frozen in the KAT manifest rather than in two-megabyte reject
+  vectors. The block ceiling never turns the carried set's **truncate, never
+  refuse** law into a refusal: an encode within a limit measures its candidate
+  and cuts against the lower of that limit and the ceiling before it mints
+  anything, so only what the uncuttable fields alone overflow is refused.
   A maximal `readSealed` and a maximal grant section are not jointly reachable
   inside one block, exactly as the section's and write-body's maxima are not; the
   envelope's own total is what refuses the combination, surfaced to the engine as
-  `HeadTooLarge` so a blocked publish is charged as a head-size refusal rather
-  than an encoder fault.
+  `HeadTooLarge` — naming the bound that refused, so a blocked publish is charged
+  as a head-size refusal rather than an encoder fault.
 - **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the

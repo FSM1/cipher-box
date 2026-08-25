@@ -37,10 +37,10 @@ pub use content_key::{
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, content_key_aad, open_content_key, seal_content_key,
 };
 pub use envelope::{
-    CRITICAL_KEY_PREFIX, CarriedCut, Envelope, MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES,
-    MAX_READ_SEALED_BYTES, READ_SEALED_ENVELOPE_HEADROOM_BYTES, UNCUTTABLE_KEYS, decode_envelope,
-    encode_envelope, encode_envelope_within, envelope_over_bound, grant_section_bytes,
-    has_grant_section, open_read_body, seal_read_body, set_grant_section,
+    CRITICAL_KEY_PREFIX, CarriedCut, Envelope, EnvelopeOverBound, MAX_BLOCK_BYTES,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_READ_SEALED_BYTES, READ_SEALED_ENVELOPE_HEADROOM_BYTES,
+    UNCUTTABLE_KEYS, decode_envelope, encode_envelope, encode_envelope_within, envelope_over_bound,
+    grant_section_bytes, has_grant_section, open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
