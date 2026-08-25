@@ -13,7 +13,13 @@ import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
 /** Which call is in flight, or `null` when the sharing surface is idle. */
-export type SharingCommand = 'read' | 'importContact' | 'grant' | 'revoke' | 'downgrade';
+export type SharingCommand =
+  | 'read'
+  | 'importContact'
+  | 'grant'
+  | 'revoke'
+  | 'downgrade'
+  | 'createInviteLink';
 
 export interface SharingActions {
   busy: SharingCommand | null;
@@ -27,6 +33,13 @@ export interface SharingActions {
   grant(contact: VerifiedContact, permission: Permission): Promise<boolean>;
   revoke(contact: VerifiedContact): Promise<boolean>;
   downgrade(contact: VerifiedContact): Promise<boolean>;
+  /**
+   * Mints a link over this scope, resolving with the engine's fragment
+   * (`MintedInviteLink`) or `null` where the engine refused. An omitted
+   * `expiresAt` mints one that never expires. A link commits no grant row, so
+   * the sharing read this scope already has stands.
+   */
+  createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -78,6 +91,16 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
           await read(facade);
         }),
       [run, read, target]
+    ),
+    createInviteLink: useCallback(
+      async (permission, expiresAt) => {
+        let fragment: string | null = null;
+        await run('createInviteLink', async (facade) => {
+          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
+        });
+        return fragment;
+      },
+      [run, target]
     ),
   };
 }

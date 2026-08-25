@@ -265,7 +265,7 @@ all living in `packages/client` and running inside the engine worker realm:
 | `/shared`         | Received shares; browsing shared scopes is the same browser over the same snapshot                                                                                                  |
 | `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                         |
 | `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export |
-| `/invite/:…`      | Invite claim — fragment secret handed to the facade unread                                                                                                                          |
+| `/invite#…`       | Invite claim — fragment secret handed to the facade unread                                                                                                                          |
 
 Cross-cutting chrome renders event-stream state only: sync/staleness
 indicator, quota (advisory-aware for BYO), dead-letter and escalation

@@ -1,8 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
+import { expiryAt, inviteUrl, LINK_LIFETIMES, type LinkLifetime } from '../../sharing/inviteLink';
 import { grantsFor, sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
+import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 import { Modal } from '../ui/Modal';
 import { ContactImportForm } from './ContactImportForm';
 
@@ -27,6 +29,13 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const [step, setStep] = useState<Step>('grants');
   const [recipient, setRecipient] = useState('');
   const [permission, setPermission] = useState<Permission>('read');
+  const [lifetime, setLifetime] = useState<LinkLifetime>('7 days');
+  // Held until the dialog closes and no longer: unmounting is what forgets it.
+  const [link, setLink] = useState<string | null>(null);
+  // Closed before the dispatch rather than by a render: two activations in one
+  // frame would mint two links and strand the first, a live capability nothing
+  // can name again — and `busy` is itself the render-late value that misses it.
+  const minting = useRef(false);
 
   // `null` is "no ledger read yet", which the list must not draw as "granted to
   // nobody" — the two differ to an owner deciding whether to grant again.
@@ -54,6 +63,19 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
     });
   };
 
+  const mintLink = () => {
+    if (busy || minting.current) return;
+    minting.current = true;
+    void actions
+      .createInviteLink(permission, expiryAt(lifetime, Date.now()))
+      .then((fragment) => {
+        if (fragment !== null) setLink(inviteUrl(fragment));
+      })
+      .finally(() => {
+        minting.current = false;
+      });
+  };
+
   const importContact = (code: Uint8Array) => {
     void actions.importContact(code).then((verified) => {
       if (verified) setStep('grants');
@@ -66,6 +88,8 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
       title={step === 'import' ? 'import contact' : `share ${row.name}`}
       error={actions.error}
       busy={busy}
+      // A minted link is shown once, so only the deliberate exit discards it.
+      dismissible={link === null}
     >
       {step === 'import' ? (
         <ContactImportForm
@@ -141,19 +165,59 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
                   </option>
                 ))}
               </select>
-              <label className="dialog-label" htmlFor="share-permission">
-                permission
+            </div>
+          )}
+
+          {/* One choice for both actions below: a grant and a minted link. */}
+          <label className="dialog-label" htmlFor="share-permission">
+            permission
+          </label>
+          <select
+            id="share-permission"
+            className="dialog-input"
+            value={permission}
+            onChange={(event) => setPermission(event.target.value as Permission)}
+            disabled={busy}
+          >
+            <option value="read">read</option>
+            <option value="write">write</option>
+          </select>
+
+          <p className="dialog-label">invite link</p>
+          {link === null ? (
+            <div className="dialog-content">
+              <label className="dialog-label" htmlFor="share-link-lifetime">
+                link expires
               </label>
               <select
-                id="share-permission"
+                id="share-link-lifetime"
                 className="dialog-input"
-                value={permission}
-                onChange={(event) => setPermission(event.target.value as Permission)}
+                value={lifetime}
+                onChange={(event) => setLifetime(event.target.value as LinkLifetime)}
                 disabled={busy}
               >
-                <option value="read">read</option>
-                <option value="write">write</option>
+                {Object.keys(LINK_LIFETIMES).map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
+              <button
+                type="button"
+                className="dialog-button"
+                onClick={mintLink}
+                disabled={busy}
+                data-testid="share-mint-link"
+              >
+                {actions.busy === 'createInviteLink' ? 'minting...' : 'mint invite link'}
+              </button>
+            </div>
+          ) : (
+            <div className="dialog-content" data-testid="invite-link">
+              <CopyableValue value={link} label="invite link" />
+              <p className="sharing-note" data-testid="invite-link-bearer">
+                {'// whoever holds this link claims it — hand it over like a key'}
+              </p>
             </div>
           )}
 
@@ -174,7 +238,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               disabled={busy}
               data-testid="share-close"
             >
-              done
+              {link === null ? 'done' : 'done — link saved'}
             </button>
             <button
               type="button"

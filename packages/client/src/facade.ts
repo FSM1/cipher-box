@@ -12,6 +12,7 @@
 
 import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
+import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -27,6 +28,9 @@ import type {
 
 /** The verified contact an import produced, with its two public keys. */
 export type ImportedContact = Extract<CommandOutcomeDescriptor, { kind: 'contactImported' }>;
+
+/** The bearer capability a mint produced — opaque characters for a URL fragment. */
+export type MintedInviteLink = Extract<CommandOutcomeDescriptor, { kind: 'inviteLinkMinted' }>;
 
 export class EngineFacade {
   constructor(private readonly transport: EngineTransport) {}
@@ -195,17 +199,21 @@ export class EngineFacade {
   }
 
   /** Mints an invite link; an omitted `expiresAt` mints one that never expires. */
-  createInviteLink(
+  async createInviteLink(
     node: Uint8Array,
     permission: Permission,
     expiresAt?: bigint
-  ): Promise<CommandOutcomeDescriptor> {
-    return this.command({
+  ): Promise<MintedInviteLink> {
+    const outcome = await this.command({
       kind: 'createInviteLink',
       node,
       permission,
       expiresAt: expiresAt ?? null,
     });
+    if (outcome.kind !== 'inviteLinkMinted') {
+      throw new Error(`create invite link answered ${outcome.kind}`);
+    }
+    return outcome;
   }
 
   /** Revokes the link minted at `node`: future claims end, converted grants stand. */
@@ -225,6 +233,12 @@ export class EngineFacade {
    * session-restore state and in the back/forward entry.
    */
   claimInviteLink(fragment: string): Promise<CommandOutcomeDescriptor> {
+    // Refused here rather than sent: past this call the fragment is cloned into
+    // the worker's realm — and, behind a follower, the leader tab's — before
+    // anything measures it (AGENTS.md 8).
+    if (fragment.length > MAX_FRAGMENT_CHARS) {
+      return Promise.reject(new Error('that is not an invite link'));
+    }
     return this.command({ kind: 'claimInviteLink', fragment });
   }
 

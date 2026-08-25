@@ -9,6 +9,7 @@ import {
   TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
+import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
@@ -18,6 +19,16 @@ import type {
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
+
+/** Stands in for the engine's opaque capability; the facade reads none of it. */
+const MINTED_FRAGMENT = 'a-minted-fragment';
+
+/** A transport whose engine answers every command with a minted link. */
+function mintingTransport(): FakeTransport {
+  const transport = new FakeTransport();
+  transport.outcome = { kind: 'inviteLinkMinted', fragment: MINTED_FRAGMENT };
+  return transport;
+}
 
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
@@ -262,7 +273,7 @@ describe('EngineFacade', () => {
   });
 
   it('spells an omitted invite deadline as a link that never expires', async () => {
-    const transport = new FakeTransport();
+    const transport = mintingTransport();
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16);
 
@@ -274,6 +285,33 @@ describe('EngineFacade', () => {
       kind: 'createInviteLink',
       expiresAt: 1_800_000_000_000n,
     });
+  });
+
+  it('hands the minted link back to its caller', async () => {
+    const minted = await new EngineFacade(mintingTransport()).createInviteLink(
+      new Uint8Array(16),
+      'read'
+    );
+
+    expect(minted.fragment).toBe(MINTED_FRAGMENT);
+  });
+
+  it('refuses an oversize fragment before any realm clones it', async () => {
+    const transport = new FakeTransport();
+
+    await expect(
+      new EngineFacade(transport).claimInviteLink('x'.repeat(MAX_FRAGMENT_CHARS + 1))
+    ).rejects.toThrow('that is not an invite link');
+    expect(transport.commands).toEqual([]);
+  });
+
+  it('refuses an answer to a mint that carries no link', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.createInviteLink(new Uint8Array(16), 'read')).rejects.toThrow(
+      'create invite link answered done'
+    );
   });
 
   it('delegates the stream trio to the transport, window intact', async () => {

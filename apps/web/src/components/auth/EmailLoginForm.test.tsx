@@ -88,9 +88,12 @@ describe('EmailLoginForm', () => {
     renderForm();
 
     typeAddress('member@example.test');
-    const code = await screen.findByTestId('email-code-input');
 
-    expect(document.activeElement).toBe(code);
+    // The field lands a commit before the effect that focuses it, so waiting on
+    // the element alone races the cursor.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('email-code-input'))
+    );
   });
 
   // A refused code is the member's most likely mistyping, not a dead end.

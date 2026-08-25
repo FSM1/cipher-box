@@ -7,7 +7,7 @@ import type {
   SharingDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
@@ -15,6 +15,9 @@ import { ShareDialog } from './ShareDialog';
 
 const DOCS = new Uint8Array(16).fill(7);
 const CODE_HEX = '00ff10';
+
+/** Stands in for the engine's opaque capability; the UI reads none of it. */
+const MINTED_FRAGMENT = 'a-minted-fragment';
 
 const folder: ListingRow = {
   id: DOCS,
@@ -101,6 +104,9 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         );
         return outcome;
       })
+    ),
+    createInviteLink: vi.fn((_scope: Uint8Array, _permission: Permission) =>
+      answer('createInviteLink', { kind: 'inviteLinkMinted' as const, fragment: MINTED_FRAGMENT })
     ),
     downgrade: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
       answer('downgrade', { kind: 'done' as const }).then((outcome) => {
@@ -299,5 +305,97 @@ describe('the import step', () => {
 
     expect(screen.getByTestId('share-dialog')).toBeTruthy();
     expect(screen.queryByTestId('dialog-error')).toBeNull();
+  });
+});
+
+/** The link the dialog is showing, as the member reads it. */
+function shownLink(): string {
+  return (
+    screen.getByTestId('invite-link').querySelector('.details-copyable-text')?.textContent ?? ''
+  );
+}
+
+/** Noon on a fixed day, so a minted deadline is an exact number. */
+const MINTED_AT = Date.UTC(2026, 7, 25, 12);
+const SEVEN_DAYS_ON = BigInt(MINTED_AT + 7 * 86_400_000);
+
+describe('the invite link', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(MINTED_AT);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('mints a link that expires, unless the owner asks for one that does not', async () => {
+    const engine = await share();
+
+    fireEvent.change(screen.getByLabelText('link expires'), { target: { value: 'never' } });
+    await click('share-mint-link');
+
+    // `undefined` is the engine's "no deadline"; the default above is not it.
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', undefined);
+  });
+
+  it('frames the engine fragment into the claim URL, in the URL fragment', async () => {
+    const engine = await share();
+
+    await click('share-mint-link');
+
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON);
+    const url = new URL(shownLink());
+    expect(url.pathname).toBe('/invite');
+    expect(url.hash).toBe(`#${MINTED_FRAGMENT}`);
+    // A fragment reaches no server; a query string would.
+    expect(url.search).toBe('');
+    expect(screen.getByTestId('invite-link-bearer')).toBeTruthy();
+  });
+
+  it('copies the whole link, capability included', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    await share();
+    await click('share-mint-link');
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('copy invite link'));
+    });
+
+    expect(writeText).toHaveBeenCalledWith(shownLink());
+  });
+
+  it("renders the engine's refusal of a write link instead of a link", async () => {
+    const refusal = new EngineRequestError('write-links-need-a-write-scope-cut', 'unsupported');
+    await share(sharingEngine({ createInviteLink: refusal }));
+    fireEvent.change(screen.getByLabelText('permission'), { target: { value: 'write' } });
+
+    await click('share-mint-link');
+
+    expect(screen.getByTestId('dialog-error').textContent).toBe(
+      'write-links-need-a-write-scope-cut'
+    );
+    expect(screen.queryByTestId('invite-link')).toBeNull();
+    expect(screen.getByTestId('share-mint-link')).toBeTruthy();
+  });
+
+  it('mints one link however fast the control is activated twice', async () => {
+    const engine = await share();
+
+    // Both land before React commits the busy state, so a second link would be
+    // a live capability the member never sees and cannot revoke.
+    await act(async () => {
+      const mint = screen.getByTestId('share-mint-link');
+      mint.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      mint.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(engine.facade.createInviteLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a shown link against a dismissal that would discard it', async () => {
+    await share();
+
+    await click('share-mint-link');
+
+    expect(screen.getByLabelText('close').hasAttribute('disabled')).toBe(true);
   });
 });
