@@ -27,24 +27,26 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, GrantLedgerEntry,
-    MAX_BLOCK_BYTES, MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
-    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind, Permission,
-    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
-    StructureSigInput, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad,
-    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
-    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
-    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
-    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
-    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
-    encode_recipient_binding, encode_write_body, open_ascent_link, open_content_key,
-    open_grant_blob, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
-    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
-    seal_owner_history_link, seal_owner_local, seal_settings_record, structure_sig_preimage,
-    verify_grant_set, verify_recipient_binding, verify_structure,
+    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX,
+    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry, MAX_BLOCK_BYTES,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_WRITE_BODY_BYTES, NodeKind,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind,
+    Permission, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput,
+    WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad, decode_ascent_link,
+    decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_section, encode_grant_set_commitment,
+    encode_override_seed_payload, encode_read_body, encode_recipient_binding, encode_write_body,
+    open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
+    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
+    open_settings_record, seal_content_key, seal_op_record, seal_owner_history_link,
+    seal_owner_local, seal_settings_record, structure_sig_preimage, verify_grant_set,
+    verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -662,6 +664,8 @@ struct GrantManifest {
     write_history_link_struct_tag: u8,
     write_body_max_bytes: usize,
     write_body_reseal_headroom_bytes: usize,
+    grant_section_max_bytes: usize,
+    grant_section_envelope_headroom_bytes: usize,
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
@@ -854,6 +858,8 @@ struct GrantSetRejectVector {
 struct SealManifest {
     aad_domain: String,
     read_body_struct_tag: u8,
+    critical_key_prefix: String,
+    critical_carried_max_bytes: usize,
     seal: FileCount,
     open_reject: RejectSection,
     read_body_accept: FileCount,
@@ -3409,6 +3415,34 @@ fn the_write_body_size_bound_is_frozen_in_the_manifest() {
         MAX_WRITE_BODY_BYTES + WRITE_BODY_RESEAL_HEADROOM_BYTES,
         MAX_BLOCK_BYTES,
         "the bound is the block ceiling minus the reserved re-seal headroom"
+    );
+}
+
+/// The grant section's total encoded-size bound, frozen the same way and for
+/// the same reason: a cross-language implementation must refuse at the same
+/// byte, and the vector that would prove it is two megabytes long. How the
+/// value is pinned against its neighbouring bounds is a `const` assertion in
+/// `seal::section`, which no build can skip.
+#[test]
+fn the_grant_section_size_bound_is_frozen_in_the_manifest() {
+    let m = manifest();
+    assert_eq!(m.grant.grant_section_max_bytes, MAX_GRANT_SECTION_BYTES);
+    assert_eq!(
+        m.grant.grant_section_envelope_headroom_bytes,
+        GRANT_SECTION_ENVELOPE_HEADROOM_BYTES
+    );
+}
+
+/// The carried-critical budget: the marker prefix and the byte budget are one
+/// wire reservation, and a reader that honours the prefix without the budget
+/// hands a publisher an uncuttable field to pad.
+#[test]
+fn the_critical_carried_budget_is_frozen_in_the_manifest() {
+    let m = manifest();
+    assert_eq!(m.seal.critical_key_prefix, CRITICAL_KEY_PREFIX);
+    assert_eq!(
+        m.seal.critical_carried_max_bytes,
+        MAX_CRITICAL_CARRIED_BYTES
     );
 }
 

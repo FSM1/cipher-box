@@ -143,9 +143,30 @@ node UUID.
   avoid. Cuts run largest first, so the fewest fields go and one pass relieves
   the pressure; that bounds the _count_, not the bytes, and a party padding a
   record below the size of an honest field can aim the first cut at it. What
-  keeps that from mattering is that no cuttable field carries a trust decision —
-  a field that starts to must say so on the wire, not rely on every already
-  shipped reader knowing its name. A cut is reported, never silent.
+  keeps that from mattering is that a field carrying a trust decision **says so
+  on the wire**, rather than relying on every already shipped reader knowing its
+  name. A cut is reported, never silent.
+  The declaration is a reserved one-byte key prefix, `!`: a carried field whose
+  key begins with it is **critical**, and a rewrite keeps it or refuses, never
+  silently drops it. Membership in the uncuttable set is frozen when each binary
+  ships, so it cannot express a field minted later; a marker rides the bytes and
+  can. The canonical map-key comparator is length-first over the encoded key, so
+  a one-byte prefix perturbs no ordering semantics, and the marker is honoured
+  inside `epochTag` as well as at top level. `grantSection` and `writeSealed`
+  stay uncuttable under their own names, grandfathered from before the marker.
+  The marker ships with a frozen **critical-bytes budget**,
+  `MAX_CRITICAL_CARRIED_BYTES` = 16 KiB, over the encoded cost of every marked
+  field plus `writeSealed`, at both levels. Without it a hostile publisher marks
+  padding critical and wedges the name permanently — strictly worse than the
+  refusal the cut replaced, since no rotation clears an uncuttable field. Decode
+  and encode refuse an over-budget envelope with the same `too-many-structures`
+  verdict, release-active on the encode side. `grantSection` is the budget's one
+  exclusion, and only because it carries its own `MAX_GRANT_SECTION_BYTES`: a
+  budget large enough to hold a grant section would be no budget at all. The
+  budget stays well under the write-body's 64 KiB re-seal headroom, so a maximal
+  critical set cannot make a maximal write-body's re-seal unencodable. The value
+  is frozen in the KAT manifest (`seal.criticalCarriedMaxBytes`, beside
+  `seal.criticalKeyPrefix`).
 - **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
@@ -228,6 +249,28 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   first** — an invariant the
   codec cannot check, since a link's epoch lives in its untransmitted AAD and
   inside its ciphertext, leaving `crates/core` an opaque sealed blob.
+  Those ceilings bound counts, not bytes. Every sealed blob in the section is
+  opaque, every level carries a preserved `unknown` map, and none of those bytes
+  is covered by the grant-set commitment or by a per-structure signature — which
+  sign specific fields and `H(ciphertext)`, not the framing. Unbounded, a
+  committed writer inflates the framing once and every later re-author of that
+  root carries it verbatim, because the section rides an uncuttable carried
+  field. What closes that is a **total encoded-size bound**,
+  `MAX_GRANT_SECTION_BYTES` = the block ceiling (2 MiB) minus a frozen 48 KiB
+  envelope headroom, so 2,048,000 bytes. Decode and encode refuse an over-bound
+  section with the same `too-many-structures` verdict, release-active on the
+  encode side; the value is frozen in the KAT manifest
+  (`grant.grantSectionMaxBytes`) rather than in a two-megabyte reject vector.
+  The value sits in the one band the surrounding constants leave. Its **floor**
+  is `MAX_WRITE_BODY_BYTES`: the sealed write-body rides in the section, so a
+  smaller bound would refuse a body the write-body codec mints — a produce-side
+  wedge one layer up. Its **ceiling** is the block every envelope must fit, less
+  the framing of the envelope the section rides in — which is what the 48 KiB
+  headroom reserves, and what the critical-bytes budget above draws from. Like
+  the write-body's, this bound narrows the head-size lever rather than closing
+  it: the section's own maxima and the write-body's are not jointly reachable
+  inside one block, so the whole-record ceiling stays the engine's `HeadTooLarge`
+  backstop.
 - **History-link retention**: a link minted at epoch `e` is sealed under **its
   own** epoch's structure key and carries the _preceding_ epoch's seed, so the
   ratchet is a **contiguous chain** walkable only backward, one epoch per step.

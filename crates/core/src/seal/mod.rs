@@ -37,9 +37,9 @@ pub use content_key::{
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, content_key_aad, open_content_key, seal_content_key,
 };
 pub use envelope::{
-    CarriedCut, Envelope, MAX_BLOCK_BYTES, decode_envelope, encode_envelope,
-    encode_envelope_within, grant_section_bytes, has_grant_section, open_read_body, seal_read_body,
-    set_grant_section,
+    CRITICAL_KEY_PREFIX, CarriedCut, Envelope, MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES,
+    decode_envelope, encode_envelope, encode_envelope_within, grant_section_bytes,
+    has_grant_section, open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
@@ -62,9 +62,9 @@ pub use owner_local::{
     open_owner_local, owner_local_aad, seal_owner_local,
 };
 pub use section::{
-    GrantSection, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, SignedAscentLink, SignedGrantBlob,
-    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, decode_grant_section,
-    encode_grant_section,
+    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantSection, MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES,
+    MAX_HISTORY_LINKS, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,
+    SignedSealed, decode_grant_section, encode_grant_section,
 };
 pub use settings_record::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, SettingsRecordHeader, open_settings_record,
