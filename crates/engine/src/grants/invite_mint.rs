@@ -134,7 +134,7 @@ where
 
     // Ahead of the record, so a subtree the gate cannot prove converged costs no
     // durable slot.
-    converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
+    let converged = converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
 
@@ -147,17 +147,9 @@ where
         .await
         .map_err(InviteMintError::Store)?;
 
-    mint_grantee_scope(
-        entropy,
-        resolver,
-        publisher,
-        plan.grantee,
-        &minted.row,
-        owner,
-        plan.parent,
-    )
-    .await
-    .map_err(InviteMintError::Create)?;
+    mint_grantee_scope(entropy, resolver, publisher, &converged, &minted.row, owner)
+        .await
+        .map_err(InviteMintError::Create)?;
 
     Ok(MintedInviteLink {
         invite_secret: invitee.secret().clone(),

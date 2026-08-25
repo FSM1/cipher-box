@@ -38,8 +38,8 @@ pub use contact_store::{
     StagingContactStore, resolve_recipient,
 };
 pub use create::{
-    CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
-    ParentScopePlan, converge_grant_subtree, create_read_grant, mint_grantee_scope,
+    ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan,
+    OwnerGrantKeys, ParentScopePlan, converge_grant_subtree, create_read_grant, mint_grantee_scope,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,

@@ -310,9 +310,8 @@ where
         Permission::Read,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
-    converge_grant_subtree(resolver, publisher, grantee, parent).await?;
-    let outcome =
-        mint_grantee_scope(entropy, resolver, publisher, grantee, &row, owner, parent).await?;
+    let converged = converge_grant_subtree(resolver, publisher, grantee, parent).await?;
+    let outcome = mint_grantee_scope(entropy, resolver, publisher, &converged, &row, owner).await?;
 
     // Post the sealed share pointer to the recipient's mailbox with a fresh
     // HPKE ephemeral scalar (never a clock or a constant).
@@ -348,6 +347,17 @@ where
     Ok(outcome)
 }
 
+/// A subtree [`converge_grant_subtree`] proved converged, carrying the two plans
+/// it proved it for.
+///
+/// [`mint_grantee_scope`] reads both plans only out of this, so neither skipping
+/// the pass nor minting against plans other than the ones it swept is
+/// expressible.
+pub struct ConvergedSubtree<'a> {
+    grantee: &'a GranteeScopePlan<'a>,
+    parent: &'a ParentScopePlan<'a>,
+}
+
 /// Prove the granted folder's subtree epoch-converged inside the scope it still
 /// lives in, so no interior node the grantee will read lags that scope's epoch.
 ///
@@ -356,12 +366,12 @@ where
 /// put its own durable write between the two: a dropped lost race means
 /// convergence is unproven, and refusing there should cost nothing that outlives
 /// the refusal (CONTEXT.md "Epoch-converged").
-pub async fn converge_grant_subtree<R, P>(
+pub async fn converge_grant_subtree<'a, R, P>(
     resolver: &R,
     publisher: &P,
-    grantee: &GranteeScopePlan<'_>,
-    parent: &ParentScopePlan<'_>,
-) -> Result<(), CreateGrantError>
+    grantee: &'a GranteeScopePlan<'a>,
+    parent: &'a ParentScopePlan<'a>,
+) -> Result<ConvergedSubtree<'a>, CreateGrantError>
 where
     R: SweepResolver,
     P: SweepPublisher,
@@ -387,7 +397,7 @@ where
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
-    Ok(())
+    Ok(ConvergedSubtree { grantee, parent })
 }
 
 /// Mint the grantee scope `row` is committed at, and hand the granted folder to
@@ -398,24 +408,23 @@ where
 /// whoever holds that row's grant blob reaches this scope's first epoch and
 /// nothing before it — the property that separates a scope mint from a row
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
-/// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes,
-/// and [`converge_grant_subtree`] must have passed over the same plan.
+/// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
 ///
 /// Fail-closed **through the grantee publish**.
 pub async fn mint_grantee_scope<E, R, P>(
     entropy: &mut E,
     resolver: &R,
     publisher: &P,
-    grantee: &GranteeScopePlan<'_>,
+    converged: &ConvergedSubtree<'_>,
     row: &GrantRow,
     owner: &OwnerGrantKeys<'_>,
-    parent: &ParentScopePlan<'_>,
 ) -> Result<CreateGrantOutcome, CreateGrantError>
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
     P: ScopeRootPublisher + SweepPublisher,
 {
+    let ConvergedSubtree { grantee, parent } = converged;
     // 1) The scope root's ipnsName, derived from the folder's write material.
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
