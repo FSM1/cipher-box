@@ -36,7 +36,7 @@ fn spill_area() -> SpillArea {
 fn spill_area_at(dir: &Path) -> SpillArea {
     static SEED: AtomicU64 = AtomicU64::new(11);
     let seed = SEED.fetch_add(1, Ordering::Relaxed);
-    SpillArea::open(dir.to_path_buf(), Box::new(SeededEntropy::new(seed)))
+    SpillArea::seeded(dir.to_path_buf(), Box::new(SeededEntropy::new(seed)))
         .expect("the spill area opens")
 }
 

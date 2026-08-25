@@ -52,8 +52,10 @@ impl<'a> Request<'a> {
     /// This calls the appropriate filesystem operation method for the
     /// request and sends back the returned reply to the kernel
     pub(crate) fn dispatch<FS: Filesystem>(&self, se: &mut Session<FS>) {
-        debug!("{}", self.request);
         let unique = self.request.unique();
+        // CipherBox patch: `Display for Operation` prints the filename, and in a
+        // zero-knowledge vault that is user plaintext (AGENTS.md rule 2).
+        debug!("FUSE request {unique:?}");
 
         let res = match self.dispatch_req(se) {
             Ok(Some(resp)) => resp,
@@ -155,7 +157,10 @@ impl<'a> Request<'a> {
             }
             // Any operation is invalid before initialization
             _ if !se.initialized => {
-                warn!("Ignoring FUSE operation before init: {}", self.request);
+                warn!(
+                    "Ignoring FUSE operation before init: {:?}",
+                    self.request.unique()
+                );
                 return Err(Errno::EIO);
             }
             // Filesystem destroyed
@@ -166,7 +171,10 @@ impl<'a> Request<'a> {
             }
             // Any operation is invalid after destroy
             _ if se.destroyed => {
-                warn!("Ignoring FUSE operation after destroy: {}", self.request);
+                warn!(
+                    "Ignoring FUSE operation after destroy: {:?}",
+                    self.request.unique()
+                );
                 return Err(Errno::EIO);
             }
 

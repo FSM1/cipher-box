@@ -46,6 +46,7 @@ jobs:
               - '.github/actions/**'
             rust:
               - 'crates/**'
+              - 'third-party/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -77,6 +78,7 @@ jobs:
               - '.github/workflows/web-e2e.yml'
             desktop:
               - 'apps/desktop/**'
+              - 'third-party/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -516,12 +518,16 @@ jobs:
       # Tauri needs webkit2gtk system deps on Linux, and the desktop-build job
       # owns its check/clippy/build on all three platforms. The contract crate
       # is excluded from the test run below (its tests need the live API stack)
-      # and owns its own lint in the contract-suite job.
+      # and owns its own lint in the contract-suite job. The vendored fuser is
+      # linted here and nowhere else — this is the only job on a target its
+      # build script accepts — and excluded from the test run below: its one
+      # upstream test mounts a real filesystem, and the FUSE Op Core job runs
+      # the rest.
       - name: Cargo clippy
         run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   engine:
     name: Engine Tests
@@ -585,6 +591,14 @@ jobs:
 
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
+
+      # The vendored fuser's socket-read patch travels with the regression test
+      # blueprint/desktop.md commits to, and this is where that test fires. The
+      # general cargo jobs exclude the crate, so this is its only gate. The one
+      # upstream test that mounts a real filesystem is skipped: this job is
+      # kernel-free by design.
+      - name: Vendored fuser socket-read patch
+        run: cargo test -p fuser -- --skip mnt::test::mount_unmount
 
   # The WASM parity gate. Runs the core KAT + property suite in three shapes —
   # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped
@@ -751,10 +765,10 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
@@ -778,10 +792,10 @@ jobs:
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
   # The live contract suite (blueprint/testing.md "The contract suite"): the
   # sdk-e2e descendant and the sole contract enforcement. It stands up the CI

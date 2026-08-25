@@ -15,7 +15,10 @@
 #![warn(missing_docs)]
 
 mod adapter;
+mod adapters;
 mod cache;
+#[cfg(unix)]
+mod errno;
 mod error;
 mod handle;
 mod inode;
@@ -24,7 +27,11 @@ mod ops;
 mod spill;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+#[cfg(target_os = "linux")]
+pub use adapters::linux;
 pub use cache::CacheBudget;
+#[cfg(unix)]
+pub use errno::errno_of;
 pub use error::{OverBudgetCause, RefusedBudget, VfsError};
 pub use handle::{Access, HandleId, HandleTable, OpenFile};
 pub use inode::{InodeTable, ROOT_INO};

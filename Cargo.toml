@@ -13,6 +13,9 @@ members = [
     "crates/contract",
     "crates/load",
     "apps/desktop/src-tauri",
+    # Vendored third-party source, a member so it shares the one lockfile; the
+    # cargo jobs exclude it by name (blueprint/testing.md).
+    "third-party/fuser",
 ]
 
 [workspace.package]
@@ -33,6 +36,7 @@ base64 = "0.22"
 # criterion's own estimates, never from generated HTML.
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 futures-channel = "0.3"
+getrandom = "0.3"
 futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

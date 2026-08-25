@@ -20,6 +20,10 @@ use zeroize::Zeroizing;
 
 use crate::error::VfsError;
 
+/// The engine data dir's child that holds every spill file. Fixed, because
+/// opening the area deletes what is in it.
+const SPILL_DIR: &str = "spill";
+
 /// AAD domain for a spill block. The block index rides in the AAD, so a slot
 /// moved to another offset in the same file no longer opens.
 const SPILL_AAD_DOMAIN: &[u8] = b"cipherbox/spill/v1";
@@ -32,10 +36,34 @@ pub struct SpillArea {
 }
 
 impl SpillArea {
+    /// The spill area a real mount runs on: a fixed child of the engine's
+    /// `data_dir`, under the OS CSPRNG.
+    ///
+    /// Entropy is not a seam here, and deliberately so. A spill block's nonce
+    /// is a counter under the per-file key, unique only because that key is
+    /// fresh random — a seeded or replayed source repeats a key and with it
+    /// every nonce under it, which is an XChaCha20 keystream reuse, not a
+    /// weakened one. A host mount has no reason to choose, so it is given none.
+    ///
+    /// The last path component is this constructor's, not the caller's:
+    /// opening an area deletes every file in it.
+    pub fn production(data_dir: &Path) -> io::Result<Self> {
+        Self::open(data_dir.join(SPILL_DIR), Box::new(OsEntropy))
+    }
+
+    /// Open the spill area at `dir` under an injected source, for the vfs suite
+    /// (`test-kit`). Never reachable from a production build — see
+    /// [`production`](Self::production) for why substituting the source is a
+    /// keystream reuse rather than a weakening.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn seeded(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+        Self::open(dir, entropy)
+    }
+
     /// Open the spill area at `dir`, creating it and sweeping whatever a
     /// previous run left behind. That debris is deleted rather than
     /// overwritten.
-    pub fn open(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+    fn open(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
         fs::create_dir_all(&dir)?;
         restrict_dir(&dir)?;
         for entry in fs::read_dir(&dir)? {
@@ -72,6 +100,16 @@ impl SpillArea {
             blocks: BTreeSet::new(),
             next_nonce: 0,
         })
+    }
+}
+
+/// The target's CSPRNG. Fail-closed: a draw that cannot be served is an error,
+/// never substituted bytes.
+struct OsEntropy;
+
+impl Entropy for OsEntropy {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
     }
 }
 
@@ -290,7 +328,7 @@ mod tests {
     }
 
     fn area(dir: &Path) -> SpillArea {
-        SpillArea::open(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
+        SpillArea::seeded(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
     }
 
     /// A seam reporting success having written nothing would seal every spill
@@ -299,8 +337,8 @@ mod tests {
     #[test]
     fn a_silent_seam_mints_no_spill() {
         let dir = tempfile::tempdir().unwrap();
-        let mut area =
-            SpillArea::open(dir.path().to_path_buf(), Box::new(SilentEntropy)).expect("spill area");
+        let mut area = SpillArea::seeded(dir.path().to_path_buf(), Box::new(SilentEntropy))
+            .expect("spill area");
         assert!(
             matches!(area.create(8), Err(VfsError::Internal { message }) if message.contains("all-zero")),
             "the refusal is the entropy guard, not any internal error"
@@ -453,5 +491,25 @@ mod tests {
             spill.put(0, b"short"),
             Err(VfsError::Internal { .. })
         ));
+    }
+
+    /// The production area is the one a mount links, so it has to be exercised
+    /// somewhere: a stub or a mis-wired source shows up here as a repeated key.
+    #[test]
+    fn the_production_area_mints_a_fresh_key_per_spill() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        let mut area = SpillArea::production(data_dir.path()).expect("production area");
+        let first = area.create(8).expect("first spill");
+        let second = area.create(8).expect("second spill");
+
+        assert_ne!(
+            first.key, second.key,
+            "a repeated key repeats every counter nonce under it"
+        );
+        assert!(first.key.iter().any(|byte| *byte != 0));
+        assert!(
+            data_dir.path().join(SPILL_DIR).is_dir(),
+            "the area owns its own directory, so opening it deletes nothing else"
+        );
     }
 }

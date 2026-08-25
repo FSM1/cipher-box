@@ -39,7 +39,7 @@ zeroize.workspace = true
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 console_error_panic_hook = "0.1"
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
 # Async locks: an RwLock lets reads (`snapshot`/`download`) share the engine
 # while `start`/`command` serialize as the single writer; a Mutex bounds
 # `nextEvent` to one outstanding stream read.

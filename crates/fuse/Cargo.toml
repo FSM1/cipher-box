@@ -7,13 +7,43 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Compiles the seam constructor the vfs suite drives the spill area through.
+# Never enabled in a production build: it is activated only by this crate's own
+# dev-dependency (below), exactly like the engine's `test-kit`.
+test-kit = []
+
 [dependencies]
 # The spill file seals its blocks with core's AEAD.
 cipherbox-core.workspace = true
 cipherbox-engine.workspace = true
 zeroize.workspace = true
+# The spill's per-handle sealing key is drawn here, at the production mount's
+# own construction site — see `SpillArea::production`.
+getrandom.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# errno constants for the shared VfsError mapping, which every unix mount
+# technology answers its kernel from.
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The one vendored copy, carrying the socket-read patch (blueprint/desktop.md
+# "Backends"). Default features select the pure-Rust `fusermount3` mount path,
+# so building the adapter needs no libfuse3 headers.
+fuser = { path = "../../third-party/fuser", default-features = false }
+# The kernel session thread hands operations to the engine task over these —
+# runtime-agnostic, matching the engine's own event stream.
+futures-channel.workspace = true
+futures-core.workspace = true
+# The mount's own uid/gid, without `unsafe` — the crate forbids it. Same
+# version fuser already resolves, so this costs no extra tree.
+nix = { version = "0.29", features = ["user"] }
 
 [dev-dependencies]
+# Self dev-dependency enables `test-kit` for this crate's own tests without
+# leaking it into a consumer's production build.
+cipherbox-fuse = { path = ".", features = ["test-kit"] }
 # The vfs suite drives a real engine over the in-memory seam fakes and the
 # virtual clock — no kernel, no network, no wall clock.
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
