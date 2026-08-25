@@ -15,6 +15,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WorkerMessage,
@@ -52,6 +53,11 @@ export interface EngineTransport {
   abortWrite(handle: WriteHandle): Promise<void>;
   /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
+  /**
+   * Reads the vault's contact book and the grants `scope`'s own record commits,
+   * or the vault root's for `null`.
+   */
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -173,6 +179,12 @@ export class LocalTransport extends CorrelatedTransport {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.request<SnapshotDescriptor>(this.ready, (id) =>
       this.worker.postMessage({ type: 'snapshot', id, folder }, [])
+    );
+  }
+
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
+    return this.request<SharingDescriptor>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'sharing', id, scope }, [])
     );
   }
 

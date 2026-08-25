@@ -34,7 +34,7 @@ use crate::seams_bridge::{
     JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter, RecordTransportAdapter,
     SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
 };
-use crate::{Command, CommandOutcome, Event, NodeId, SnapshotView};
+use crate::{Command, CommandOutcome, Event, NodeId, SharingView, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -333,6 +333,21 @@ impl EngineHandle {
             let folder = folder.unwrap_or_else(|| engine.root());
             let view = engine.snapshot(folder).await.map_err(engine_error)?;
             Ok(SnapshotView::from_facade(view).into())
+        })
+    }
+
+    /// Reads a key-free [`SharingView`] for a sharing UI: this vault's verified
+    /// contact book, and the grants `scopeRoot`'s own record commits — of the
+    /// engine's current root when `scopeRoot` is absent, as `snapshot` does.
+    /// Resolves with the view; rejects with the engine error.
+    pub fn sharing(&self, scope_root: Option<NodeId>) -> Promise {
+        let engine = self.engine.clone();
+        let scope_root = scope_root.map(|node| node.facade());
+        future_to_promise(async move {
+            let engine = engine.read().await;
+            let scope_root = scope_root.unwrap_or_else(|| engine.root());
+            let view = engine.sharing(scope_root).await.map_err(engine_error)?;
+            Ok(SharingView::from_facade(view).into())
         })
     }
 

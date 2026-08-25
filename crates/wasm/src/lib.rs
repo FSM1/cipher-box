@@ -821,6 +821,120 @@ impl SnapshotView {
     }
 }
 
+/// One imported contact in a [`SharingView`]: the two public keys a grant
+/// needs, and nothing else.
+#[wasm_bindgen]
+pub struct SharingContact {
+    inner: facade::SharingContact,
+}
+
+#[wasm_bindgen]
+impl SharingContact {
+    /// The peer's secp256k1 identity key, compressed SEC1 — the grant ledger's
+    /// recipient label.
+    #[wasm_bindgen(getter, js_name = identityPublicKey)]
+    pub fn identity_public_key(&self) -> Vec<u8> {
+        self.inner.identity_public_key.clone()
+    }
+
+    /// The peer's X25519 encryption subkey, which the imported code's binding
+    /// signature ties to `identityPublicKey`.
+    #[wasm_bindgen(getter, js_name = encryptionPublicKey)]
+    pub fn encryption_public_key(&self) -> Vec<u8> {
+        self.inner.encryption_public_key.clone()
+    }
+}
+
+impl SharingContact {
+    /// Wraps an engine sharing contact. Never exported to JS.
+    pub fn from_facade(inner: facade::SharingContact) -> Self {
+        Self { inner }
+    }
+}
+
+/// One grant standing on the scope a [`SharingView`] reads.
+#[wasm_bindgen]
+pub struct SharingGrant {
+    inner: facade::SharingGrant,
+}
+
+#[wasm_bindgen]
+impl SharingGrant {
+    /// The recipient's secp256k1 identity key, which joins the row to a
+    /// [`SharingContact`]. All-zero for a row the owner could not vouch for.
+    #[wasm_bindgen(getter, js_name = recipientIdentityPublicKey)]
+    pub fn recipient_identity_public_key(&self) -> Vec<u8> {
+        self.inner.recipient_identity_public_key.clone()
+    }
+
+    /// The permission the scope root commits for this recipient.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Permission {
+        self.inner.permission.into()
+    }
+
+    /// The row's advisory expiry in Unix millis (a `bigint`), or `undefined`.
+    /// Not a capability boundary — no owner signature covers it.
+    #[wasm_bindgen(getter, js_name = expiresAt)]
+    pub fn expires_at(&self) -> Option<u64> {
+        self.inner.expires_at
+    }
+}
+
+impl SharingGrant {
+    /// Wraps an engine sharing grant. Never exported to JS.
+    pub fn from_facade(inner: facade::SharingGrant) -> Self {
+        Self { inner }
+    }
+}
+
+/// A key-free read of one scope's sharing state: this vault's whole verified
+/// contact book, and the grants the scope's own record commits.
+#[wasm_bindgen]
+pub struct SharingView {
+    inner: facade::SharingView,
+}
+
+#[wasm_bindgen]
+impl SharingView {
+    /// The 16 raw bytes of the scope root this read is for.
+    #[wasm_bindgen(getter)]
+    pub fn scope(&self) -> Vec<u8> {
+        self.inner.scope.0.to_vec()
+    }
+
+    /// Every contact this vault has imported, ordered as the book stores them.
+    #[wasm_bindgen(getter)]
+    pub fn contacts(&self) -> Vec<SharingContact> {
+        self.inner
+            .contacts
+            .iter()
+            .cloned()
+            .map(SharingContact::from_facade)
+            .collect()
+    }
+
+    /// The grants standing on `scope`, ordered as the ledger commits them.
+    /// Empty for a node that is not a scope root — nothing is granted there.
+    #[wasm_bindgen(getter)]
+    pub fn grants(&self) -> Vec<SharingGrant> {
+        self.inner
+            .grants
+            .iter()
+            .cloned()
+            .map(SharingGrant::from_facade)
+            .collect()
+    }
+}
+
+impl SharingView {
+    /// Wraps an engine sharing view for the boundary. For the engine handle and
+    /// the boundary tests; never exported to JS.
+    pub fn from_facade(inner: facade::SharingView) -> Self {
+        Self { inner }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Commands — the write-intent surface. Built by the host, consumed (later) by
 // the engine handle; payload readback is deliberately absent so no user data or

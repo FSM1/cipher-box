@@ -26,6 +26,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -43,6 +44,7 @@ export interface BroadcastChannelLike {
 /** A follower read intent: served by the leader's engine, answered by value. */
 export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
+  | { kind: 'sharing'; scope: Uint8Array | null }
   | { kind: 'siweChallenge' }
   | { kind: 'download'; node: Uint8Array };
 
@@ -120,6 +122,7 @@ export type PortResponse =
       ok: true;
       result?:
         | SnapshotDescriptor
+        | SharingDescriptor
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | string

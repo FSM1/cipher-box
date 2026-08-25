@@ -1,15 +1,19 @@
 import type { ReactNode } from 'react';
 import { EngineRequestError, toHex } from '@cipherbox/client';
-import type { EngineClient, EventDescriptor } from '@cipherbox/client';
+import type {
+  EngineClient,
+  EventDescriptor,
+  Permission,
+  SharingDescriptor,
+} from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
-import { sharingStore, type VerifiedContact } from '../../stores/sharing.store';
+import { sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
 import { ShareDialog } from './ShareDialog';
 
 const DOCS = new Uint8Array(16).fill(7);
-const PHOTOS = new Uint8Array(16).fill(9);
 const CODE_HEX = '00ff10';
 
 const folder: ListingRow = {
@@ -26,33 +30,87 @@ const folder: ListingRow = {
   deadLetter: false,
 };
 
-function contact(seed: number): VerifiedContact {
-  return sharingStore.contactImported({
-    kind: 'contactImported',
-    identityPublicKey: new Uint8Array(33).fill(seed),
-    encPublicKey: new Uint8Array(32).fill(seed),
-  });
+function identity(seed: number): Uint8Array {
+  return new Uint8Array(33).fill(seed);
 }
 
-/** The grant surface the dialog drives; a named command answers with a refusal. */
-function sharingEngine(refusals: Record<string, Error> = {}) {
+function key(seed: number): string {
+  return toHex(identity(seed));
+}
+
+/** The sharing state one vault holds, as the engine would answer a read with. */
+interface EngineState {
+  contacts: number[];
+  grants: Map<string, Array<[number, Permission]>>;
+}
+
+/**
+ * The sharing surface the dialog drives, over engine-side state the accepted
+ * commands mutate — so the dialog's re-read sees what a real engine would
+ * report, and never what a command happened to return.
+ */
+function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<EngineState> = {}) {
+  const state: EngineState = {
+    contacts: held.contacts ?? [],
+    grants: held.grants ?? new Map(),
+  };
   const answer = <T,>(name: string, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
+  const rowsOf = (scope: Uint8Array) => state.grants.get(toHex(scope)) ?? [];
+  const seedOf = (identityPublicKey: Uint8Array) => identityPublicKey[0] ?? 0;
 
   const facade = {
     subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
     snapshot: () => new Promise<never>(() => undefined),
     setFocus: () => Promise.resolve(),
-    importContact: vi.fn((code: Uint8Array) =>
-      answer('importContact', {
-        kind: 'contactImported' as const,
-        identityPublicKey: new Uint8Array(33).fill(code[0] ?? 1),
-        encPublicKey: new Uint8Array(32).fill(1),
+    sharing: vi.fn(
+      (scope: Uint8Array): Promise<SharingDescriptor> =>
+        answer('sharing', {
+          scope,
+          contacts: state.contacts.map((seed) => ({
+            identityPublicKey: identity(seed),
+            encryptionPublicKey: new Uint8Array(32).fill(seed),
+          })),
+          grants: rowsOf(scope).map(([seed, permission]) => ({
+            recipientIdentityPublicKey: identity(seed),
+            permission,
+            expiresAt: null,
+          })),
+        })
+    ),
+    importContact: vi.fn((code: Uint8Array) => {
+      const seed = code[0] ?? 1;
+      return answer('importContact', { kind: 'contactImported' as const }).then((outcome) => {
+        if (!state.contacts.includes(seed)) state.contacts.push(seed);
+        return outcome;
+      });
+    }),
+    grant: vi.fn((scope: Uint8Array, recipient: Uint8Array, permission: Permission) =>
+      answer('grant', { kind: 'done' as const }).then((outcome) => {
+        state.grants.set(toHex(scope), [...rowsOf(scope), [seedOf(recipient), permission]]);
+        return outcome;
       })
     ),
-    grant: vi.fn(() => answer('grant', { kind: 'done' as const })),
-    revoke: vi.fn(() => answer('revoke', { kind: 'done' as const })),
-    downgrade: vi.fn(() => answer('downgrade', { kind: 'done' as const })),
+    revoke: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
+      answer('revoke', { kind: 'done' as const }).then((outcome) => {
+        state.grants.set(
+          toHex(scope),
+          rowsOf(scope).filter(([seed]) => seed !== seedOf(recipient))
+        );
+        return outcome;
+      })
+    ),
+    downgrade: vi.fn((scope: Uint8Array, recipient: Uint8Array) =>
+      answer('downgrade', { kind: 'done' as const }).then((outcome) => {
+        state.grants.set(
+          toHex(scope),
+          rowsOf(scope).map(([seed, permission]): [number, Permission] =>
+            seed === seedOf(recipient) ? [seed, 'read'] : [seed, permission]
+          )
+        );
+        return outcome;
+      })
+    ),
   };
 
   const client = {
@@ -64,64 +122,67 @@ function sharingEngine(refusals: Record<string, Error> = {}) {
   return { client, facade };
 }
 
-function share(engine = sharingEngine()) {
+/** Renders the dialog and lets its opening read land. */
+async function share(engine = sharingEngine()) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <EngineProvider createClient={() => engine.client}>{children}</EngineProvider>
   );
-  render(wrapper({ children: <ShareDialog row={folder} onClose={() => undefined} /> }));
+  await act(async () => {
+    render(wrapper({ children: <ShareDialog row={folder} onClose={() => undefined} /> }));
+  });
   return engine;
 }
 
-/** Clicks and lets the command it dispatched settle. */
+/** Clicks and lets the command it dispatched, and its re-read, settle. */
 async function click(testId: string) {
   await act(async () => {
     fireEvent.click(screen.getByTestId(testId));
   });
 }
 
+/** A vault whose engine already holds `contacts`, and `rows` on the folder. */
+function held(contacts: number[], rows: Array<[number, Permission]> = []) {
+  return { contacts, grants: new Map([[toHex(DOCS), rows]]) };
+}
+
 afterEach(() => sharingStore.clear());
 
 describe('the grant list', () => {
-  it('says only that this session recorded no grant, never that none exists', () => {
-    share();
+  it('reports the emptiness of a scope the engine grants nothing on', async () => {
+    await share();
 
     expect(screen.getByTestId('share-no-grants')).toBeTruthy();
-    expect(screen.getByTestId('share-session-note')).toBeTruthy();
     expect(screen.queryByTestId('share-grant-list')).toBeNull();
+    // The list is engine truth now, so nothing on screen limits it to this
+    // session's own commands.
+    expect(screen.queryByTestId('share-session-note')).toBeNull();
   });
 
-  it('lists one row per grant standing on this scope, and none from another', () => {
-    const alice = contact(1);
-    const bob = contact(2);
-    sharingStore.granted(DOCS, alice, 'write');
-    sharingStore.granted(PHOTOS, bob, 'read');
-    share();
+  it('lists a grant this session never issued, because the engine holds it', async () => {
+    await share(sharingEngine({}, held([1], [[1, 'write']])));
 
     const rows = screen.getAllByTestId('share-grant-row');
     expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toContain(alice.key);
+    expect(rows[0].textContent).toContain(key(1));
+    expect(screen.getByTestId('share-grant-permission').textContent).toBe('write');
   });
 
   it('leaves no grant row once the engine accepted the revoke', async () => {
-    const alice = contact(1);
-    sharingStore.granted(DOCS, alice, 'read');
-    const engine = share();
+    const engine = await share(sharingEngine({}, held([1], [[1, 'read']])));
 
     await click('share-revoke');
 
-    expect(engine.facade.revoke).toHaveBeenCalledWith(DOCS, alice.identityPublicKey);
+    expect(engine.facade.revoke).toHaveBeenCalledWith(DOCS, identity(1));
     expect(screen.queryByTestId('share-grant-row')).toBeNull();
     expect(screen.getByTestId('share-no-grants')).toBeTruthy();
   });
 
   it('renders a downgrade as the row changing permission, not as a revoke', async () => {
-    const alice = contact(1);
-    sharingStore.granted(DOCS, alice, 'write');
-    const engine = share();
+    const engine = await share(sharingEngine({}, held([1], [[1, 'write']])));
 
     await click('share-downgrade');
 
-    expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, alice.identityPublicKey);
+    expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, identity(1));
     expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
     expect(screen.getByTestId('share-grant-permission').textContent).toBe('read');
     // Read is the floor a downgrade lands on, so the control is spent.
@@ -129,9 +190,12 @@ describe('the grant list', () => {
   });
 
   it('keeps the write grant a refused downgrade left standing, and says why', async () => {
-    const alice = contact(1);
-    sharingStore.granted(DOCS, alice, 'write');
-    share(sharingEngine({ downgrade: new EngineRequestError('the publish was refused') }));
+    await share(
+      sharingEngine(
+        { downgrade: new EngineRequestError('the publish was refused') },
+        held([1], [[1, 'write']])
+      )
+    );
 
     await click('share-downgrade');
 
@@ -142,32 +206,30 @@ describe('the grant list', () => {
 
 describe('granting', () => {
   it('grants the picked contact at the picked permission', async () => {
-    const alice = contact(1);
-    const engine = share();
+    const engine = await share(sharingEngine({}, held([1])));
 
-    fireEvent.change(screen.getByLabelText('contact'), { target: { value: alice.key } });
+    fireEvent.change(screen.getByLabelText('contact'), { target: { value: key(1) } });
     fireEvent.change(screen.getByLabelText('permission'), { target: { value: 'write' } });
     await click('share-grant');
 
-    expect(engine.facade.grant).toHaveBeenCalledWith(DOCS, alice.identityPublicKey, 'write');
+    expect(engine.facade.grant).toHaveBeenCalledWith(DOCS, identity(1), 'write');
     expect(screen.getByTestId('share-grant-permission').textContent).toBe('write');
   });
 
   it('lists no row for a grant the engine refused', async () => {
-    const alice = contact(1);
-    share(sharingEngine({ grant: new EngineRequestError('the recipient is the owner') }));
+    await share(
+      sharingEngine({ grant: new EngineRequestError('the recipient is the owner') }, held([1]))
+    );
 
-    fireEvent.change(screen.getByLabelText('contact'), { target: { value: alice.key } });
+    fireEvent.change(screen.getByLabelText('contact'), { target: { value: key(1) } });
     await click('share-grant');
 
     expect(screen.queryByTestId('share-grant-row')).toBeNull();
     expect(screen.getByTestId('dialog-error').textContent).toBe('the recipient is the owner');
   });
 
-  it('cannot grant to a contact that already holds a grant here', () => {
-    const alice = contact(1);
-    sharingStore.granted(DOCS, alice, 'read');
-    share();
+  it('cannot grant to a contact that already holds a grant here', async () => {
+    await share(sharingEngine({}, held([1], [[1, 'read']])));
 
     expect(screen.getByTestId('share-no-contacts')).toBeTruthy();
     expect((screen.getByTestId('share-grant') as HTMLButtonElement).disabled).toBe(true);
@@ -176,7 +238,7 @@ describe('granting', () => {
 
 describe('the import step', () => {
   async function openImport(engine = sharingEngine()) {
-    share(engine);
+    await share(engine);
     await click('share-import-contact');
     return engine;
   }

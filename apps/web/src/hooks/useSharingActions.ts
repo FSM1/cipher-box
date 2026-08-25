@@ -1,65 +1,83 @@
 /**
- * The sharing write path: one facade command per user action, and a store entry
- * only where the engine answered (`stores/sharing.store.ts`).
+ * The sharing surface for one scope: one facade command per user action, each
+ * followed by a re-read of the engine's own sharing state
+ * (`stores/sharing.store.ts`). The store mirrors nothing a command returned, so
+ * a grant another device issued shows up and a row this session issued survives
+ * a reload.
  */
 
-import { useCallback } from 'react';
-import type { Permission } from '@cipherbox/client';
+import { useCallback, useMemo } from 'react';
+import { toHex } from '@cipherbox/client';
+import type { EngineFacade, Permission } from '@cipherbox/client';
 import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
-/** Which command is in flight, or `null` when the sharing surface is idle. */
-export type SharingCommand = 'importContact' | 'grant' | 'revoke' | 'downgrade';
+/** Which call is in flight, or `null` when the sharing surface is idle. */
+export type SharingCommand = 'read' | 'importContact' | 'grant' | 'revoke' | 'downgrade';
 
 export interface SharingActions {
   busy: SharingCommand | null;
   /** The last refusal, in the engine's own words; cleared by the next dispatch. */
   error: string | null;
   clearError(): void;
-  /** Resolves `true` once the engine verified the code and returned a contact. */
+  /** Re-reads this scope's contacts and grants into the store. */
+  reload(): Promise<boolean>;
+  /** Resolves `true` once the engine verified the code and re-read the book. */
   importContact(contactCode: Uint8Array): Promise<boolean>;
-  grant(scope: Uint8Array, contact: VerifiedContact, permission: Permission): Promise<boolean>;
-  revoke(scope: Uint8Array, contact: VerifiedContact): Promise<boolean>;
-  downgrade(scope: Uint8Array, contact: VerifiedContact): Promise<boolean>;
+  grant(contact: VerifiedContact, permission: Permission): Promise<boolean>;
+  revoke(contact: VerifiedContact): Promise<boolean>;
+  downgrade(contact: VerifiedContact): Promise<boolean>;
 }
 
-export function useSharingActions(): SharingActions {
+export function useSharingActions(scope: Uint8Array): SharingActions {
   const { busy, error, run, clearError } = useCommandRunner<SharingCommand>();
+  // Keyed by the scope's hex id: a caller rebuilding the byte array each render
+  // is the same scope, and re-reading on it would loop through the store the
+  // read publishes to.
+  const scopeKey = toHex(scope);
+  const target = useMemo(() => scope, [scopeKey]);
+
+  const read = useCallback(
+    async (facade: EngineFacade) => sharingStore.reported(await facade.sharing(target)),
+    [target]
+  );
 
   return {
     busy,
     error,
     clearError,
+    reload: useCallback(() => run('read', read), [run, read]),
     importContact: useCallback(
       (contactCode) =>
         run('importContact', async (facade) => {
-          sharingStore.contactImported(await facade.importContact(contactCode));
+          await facade.importContact(contactCode);
+          await read(facade);
         }),
-      [run]
+      [run, read]
     ),
     grant: useCallback(
-      (scope, contact, permission) =>
+      (contact, permission) =>
         run('grant', async (facade) => {
-          await facade.grant(scope, contact.identityPublicKey, permission);
-          sharingStore.granted(scope, contact, permission);
+          await facade.grant(target, contact.identityPublicKey, permission);
+          await read(facade);
         }),
-      [run]
+      [run, read, target]
     ),
     revoke: useCallback(
-      (scope, contact) =>
+      (contact) =>
         run('revoke', async (facade) => {
-          await facade.revoke(scope, contact.identityPublicKey);
-          sharingStore.revoked(scope, contact);
+          await facade.revoke(target, contact.identityPublicKey);
+          await read(facade);
         }),
-      [run]
+      [run, read, target]
     ),
     downgrade: useCallback(
-      (scope, contact) =>
+      (contact) =>
         run('downgrade', async (facade) => {
-          await facade.downgrade(scope, contact.identityPublicKey);
-          sharingStore.downgraded(scope, contact);
+          await facade.downgrade(target, contact.identityPublicKey);
+          await read(facade);
         }),
-      [run]
+      [run, read, target]
     ),
   };
 }

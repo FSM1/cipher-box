@@ -15,6 +15,8 @@ import type {
   NodeKind,
   OpProgressPhase,
   PendingClass,
+  Permission,
+  SharingDescriptor,
   SnapshotDescriptor,
   Staleness,
 } from './protocol.js';
@@ -25,6 +27,7 @@ import type {
   WasmEvent,
   WasmByoIpfsConfig,
   WasmNodeId,
+  WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
 } from './engineWasm.js';
@@ -448,5 +451,34 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
     blocked: blockedHold(view.blocked),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
+  };
+}
+
+function permissionFrom(wasm: EngineWasm, permission: number): Permission {
+  switch (permission) {
+    case wasm.Permission.Read:
+      return 'read';
+    case wasm.Permission.Write:
+      return 'write';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
+      // guessed permission would misreport who can write to a scope.
+      throw new Error(`unknown WASM permission value: ${permission}`);
+  }
+}
+
+/** Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor. */
+export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDescriptor {
+  return {
+    scope: view.scope,
+    contacts: view.contacts.map((contact) => ({
+      identityPublicKey: contact.identityPublicKey,
+      encryptionPublicKey: contact.encryptionPublicKey,
+    })),
+    grants: view.grants.map((grant) => ({
+      recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
+      permission: permissionFrom(wasm, grant.permission),
+      expiresAt: grant.expiresAt ?? null,
+    })),
   };
 }

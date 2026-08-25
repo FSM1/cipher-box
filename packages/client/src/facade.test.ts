@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import { EngineFacade } from './facade.js';
-import { byoSettings, emptySnapshot, FAKE_SIWE_NONCE, TEST_ACCOUNT_ID } from './testkit.js';
+import {
+  byoSettings,
+  emptySharing,
+  emptySnapshot,
+  FAKE_SIWE_NONCE,
+  TEST_ACCOUNT_ID,
+} from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -16,6 +23,7 @@ class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
   commands: CommandDescriptor[] = [];
   snapshots: Uint8Array[] = [];
+  sharingReads: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
   opened: Uint8Array[] = [];
@@ -64,6 +72,11 @@ class FakeTransport implements EngineTransport {
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return Promise.resolve(emptySnapshot(folder));
+  }
+
+  sharing(scope: Uint8Array): Promise<SharingDescriptor> {
+    this.sharingReads.push(scope);
+    return Promise.resolve(emptySharing(scope));
   }
 
   siweChallenge(): Promise<string> {

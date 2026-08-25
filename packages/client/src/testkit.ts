@@ -17,6 +17,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
@@ -96,6 +97,11 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
   };
 }
 
+/** A minimal empty sharing descriptor for transport-plumbing assertions. */
+export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDescriptor {
+  return { scope, contacts: [], grants: [] };
+}
+
 const notStubbed = (method: string): Promise<never> =>
   Promise.reject(new Error(`${method} not stubbed`));
 
@@ -131,6 +137,10 @@ export class StubEngineHost implements EngineHostLike {
 
   snapshot(_folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return notStubbed('snapshot');
+  }
+
+  sharing(_scope: Uint8Array | null): Promise<SharingDescriptor> {
+    return notStubbed('sharing');
   }
 
   siweChallenge(): Promise<string> {
@@ -440,6 +450,7 @@ export class FakeEngineTransport implements EngineTransport {
   /** What each `command` was asked to move rather than copy. */
   readonly commandTransfers: Transferable[][] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
+  readonly sharingReads: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
   readonly opened: Uint8Array[] = [];
@@ -460,6 +471,8 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve({ kind: 'done' });
   respondSnapshot: (folder: Uint8Array | null) => Promise<SnapshotDescriptor> = (folder) =>
     Promise.resolve(emptySnapshot(folder ?? undefined));
+  respondSharing: (scope: Uint8Array | null) => Promise<SharingDescriptor> = (scope) =>
+    Promise.resolve(emptySharing(scope ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
@@ -512,6 +525,11 @@ export class FakeEngineTransport implements EngineTransport {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return this.respondSnapshot(folder);
+  }
+
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
+    this.sharingReads.push(scope);
+    return this.respondSharing(scope);
   }
 
   siweChallenge(): Promise<string> {

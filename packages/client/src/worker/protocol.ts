@@ -119,6 +119,40 @@ export interface SnapshotDescriptor {
   staleness: Staleness;
 }
 
+/** One contact the vault's book holds, as data (mirrors `SharingContact`). */
+export interface SharingContactDescriptor {
+  identityPublicKey: Uint8Array;
+  encryptionPublicKey: Uint8Array;
+}
+
+/** One grant a scope's ledger commits, as data (mirrors `SharingGrant`). */
+export interface SharingGrantDescriptor {
+  /**
+   * Joins the row to a contact by identity key. All-zero for a row the owner
+   * could not vouch for, which joins to no contact.
+   */
+  recipientIdentityPublicKey: Uint8Array;
+  permission: Permission;
+  /**
+   * Advisory expiry in Unix millis, `null` when the row carries none. Not a
+   * capability boundary — no owner signature covers it.
+   */
+  expiresAt: bigint | null;
+}
+
+/**
+ * One scope's sharing state, as data (mirrors the facade `SharingView`).
+ * A wire projection of view state the engine owns, not the forbidden
+ * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
+ */
+export interface SharingDescriptor {
+  scope: Uint8Array;
+  /** This vault's whole contact book, re-verified from each stored code. */
+  contacts: SharingContactDescriptor[];
+  /** Empty for a node that is not a scope root — nothing is granted there. */
+  grants: SharingGrantDescriptor[];
+}
+
 /** Where a version's bytes are pinned (mirrors the facade `PinMode`). */
 export type PinMode = 'hosted' | 'external' | 'dual';
 
@@ -253,6 +287,7 @@ export type WorkerRequest =
   | { type: 'commitWrite'; id: number; handle: WriteHandle }
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
+  | { type: 'sharing'; id: number; scope: Uint8Array | null }
   | { type: 'siweChallenge'; id: number }
   | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
@@ -265,7 +300,8 @@ export type WorkerMessage =
   | { type: 'ready' }
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
-   * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
+   * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
+   * the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
@@ -275,7 +311,13 @@ export type WorkerMessage =
       type: 'response';
       id: number;
       ok: true;
-      result?: SnapshotDescriptor | CommandOutcomeDescriptor | ArrayBuffer | bigint | string;
+      result?:
+        | SnapshotDescriptor
+        | SharingDescriptor
+        | CommandOutcomeDescriptor
+        | ArrayBuffer
+        | bigint
+        | string;
     }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the

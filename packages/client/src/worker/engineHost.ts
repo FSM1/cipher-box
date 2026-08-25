@@ -10,6 +10,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
   WriteHandle,
@@ -24,6 +25,7 @@ import {
   minted,
   nodeId,
   readEvent,
+  readSharing,
   readSnapshot,
   record,
   text,
@@ -48,6 +50,8 @@ export interface EngineHostLike {
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
+  /** Reads the contact book and `scope`'s committed grants, or the root's. */
+  sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Opens a read stream pinned to the node's current head content version. */
@@ -229,6 +233,13 @@ export class EngineHost implements EngineHostLike {
       folder === null ? undefined : nodeId(this.wasm, folder, 'folder')
     );
     return readSnapshot(this.wasm, view);
+  }
+
+  async sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
+    const view = await this.handle.sharing(
+      scope === null ? undefined : nodeId(this.wasm, scope, 'scope')
+    );
+    return readSharing(this.wasm, view);
   }
 
   siweChallenge(): Promise<string> {
