@@ -29,19 +29,8 @@ const STATUS_QUOTA_EXCEEDED: NtStatus = 0xC000_0044_u32 as i32;
 const STATUS_DATA_ERROR: NtStatus = 0xC000_003E_u32 as i32;
 const STATUS_RETRY: NtStatus = 0xC000_022D_u32 as i32;
 
-/// The NT status a WinFsp caller gets for `error`.
-///
-/// The same three classes the errno table keeps apart, because the user acts on
-/// each differently (blueprint/desktop.md "statfs", "Conflicts, dead letters,
-/// and rotation"):
-///
-/// - a storage refusal names *which* budget refused — `STATUS_DISK_FULL` for
-///   the device, `STATUS_QUOTA_EXCEEDED` for the hosted account, never both
-///   collapsed into "disk full";
-/// - a fail-closed verdict — a trust violation or a journal-time refusal — is
-///   `STATUS_DATA_ERROR`, terminal, with the tray carrying the explanation;
-/// - an availability failure is `STATUS_RETRY`: the same operation may succeed
-///   once the content resolves, and it must never read as the terminal class.
+/// The NT status a WinFsp caller gets for `error`, keeping the three classes
+/// [`crate::errno::errno_of`] names apart in this code space.
 pub fn ntstatus_of(error: &VfsError) -> NtStatus {
     match error {
         VfsError::NotFound => STATUS_OBJECT_NAME_NOT_FOUND,
@@ -165,46 +154,19 @@ mod tests {
         }
     }
 
-    /// A full device and a full account send the user to different machines,
-    /// so the cause has to survive onto this axis too.
+    /// The class relations, from their one home — a device budget apart from an
+    /// account budget, availability apart from a fail-closed verdict.
     #[test]
-    fn a_device_budget_and_an_account_budget_are_different_statuses() {
-        for cause in [
-            OverBudgetCause::StagingLimit,
-            OverBudgetCause::DeviceFull,
-            OverBudgetCause::StagingBacklog,
-            OverBudgetCause::StorageUnmeasured,
-            OverBudgetCause::TooManyWrites,
-        ] {
-            assert_eq!(
-                ntstatus_of(&VfsError::OverBudget(cause)),
-                STATUS_DISK_FULL,
-                "{cause:?}"
-            );
-        }
+    fn the_shared_class_rules_hold_for_ntstatus() {
+        crate::error::assert_class_rules_hold(ntstatus_of);
+        assert_eq!(
+            ntstatus_of(&VfsError::OverBudget(OverBudgetCause::DeviceFull)),
+            STATUS_DISK_FULL
+        );
         assert_eq!(
             ntstatus_of(&VfsError::OverBudget(OverBudgetCause::AccountQuota)),
             STATUS_QUOTA_EXCEEDED
         );
-    }
-
-    /// Relational, not a second copy of the table above: the two classes must
-    /// stay apart however either value moves (security rule 6).
-    #[test]
-    fn availability_never_arrives_as_the_fail_closed_status() {
-        let unavailable = ntstatus_of(&VfsError::Unavailable {
-            message: "no endpoint served a record this pass could adopt".to_owned(),
-        });
-        for terminal in [
-            VfsError::TrustViolation {
-                message: "rejected child record".to_owned(),
-            },
-            VfsError::Refused {
-                message: "rotation impossible".to_owned(),
-            },
-        ] {
-            assert_ne!(ntstatus_of(&terminal), unavailable, "{terminal}");
-        }
     }
 
     /// A status whose top two bits are not `11` is a success or an informational

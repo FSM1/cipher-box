@@ -1496,6 +1496,18 @@ impl EngineView {
             .map(node_attrs)
     }
 
+    /// The child of `parent` stored under exactly `name`, if any — what a host
+    /// presenting names case-sensitively resolves through. Collisions stay
+    /// [`lookup`](Self::lookup)'s: this decides what a name refers to, never
+    /// whether two names are one.
+    pub fn lookup_exact(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
+        self.rendered
+            .children(parent)
+            .into_iter()
+            .find(|child| child.name() == name)
+            .map(node_attrs)
+    }
+
     /// The node's attributes, if present in the rendered view (FUSE getattr).
     pub fn attrs(&self, node: NodeId) -> Option<NodeAttrs> {
         self.rendered.node(node).map(node_attrs)

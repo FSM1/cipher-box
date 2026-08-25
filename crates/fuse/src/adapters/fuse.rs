@@ -83,10 +83,10 @@ fn malformed() -> i32 {
     errno_of(&VfsError::Invalid)
 }
 
-/// What one mount technology asks of the shared FUSE wire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What one mount technology asks of the shared FUSE wire, on top of
+/// [`floor_options`].
 pub(crate) struct MountProfile {
-    /// The options the mount is made with.
+    /// The options this backend adds. The floor is not among them.
     pub(crate) options: Vec<MountOption>,
     /// What the backend can do for the operation core.
     pub(crate) capabilities: HostCapabilities,
@@ -96,6 +96,47 @@ pub(crate) struct MountProfile {
     /// request that never comes (blueprint/desktop.md "The FS core and host
     /// adapters" — readdir single-pass).
     pub(crate) resumable_readdir: bool,
+}
+
+/// Every CipherBox mount's floor, whatever backend it is made on. Held here
+/// rather than in each profile so a backend cannot ship without it.
+fn floor_options() -> Vec<MountOption> {
+    vec![
+        MountOption::FSName("cipherbox".to_owned()),
+        MountOption::DefaultPermissions,
+        MountOption::NoSuid,
+        MountOption::NoExec,
+        MountOption::NoDev,
+    ]
+}
+
+/// Options that would admit someone other than the mount's maker. Refused
+/// rather than asserted against: a vault the whole machine can read is not a
+/// trade for tidier teardown, and `auto_unmount` is on the list because fuser
+/// must add `allow_other` to get it.
+fn forbidden_options() -> Vec<MountOption> {
+    vec![
+        MountOption::AllowOther,
+        MountOption::AllowRoot,
+        MountOption::AutoUnmount,
+    ]
+}
+
+/// The floor plus what `profile` adds, or an error if the backend asked for an
+/// option that widens who may read the vault.
+fn mount_options(profile_options: Vec<MountOption>) -> io::Result<Vec<MountOption>> {
+    let forbidden = forbidden_options();
+    if let Some(refused) = profile_options
+        .iter()
+        .find(|option| forbidden.contains(option))
+    {
+        return Err(io::Error::other(format!(
+            "a mount option would admit more than its maker: {refused:?}"
+        )));
+    }
+    let mut options = floor_options();
+    options.extend(profile_options);
+    Ok(options)
 }
 
 /// Pushes the operation core's invalidations at the backend.
@@ -264,21 +305,45 @@ impl FuseSession {
 /// rendering the directory again per continuation makes one listing cost a
 /// render per reply buffer. One slot is enough — the kernel walks one stream at
 /// a time — and a miss simply renders.
-#[derive(Default)]
 struct DirStream {
+    resumable: bool,
     dir: Option<u64>,
     entries: Vec<DirEntry>,
 }
 
 impl DirStream {
+    fn new(resumable: bool) -> Self {
+        Self {
+            resumable,
+            dir: None,
+            entries: Vec::new(),
+        }
+    }
+
     /// Whether the listing in hand answers this request, or the directory has
-    /// to be rendered again.
-    ///
-    /// A fresh walk always renders, so a directory is never served from a
-    /// listing older than the walk asking for it. A single-pass backend never
-    /// resumes, so nothing it asks for can be served from a previous reply.
-    fn serves(&self, ino: u64, offset: usize, resumable: bool) -> bool {
-        resumable && offset != 0 && self.dir == Some(ino)
+    /// to be rendered again. A fresh walk always renders, so a directory is
+    /// never served from a listing older than the walk asking for it.
+    fn serves(&self, ino: u64, offset: usize) -> bool {
+        self.resumable && offset != 0 && self.dir == Some(ino)
+    }
+
+    fn hold(&mut self, ino: u64, entries: Vec<DirEntry>) {
+        self.dir = Some(ino);
+        self.entries = entries;
+    }
+
+    fn forget(&mut self) {
+        self.dir = None;
+        self.entries = Vec::new();
+    }
+
+    /// Drop the listing a backend will not come back for — on a single-pass
+    /// mount that is every listing, and each one is a directory's worth of
+    /// filenames held for the life of the mount otherwise.
+    fn release(&mut self) {
+        if !self.resumable {
+            self.forget();
+        }
     }
 
     /// The entry a listing emits at `index`: the two dot entries, then the
@@ -314,14 +379,11 @@ pub struct FuseMount {
 
 impl FuseMount {
     /// Mount at `mountpoint`, which must already exist, under one backend's
-    /// [`MountProfile`].
-    ///
-    /// Owner-only by construction: no `allow_other`, and therefore no
-    /// `auto_unmount` either, since fuser must add `allow_other` to get it — a
-    /// vault the whole machine can read is not a trade for tidier teardown.
+    /// [`MountProfile`] and the shared [`floor_options`].
     pub(crate) fn at(mountpoint: &Path, profile: MountProfile) -> io::Result<Self> {
+        let options = mount_options(profile.options)?;
         let (sender, ops) = mpsc::unbounded();
-        let session = Session::new(FuseSession { ops: sender }, mountpoint, &profile.options)?;
+        let session = Session::new(FuseSession { ops: sender }, mountpoint, &options)?;
         let invalidator = FuseInvalidator {
             notifier: session.notifier(),
             capabilities: profile.capabilities,
@@ -350,12 +412,11 @@ impl FuseMount {
     /// operation here awaits IPNS resolution, publish, or API bookkeeping.
     pub async fn serve<T: SeamTypes>(&mut self, core: &mut OperationCore<T, FuseInvalidator>) {
         let owner = self.owner;
-        let resumable = self.resumable_readdir;
-        let mut listing = DirStream::default();
+        let mut listing = DirStream::new(self.resumable_readdir);
         loop {
             let next = core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx)).await;
             let Some(op) = next else { break };
-            answer(core, op, owner, resumable, &mut listing).await;
+            answer(core, op, owner, &mut listing).await;
         }
     }
 }
@@ -659,7 +720,6 @@ async fn answer<T: SeamTypes>(
     core: &mut OperationCore<T, FuseInvalidator>,
     op: FuseOp,
     owner: Ownership,
-    resumable_readdir: bool,
     listing: &mut DirStream,
 ) {
     match op {
@@ -692,16 +752,11 @@ async fn answer<T: SeamTypes>(
             offset,
             mut reply,
         } => {
-            if !listing.serves(ino, offset, resumable_readdir) {
+            if !listing.serves(ino, offset) {
                 match core.readdir(ino).await {
-                    Ok(entries) => {
-                        *listing = DirStream {
-                            dir: Some(ino),
-                            entries,
-                        }
-                    }
+                    Ok(entries) => listing.hold(ino, entries),
                     Err(refusal) => {
-                        *listing = DirStream::default();
+                        listing.forget();
                         reply.error(errno_of(&refusal));
                         return;
                     }
@@ -709,6 +764,7 @@ async fn answer<T: SeamTypes>(
             }
             emit_listing(&mut reply, ino, offset, listing);
             reply.ok();
+            listing.release();
         }
         FuseOp::Create {
             parent,
@@ -1020,10 +1076,13 @@ mod tests {
     }
 
     fn stream() -> DirStream {
-        DirStream {
-            dir: Some(1),
-            entries: vec![child(2, "alpha"), child(3, "beta")],
-        }
+        streaming(true)
+    }
+
+    fn streaming(resumable: bool) -> DirStream {
+        let mut listing = DirStream::new(resumable);
+        listing.hold(1, vec![child(2, "alpha"), child(3, "beta")]);
+        listing
     }
 
     /// A listing leads with `.` and `..`, both naming the directory itself.
@@ -1063,32 +1122,68 @@ mod tests {
     #[test]
     fn a_fresh_walk_always_renders() {
         for resumable in [true, false] {
-            assert!(!stream().serves(1, 0, resumable));
+            assert!(!streaming(resumable).serves(1, 0));
         }
     }
 
     #[test]
     fn a_resumable_backend_continues_the_listing_in_hand() {
         let listing = stream();
-        assert!(listing.serves(1, 1, true));
+        assert!(listing.serves(1, 1));
+        assert!(!listing.serves(2, 1), "another directory renders its own");
+        assert!(!DirStream::new(true).serves(1, 1), "an empty slot renders");
+    }
+
+    #[test]
+    fn a_single_pass_backend_is_never_served_from_a_previous_reply() {
+        let listing = streaming(false);
+        for offset in [0, 1, 2, usize::MAX] {
+            assert!(!listing.serves(1, offset), "at {offset}");
+        }
+    }
+
+    /// A listing a backend will not come back for is a directory's worth of
+    /// filenames held for the life of the mount.
+    #[test]
+    fn a_single_pass_backend_keeps_no_listing_after_its_reply() {
+        let mut kept = streaming(true);
+        kept.release();
         assert!(
-            !listing.serves(2, 1, true),
-            "another directory renders its own"
+            kept.serves(1, 1),
+            "a resumable backend keeps what it may ask for"
         );
-        assert!(
-            !DirStream::default().serves(1, 1, true),
-            "an empty slot renders"
+
+        let mut dropped = streaming(false);
+        dropped.release();
+        assert_eq!(
+            dropped.len(),
+            DOT_ENTRIES,
+            "nothing but the dot entries left"
         );
     }
 
-    /// FUSE-T's smbfs client walks a directory in one pass and never resumes at
-    /// a cookie, so a listing kept for it could only ever answer a request it
-    /// has already answered.
+    /// The floor is the shared wire's, not each backend's, so a new backend
+    /// cannot ship without it — and cannot widen who reads the vault either.
     #[test]
-    fn a_single_pass_backend_is_never_served_from_a_previous_reply() {
-        let listing = stream();
-        for offset in [0, 1, 2, usize::MAX] {
-            assert!(!listing.serves(1, offset, false), "at {offset}");
+    fn every_mount_carries_the_floor_and_no_option_that_widens_it() {
+        let options = mount_options(vec![MountOption::CUSTOM("backend=smb".to_owned())])
+            .expect("a backend option is added on top of the floor");
+        for required in [
+            MountOption::FSName("cipherbox".to_owned()),
+            MountOption::DefaultPermissions,
+            MountOption::NoSuid,
+            MountOption::NoExec,
+            MountOption::NoDev,
+        ] {
+            assert!(options.contains(&required), "{required:?}");
+        }
+        assert!(options.contains(&MountOption::CUSTOM("backend=smb".to_owned())));
+
+        for refused in forbidden_options() {
+            assert!(
+                mount_options(vec![refused.clone()]).is_err(),
+                "{refused:?} must be refused, not merely absent"
+            );
         }
     }
 

@@ -134,46 +134,18 @@ mod tests {
         }
     }
 
-    /// The distinction the blueprint puts on this axis: a full device tells the
-    /// user to free space here, a hosted-quota refusal tells them to buy or
-    /// free space there. Collapsing them sends them to the wrong machine.
+    /// The class relations, from their one home — a device budget apart from an
+    /// account budget, availability apart from a fail-closed verdict.
     #[test]
-    fn a_device_budget_and_an_account_budget_are_different_errnos() {
-        for cause in [
-            OverBudgetCause::StagingLimit,
-            OverBudgetCause::DeviceFull,
-            OverBudgetCause::StagingBacklog,
-            OverBudgetCause::StorageUnmeasured,
-            OverBudgetCause::TooManyWrites,
-        ] {
-            assert_eq!(
-                errno_of(&VfsError::OverBudget(cause)),
-                libc::ENOSPC,
-                "{cause:?}"
-            );
-        }
+    fn the_shared_class_rules_hold_for_errno() {
+        crate::error::assert_class_rules_hold(errno_of);
+        assert_eq!(
+            errno_of(&VfsError::OverBudget(OverBudgetCause::DeviceFull)),
+            libc::ENOSPC
+        );
         assert_eq!(
             errno_of(&VfsError::OverBudget(OverBudgetCause::AccountQuota)),
             libc::EDQUOT
         );
-    }
-
-    /// Relational, not a second copy of the table above: the two classes must
-    /// stay apart however either value moves (security rule 6).
-    #[test]
-    fn availability_never_arrives_as_the_fail_closed_code() {
-        let unavailable = errno_of(&VfsError::Unavailable {
-            message: "no endpoint served a record this pass could adopt".to_owned(),
-        });
-        for terminal in [
-            VfsError::TrustViolation {
-                message: "rejected child record".to_owned(),
-            },
-            VfsError::Refused {
-                message: "rotation impossible".to_owned(),
-            },
-        ] {
-            assert_ne!(errno_of(&terminal), unavailable, "{terminal}");
-        }
     }
 }

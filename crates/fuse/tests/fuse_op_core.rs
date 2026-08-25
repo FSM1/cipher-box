@@ -47,13 +47,19 @@ struct RecordingAdapter {
     seen: Rc<RefCell<Vec<Invalidation>>>,
 }
 
+/// The capabilities every mount in this suite starts from: a push-capable
+/// backend that presents names the unix way.
+fn base_capabilities() -> HostCapabilities {
+    HostCapabilities {
+        push_invalidation: true,
+        attribute_cache: true,
+        case_insensitive_lookup: false,
+    }
+}
+
 impl RecordingAdapter {
     fn push_capable() -> Self {
-        Self::declaring(HostCapabilities {
-            push_invalidation: true,
-            attribute_cache: true,
-            case_insensitive_lookup: false,
-        })
+        Self::declaring(base_capabilities())
     }
 
     fn declaring(capabilities: HostCapabilities) -> Self {
@@ -910,9 +916,8 @@ fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
 #[test]
 fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
     let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
-        push_invalidation: true,
-        attribute_cache: true,
         case_insensitive_lookup: true,
+        ..base_capabilities()
     }));
     let created = block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
 
@@ -952,6 +957,39 @@ fn a_case_sensitive_host_resolves_no_respelling_at_all() {
     block_on(core.lookup(ROOT_INO, "Report.txt")).expect("the stored spelling resolves");
 }
 
+/// The kernel cached the entry under the name a listing gave it, so a mount
+/// that invalidated the caller's respelling would leave the real cached entry
+/// alive for its whole TTL — and this backend's entry cache is never zero.
+#[test]
+fn a_respelled_mutation_invalidates_the_name_the_kernel_cached() {
+    let adapter = RecordingAdapter::declaring(HostCapabilities {
+        case_insensitive_lookup: true,
+        ..base_capabilities()
+    });
+    let mut core = mount_with(adapter.clone());
+    block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.mkdir(ROOT_INO, "Archive")).expect("mkdir");
+    adapter.drain();
+
+    block_on(core.rename(ROOT_INO, "REPORT.TXT", ROOT_INO, "moved.txt")).expect("rename");
+    assert!(
+        adapter.drain().contains(&Invalidation::Entry {
+            parent: ROOT_INO,
+            name: "Report.txt".to_owned(),
+        }),
+        "the source entry is invalidated as stored, not as respelled"
+    );
+
+    block_on(core.rmdir(ROOT_INO, "ARCHIVE")).expect("rmdir");
+    assert!(
+        adapter.drain().contains(&Invalidation::Entry {
+            parent: ROOT_INO,
+            name: "Archive".to_owned(),
+        }),
+        "the removed entry is invalidated as stored, not as respelled"
+    );
+}
+
 /// Presentation is not collision policy: however a host spells a lookup, two
 /// names that fold together are one name to the engine's strict comparator, on
 /// every platform, so a folder committed anywhere mounts everywhere.
@@ -959,9 +997,8 @@ fn a_case_sensitive_host_resolves_no_respelling_at_all() {
 fn the_strict_comparator_decides_collisions_whatever_the_host_presents() {
     for case_insensitive_lookup in [true, false] {
         let mut core = mount_with(RecordingAdapter::declaring(HostCapabilities {
-            push_invalidation: true,
-            attribute_cache: true,
             case_insensitive_lookup,
+            ..base_capabilities()
         }));
         block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
         assert_eq!(
@@ -980,9 +1017,8 @@ fn the_strict_comparator_decides_collisions_whatever_the_host_presents() {
 fn a_noattrcache_mount_keeps_its_entry_cache_and_loses_only_the_attribute_one() {
     let (with_attrs, _adapter) = mount();
     let suppressed = mount_with(RecordingAdapter::declaring(HostCapabilities {
-        push_invalidation: true,
         attribute_cache: false,
-        case_insensitive_lookup: false,
+        ..base_capabilities()
     }));
 
     assert!(
@@ -1001,8 +1037,7 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
     let (with_push, _adapter) = mount();
     let without_push = mount_with(RecordingAdapter::declaring(HostCapabilities {
         push_invalidation: false,
-        attribute_cache: true,
-        case_insensitive_lookup: false,
+        ..base_capabilities()
     }));
 
     assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
@@ -2610,8 +2645,7 @@ mod published {
             CacheBudget::CI,
             RecordingAdapter::declaring(HostCapabilities {
                 push_invalidation: false,
-                attribute_cache: true,
-                case_insensitive_lookup: false,
+                ..base_capabilities()
             }),
         );
         let ino = mount.ino;

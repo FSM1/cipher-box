@@ -283,19 +283,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// Find `name` under `parent` as the host presents names — the one rule
     /// every operation that names an existing node resolves through.
     ///
-    /// Case-insensitive presentation is the Windows convention and resolves to
-    /// the child stored as entered; every other host matches the stored name
-    /// exactly. Collisions are not on this axis: the engine's one strict
-    /// comparator decides them at create and at merge on every platform, so a
-    /// folder committed anywhere mounts everywhere (blueprint/desktop.md "Names
-    /// and attributes").
+    /// Which engine rule the host presents — see
+    /// [`HostCapabilities::case_insensitive_lookup`]. Collisions are not on
+    /// this axis: `create`, `mkdir`, and a rename's destination stay with the
+    /// strict comparator.
     fn resolve(&self, view: &EngineView, parent: NodeId, name: &str) -> Option<NodeAttrs> {
         if self.adapter.capabilities().case_insensitive_lookup {
             view.lookup(parent, name)
         } else {
-            view.children(parent)
-                .into_iter()
-                .find(|child| child.name == name)
+            view.lookup_exact(parent, name)
         }
     }
 
@@ -405,7 +401,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         .await?;
 
         let ino = self.inodes.ino_for(source.id);
-        self.entry_changed(parent, name);
+        self.entry_changed(parent, &source.name);
         self.entry_changed(new_parent, new_name);
         self.adapter.invalidate(Invalidation::Attributes { ino });
         Ok(())
@@ -915,6 +911,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.adapter.invalidate(Invalidation::Attributes { ino });
     }
 
+    /// Invalidate a name binding. The name is the *stored* spelling: on a
+    /// case-insensitive mount the kernel cached the entry under the name the
+    /// listing gave it, and invalidating the caller's respelling would leave
+    /// that cached entry alive for its whole TTL.
     fn entry_changed(&self, parent: u64, name: &str) {
         self.adapter.invalidate(Invalidation::Entry {
             parent,
@@ -990,8 +990,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .resolve(&view, parent_node, name)
             .ok_or(VfsError::NotFound)?;
         removable(&view, &meta, expected)?;
+        let gone = meta.name.clone();
         self.delete(&view, meta.id).await?;
-        self.entry_changed(parent, name);
+        self.entry_changed(parent, &gone);
         Ok(())
     }
 

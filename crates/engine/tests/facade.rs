@@ -15,8 +15,8 @@ use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
-    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, Permission, StoragePolicy,
-    SyncTimingProfile,
+    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, NodeKind, Permission,
+    StoragePolicy, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -103,6 +103,43 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             },
         ),
     ]
+}
+
+/// Two name-resolution rules, one comparator. `lookup` folds — that is the
+/// strict comparator, and the only rule that decides whether two names are
+/// one. `lookup_exact` is what a host presenting names case-sensitively
+/// resolves through, and it must not fold anything.
+#[test]
+fn the_view_resolves_a_name_folded_or_exactly_and_never_confuses_the_two() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+    let root = block_on(engine.view()).expect("view").root();
+    block_on(engine.command(Command::Create {
+        parent: root,
+        name: "Report.txt".to_owned(),
+        kind: NodeKind::File,
+    }))
+    .expect("the create stages");
+
+    let view = block_on(engine.view()).expect("view");
+    let stored = view.lookup(root, "Report.txt").expect("the stored name");
+    assert_eq!(stored.name, "Report.txt", "the name is never mutated");
+
+    assert_eq!(
+        view.lookup(root, "REPORT.TXT").map(|node| node.id),
+        Some(stored.id),
+        "the strict comparator folds case"
+    );
+    assert_eq!(
+        view.lookup_exact(root, "Report.txt").map(|node| node.id),
+        Some(stored.id)
+    );
+    assert!(
+        view.lookup_exact(root, "REPORT.TXT").is_none(),
+        "an exact resolution folds nothing"
+    );
 }
 
 #[test]

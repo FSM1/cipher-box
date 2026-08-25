@@ -26,20 +26,7 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
 
-      - name: Install FUSE-T
-        run: |
-          brew install --cask fuse-t
-          sudo mkdir -p /usr/local/lib/pkgconfig
-          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
-          if [ ! -f "$FUSE_T_PC" ]; then
-            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
-          fi
-          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
-            echo "::error::fuse-t.pc not found after FUSE-T installation"
-            exit 1
-          fi
-          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
-          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
+      - uses: ./.github/actions/setup-fuse-t
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
