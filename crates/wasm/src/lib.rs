@@ -16,10 +16,12 @@
 //! decrypted user content.
 //!
 //! One secret crosses, and only because handing it over *is* the feature: an
-//! invite link's bearer capability ([`CommandOutcome::invite_secret`]), which
-//! the host puts in a URL fragment. Residual: wasm-bindgen copies the returned
-//! buffer into the JS heap and frees it unwiped, so those bytes stay readable
-//! in linear memory until the allocator reuses the block.
+//! invite link's bearer capability ([`CommandOutcome::fragment`]), which the
+//! host puts in a URL fragment and reads nothing out of. It crosses as the
+//! fragment text rather than as bytes so the host composes and parses no link
+//! material. Residual: a JS string is immutable, so the host cannot scrub the
+//! copy it holds — inherent to a capability that has to reach a URL — and
+//! wasm-bindgen frees the linear-memory copy unwiped.
 
 // wasm-bindgen's macro-generated glue is unsafe by nature and exempt; this
 // forbids only unsafe we would hand-write (there is none).
@@ -473,27 +475,12 @@ impl CommandOutcome {
             .map(|contact| contact.enc_subkey().to_bytes().to_vec())
     }
 
-    /// `inviteLinkMinted`: the invite secret the link's URL fragment carries;
-    /// otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = inviteSecret)]
-    pub fn invite_secret(&self) -> Option<Vec<u8>> {
-        self.link()
-            .map(|link| link.invite_secret.as_bytes().to_vec())
-    }
-
-    /// `inviteLinkMinted`: the owner's contact code, which the fragment carries
-    /// beside the secret so a claimant can seal its claim to the owner;
-    /// otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = ownerContactCode)]
-    pub fn owner_contact_code(&self) -> Option<Vec<u8>> {
-        self.link().map(|link| link.owner_contact_code.clone())
-    }
-
-    /// `inviteLinkMinted`: the scope root's opaque `ipnsName`, which a claim
-    /// names; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = scopeRootName)]
-    pub fn scope_root_name(&self) -> Option<Vec<u8>> {
-        self.link().map(|link| link.scope_root_name.clone())
+    /// `inviteLinkMinted`: the link's whole URL fragment — the bearer
+    /// capability, handed back verbatim to `claimInviteLink`; otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn fragment(&self) -> Option<String> {
+        self.link().map(|link| link.fragment.to_string())
     }
 
     /// `shareAccepted`: the accepted scope's raw 16-byte id, the same
@@ -1059,6 +1046,23 @@ impl Command {
     #[wasm_bindgen(js_name = pruneInviteLinks)]
     pub fn prune_invite_links(node: &NodeId) -> Command {
         Self::wrap(facade::Command::PruneInviteLinks {
+            node: node.facade(),
+        })
+    }
+
+    /// Claim an invite link from the fragment its URL carries, verbatim.
+    #[wasm_bindgen(js_name = claimInviteLink)]
+    pub fn claim_invite_link(fragment: String) -> Command {
+        Self::wrap(facade::Command::ClaimInviteLink {
+            fragment: Zeroizing::new(fragment),
+        })
+    }
+
+    /// Convert the invite claims waiting for the link minted at a node
+    /// (owner-only).
+    #[wasm_bindgen(js_name = convertInviteClaims)]
+    pub fn convert_invite_claims(node: &NodeId) -> Command {
+        Self::wrap(facade::Command::ConvertInviteClaims {
             node: node.facade(),
         })
     }

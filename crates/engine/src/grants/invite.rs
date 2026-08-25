@@ -33,6 +33,8 @@
 //! is that identity, inside the signed payload, and [`ConvertedClaimRecord`] is
 //! the owner-local memory of what it has spent.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as FRAGMENT_B64;
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::seal::{
@@ -47,6 +49,7 @@ use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
 use core::num::NonZeroU64;
 use std::collections::BTreeSet;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_seed};
 use crate::grants::accept::{fixed, req};
@@ -96,6 +99,14 @@ pub enum InviteError {
     InvalidExpiry,
     /// The claim payload did not decode.
     MalformedClaim(CodecError),
+    /// The link fragment is not one this build encoded. Carries no detail: the
+    /// bytes under it are the bearer capability, so a refusal that said which
+    /// field failed would narrate them into a host's error surface.
+    MalformedFragment,
+    /// The fragment is past [`MAX_INVITE_FRAGMENT_BYTES`]. Raised on both sides
+    /// of the same bound: a claim refuses one, and a mint refuses to hand out a
+    /// link the claim path would refuse.
+    FragmentTooLarge,
     /// The claim names a different scope root than the committed set it is
     /// converted against.
     ScopeMismatch,
@@ -153,6 +164,8 @@ impl InviteError {
             Self::UnusableInviteeKey => "unusable-invitee-key",
             Self::InvalidExpiry => "invalid-expiry",
             Self::MalformedClaim(_) => "malformed-claim",
+            Self::MalformedFragment => "malformed-invite-fragment",
+            Self::FragmentTooLarge => "invite-fragment-too-large",
             Self::ScopeMismatch => "claim-scope-mismatch",
             Self::NotOwner => "not-owner",
             Self::LinkNotCommitted => "link-not-committed",
@@ -307,6 +320,107 @@ pub fn mint_invite_grant(
         },
         row,
     })
+}
+
+/// The bound on an invite fragment's decoded blob: a 32-byte secret, a contact
+/// bundle ([`MAX_CONTACT_CODE_BYTES`](super::MAX_CONTACT_CODE_BYTES)) and a
+/// scope root's `ipnsName`, with room for the map around them.
+pub const MAX_INVITE_FRAGMENT_BYTES: usize = 2048;
+
+/// The bound on the fragment *text*, so a hostile one is refused before its
+/// blob is allocated. base64url spends four characters per three bytes.
+const MAX_FRAGMENT_TEXT_LEN: usize = MAX_INVITE_FRAGMENT_BYTES.div_ceil(3) * 4;
+
+/// An invite link's URL fragment — **the whole bearer capability**, as one
+/// opaque blob.
+///
+/// The engine encodes it at the mint and decodes it at the claim, so a host
+/// only ever moves it between a URL and a command: it composes no link and
+/// parses none, and so never holds the invite secret or the owner bundle as
+/// something it could log or store (#25 D6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InviteFragment {
+    /// The invite secret — the whole capability.
+    pub invite_secret: SecretBytes,
+    /// The owner's contact code, which a claimant seals its claim to.
+    pub owner_contact_code: Vec<u8>,
+    /// The scope root's opaque `ipnsName`, which a claim names.
+    pub scope_root_name: Vec<u8>,
+}
+
+fn malformed_fragment<E>(_: E) -> InviteError {
+    InviteError::MalformedFragment
+}
+
+impl InviteFragment {
+    /// Encode to the text a URL fragment carries: strict det-CBOR under
+    /// base64url, which needs no percent-encoding.
+    pub fn encode(&self) -> Result<Zeroizing<String>, InviteError> {
+        let mut m = Map::new();
+        m.insert(
+            "inviteSecret",
+            Value::Bytes(self.invite_secret.as_bytes().to_vec()),
+        );
+        m.insert(
+            "ownerContactCode",
+            Value::Bytes(self.owner_contact_code.clone()),
+        );
+        m.insert("scopeRootName", Value::Bytes(self.scope_root_name.clone()));
+        // The tree holds a verbatim copy of the capability and this codec is its
+        // terminal owner (`crates/core/src/codec/scrub.rs`). Wiped after the
+        // encode, since the mark makes every later encode refuse it.
+        let mut tree = Value::Map(m);
+        let blob = Zeroizing::new(encode_fixed_depth(&tree));
+        tree.zeroize_bytes();
+        if blob.len() > MAX_INVITE_FRAGMENT_BYTES {
+            return Err(InviteError::FragmentTooLarge);
+        }
+        Ok(Zeroizing::new(FRAGMENT_B64.encode(blob.as_slice())))
+    }
+
+    /// Decode a fragment a bearer handed in.
+    pub fn decode(fragment: &str) -> Result<Self, InviteError> {
+        // Ahead of the base64 allocation, so an oversize fragment is refused
+        // before it is materialised.
+        if fragment.len() > MAX_FRAGMENT_TEXT_LEN {
+            return Err(InviteError::FragmentTooLarge);
+        }
+        let blob = Zeroizing::new(FRAGMENT_B64.decode(fragment).map_err(malformed_fragment)?);
+        if blob.len() > MAX_INVITE_FRAGMENT_BYTES {
+            return Err(InviteError::FragmentTooLarge);
+        }
+        let mut tree = decode(&blob).map_err(malformed_fragment)?;
+        // Wiped on every exit of the read, terminal owner as above.
+        let parsed = Self::from_tree(&tree);
+        tree.zeroize_bytes();
+        parsed
+    }
+
+    fn from_tree(tree: &Value) -> Result<Self, InviteError> {
+        let map = tree.as_map().map_err(malformed_fragment)?;
+        let field = |name: &'static str| -> Result<Vec<u8>, InviteError> {
+            Ok(req(map, name)
+                .map_err(malformed_fragment)?
+                .as_bytes()
+                .map_err(malformed_fragment)?
+                .to_vec())
+        };
+        let owner_contact_code = field("ownerContactCode")?;
+        let scope_root_name = field("scopeRootName")?;
+        let mut secret = fixed::<SECRET_LEN>(
+            req(map, "inviteSecret").map_err(malformed_fragment)?,
+            "inviteSecret",
+        )
+        .map_err(malformed_fragment)?;
+        let invite_secret = SecretBytes::new(secret);
+        // `fixed` hands back a plain array; this frame is its terminal owner.
+        secret.zeroize();
+        Ok(Self {
+            invite_secret,
+            owner_contact_code,
+            scope_root_name,
+        })
+    }
 }
 
 /// Byte length of an [`InviteClaim::claim_id`].
@@ -464,7 +578,7 @@ impl OwnerAuthority<'_> {
     /// Fail closed unless this caller's identity key signed the committed set it
     /// is about to change. Every commitment change is owner-only, and
     /// `mint_invite_grant` gets that from its arguments where these two do not.
-    pub(super) fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
+    pub fn authorise(&self, scope: &CommittedScope<'_>) -> Result<(), InviteError> {
         verify_grant_set(
             &self.identity_signer.verifying_key(),
             scope.commitment,
@@ -500,6 +614,10 @@ pub struct ConvertedClaim {
     pub commitment: GrantSetCommitment,
     /// The grant ledger matching it.
     pub ledger: Vec<GrantLedgerEntry>,
+    /// The claimant's verified contact, as the claim's own bundle imported. It
+    /// is the only address the share pointer for this grant can be sent to: the
+    /// item's sender is the link's ephemeral identity, not the claimant's.
+    pub claimant: Contact,
     /// What this conversion changed.
     pub outcome: ClaimOutcome,
     /// What the owner must persist to keep this claim single-use, if anything.
@@ -669,6 +787,7 @@ pub fn convert_invite_claim(
         row,
         commitment,
         ledger,
+        claimant: contact,
         outcome,
         record,
     })
@@ -2045,6 +2164,74 @@ mod tests {
                 "invalid-field-length",
             );
         }
+    }
+
+    /// The fragment is the one channel between a mint and a claim, and the host
+    /// in between reads none of it — so what the mint encodes has to be exactly
+    /// what the claim path decodes.
+    #[test]
+    fn a_fragment_round_trips_through_the_text_a_url_carries() {
+        let fragment = InviteFragment {
+            invite_secret: SecretBytes::new([0x4e; SECRET_LEN]),
+            owner_contact_code: b"owner-bundle".to_vec(),
+            scope_root_name: b"k51scoperoot".to_vec(),
+        };
+        let text = fragment.encode().expect("encodes");
+
+        // A URL fragment carries these characters verbatim: anything outside
+        // base64url would have to be percent-encoded by the host, which is
+        // exactly the composing this type exists to remove.
+        assert!(
+            text.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "the fragment needs no percent-encoding",
+        );
+        assert_eq!(InviteFragment::decode(&text).expect("decodes"), fragment);
+    }
+
+    /// Every way a fragment can fail to be one is the same fail-closed refusal:
+    /// a bearer hands this in off a URL, so a decode that guessed at a missing
+    /// or short field would reconstruct an identity nobody committed.
+    #[test]
+    fn a_fragment_that_is_not_one_is_refused() {
+        let mut m = Map::new();
+        m.insert("inviteSecret", Value::Bytes(vec![0x01; SECRET_LEN - 1]));
+        m.insert("ownerContactCode", Value::Bytes(b"owner".to_vec()));
+        m.insert("scopeRootName", Value::Bytes(b"name".to_vec()));
+        let short_secret = FRAGMENT_B64.encode(encode_fixed_depth(&Value::Map(m)));
+
+        let mut m = Map::new();
+        m.insert("inviteSecret", Value::Bytes(vec![0x01; SECRET_LEN]));
+        m.insert("scopeRootName", Value::Bytes(b"name".to_vec()));
+        let no_owner = FRAGMENT_B64.encode(encode_fixed_depth(&Value::Map(m)));
+
+        for bad in ["", "not base64!!", "Zm9v", &short_secret, &no_owner] {
+            assert_eq!(
+                InviteFragment::decode(bad).unwrap_err().check(),
+                "malformed-invite-fragment",
+                "{bad}",
+            );
+        }
+    }
+
+    /// Both sides of the same wire (AGENTS.md rule 8).
+    #[test]
+    fn an_oversize_fragment_is_refused_at_both_ends() {
+        let oversize = InviteFragment {
+            invite_secret: SecretBytes::new([0x4e; SECRET_LEN]),
+            owner_contact_code: vec![0x2a; MAX_INVITE_FRAGMENT_BYTES],
+            scope_root_name: b"k51scoperoot".to_vec(),
+        };
+        assert_eq!(
+            oversize.encode().unwrap_err().check(),
+            "invite-fragment-too-large",
+        );
+        assert_eq!(
+            InviteFragment::decode(&"A".repeat(MAX_FRAGMENT_TEXT_LEN + 1))
+                .unwrap_err()
+                .check(),
+            "invite-fragment-too-large",
+        );
     }
 
     /// A fresh id per claim is what a redelivery cannot fake, so the mint must

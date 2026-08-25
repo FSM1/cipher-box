@@ -192,7 +192,22 @@ export type CommandDescriptor =
     }
   | { kind: 'revoke'; node: Uint8Array; recipientIdentityPublicKey: Uint8Array }
   | { kind: 'downgrade'; node: Uint8Array; recipientIdentityPublicKey: Uint8Array }
-  | { kind: 'createInviteLink'; node: Uint8Array; permission: Permission }
+  | {
+      kind: 'createInviteLink';
+      node: Uint8Array;
+      permission: Permission;
+      /** Unix-millis deadline; `null` mints a link that never expires. */
+      expiresAt: bigint | null;
+    }
+  | { kind: 'revokeInviteLink'; node: Uint8Array }
+  | { kind: 'pruneInviteLinks'; node: Uint8Array }
+  /**
+   * The fragment is the whole bearer capability, opaque above the engine: it
+   * crosses verbatim, is never parsed, and never reaches a log or any durable
+   * store on the way.
+   */
+  | { kind: 'claimInviteLink'; fragment: string }
+  | { kind: 'convertInviteClaims'; node: Uint8Array }
   | { kind: 'acceptShare'; sealedSharePointer: Uint8Array }
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
@@ -228,7 +243,18 @@ export function commandTransfer(command: unknown): Transferable[] {
 export type CommandOutcomeDescriptor =
   | { kind: 'done' }
   | { kind: 'queued'; opId: bigint }
-  | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array };
+  | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array }
+  /** The whole bearer capability: a host puts `fragment` in a URL and hands the
+   * same characters back to `claimInviteLink`, reading none of it. */
+  | { kind: 'inviteLinkMinted'; fragment: string }
+  | {
+      kind: 'shareAccepted';
+      scopeId: Uint8Array;
+      sequence: bigint;
+      /** What the owner's ledger commits, never what the share pointer claimed. */
+      permission: Permission;
+      newlyAdded: boolean;
+    };
 
 /**
  * Where a streaming write lands: a new file named `name` under `parent`, or a

@@ -430,6 +430,83 @@ describe('EngineHost command outcomes', () => {
     expect(freed()).toBe(1);
   });
 
+  it('carries the minted link fragment back and releases the boundary object', async () => {
+    // A stand-in for the real fragment, which is the whole bearer capability.
+    const fragment = 'placeholder-invite-fragment';
+    const { outcome, freed } = outcomeHandle({ kind: 'inviteLinkMinted', fragment });
+
+    await expect(
+      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
+    ).resolves.toEqual({ kind: 'inviteLinkMinted', fragment });
+    expect(freed()).toBe(1);
+  });
+
+  it('carries the accepted share back with the owner-committed permission', async () => {
+    const scopeId = new Uint8Array(16).fill(5);
+    const { outcome, freed } = outcomeHandle({
+      kind: 'shareAccepted',
+      scopeId,
+      sequence: 9007199254740993n,
+      permission: fakeWasmEnums.Permission.Write,
+      newlyAdded: true,
+    });
+
+    await expect(
+      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
+    ).resolves.toEqual({
+      kind: 'shareAccepted',
+      scopeId,
+      sequence: 9007199254740993n,
+      permission: 'write',
+      newlyAdded: true,
+    });
+    expect(freed()).toBe(1);
+  });
+
+  it('refuses a minted link outcome carrying no fragment, still releasing it', async () => {
+    const { outcome, freed } = outcomeHandle({ kind: 'inviteLinkMinted' });
+
+    await expect(
+      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
+    ).rejects.toThrow('command outcome inviteLinkMinted carries no fragment');
+    expect(freed()).toBe(1);
+  });
+
+  it.each(['scopeId', 'sequence', 'permission', 'newlyAdded'] as const)(
+    'refuses an accepted share carrying no %s, still releasing it',
+    async (field) => {
+      const fields: Record<string, unknown> = {
+        kind: 'shareAccepted',
+        scopeId: new Uint8Array(16),
+        sequence: 4n,
+        permission: fakeWasmEnums.Permission.Read,
+        newlyAdded: false,
+      };
+      delete fields[field];
+      const { outcome, freed } = outcomeHandle(fields);
+
+      await expect(
+        (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
+      ).rejects.toThrow(`command outcome shareAccepted carries no ${field}`);
+      expect(freed()).toBe(1);
+    }
+  );
+
+  it('refuses an accepted share whose permission this build cannot map', async () => {
+    const { outcome, freed } = outcomeHandle({
+      kind: 'shareAccepted',
+      scopeId: new Uint8Array(16),
+      sequence: 4n,
+      permission: 42,
+      newlyAdded: false,
+    });
+
+    await expect(
+      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
+    ).rejects.toThrow('unknown WASM permission value: 42');
+    expect(freed()).toBe(1);
+  });
+
   it('refuses an outcome kind this build does not know, still releasing it', async () => {
     const { outcome, freed } = outcomeHandle({ kind: 'teleported' });
 

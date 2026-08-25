@@ -51,6 +51,11 @@ export interface WasmCommandOutcome {
   readonly opId?: bigint;
   readonly identityPublicKey?: Uint8Array;
   readonly encPublicKey?: Uint8Array;
+  readonly fragment?: string;
+  readonly scopeId?: Uint8Array;
+  readonly sequence?: bigint;
+  readonly permission?: number;
+  readonly newlyAdded?: boolean;
   free(): void;
 }
 
@@ -168,7 +173,11 @@ export interface EngineWasm {
     ): WasmCommand;
     revoke(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
     downgrade(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
-    createInviteLink(node: WasmNodeId, permission: number): WasmCommand;
+    createInviteLink(node: WasmNodeId, permission: number, expiresAt?: bigint): WasmCommand;
+    revokeInviteLink(node: WasmNodeId): WasmCommand;
+    pruneInviteLinks(node: WasmNodeId): WasmCommand;
+    claimInviteLink(fragment: string): WasmCommand;
+    convertInviteClaims(node: WasmNodeId): WasmCommand;
     acceptShare(sealedSharePointer: Uint8Array): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;

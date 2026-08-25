@@ -18,7 +18,7 @@ use core::fmt;
 
 use cipherbox_core::seal::Permission;
 use cipherbox_core::suite::contact::ContactCode;
-use cipherbox_core::suite::secret::SecretBytes;
+use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
 use crate::grants::ScopeRootPromoter;
@@ -29,7 +29,7 @@ use super::create::{
     CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, converge_grant_subtree,
     mint_grantee_scope,
 };
-use super::invite::{EphemeralInvitee, InviteError, mint_invite_grant};
+use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
 
 /// What one mint needs beyond the owner's own key material: the scope the link
@@ -47,24 +47,18 @@ pub struct InviteMintPlan<'a> {
     pub expires_at: Option<UnixMillis>,
 }
 
-/// A minted link as the host must present it: the bearer capability, the owner
-/// bundle a claimant seals its claim to, and what the link hands out.
-///
-/// The URL fragment carries the invite secret and the owner's contact bundle
-/// (blueprint/engine.md "Invites"); assembling the URL is the host's, since the
-/// engine knows no origin.
+/// A minted link as the host must present it: one opaque URL fragment
+/// ([`InviteFragment`]) and nothing else. Assembling the URL around it is the
+/// host's, since the engine knows no origin.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MintedInviteLink {
-    /// The invite secret the fragment carries — **the whole capability**.
-    pub invite_secret: SecretBytes,
-    /// The owner's contact code, which a claimant seals its claim to.
-    pub owner_contact_code: Vec<u8>,
-    /// The scope root's opaque `ipnsName`, which a claim names.
-    pub scope_root_name: Vec<u8>,
+    /// The link's URL fragment — **the whole bearer capability**. A host puts it
+    /// in a URL and nowhere durable.
+    pub fragment: Zeroizing<String>,
 }
 
 impl fmt::Debug for MintedInviteLink {
-    /// Hand-written like [`Command`](crate::facade::Command)'s: the secret is
+    /// Hand-written like [`Command`](crate::facade::Command)'s: the fragment is
     /// the capability, and a derived `{:?}` would put it in host logs.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("MintedInviteLink(..)")
@@ -133,6 +127,17 @@ where
     )
     .map_err(InviteMintError::Mint)?;
 
+    // Before anything publishes: refusing a fragment that will not encode
+    // leaves nothing behind.
+    let fragment = InviteFragment {
+        invite_secret: invitee.secret().clone(),
+        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
+            .encode(),
+        scope_root_name: plan.grantee.ipns_name().as_str().as_bytes().to_vec(),
+    }
+    .encode()
+    .map_err(InviteMintError::Mint)?;
+
     // Ahead of the record, so a subtree the gate cannot prove converged costs no
     // durable slot.
     let converged = converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
@@ -152,12 +157,7 @@ where
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok(MintedInviteLink {
-        invite_secret: invitee.secret().clone(),
-        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
-            .encode(),
-        scope_root_name: plan.grantee.ipns_name().as_str().as_bytes().to_vec(),
-    })
+    Ok(MintedInviteLink { fragment })
 }
 
 #[cfg(test)]
@@ -471,15 +471,16 @@ mod tests {
         let [record] = f.recovered()[..] else {
             panic!("one link was minted");
         };
+        let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
         let invitee =
-            EphemeralInvitee::from_secret(link.invite_secret.as_bytes()).expect("valid secret");
+            EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
         assert_eq!(
             record.ephemeral_identity_pk,
             invitee.identity_pk().to_sec1(),
             "the recovered record answers to the fragment holder's identity",
         );
         assert_eq!(record.expires_at, None);
-        assert_eq!(link.scope_root_name, folder_name());
+        assert_eq!(fragment.scope_root_name, folder_name());
 
         let published = f.net.published.borrow();
         let scope_root = published

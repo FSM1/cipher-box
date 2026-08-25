@@ -521,11 +521,13 @@ mod tests {
     use cipherbox_engine::facade::CommandOutcome as Outcome;
     use cipherbox_engine::import_contact;
     use cipherbox_engine::seams::OpId;
-    use cipherbox_engine::{AcceptOutcome, Headroom};
+    use cipherbox_engine::{AcceptOutcome, Headroom, MintedInviteLink};
     use js_sys::BigInt;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const CONTACT_SCALAR: [u8; 32] = [3u8; 32];
+    /// Stands in for an encoded fragment; nothing derives from it.
+    const FRAGMENT: &str = "ZnJhZ21lbnQtdGV4dA";
 
     fn crossed(outcome: Outcome) -> JsValue {
         CommandOutcome::from_facade(outcome).into()
@@ -545,6 +547,12 @@ mod tests {
             sequence: u64::MAX,
             permission,
             newly_added: true,
+        })
+    }
+
+    fn minted_link() -> Outcome {
+        Outcome::InviteLinkMinted(MintedInviteLink {
+            fragment: Zeroizing::new(FRAGMENT.to_owned()),
         })
     }
 
@@ -680,6 +688,16 @@ mod tests {
         assert!(field(&crossed(Outcome::Done), "scopeId").is_undefined());
     }
 
+    /// A minted link crosses as one opaque fragment, never as the parts it is
+    /// built from.
+    #[wasm_bindgen_test]
+    fn a_minted_link_crosses_as_one_opaque_fragment() {
+        let minted = crossed(minted_link());
+
+        assert_eq!(field(&minted, "fragment"), JsValue::from_str(FRAGMENT));
+        assert!(field(&crossed(Outcome::Done), "fragment").is_undefined());
+    }
+
     /// Hosts switch on `kind`, so each arm's discriminant is a stable string
     /// literal — the marshalling `Event::kind` already uses.
     #[wasm_bindgen_test]
@@ -689,6 +707,7 @@ mod tests {
             (Outcome::Queued { op_id: OpId(1) }, "queued"),
             (imported_contact(), "contactImported"),
             (accepted_share(CorePermission::Read), "shareAccepted"),
+            (minted_link(), "inviteLinkMinted"),
         ] {
             assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));
         }

@@ -24,6 +24,7 @@ import {
   count,
   minted,
   nodeId,
+  permissionFrom,
   readEvent,
   readSharing,
   readSnapshot,
@@ -78,7 +79,7 @@ function present<T>(value: T | undefined, kind: string, field: string): T {
 }
 
 /** Reads a wasm-bindgen `CommandOutcome`'s getters into a descriptor. */
-function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
+function readOutcome(wasm: EngineWasm, outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
   const kind = outcome.kind;
   switch (kind) {
     case 'done':
@@ -90,6 +91,16 @@ function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
         kind: 'contactImported',
         identityPublicKey: present(outcome.identityPublicKey, kind, 'identityPublicKey'),
         encPublicKey: present(outcome.encPublicKey, kind, 'encPublicKey'),
+      };
+    case 'inviteLinkMinted':
+      return { kind: 'inviteLinkMinted', fragment: present(outcome.fragment, kind, 'fragment') };
+    case 'shareAccepted':
+      return {
+        kind: 'shareAccepted',
+        scopeId: present(outcome.scopeId, kind, 'scopeId'),
+        sequence: present(outcome.sequence, kind, 'sequence'),
+        permission: permissionFrom(wasm, present(outcome.permission, kind, 'permission')),
+        newlyAdded: present(outcome.newlyAdded, kind, 'newlyAdded'),
       };
   }
   throw new Error(`unknown command outcome ${kind}`);
@@ -187,7 +198,7 @@ export class EngineHost implements EngineHostLike {
     try {
       const outcome = await this.handle.command(buildCommand(this.wasm, command));
       try {
-        return readOutcome(outcome);
+        return readOutcome(this.wasm, outcome);
       } finally {
         outcome.free();
       }

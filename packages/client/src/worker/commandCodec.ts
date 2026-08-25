@@ -93,6 +93,32 @@ export function minted(value: unknown, field: string): bigint {
   return value;
 }
 
+/**
+ * An invite link's Unix-millis deadline, bounded to the `u64` the builder takes:
+ * an out-of-range value the bigint ABI truncates would arrive as an unrelated
+ * near-epoch deadline. Refused before any wasm object is minted, as
+ * [`retentionCap`] is.
+ */
+function deadline(value: unknown, field: string): bigint {
+  const at = minted(value, field);
+  if (at <= 0n || at > 0xffff_ffff_ffff_ffffn) throw invalidField(field, value);
+  return at;
+}
+
+/** A guard, not the contract: the engine's own bound is what a fragment answers to. */
+const MAX_FRAGMENT_CHARS = 4096;
+
+/**
+ * A bearer link's URL fragment, length-guarded before the copy into wasm linear
+ * memory. Like every refusal here it names the field and never echoes the
+ * value, which is the capability itself.
+ */
+function fragment(value: unknown, field: string): string {
+  const carried = text(value, field);
+  if (carried.length > MAX_FRAGMENT_CHARS) throw invalidField(field, value);
+  return carried;
+}
+
 export function nodeId(wasm: EngineWasm, value: unknown, field: string): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes(value, field));
 }
@@ -248,11 +274,21 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         nodeId(wasm, descriptor.node, 'node'),
         bytes(descriptor.recipientIdentityPublicKey, 'recipientIdentityPublicKey')
       );
-    case 'createInviteLink':
-      return wasm.Command.createInviteLink(
-        nodeId(wasm, descriptor.node, 'node'),
-        permission(wasm, descriptor.permission)
-      );
+    case 'createInviteLink': {
+      // Every scalar first: a refusal after `nodeId` strands the handle it minted.
+      const level = permission(wasm, descriptor.permission);
+      const at =
+        descriptor.expiresAt == null ? undefined : deadline(descriptor.expiresAt, 'expiresAt');
+      return wasm.Command.createInviteLink(nodeId(wasm, descriptor.node, 'node'), level, at);
+    }
+    case 'revokeInviteLink':
+      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'));
+    case 'pruneInviteLinks':
+      return wasm.Command.pruneInviteLinks(nodeId(wasm, descriptor.node, 'node'));
+    case 'claimInviteLink':
+      return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
+    case 'convertInviteClaims':
+      return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
     case 'acceptShare':
       return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
@@ -454,7 +490,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
   };
 }
 
-function permissionFrom(wasm: EngineWasm, permission: number): Permission {
+export function permissionFrom(wasm: EngineWasm, permission: number): Permission {
   switch (permission) {
     case wasm.Permission.Read:
       return 'read';
