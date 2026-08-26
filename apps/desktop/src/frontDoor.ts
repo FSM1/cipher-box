@@ -72,6 +72,7 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   if (model.error !== null) {
     view.append(text('p', model.error, { class: 'error', role: 'alert' }));
   }
+  view.append(attribution());
   const focused = focusedName(root);
   root.replaceChildren(view);
   refocus(view, focused);
@@ -292,6 +293,32 @@ function warning({ kind, detail }: VaultWarning): HTMLElement {
     'data-vault': 'warning',
     'data-warning': kind,
   });
+}
+
+/**
+ * The notice WinFsp's licence asks its distributors to show, verbatim, and the
+ * project it points at. `docs/ATTRIBUTION.md` carries the same two lines.
+ *
+ * Shown on every platform rather than only where WinFsp ships: this window is
+ * one screen, the notice is two muted lines, and a build-time branch that could
+ * drop a licence condition is worth more than the two lines cost.
+ */
+const WINFSP_NOTICE = 'WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos';
+const WINFSP_HOME = 'https://github.com/winfsp/winfsp';
+
+/**
+ * The attribution footer.
+ *
+ * The address is text, not an anchor: this shell has no opener plugin and its
+ * CSP admits nothing but itself, so a live link would either do nothing or
+ * navigate the only window away from a signed-in session. Text is readable and
+ * copyable, which is what the notice is for.
+ */
+function attribution(): HTMLElement {
+  const footer = element('footer', { class: 'attribution', 'data-attribution': 'winfsp' });
+  footer.append(text('p', WINFSP_NOTICE, { class: 'muted' }));
+  footer.append(text('p', WINFSP_HOME, { class: 'muted' }));
+  return footer;
 }
 
 function note(message: string): HTMLElement {

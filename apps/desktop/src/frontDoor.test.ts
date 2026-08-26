@@ -318,6 +318,21 @@ describe('the front door', () => {
     expect(security?.querySelector('a')).toBeNull();
   });
 
+  // WinFsp's licence asks that this notice be shown wherever the work is, so a
+  // screen that stopped showing it is a licence condition dropped, not a
+  // cosmetic regression.
+  it.each(['starting', 'signedOut', 'signedIn'] as const)(
+    'shows the WinFsp notice and its project address while %s',
+    (phase) => {
+      renderShell(root, model({ phase, vault: vaultStatus() }), actions());
+      const footer = root.querySelector('[data-attribution="winfsp"]');
+      expect(footer?.textContent).toContain(
+        'WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos'
+      );
+      expect(footer?.textContent).toContain('https://github.com/winfsp/winfsp');
+    }
+  );
+
   it('reports a failure without offering it as markup', () => {
     renderShell(root, model({ error: '<img src=x onerror=alert(1)>' }), actions());
     const failure = root.querySelector('.error');

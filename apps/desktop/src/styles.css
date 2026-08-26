@@ -90,3 +90,17 @@ button:disabled {
   opacity: 0.55;
   cursor: default;
 }
+
+/* The licence notice: present on every screen, and never competing with one. */
+.attribution {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+  width: 100%;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
