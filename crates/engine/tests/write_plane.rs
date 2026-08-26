@@ -46,8 +46,9 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_KEY,
-    owner_scoped_key, owner_tag, record_content_root_cid,
+    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
+    UPLOAD_MARK_PREFIX, encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid,
+    upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -1261,7 +1262,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![drained_key(), mark_key(), UPLOAD_MARK_KEY.to_vec()],
+        vec![drained_key(), mark_key()],
         "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
@@ -2258,12 +2259,11 @@ fn a_corrupt_upload_mark_is_no_progress_rather_than_blanket_coverage() {
     let version = evict_leaf(&alice, |leaves| leaves / 2);
     let (root_cid, _) = staged_version(&alice);
     let mut corrupt = Placement::Hosted.destinations().encode().to_vec();
-    corrupt.extend_from_slice(&root_cid);
     corrupt.extend_from_slice(&u32::MAX.to_be_bytes());
     block_on(
         alice
             .staging_store
-            .put_staged_bytes(UPLOAD_MARK_KEY, &corrupt),
+            .put_staged_bytes(&upload_mark_key(&root_cid), &corrupt),
     )
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -2323,14 +2323,24 @@ fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8
         .collect()
 }
 
-/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it, minus the
-/// destinations it opens on: the version root it names and the leaf count it
-/// claims.
+/// The one durable upload mark this device holds: the version root its key names
+/// and the leaf count it claims. Panics on a second, since every test below
+/// writes one version at a time.
 fn upload_mark(device: &FakeDevice) -> Option<(Vec<u8>, u32)> {
-    let stored = block_on(device.staging_store.staged_bytes(UPLOAD_MARK_KEY)).unwrap()?;
-    let (named, count) = stored.split_at(stored.len() - 4);
-    let root = &named[DESTINATIONS_LEN..];
-    Some((root.to_vec(), u32::from_be_bytes(count.try_into().unwrap())))
+    let mut marks = block_on(device.staging_store.staged_keys())
+        .unwrap()
+        .into_iter()
+        .filter(|key| key.starts_with(UPLOAD_MARK_PREFIX));
+    let key = marks.next()?;
+    assert!(marks.next().is_none(), "one version in flight at a time");
+    let stored = block_on(device.staging_store.staged_bytes(&key))
+        .unwrap()
+        .expect("the key was just listed");
+    let count = <[u8; 4]>::try_from(&stored[DESTINATIONS_LEN..]).unwrap();
+    Some((
+        key[UPLOAD_MARK_PREFIX.len()..].to_vec(),
+        u32::from_be_bytes(count),
+    ))
 }
 
 /// A second device that only ever saw the network reads `plaintext` back off
@@ -2377,7 +2387,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
         // staging store, died the instant after that leaf uploaded.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_KEY, interrupted as u64);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, interrupted as u64);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -2474,7 +2484,7 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         );
         assert_eq!(
             block_on(alice.staging_store.staged_keys()).unwrap(),
-            vec![drained_key(), mark_key(), UPLOAD_MARK_KEY.to_vec()],
+            vec![drained_key(), mark_key()],
             "the retry re-removes it, so the residue holds no staging budget"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
@@ -5281,7 +5291,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         block_on(alice.staging_store.staged_keys())
             .unwrap()
             .iter()
-            .all(|key| *key == drained_key() || key.as_slice() == UPLOAD_MARK_KEY),
+            .all(|key| *key == drained_key()),
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(
@@ -5334,10 +5344,11 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
     );
 }
 
-/// A cancel releases leaves the durable mark still covers, and leaves that mark
-/// behind naming a root nothing will ever upload again. That residue must not
-/// reach the next version: a mark read as this version's progress would skip
-/// leaves it never sent and publish a manifest naming blocks nobody holds.
+/// A cancel releases leaves the durable mark still covers. That mark must not
+/// reach the next version: read as its progress, it would skip leaves that
+/// version never sent and publish a manifest naming blocks nobody holds. It is
+/// keyed to the version it marked, and the release that drops that version's
+/// blocks drops it with them.
 #[test]
 fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
     let world = FakeWorld::new();
@@ -5355,8 +5366,6 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
         &(0..200u8).collect::<Vec<_>>(),
     )
     .unwrap();
-    let root_cid = queued_version(&alice, cancelled)[0].clone();
-
     world.scheduler.advance(engine.profile().poll_cadence);
     for _ in 0..4 {
         poll_tasks_once(&mut tasks);
@@ -5368,12 +5377,10 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
     block_on(engine.command(Command::CancelUpload { op_id: cancelled })).unwrap();
     poll_tasks_until_parked(&mut tasks);
 
-    let mark = block_on(alice.staging_store.staged_bytes(UPLOAD_MARK_KEY))
-        .unwrap()
-        .expect("the cancelled pass left its progress mark behind");
-    assert!(
-        mark[DESTINATIONS_LEN..].starts_with(&root_cid),
-        "the residue names the cancelled root, so the next version must not read it as progress"
+    assert_eq!(
+        upload_mark(&alice),
+        None,
+        "the cancelled version's mark left with the blocks it marked"
     );
 
     let plaintext: Vec<u8> = (0..200u8).rev().collect();
@@ -6959,7 +6966,7 @@ fn a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are() {
         // that leaf uploaded and the two before it were released.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_KEY, 2);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -7394,7 +7401,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         // The process dies two leaves in, with those two already released.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_KEY, 2);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -7905,6 +7912,223 @@ fn an_edit_refuses_to_supersede_a_version_published_after_it_was_formed() {
             .chain([&root_cid])
             .all(|cid| after_drain.contains(cid)),
         "the losing edit keeps its staged version — nothing is silently dropped"
+    );
+}
+
+/// The verdict a dead letter carries is a claim about the member's bytes, so it
+/// must be decided against them. Two halts, identical but for what their
+/// version's upload mark covers: leaves the mark says reached a destination are
+/// recoverable and the edit keeps its own reason, where leaves it says were
+/// never handed off are gone, and a notice must not promise them.
+///
+/// The mark is what tells those apart, and it is readable here only because it
+/// is keyed to the version rather than to whichever op last held the queue.
+#[test]
+fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
+    for (uploaded, expected) in [
+        (true, DeadLetterReason::BaseSuperseded),
+        (false, DeadLetterReason::ContentUnrecoverable),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let (first, bobs, alices) = contested_bodies();
+        let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+        let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+        let op_id = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
+            .expect("the second device's write commits");
+        let (root_cid, leaves) = staged_version(&bob);
+        // Leaf zero left staging. Marked, it reached a destination and the
+        // version is still assemblable; unmarked, those bytes are simply gone.
+        let covered = if uploaded { leaves.len() } else { 0 };
+        let mark = encode_upload_mark(&Placement::Hosted.destinations(), covered, leaves.len())
+            .expect("in range");
+        block_on(
+            bob.staging_store
+                .put_staged_bytes(&upload_mark_key(&root_cid), &mark),
+        )
+        .unwrap();
+        // Leaf zero and the tail together: one absent leaf is a damaged store,
+        // and the verdict takes both point reads before it destroys anything.
+        for leaf in [&leaves[0], leaves.last().expect("a multi-leaf version")] {
+            block_on(bob.staging_store.remove_staged_bytes(leaf)).unwrap();
+        }
+
+        write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
+            .expect("the first device's write commits");
+        tick(&world, &engine_a, &mut tasks_a);
+
+        let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+        assert_eq!(
+            dead_letters,
+            vec![DeadLetter {
+                op_id,
+                reason: expected
+            }],
+            "leaves uploaded: {uploaded}"
+        );
+    }
+}
+
+/// A desktop vault stages on the order of ten thousand keys, and the pass used
+/// to enumerate them two and three times over for answers it could take once.
+#[test]
+fn a_drain_tick_enumerates_the_staged_key_set_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let before = alice.staging_store.key_listings();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        alice.staging_store.key_listings() - before,
+        1,
+        "a publishing tick lists once"
+    );
+
+    // And a tick that dead-letters, which used to pay a third enumeration for
+    // the preserved set's byte accounting.
+    blocks.refuse_register(registry_batch_refused());
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "refused.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let before = alice.staging_store.key_listings();
+    let (_, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        alice.staging_store.key_listings() - before,
+        passes as u64,
+        "a dead-lettering tick lists once too"
+    );
+}
+
+/// The preserved bounds are the device's, not the write path's. A budget cut
+/// between one session and the next leaves the set over it with no write coming
+/// to notice, so the store open is where it is enforced.
+#[test]
+fn a_shrunken_preserved_budget_is_enforced_at_the_next_store_open() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_register(proxy_400());
+
+    let mut roots = Vec::new();
+    for name in ["first.bin", "second.bin"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        roots.push(staged_version(&alice).0);
+        while block_on(engine.snapshot(ROOT)).unwrap().dead_letters.len() < roots.len() {
+            tick(&world, &engine, &mut tasks);
+        }
+    }
+    let staged = || block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        roots.iter().all(|root| staged().contains(root)),
+        "both losers are preserved under the budget they were parked at"
+    );
+
+    // Reopen the same store under a budget with no room, so only the newest
+    // survivor can stand.
+    drop(engine);
+    let (mut reopened, _reopened_events) = Engine::new(
+        alice.seam_set(),
+        Box::new(SeededEntropy::new(42)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy {
+            staging_budget_bytes: 0,
+            ..StoragePolicy::CI
+        },
+        ApiBaseUrl::offline(),
+        GatewayConfig {
+            accelerator: Some("https://gw.test".into()),
+            public_fallbacks: Vec::new(),
+        },
+    );
+    serve_http(&alice, &blocks, 400);
+    block_on(reopened.start(secret())).expect("the second session cold-starts");
+
+    assert!(
+        !staged().contains(&roots[0]),
+        "the oldest preserved version is cut back to the new budget at open, \
+         before a single poll tick and with no dead letter written"
+    );
+    assert!(
+        staged().contains(&roots[1]),
+        "and the newest survivor stands, exactly as the write path would keep it"
+    );
+}
+
+/// v1 capped a parked entry's age at thirty days. Without that bound a vault
+/// that stays under the count and byte ceilings parks state nothing ever
+/// reclaims, however long ago the member stopped caring.
+#[test]
+fn a_preserved_dead_letter_past_its_age_bound_is_purged_on_a_poll_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_register(proxy_400());
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "parked.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let (root_cid, leaves) = staged_version(&alice);
+    tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    let staged = || block_on(alice.staging_store.staged_keys()).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        staged().contains(&root_cid),
+        "inside the bound the version is held, so the member can still act on it"
+    );
+
+    // Time moves only where the test moves it: the purge is a decision about the
+    // scheduler seam's clock, never the host's.
+    world
+        .scheduler
+        .advance(engine.profile().preserved_dead_letter_ttl);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| !staged().contains(cid)),
+        "past it the entry is purged and its whole version leaves the budget"
     );
 }
 

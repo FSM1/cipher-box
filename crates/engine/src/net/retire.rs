@@ -10,6 +10,7 @@
 //! ordered it ([`drain_owed_retires`]).
 
 use core::cell::RefCell;
+use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -156,12 +157,38 @@ const NODE_ID_LEN: usize = 16;
 ///
 /// One key per entry, so `settle` is a single removal and a concurrent `owe` of
 /// another target cannot lose it — there is no whole-set record to rewrite.
-pub struct StagingRetireLedger<'a, St>(&'a St);
+pub struct StagingRetireLedger<'a, St> {
+    staging: &'a St,
+    listed: Option<&'a [Vec<u8>]>,
+}
 
 impl<'a, St: StagingStore> StagingRetireLedger<'a, St> {
-    /// Wraps a staging store as the retire ledger.
+    /// Wraps a staging store as the retire ledger, enumerating it on each
+    /// [`owed`](RetireLedger::owed).
     pub fn new(staging: &'a St) -> Self {
-        Self(staging)
+        Self {
+            staging,
+            listed: None,
+        }
+    }
+
+    /// The same ledger over a key enumeration the caller already holds, for a
+    /// pass that reconciles several consumers off one listing. `listed` must
+    /// cover every `owe` this pass has already journaled, or their debts wait
+    /// for the next one.
+    pub fn over(staging: &'a St, listed: &'a [Vec<u8>]) -> Self {
+        Self {
+            staging,
+            listed: Some(listed),
+        }
+    }
+
+    /// The keys `owed` reads entries out of.
+    async fn keys(&self) -> SeamResult<Cow<'a, [Vec<u8>]>> {
+        match self.listed {
+            Some(listed) => Ok(Cow::Borrowed(listed)),
+            None => Ok(Cow::Owned(self.staging.staged_keys().await?)),
+        }
     }
 
     /// The key prefix every entry of one owner shares. The tag length is written
@@ -196,19 +223,23 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             // it only ever advances to `Retired`, because a node whose record a
             // delete retired never publishes again, and keeping the stored
             // `Published` would leave that debt unsettleable.
-            match decode_entry(self.0.staged_bytes(&key).await?) {
+            match decode_entry(self.staging.staged_bytes(&key).await?) {
                 Some(held) if held.owing == entry.owing => continue,
                 Some(held) if entry.owing == OwingRecord::Retired => {
                     let advanced = OwedRetire {
                         owing: OwingRecord::Retired,
                         ..held
                     };
-                    self.0
+                    self.staging
                         .put_staged_bytes(&key, &encode_entry(&advanced))
                         .await?;
                 }
                 Some(_) => continue,
-                None => self.0.put_staged_bytes(&key, &encode_entry(entry)).await?,
+                None => {
+                    self.staging
+                        .put_staged_bytes(&key, &encode_entry(entry))
+                        .await?
+                }
             }
         }
         Ok(())
@@ -217,14 +248,14 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owed(&self, owner_tag: &[u8]) -> SeamResult<Vec<OwedRetire>> {
         let scope = Self::scope(owner_tag)?;
         let mut entries = Vec::new();
-        for key in self.0.staged_keys().await? {
+        for key in self.keys().await?.iter() {
             let Some(cid) = key
                 .strip_prefix(&scope[..])
                 .filter(|cid| is_wellformed_content_cid(cid))
             else {
                 continue;
             };
-            let Some(stored) = decode_entry(self.0.staged_bytes(&key).await?) else {
+            let Some(stored) = decode_entry(self.staging.staged_bytes(key).await?) else {
                 continue;
             };
             entries.push(OwedRetire {
@@ -240,7 +271,7 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 
     async fn settle(&self, owner_tag: &[u8], targets: &[String]) -> SeamResult<()> {
         for target in targets {
-            self.0
+            self.staging
                 .remove_staged_bytes(&Self::key(owner_tag, target)?)
                 .await?;
         }

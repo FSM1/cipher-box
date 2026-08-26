@@ -32,11 +32,12 @@ pub(crate) mod refresh;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
+pub(crate) mod upload_mark;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use drain::{
     BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
-    UPLOAD_MARK_KEY, owner_scoped_key, owner_tag,
+    owner_scoped_key, owner_tag,
 };
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -60,6 +61,7 @@ pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,
     focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
 };
+pub use upload_mark::{UPLOAD_MARK_PREFIX, encode_upload_mark, upload_mark_key};
 
 /// Whole milliseconds of `duration`, truncating and saturating — the engine's
 /// clock is the millisecond [`UnixMillis`](crate::seams::UnixMillis), so every

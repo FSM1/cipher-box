@@ -282,7 +282,11 @@ mod tests {
         block_on(staging.put_staged_bytes(b"upload-residue", b"stale")).expect("stage");
 
         assert_eq!(
-            block_on(orphan_staging_keys(&staging, &[])).expect("sweep"),
+            block_on(async {
+                let staged = staging.staged_keys().await.expect("list");
+                orphan_staging_keys(&staging, &staged, &[]).await
+            })
+            .expect("sweep"),
             vec![b"upload-residue".to_vec()],
             "only the residue is collected, never the received-shares list"
         );
