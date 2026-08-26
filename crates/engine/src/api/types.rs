@@ -59,7 +59,7 @@ pub(crate) struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
     /// The read accelerator's opaque pseudonym (CONTEXT.md, Accelerator token).
-    pub gateway_token: String,
+    pub accelerator_token: String,
     #[serde(default)]
     pub is_new_user: Option<bool>,
 }
@@ -82,7 +82,7 @@ pub(crate) struct SiweChallengeResponse {
 pub(crate) struct TestLoginResponse {
     pub access_token: String,
     pub refresh_token: String,
-    pub gateway_token: String,
+    pub accelerator_token: String,
     #[serde(default)]
     pub is_new_user: Option<bool>,
     pub public_key: String,
@@ -100,7 +100,7 @@ pub(crate) fn login_response(
     serde_json::json!({
         "accessToken": access_token,
         "refreshToken": refresh_token,
-        "gatewayToken": accelerator_token,
+        "acceleratorToken": accelerator_token,
     })
 }
 

@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { buildOpenApiDocument } from '../src/app-setup';
 import { AuthController } from '../src/auth/auth.controller';
 import { GatewayController } from '../src/auth/gateway.controller';
-import { GatewayTokenService } from '../src/auth/services/gateway-token.service';
+import { AcceleratorTokenService } from '../src/auth/services/accelerator-token.service';
 import { AuthService } from '../src/auth/services/auth.service';
 import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { TokenService } from '../src/auth/services/token.service';
@@ -64,7 +64,7 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     { provide: AuthService, useValue: {} },
     { provide: TestAuthService, useValue: {} },
     { provide: TokenService, useValue: {} },
-    { provide: GatewayTokenService, useValue: {} },
+    { provide: AcceleratorTokenService, useValue: {} },
     { provide: IdentityExchangeService, useValue: {} },
     { provide: IdentityTokenService, useValue: {} },
     { provide: MailboxService, useValue: {} },

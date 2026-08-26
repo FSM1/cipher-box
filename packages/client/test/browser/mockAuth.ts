@@ -73,7 +73,7 @@ function login(res: ServerResponse, dto: Fields): void {
   send(res, 200, {
     accessToken: 'browser-suite-access',
     refreshToken: 'r'.repeat(64),
-    gatewayToken: 'g'.repeat(64),
+    acceleratorToken: 'g'.repeat(64),
     isNewUser: true,
   });
 }

@@ -9,7 +9,7 @@ import { OpsModule } from '../ops/ops.module';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
-import { GatewayToken } from './entities/gateway-token.entity';
+import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
@@ -20,7 +20,7 @@ import { resolveAccessTtlSeconds } from './services/access-ttl';
 import { AuthService } from './services/auth.service';
 import { ChallengeService } from './services/challenge.service';
 import { EmailOtpService } from './services/email-otp.service';
-import { GatewayTokenService } from './services/gateway-token.service';
+import { AcceleratorTokenService } from './services/accelerator-token.service';
 import { GoogleOAuthService } from './services/google-oauth.service';
 import { IdentityExchangeService } from './services/identity-exchange.service';
 import { IdentityService } from './services/identity.service';
@@ -30,7 +30,7 @@ import { buildMailProvider, MailProvider } from './services/mail.provider';
 import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
-import { GatewayTokenSweepTask } from './tasks/gateway-token-sweep.task';
+import { AcceleratorTokenSweepTask } from './tasks/accelerator-token-sweep.task';
 
 export function buildJwtOptions(configService: ConfigService) {
   const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
@@ -50,7 +50,7 @@ export function buildJwtOptions(configService: ConfigService) {
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject]),
+    TypeOrmModule.forFeature([User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -65,8 +65,8 @@ export function buildJwtOptions(configService: ConfigService) {
     AuthService,
     TestAuthService,
     TokenService,
-    GatewayTokenService,
-    GatewayTokenSweepTask,
+    AcceleratorTokenService,
+    AcceleratorTokenSweepTask,
     ChallengeService,
     IdentityService,
     SiweService,
@@ -86,13 +86,13 @@ export function buildJwtOptions(configService: ConfigService) {
 export class AuthModule implements OnModuleInit {
   constructor(
     private readonly scheduler: WorkerScheduler,
-    private readonly sweepTask: GatewayTokenSweepTask,
+    private readonly sweepTask: AcceleratorTokenSweepTask,
     private readonly configService: ConfigService
   ) {}
 
   onModuleInit(): void {
     // Opt-out (default on) for deployments that run the sweep out of process.
-    if (isDisabled(this.configService.get('GATEWAY_TOKEN_SWEEP_ENABLED'))) {
+    if (isDisabled(this.configService.get('ACCELERATOR_TOKEN_SWEEP_ENABLED'))) {
       return;
     }
     this.scheduler.register(this.sweepTask);

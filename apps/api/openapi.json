@@ -1482,7 +1482,7 @@
             "type": "string",
             "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
           },
-          "gatewayToken": {
+          "acceleratorToken": {
             "type": "string",
             "description": "Opaque read-scoped pseudonym for the read accelerator, rotating with the access token"
           },
@@ -1494,7 +1494,7 @@
         "required": [
           "accessToken",
           "refreshToken",
-          "gatewayToken"
+          "acceleratorToken"
         ]
       },
       "SiweChallengeResponseDto": {
@@ -1579,7 +1579,7 @@
             "type": "string",
             "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
           },
-          "gatewayToken": {
+          "acceleratorToken": {
             "type": "string",
             "description": "Opaque read-scoped pseudonym for the read accelerator, rotating with the access token"
           },
@@ -1599,7 +1599,7 @@
         "required": [
           "accessToken",
           "refreshToken",
-          "gatewayToken",
+          "acceleratorToken",
           "publicKey",
           "privateKey"
         ]

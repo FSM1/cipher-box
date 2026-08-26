@@ -1437,17 +1437,19 @@ async fn get_status(base: &str, path: &str, bearer: Option<&str>) -> u16 {
 #[tokio::test]
 async fn the_accelerator_token_is_read_scoped_and_rotates_with_the_session() {
     let base = require_stack!("the_accelerator_token_is_read_scoped_and_rotates_with_the_session");
-    let login = test_login_body(&base, "contract-gateway-token").await;
-    let gateway_token = login["gatewayToken"].as_str().expect("a gateway token");
+    let login = test_login_body(&base, "contract-accelerator-token").await;
+    let accelerator_token = login["acceleratorToken"]
+        .as_str()
+        .expect("an accelerator token");
     let access_token = login["accessToken"].as_str().expect("an access token");
 
-    assert_ne!(gateway_token, access_token);
+    assert_ne!(accelerator_token, access_token);
     assert_ne!(
-        gateway_token,
+        accelerator_token,
         login["refreshToken"].as_str().expect("a refresh token")
     );
     assert_eq!(
-        get_status(&base, "/auth/gateway/verify", Some(gateway_token)).await,
+        get_status(&base, "/auth/gateway/verify", Some(accelerator_token)).await,
         204,
         "the minted pseudonym opens the accelerator"
     );
@@ -1470,8 +1472,10 @@ async fn the_accelerator_token_is_read_scoped_and_rotates_with_the_session() {
     // A second session, never presented at the gateway: the API caches every
     // verified answer, so the superseded pseudonym of a session already checked
     // above would still be honoured for the length of that window.
-    let rotating = test_login_body(&base, "contract-gateway-rotation").await;
-    let superseded = rotating["gatewayToken"].as_str().expect("a gateway token");
+    let rotating = test_login_body(&base, "contract-accelerator-rotation").await;
+    let superseded = rotating["acceleratorToken"]
+        .as_str()
+        .expect("an accelerator token");
     let refreshed = post_json_body(
         &base,
         "/auth/refresh",
@@ -1479,7 +1483,9 @@ async fn the_accelerator_token_is_read_scoped_and_rotates_with_the_session() {
         serde_json::json!({ "refreshToken": rotating["refreshToken"] }),
     )
     .await;
-    let rotated = refreshed["gatewayToken"].as_str().expect("a gateway token");
+    let rotated = refreshed["acceleratorToken"]
+        .as_str()
+        .expect("an accelerator token");
 
     assert_ne!(rotated, superseded, "refresh rotates the pseudonym");
     assert_eq!(

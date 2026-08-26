@@ -8,7 +8,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { MetricsService } from '../ops/metrics.service';
 import { THROTTLE_SURFACES } from '../ops/throttling';
-import { GatewayTokenService } from './services/gateway-token.service';
+import { AcceleratorTokenService } from './services/accelerator-token.service';
 
 const BEARER_PREFIX = 'Bearer ';
 
@@ -24,7 +24,7 @@ const BEARER_PREFIX = 'Bearer ';
 @Controller('auth/gateway')
 export class GatewayController {
   constructor(
-    private readonly gatewayTokenService: GatewayTokenService,
+    private readonly acceleratorTokenService: AcceleratorTokenService,
     private readonly metricsService: MetricsService
   ) {}
 
@@ -41,7 +41,7 @@ export class GatewayController {
       this.metricsService.observeGatewayVerify('refused');
       throw new UnauthorizedException('Missing accelerator token');
     }
-    const accepted = await this.gatewayTokenService.verify(
+    const accepted = await this.acceleratorTokenService.verify(
       authorization.slice(BEARER_PREFIX.length)
     );
     this.metricsService.observeGatewayVerify(accepted ? 'accepted' : 'refused');

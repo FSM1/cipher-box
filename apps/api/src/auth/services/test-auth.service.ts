@@ -13,7 +13,7 @@ import { TokenService } from './token.service';
 export interface TestLoginResult {
   accessToken: string;
   refreshToken: string;
-  gatewayToken: string;
+  acceleratorToken: string;
   isNewUser: boolean;
   publicKey: string;
   privateKey: string;
@@ -91,7 +91,7 @@ export class TestAuthService {
     return {
       accessToken: pair.accessToken,
       refreshToken: pair.refreshToken,
-      gatewayToken: pair.gatewayToken,
+      acceleratorToken: pair.acceleratorToken,
       isNewUser,
       publicKey,
       privateKey,

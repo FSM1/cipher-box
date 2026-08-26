@@ -16,13 +16,13 @@ import { sha256Hex } from '../../common/hash';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { refreshRowState } from '../refresh-liveness';
-import { GatewayTokenService } from './gateway-token.service';
+import { AcceleratorTokenService } from './accelerator-token.service';
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
-  /** The read accelerator's opaque pseudonym, minted by GatewayTokenService. */
-  gatewayToken: string;
+  /** The read accelerator's opaque pseudonym, minted by AcceleratorTokenService. */
+  acceleratorToken: string;
 }
 
 export interface ScopedToken {
@@ -74,7 +74,7 @@ export class TokenService {
     private readonly jwtService: JwtService,
     private readonly clock: Clock,
     private readonly entropy: Entropy,
-    private readonly gatewayTokenService: GatewayTokenService,
+    private readonly acceleratorTokenService: AcceleratorTokenService,
     configService: ConfigService,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
@@ -233,7 +233,7 @@ export class TokenService {
     userId: string,
     familyId: string,
     manager: EntityManager
-  ): Promise<{ refreshToken: string; gatewayToken: string }> {
+  ): Promise<{ refreshToken: string; acceleratorToken: string }> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
     await manager.getRepository(RefreshToken).save({
       userId,
@@ -244,7 +244,7 @@ export class TokenService {
     });
     return {
       refreshToken: rawToken,
-      gatewayToken: await this.gatewayTokenService.mintForFamily(userId, familyId, manager),
+      acceleratorToken: await this.acceleratorTokenService.mintForFamily(userId, familyId, manager),
     };
   }
 

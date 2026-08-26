@@ -4,10 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
-import { GatewayToken } from '../entities/gateway-token.entity';
+import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { User } from '../entities/user.entity';
-import { GatewayTokenService } from './gateway-token.service';
+import { AcceleratorTokenService } from './accelerator-token.service';
 import { TokenService } from './token.service';
 
 /**
@@ -24,7 +24,7 @@ const publicKeyByUserId = async (): Promise<string> => PUBLIC_KEY;
  * Writes its row on the caller's transaction like the real service, then throws
  * where a mid-mint database failure would while `fail` is set.
  */
-class FlakyGatewayTokens {
+class FlakyAcceleratorTokens {
   fail = false;
   private counter = 0;
 
@@ -33,7 +33,7 @@ class FlakyGatewayTokens {
   async mintForFamily(userId: string, familyId: string, manager: EntityManager): Promise<string> {
     this.counter += 1;
     const tokenHash = this.counter.toString(16).padStart(64, '0');
-    await manager.getRepository(GatewayToken).insert({
+    await manager.getRepository(AcceleratorToken).insert({
       userId,
       familyId,
       tokenHash,
@@ -49,16 +49,16 @@ class FlakyGatewayTokens {
 describe('TokenService rotation atomicity (real Postgres)', () => {
   let db: IntegrationDatabase;
   let refreshTokens: Repository<RefreshToken>;
-  let gatewayTokens: Repository<GatewayToken>;
+  let acceleratorTokens: Repository<AcceleratorToken>;
   let users: Repository<User>;
-  let gateway: FlakyGatewayTokens;
+  let gateway: FlakyAcceleratorTokens;
   let service: TokenService;
   let userId: string;
 
   beforeAll(async () => {
     db = await createIntegrationDatabase();
     refreshTokens = db.dataSource.getRepository(RefreshToken);
-    gatewayTokens = db.dataSource.getRepository(GatewayToken);
+    acceleratorTokens = db.dataSource.getRepository(AcceleratorToken);
     users = db.dataSource.getRepository(User);
   });
 
@@ -68,12 +68,12 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
 
   beforeEach(async () => {
     await db.dataSource.query('TRUNCATE TABLE users CASCADE');
-    gateway = new FlakyGatewayTokens(new FakeClock());
+    gateway = new FlakyAcceleratorTokens(new FakeClock());
     service = new TokenService(
       new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } }),
       new FakeClock(),
       new FakeEntropy(),
-      gateway as unknown as GatewayTokenService,
+      gateway as unknown as AcceleratorTokenService,
       fakeConfig({}).service,
       refreshTokens,
       db.dataSource
@@ -96,7 +96,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(presented.id);
     expect(rows[0].usedAt).toBeNull();
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
 
     gateway.fail = false;
     const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
@@ -112,7 +112,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     );
 
     expect(await refreshTokens.count({ where: { userId } })).toBe(1);
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
   });
 
   it('still hard-deletes the family when a rotation is refused as reuse', async () => {

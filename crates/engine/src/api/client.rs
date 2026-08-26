@@ -247,7 +247,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         self.store_tokens(TokenResponse {
             access_token: body.access_token,
             refresh_token: body.refresh_token,
-            gateway_token: body.gateway_token,
+            accelerator_token: body.accelerator_token,
             is_new_user: body.is_new_user,
         })
         .await?;
@@ -646,7 +646,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .store_refresh_token(refresh_token.as_bytes())
             .await?;
         self.session.set(tokens.access_token);
-        self.accelerator.set(tokens.gateway_token);
+        self.accelerator.set(tokens.accelerator_token);
         Ok(())
     }
 

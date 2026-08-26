@@ -5,10 +5,10 @@ import { sha256Hex } from '../../common/hash';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
-import { GatewayToken } from '../entities/gateway-token.entity';
+import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { User } from '../entities/user.entity';
-import { GatewayTokenService, REFUSAL_CACHE_MAX_ENTRIES } from './gateway-token.service';
+import { AcceleratorTokenService, REFUSAL_CACHE_MAX_ENTRIES } from './accelerator-token.service';
 
 /**
  * The accelerator pseudonym against a REAL Postgres: its validity is a join
@@ -20,15 +20,15 @@ const ACCESS_TTL_SECONDS = 900;
 const CACHE_TTL_SECONDS = 30;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-describe('GatewayTokenService (real Postgres)', () => {
+describe('AcceleratorTokenService (real Postgres)', () => {
   let db: IntegrationDatabase;
-  let gatewayTokens: Repository<GatewayToken>;
+  let acceleratorTokens: Repository<AcceleratorToken>;
   let refreshTokens: Repository<RefreshToken>;
   let users: Repository<User>;
 
   beforeAll(async () => {
     db = await createIntegrationDatabase();
-    gatewayTokens = db.dataSource.getRepository(GatewayToken);
+    acceleratorTokens = db.dataSource.getRepository(AcceleratorToken);
     refreshTokens = db.dataSource.getRepository(RefreshToken);
     users = db.dataSource.getRepository(User);
   });
@@ -41,15 +41,15 @@ describe('GatewayTokenService (real Postgres)', () => {
     await db.dataSource.query('TRUNCATE TABLE users CASCADE');
   });
 
-  function buildService(clock: FakeClock): GatewayTokenService {
-    return new GatewayTokenService(
+  function buildService(clock: FakeClock): AcceleratorTokenService {
+    return new AcceleratorTokenService(
       clock,
       new FakeEntropy(),
       fakeConfig({
         ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
-        GATEWAY_TOKEN_CACHE_TTL_SECONDS: String(CACHE_TTL_SECONDS),
+        ACCELERATOR_TOKEN_CACHE_TTL_SECONDS: String(CACHE_TTL_SECONDS),
       }).service,
-      gatewayTokens
+      acceleratorTokens
     );
   }
 
@@ -82,7 +82,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
-    const [row] = await gatewayTokens.find({ where: { userId } });
+    const [row] = await acceleratorTokens.find({ where: { userId } });
     expect(row.tokenHash).not.toBe(token);
     expect(row.expiresAt.getTime()).toBe(clock.now().getTime() + ACCESS_TTL_SECONDS * 1000);
     expect(await service.verify(token)).toBe(true);
@@ -110,7 +110,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const second = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(second).not.toBe(first);
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
     expect(await service.verify(second)).toBe(true);
     expect(await service.verify(first)).toBe(false);
   });
@@ -137,7 +137,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const relogin = await startSession(clock, abandoned.userId);
     await service.mintForFamily(relogin.userId, relogin.familyId, db.dataSource.manager);
 
-    expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
   });
 
   it('sweeps every account’s expired rows on a tick, and spares the live ones', async () => {
@@ -152,20 +152,20 @@ describe('GatewayTokenService (real Postgres)', () => {
 
     // No mint by the abandoned account: only the scheduled sweep can reclaim it.
     expect(await service.sweepExpired()).toBe(1);
-    expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(0);
-    expect(await gatewayTokens.count({ where: { userId: active.userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId: abandoned.userId } })).toBe(0);
+    expect(await acceleratorTokens.count({ where: { userId: active.userId } })).toBe(1);
   });
 
   it('walks past a full batch until nothing expired is left', async () => {
     const clock = new FakeClock();
-    const service = new GatewayTokenService(
+    const service = new AcceleratorTokenService(
       clock,
       new FakeEntropy(),
       fakeConfig({
         ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
-        GATEWAY_TOKEN_SWEEP_BATCH_SIZE: '2',
+        ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE: '2',
       }).service,
-      gatewayTokens
+      acceleratorTokens
     );
     for (let i = 0; i < 5; i += 1) {
       const session = await startSession(clock);
@@ -174,7 +174,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
 
     expect(await service.sweepExpired()).toBe(5);
-    expect(await gatewayTokens.count()).toBe(0);
+    expect(await acceleratorTokens.count()).toBe(0);
   });
 
   it('stops verifying once the session it names is gone', async () => {
@@ -188,7 +188,7 @@ describe('GatewayTokenService (real Postgres)', () => {
 
     expect(await service.verify(token)).toBe(false);
     // The row itself outlives the session; only the join makes it worthless.
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
   });
 
   it('stops verifying once every refresh row in the family has been spent', async () => {
@@ -211,7 +211,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     await users.delete({ id: userId });
 
     expect(await service.verify(token)).toBe(false);
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(0);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(0);
   });
 
   it('serves a verified token from cache, and re-reads once the entry ages out', async () => {

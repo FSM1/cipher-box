@@ -7,7 +7,7 @@ import { RuntimeModule } from '../common/runtime.module';
 import { fakeConfig } from '../testing/fakes';
 import { AuthModule, buildJwtOptions } from './auth.module';
 import { AuthMethod } from './entities/auth-method.entity';
-import { GatewayToken } from './entities/gateway-token.entity';
+import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
@@ -81,7 +81,7 @@ describe('AuthModule dependency graph', () => {
         AuthModule,
       ],
     });
-    for (const entity of [User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject]) {
+    for (const entity of [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject]) {
       builder.overrideProvider(getRepositoryToken(entity)).useValue({});
     }
 

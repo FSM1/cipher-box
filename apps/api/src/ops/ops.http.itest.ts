@@ -15,8 +15,8 @@ import { ChallengeService } from '../auth/services/challenge.service';
 import { IdentityService } from '../auth/services/identity.service';
 import { SiweService } from '../auth/services/siwe.service';
 import { TestAuthService } from '../auth/services/test-auth.service';
-import { GatewayToken } from '../auth/entities/gateway-token.entity';
-import { GatewayTokenService } from '../auth/services/gateway-token.service';
+import { AcceleratorToken } from '../auth/entities/accelerator-token.entity';
+import { AcceleratorTokenService } from '../auth/services/accelerator-token.service';
 import { TokenService } from '../auth/services/token.service';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
@@ -46,14 +46,14 @@ describe('ops HTTP surface (real Postgres)', () => {
     db = await createIntegrationDatabase({ poolMax: 10 });
     ctx = await createHttpIntegrationApp({
       db,
-      entities: [User, AuthMethod, RefreshToken, GatewayToken],
+      entities: [User, AuthMethod, RefreshToken, AcceleratorToken],
       controllers: [AuthController, GatewayController],
       providers: [
         AuthMetricsInterceptor,
         AuthService,
         TestAuthService,
         TokenService,
-        GatewayTokenService,
+        AcceleratorTokenService,
         ChallengeService,
         IdentityService,
         SiweService,
@@ -169,7 +169,7 @@ describe('ops HTTP surface (real Postgres)', () => {
         usedAt: null,
       });
       const token = await ctx.app
-        .get(GatewayTokenService)
+        .get(AcceleratorTokenService)
         .mintForFamily(account.userId, familyId, db.dataSource.manager);
 
       await request(http())
