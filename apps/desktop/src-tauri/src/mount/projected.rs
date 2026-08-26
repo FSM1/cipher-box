@@ -16,6 +16,10 @@ pub use cipherbox_fuse::KernelOp;
 /// projected again by signing in again, not by re-mounting under it.
 const ENDED: &str = "the vault was unmounted outside CipherBox; sign out and back in to mount it";
 
+/// Shown when the device reports no home directory, so no mount point can be
+/// composed. A mount refusal, not a reason to refuse the session.
+const NO_HOME: &str = "this device has no home directory to mount the vault under";
+
 /// The vault's mount point: `~/CipherBox`, the name v1 taught members to look
 /// for.
 fn mount_point(home_dir: &Path) -> PathBuf {
@@ -42,7 +46,17 @@ pub enum Projection {
 impl Projection {
     /// Mounts the vault for a session that has already started, or hands back an
     /// engine that stands alone and the reason it does.
-    pub fn open(engine: Engine<DesktopSeamTypes>, home_dir: &Path, account_dir: &Path) -> Self {
+    pub fn open(
+        engine: Engine<DesktopSeamTypes>,
+        home_dir: Option<&Path>,
+        account_dir: &Path,
+    ) -> Self {
+        let Some(home_dir) = home_dir else {
+            return Self::Detached {
+                engine: Box::new(engine),
+                refusal: NO_HOME.to_owned(),
+            };
+        };
         let at = mount_point(home_dir);
         match mount(&at, account_dir) {
             Ok((mount, spill)) => Self::Projected {
@@ -81,20 +95,24 @@ impl Projection {
         }
     }
 
-    /// The next kernel operation. Never resolves without a live mount, so a host
-    /// may wait on it beside its other wake sources whether or not this session
-    /// projects anything.
-    pub async fn next_op(&mut self) -> KernelOp {
-        loop {
-            let Self::Projected {
-                mount: Some(live), ..
-            } = self
-            else {
-                return core::future::pending().await;
-            };
-            match live.next_op().await {
-                Some(op) => return op,
-                None => self.detach(),
+    /// The next kernel operation, or `None` the one time the kernel session
+    /// ends under a live app: the mount status has moved, and a host that only
+    /// re-reads on a wake would go on showing the mount point otherwise.
+    ///
+    /// Never resolves without a live mount, so a host may wait on it beside its
+    /// other wake sources whether or not this session projects anything.
+    pub async fn next_op(&mut self) -> Option<KernelOp> {
+        let Self::Projected {
+            mount: Some(live), ..
+        } = self
+        else {
+            return core::future::pending().await;
+        };
+        match live.next_op().await {
+            Some(op) => Some(op),
+            None => {
+                self.detach();
+                None
             }
         }
     }

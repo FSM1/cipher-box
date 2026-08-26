@@ -317,7 +317,9 @@ pub struct SessionEnv {
     /// `<data_local_dir>` — the account directory is composed under it.
     pub data_local_dir: PathBuf,
     /// The member's home directory — the mount point is composed under it.
-    pub home_dir: PathBuf,
+    /// `None` on a device that reports none, which refuses the mount and not
+    /// the session (blueprint/desktop.md "Lifecycle").
+    pub home_dir: Option<PathBuf>,
     /// The OS keyring service name holding the rotating refresh token.
     pub keyring_service: String,
     /// Called when the engine emits, so the shell re-reads what it renders.
@@ -372,7 +374,7 @@ fn host_engine(
         // failure no way to fail the session it reports itself in.
         let _ = verdict.send(Ok(()));
 
-        let projection = Projection::open(engine, &session.home_dir, &account_dir);
+        let projection = Projection::open(engine, session.home_dir.as_deref(), &account_dir);
         serve(projection, credentials, inbox, events, session.changed).await;
     });
 }
@@ -431,8 +433,8 @@ enum Woke {
     Request(Option<Request>),
     /// The engine emitted, or dropped its stream.
     Event(Option<Event>),
-    /// The kernel asked the mount for something.
-    Op(KernelOp),
+    /// The kernel asked the mount for something, or its session ended.
+    Op(Option<KernelOp>),
 }
 
 /// Serves the session until the host closes the request channel (logout or
@@ -452,8 +454,8 @@ async fn serve(
             op = projection.next_op() => Woke::Op(op),
         };
         match woke {
-            // The host closed the channel, or the engine stopped emitting —
-            // which it only does by dropping, and this loop is what holds it.
+            // The engine only stops emitting by dropping, and this loop is what
+            // holds it.
             Woke::Request(None) | Woke::Event(None) => break,
             Woke::Request(Some(Request::Status(reply))) => {
                 let _ = reply.send(status(&mut projection, &warnings).await);
@@ -471,7 +473,10 @@ async fn serve(
                     changed();
                 }
             }
-            Woke::Op(op) => projection.answer(op).await,
+            Woke::Op(Some(op)) => projection.answer(op).await,
+            // Unmounted from outside the app: the status moved without an
+            // engine event behind it, so this is the only thing that repaints.
+            Woke::Op(None) => changed(),
         }
     }
     projection.tear_down();
@@ -528,7 +533,7 @@ mod tests {
             })
             .expect("a configured build parses"),
             data_local_dir: data_local_dir.to_path_buf(),
-            home_dir: data_local_dir.join("home"),
+            home_dir: Some(data_local_dir.join("home")),
             keyring_service: "com.cipherbox.desktop.test".to_owned(),
             changed: Box::new(|| {}),
         }
@@ -626,23 +631,28 @@ mod tests {
     fn a_mount_that_cannot_be_made_leaves_the_session_standing() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let session = session_env(dir.path());
+        let home = session.home_dir.clone().expect("the test env names a home");
         // A home directory that is a file: no mount point can be made under
         // one, whatever the mount point is called.
-        std::fs::write(&session.home_dir, b"not a home directory").expect("no home to mount under");
+        std::fs::write(&home, b"not a home directory").expect("no home to mount under");
 
-        let account_dir = dir.path().join("account");
-        let engine = unstarted_engine(&session, &account_dir);
-        let mut projection = Projection::open(engine, &session.home_dir, &account_dir);
+        // …and a device that reports no home directory at all is the same
+        // refusal, not a refused session.
+        for home_dir in [Some(home.as_path()), None] {
+            let account_dir = dir.path().join("account");
+            let engine = unstarted_engine(&session, &account_dir);
+            let mut projection = Projection::open(engine, home_dir, &account_dir);
 
-        let mount = projection.status();
-        assert_eq!(mount.path, None);
-        assert!(mount.refusal.is_some(), "a session with no mount says why");
-        assert_eq!(
-            projection.engine_mut().profile(),
-            &session.config.profile,
-            "the session's engine is still here to serve reads",
-        );
-        projection.tear_down();
+            let mount = projection.status();
+            assert_eq!(mount.path, None);
+            assert!(mount.refusal.is_some(), "a session with no mount says why");
+            assert_eq!(
+                projection.engine_mut().profile(),
+                &session.config.profile,
+                "the session's engine is still here to serve reads",
+            );
+            projection.tear_down();
+        }
     }
 
     /// A logout keeps this device's durable stores — the ops a mount acked and

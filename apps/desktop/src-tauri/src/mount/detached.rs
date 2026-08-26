@@ -20,7 +20,11 @@ pub enum KernelOp {}
 pub struct Projection(Engine<DesktopSeamTypes>);
 
 impl Projection {
-    pub fn open(engine: Engine<DesktopSeamTypes>, _home_dir: &Path, _account_dir: &Path) -> Self {
+    pub fn open(
+        engine: Engine<DesktopSeamTypes>,
+        _home_dir: Option<&Path>,
+        _account_dir: &Path,
+    ) -> Self {
         Self(engine)
     }
 
@@ -32,7 +36,7 @@ impl Projection {
         MountStatus::refused(NO_ADAPTER)
     }
 
-    pub async fn next_op(&mut self) -> KernelOp {
+    pub async fn next_op(&mut self) -> Option<KernelOp> {
         core::future::pending().await
     }
 

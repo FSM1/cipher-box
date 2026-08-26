@@ -41,10 +41,7 @@ fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
             .path()
             .local_data_dir()
             .map_err(|error| format!("this device has no local data directory: {error}"))?,
-        home_dir: app
-            .path()
-            .home_dir()
-            .map_err(|error| format!("this device has no home directory: {error}"))?,
+        home_dir: app.path().home_dir().ok(),
         keyring_service: app.config().identifier.clone(),
         changed: Box::new(move || {
             let _ = app.emit(VAULT_CHANGED, ());
