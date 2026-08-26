@@ -12,8 +12,8 @@
 //! the [`Command`] enum, the [`Event`] stream) is frozen. Metadata intent ops
 //! stage through the durable op queue, reads render the gate-passing base
 //! snapshot ⊕ pending-op overlay (blueprint/engine.md "Sync core: State law"),
-//! and every successful stage emits [`Event::SnapshotUpdated`]. A command whose
-//! slice has not landed returns [`EngineError::Unimplemented`].
+//! and every successful stage emits [`Event::SnapshotUpdated`]. A [`Command`]
+//! variant with no arm of its own returns [`EngineError::Unimplemented`].
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
@@ -3920,9 +3920,7 @@ where {
     /// The metadata intent ops (create/delete/rename/relink) stage onto the
     /// durable op queue via [`stage_op`] and emit [`Event::SnapshotUpdated`];
     /// the base sequence each op carries is read from the rendered view (state
-    /// law), so an op rebases against the state the host saw. The grant,
-    /// share, and rotation arms whose slices have not landed stay
-    /// [`EngineError::Unimplemented`].
+    /// law), so an op rebases against the state the host saw.
     ///
     pub async fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
         // Ahead of the session gate: an engine whose `start` failed closed — a
@@ -4107,6 +4105,9 @@ where {
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
+            // The two commands hoisted above the session gate are the only ones
+            // this arm can name, so it is the completeness backstop rather than
+            // a live verdict: a variant added without an arm reports itself.
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
             }),
