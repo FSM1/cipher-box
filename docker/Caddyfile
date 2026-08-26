@@ -4,6 +4,23 @@
 {
 	auto_https off
 
+	order rate_limit before basicauth
+
+	# Cloudflare fronts every vhost. Untrusted, Caddy discards the inbound
+	# X-Forwarded-For and every IP-keyed limit buckets a whole edge POP; trusted,
+	# `{client_ip}` and the header the API reads both resolve to the member.
+	# A peer outside these ranges is still untrusted, so a direct-to-origin
+	# request cannot forge its own address. Published at cloudflare.com/ips.
+	#
+	# Strict is load-bearing: unset, `{client_ip}` is the LEFTMOST X-Forwarded-For
+	# entry, which the caller writes — so a rate limit keyed on it hands every
+	# caller a bucket of its own choosing. Strict walks in from the right instead,
+	# past the trusted proxies, to the first address one of them observed.
+	servers {
+		trusted_proxies_strict
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+
 	# Caddy's error log records client IP beside the requested URI, which re-links
 	# an account to its reads — the accelerator front must stay silent there too.
 	log accelerator_errors {
@@ -50,7 +67,9 @@ app-staging.cipherbox.cc {
 	header {
 		Access-Control-Allow-Origin "{$ACCELERATOR_ALLOWED_ORIGIN:https://app-staging.cipherbox.cc}"
 		Access-Control-Expose-Headers "Content-Length, Content-Range, Content-Type"
-		Vary Origin
+		# `+` appends. Setting it would drop the upstream's own Vary members, and a
+		# gateway varies on more than the origin.
+		+Vary Origin
 	}
 
 	# A preflight carries no Authorization, so gating it would 401 every browser read.
@@ -118,10 +137,22 @@ routing-staging.cipherbox.cc {
 		path /routing/v1/ipns/*
 	}
 	handle @publish {
-		# An IPNS record is a couple of KB; the cap is all this ungated leg can
-		# bound on its own. Per-address rate limiting belongs at the edge.
+		# An IPNS record is a couple of KB, and the token gate that bounds the read
+		# legs is deliberately absent here, so the size cap and the per-address rate
+		# are the whole abuse budget of this leg.
 		request_body {
 			max_size 64KB
+		}
+
+		# `{client_ip}` resolves through the trusted proxies above, so the bucket is
+		# a caller rather than a Cloudflare POP. A publish follows a scope mutation;
+		# the republisher's re-PUTs route internally and never arrive here.
+		rate_limit {
+			zone publish {
+				key {client_ip}
+				events 60
+				window 1m
+			}
 		}
 		reverse_proxy someguy:8190 {
 			header_up -Authorization

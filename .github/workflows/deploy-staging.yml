@@ -97,6 +97,38 @@ jobs:
             ${{ env.API_IMAGE }}:latest-staging
             ${{ env.API_IMAGE }}:${{ env.DEPLOY_TAG }}
 
+  # The front's publish-leg rate limiter is a module stock Caddy does not carry,
+  # so the proxy is built here rather than pulled from Docker Hub.
+  build-caddy:
+    name: Build & Push Caddy Image
+    needs: [assert-main-revision]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEPLOY_TAG }}
+
+      - name: Set lowercase image name
+        run: echo "CADDY_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-caddy" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: docker/caddy
+          file: docker/caddy/Dockerfile
+          push: true
+          tags: |
+            ${{ env.CADDY_IMAGE }}:latest-staging
+            ${{ env.CADDY_IMAGE }}:${{ env.DEPLOY_TAG }}
+
   build-web:
     name: Build Web App
     needs: [assert-main-revision]
@@ -155,7 +187,7 @@ jobs:
 
   deploy-vps:
     name: Deploy to Staging VPS
-    needs: [build-api, build-web]
+    needs: [build-api, build-caddy, build-web]
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -223,12 +255,11 @@ jobs:
           DB_DATABASE=cipherbox_staging
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
-          # One: Caddy is the only proxy whose X-Forwarded-For survives. With no
-          # `trusted_proxies`, Caddy REPLACES an inbound header rather than
-          # appending to it, so whatever Cloudflare sent is gone and the API sees
-          # a single entry — Cloudflare's edge address. Coarser than per-member,
-          # but a caller cannot write it. See apps/api/.env.example.
-          TRUST_PROXY_HOPS=1
+          # Two entries arrive: Caddy trusts Cloudflare's ranges, so it keeps the
+          # member address Cloudflare appended and adds the edge beside it.
+          # Counting from the peer lands on the member; a caller-written entry
+          # only ever sits further left. Held to the Caddyfile by the Lint gate.
+          TRUST_PROXY_HOPS=2
           KUBO_API_URL=http://ipfs:5001
           ROUTING_V1_URL=http://someguy:8190
           THROTTLE_BYPASS_SECRET=${{ secrets.THROTTLE_BYPASS_SECRET }}
