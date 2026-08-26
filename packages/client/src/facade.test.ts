@@ -232,6 +232,21 @@ describe('EngineFacade', () => {
     );
   });
 
+  it('erases the containers a host with its own prefix named', async () => {
+    const origin = stubOrigin([
+      `engine-7-${TEST_ACCOUNT_ID}-floors`,
+      `engine-7-${TEST_ACCOUNT_ID}-staging`,
+      `engine-7-${TEST_ACCOUNT_ID}-staging-staged`,
+      `engine-7-${TEST_ACCOUNT_ID}-snapshot-cache`,
+    ]);
+    const facade = new EngineFacade(new FakeTransport(origin), { dbPrefix: 'engine-7' });
+
+    await facade.forgetDevice();
+    await facade.logout();
+
+    expect(origin.containers).toEqual([]);
+  });
+
   it('erases the containers only once the worker is torn down', async () => {
     const transport = new FakeTransport(stubOrigin([`cipherbox-${TEST_ACCOUNT_ID}-floors`]));
     const facade = new EngineFacade(transport);

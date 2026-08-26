@@ -691,6 +691,11 @@ where
         store.load_last_account_id().await.unwrap(),
         Some(b"account-7".to_vec())
     );
+    assert_eq!(
+        open().await.load_last_account_id().await.unwrap(),
+        Some(b"account-7".to_vec()),
+        "the stored id survives a reopen — it names the account directory next launch"
+    );
 
     // Independent of the refresh token: the two are separate entries.
     store.store_refresh_token(b"tok").await.unwrap();

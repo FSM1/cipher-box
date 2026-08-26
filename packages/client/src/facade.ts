@@ -10,7 +10,7 @@
  * consumes it), and events arrive as key-free view descriptors.
  */
 
-import { eraseAccountStores } from './accountStores.js';
+import { type AccountStoreNaming, eraseAccountStores } from './accountStores.js';
 import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
@@ -39,7 +39,15 @@ export class EngineFacade {
   // the teardown that clears the session cannot take the name with it.
   private forgotten: string | null = null;
 
-  constructor(private readonly transport: EngineTransport) {}
+  /**
+   * `naming` must be the spelling the worker opened the stores under: the erase
+   * names its containers rather than enumerating them, so a prefix it does not
+   * share is a prefix it cannot take.
+   */
+  constructor(
+    private readonly transport: EngineTransport,
+    private readonly naming: AccountStoreNaming = {}
+  ) {}
 
   /**
    * Cold start: hands the login secret to the engine once, transferred (the
@@ -95,7 +103,7 @@ export class EngineFacade {
     const account = this.forgotten;
     if (account === null) return;
     this.forgotten = null;
-    await eraseAccountStores(account);
+    await eraseAccountStores(account, this.naming);
   }
 
   /** Subscribes to the one-way engine event stream; returns an unsubscribe. */
