@@ -807,6 +807,12 @@ jobs:
 
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
+        env:
+          # dyld's default fallback path still resolves `@rpath/libfuse-t.dylib`
+          # when nothing linked an `LC_RPATH` in, which would hide the break
+          # here and surface it as an unlaunchable bundle. Emptying the fallback
+          # makes this leg prove the rpath `.cargo/config.toml` links.
+          DYLD_FALLBACK_LIBRARY_PATH: /nonexistent
 
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
