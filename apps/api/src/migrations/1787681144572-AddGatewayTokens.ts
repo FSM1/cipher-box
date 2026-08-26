@@ -11,6 +11,9 @@ export class AddGatewayTokens1787681144572 implements MigrationInterface {
       `CREATE INDEX "idx_gateway_tokens_user_id" ON "gateway_tokens" ("user_id") `
     );
     await queryRunner.query(
+      `CREATE INDEX "idx_gateway_tokens_expires_at" ON "gateway_tokens" ("expires_at") `
+    );
+    await queryRunner.query(
       `ALTER TABLE "gateway_tokens" ADD CONSTRAINT "FK_7bebe1dc55a6f2ea7d6c054e3fa" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION`
     );
   }
@@ -19,6 +22,7 @@ export class AddGatewayTokens1787681144572 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "gateway_tokens" DROP CONSTRAINT "FK_7bebe1dc55a6f2ea7d6c054e3fa"`
     );
+    await queryRunner.query(`DROP INDEX "public"."idx_gateway_tokens_expires_at"`);
     await queryRunner.query(`DROP INDEX "public"."idx_gateway_tokens_user_id"`);
     await queryRunner.query(`DROP TABLE "gateway_tokens"`);
   }

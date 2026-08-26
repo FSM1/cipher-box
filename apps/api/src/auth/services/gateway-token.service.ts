@@ -31,6 +31,12 @@ const REFUSAL_CACHE_TTL_MS = 1000;
 const ACCEPTANCE_CACHE_MAX_ENTRIES = 10_000;
 export const REFUSAL_CACHE_MAX_ENTRIES = 1_000;
 
+/** Rows deleted per sweep batch; via GATEWAY_TOKEN_SWEEP_BATCH_SIZE. */
+const DEFAULT_SWEEP_BATCH_SIZE = 1000;
+
+/** Ceiling on batches per tick, so one sweep cannot run unbounded. */
+const SWEEP_MAX_BATCHES = 1000;
+
 /**
  * The read accelerator's credential: an opaque per-session pseudonym minted
  * beside the access token (CONTEXT.md, Accelerator token).
@@ -42,6 +48,7 @@ export const REFUSAL_CACHE_MAX_ENTRIES = 1_000;
 export class GatewayTokenService {
   private readonly ttlSeconds: number;
   private readonly cacheTtlMs: number;
+  private readonly sweepBatchSize: number;
   /** tokenHash → the epoch ms that answer stops being trusted. */
   private readonly accepted = new Map<string, number>();
   private readonly refused = new Map<string, number>();
@@ -60,6 +67,10 @@ export class GatewayTokenService {
         DEFAULT_CACHE_TTL_SECONDS,
         MAX_CACHE_TTL_SECONDS
       ) * 1000;
+    this.sweepBatchSize = positiveIntConfig(
+      configService.get('GATEWAY_TOKEN_SWEEP_BATCH_SIZE'),
+      DEFAULT_SWEEP_BATCH_SIZE
+    );
   }
 
   /**
@@ -133,6 +144,44 @@ export class GatewayTokenService {
       Math.min(live.expires_at.getTime(), now + this.cacheTtlMs)
     );
     return true;
+  }
+
+  /**
+   * Hard-delete every expired row, whoever owns it. A mint only reclaims the
+   * minting account's rows, so an account that logs in once and never returns
+   * would otherwise keep its row forever.
+   */
+  async sweepExpired(): Promise<number> {
+    const cutoff = this.clock.now();
+    let total = 0;
+    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
+      const deleted = await this.deleteExpiredBatch(cutoff);
+      total += deleted;
+      if (deleted < this.sweepBatchSize) {
+        break;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Postgres has no `DELETE ... LIMIT`, so the batch is bounded by selecting
+   * `ctid`s under the cutoff and deleting exactly those; `expires_at` ordering
+   * lets `idx_gateway_tokens_expires_at` drive the scan. `SKIP LOCKED` yields
+   * any row a concurrent mint is already deleting, so the two paths take their
+   * row locks in whatever order they like without ever forming a cycle.
+   */
+  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
+    const result = await this.gatewayTokenRepository
+      .createQueryBuilder()
+      .delete()
+      .from(GatewayToken)
+      .where(
+        'ctid IN (SELECT ctid FROM gateway_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
+        { cutoff, limit: this.sweepBatchSize }
+      )
+      .execute();
+    return result.affected ?? 0;
   }
 }
 

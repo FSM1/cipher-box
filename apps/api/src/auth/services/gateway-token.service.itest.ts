@@ -140,6 +140,43 @@ describe('GatewayTokenService (real Postgres)', () => {
     expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
   });
 
+  it('sweeps every account’s expired rows on a tick, and spares the live ones', async () => {
+    const clock = new FakeClock();
+    const service = buildService(clock);
+    const abandoned = await startSession(clock);
+    await service.mintForFamily(abandoned.userId, abandoned.familyId, db.dataSource.manager);
+
+    clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
+    const active = await startSession(clock);
+    await service.mintForFamily(active.userId, active.familyId, db.dataSource.manager);
+
+    // No mint by the abandoned account: only the scheduled sweep can reclaim it.
+    expect(await service.sweepExpired()).toBe(1);
+    expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(0);
+    expect(await gatewayTokens.count({ where: { userId: active.userId } })).toBe(1);
+  });
+
+  it('walks past a full batch until nothing expired is left', async () => {
+    const clock = new FakeClock();
+    const service = new GatewayTokenService(
+      clock,
+      new FakeEntropy(),
+      fakeConfig({
+        ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
+        GATEWAY_TOKEN_SWEEP_BATCH_SIZE: '2',
+      }).service,
+      gatewayTokens
+    );
+    for (let i = 0; i < 5; i += 1) {
+      const session = await startSession(clock);
+      await service.mintForFamily(session.userId, session.familyId, db.dataSource.manager);
+    }
+    clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
+
+    expect(await service.sweepExpired()).toBe(5);
+    expect(await gatewayTokens.count()).toBe(0);
+  });
+
   it('stops verifying once the session it names is gone', async () => {
     const clock = new FakeClock();
     const service = buildService(clock);

@@ -30,6 +30,8 @@ export class GatewayToken {
   @Column({ name: 'token_hash', type: 'varchar', length: 64, unique: true })
   tokenHash: string;
 
+  /** Indexed to drive the scheduled expiry sweep's ordered scan. */
+  @Index('idx_gateway_tokens_expires_at')
   @Column({ name: 'expires_at', type: 'timestamptz' })
   expiresAt: Date;
 
