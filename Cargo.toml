@@ -41,4 +41,8 @@ getrandom = "0.3"
 futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The engine's strict comparator normalizes to NFC before folding case
+# (blueprint/engine.md rebase table). Pinned to a minor: a normalization table
+# change moves which names collide, which is a merge-visible law.
+unicode-normalization = "=0.1.25"
 zeroize = "1"

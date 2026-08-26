@@ -9,14 +9,23 @@
 //! lands.
 //!
 //! It rides the staging store's opaque key space on the same terms as the
-//! [`retire ledger`](crate::net::StagingRetireLedger): durable, per-owner, and
-//! never dead-lettered.
+//! [`retire ledger`](crate::net::StagingRetireLedger): durable, per-owner,
+//! never dead-lettered, and sealed at rest under the tier rule
+//! ([`crate::sync::bookkeeping`]). The key still says *that* this node has a
+//! delete pending; what the seal withholds is the write-plane names the
+//! detached subtree published under, which outlive the delete recording them.
+//! The seal wraps this codec rather than replacing it: [`FORMAT_V1`] versions
+//! the journal's own grammar, independently of the ledger's.
 
 use cipherbox_core::content::{decode_content_cid_str, is_wellformed_content_cid};
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::seal::OwnerLocalKind;
 
 use crate::facade::NodeId;
+use zeroize::Zeroizing;
+
 use crate::seams::{OwedRetire, OwingRecord, SeamError, SeamResult};
+use crate::sync::BookkeepingSeal;
 
 /// The staging-key prefix the doomed-name journal writes under. One key per
 /// delete target, so two deletes in flight cannot lose each other's entry.
@@ -125,15 +134,36 @@ pub fn journalled_keys(
     keys
 }
 
-/// One entry as the staging store holds it.
+/// One entry as the staging store holds it: the encoded reclamation, sealed.
+pub fn seal_reclamation(
+    seal: BookkeepingSeal<'_>,
+    reclamation: &Reclamation,
+) -> SeamResult<Vec<u8>> {
+    seal.seal(
+        OwnerLocalKind::DoomedJournal,
+        &encode_reclamation(reclamation)?,
+    )
+}
+
+/// One stored entry, or `None` for bytes this identity's key and this build's
+/// grammar do not both accept — which read as no journal rather than as a
+/// reclamation of their own.
+pub fn open_reclamation(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<Reclamation> {
+    decode_reclamation(&seal.open(OwnerLocalKind::DoomedJournal, blob)?)
+}
+
+/// The journal's own encoding, inside the seal.
 ///
 /// Refuses, with a release-active `Err`, every shape [`decode_reclamation`]
 /// refuses: an over-long length prefix, a doomed name that is not an
 /// `ipnsName`, and a debt target that is not a content CID. A journal entry
 /// only ever leaves once its reclamation lands, so one this build could write
 /// but neither read back nor spend would sit undrainable forever.
-pub fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Vec<u8>> {
-    let mut out = vec![FORMAT_V1];
+///
+/// Zeroizing because the plaintext side of a sealed value is exactly what the
+/// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
+fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>>> {
+    let mut out = Zeroizing::new(vec![FORMAT_V1]);
     push_len(&mut out, reclamation.doomed.len())?;
     for (node, name) in &reclamation.doomed {
         if IpnsName::parse(name).is_err() {
@@ -159,10 +189,9 @@ pub fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Vec<u8>> {
     Ok(out)
 }
 
-/// One entry, or `None` for bytes this build did not write — which read as no
-/// journal rather than as a reclamation of their own.
+/// One encoded reclamation, or `None` for bytes this build did not write.
 #[must_use]
-pub fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
+fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
     let mut rest = bytes.strip_prefix(&[FORMAT_V1][..])?;
     let mut doomed = Vec::new();
     for _ in 0..take_len(&mut rest)? {
@@ -236,10 +265,14 @@ fn take_str(rest: &mut &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
+    use cipherbox_core::suite::x25519::X25519Secret;
 
     use super::*;
+    use crate::testkit::SeededEntropy;
 
     /// The content-CID codec the retire ledger keys its entries by.
     const CONTENT_CID_CODEC: u8 = 0x55;
@@ -354,6 +387,38 @@ mod tests {
         assert!(
             !strangers_debt.is_for(node(1)),
             "no other node owes a content debt through this entry"
+        );
+    }
+
+    /// The journal joins the sealed tier ([`crate::sync::bookkeeping`]): an
+    /// entry's `ipnsName`s are a delete-intent signal that outlives the delete
+    /// recording them, so what the store holds is a blob only this identity
+    /// opens — never the encoding itself.
+    #[test]
+    fn an_entry_is_sealed_at_rest() {
+        let mine = X25519Secret::from_scalar([0x9d; 32]);
+        let theirs = X25519Secret::from_scalar([0x9e; 32]);
+        let entropy = RefCell::new(SeededEntropy::new(11));
+        let seal = BookkeepingSeal::new(&mine, &entropy);
+
+        let stored = seal_reclamation(seal, &sample()).expect("seal");
+        assert_ne!(
+            stored,
+            *encode_reclamation(&sample()).expect("encode"),
+            "the journal grammar never reaches the store on its own"
+        );
+        assert_eq!(open_reclamation(seal, &stored), Some(sample()));
+        assert_eq!(
+            open_reclamation(BookkeepingSeal::new(&theirs, &entropy), &stored),
+            None,
+            "another identity's key opens nothing"
+        );
+
+        // The only shape a build that skipped the seal could have written.
+        assert_eq!(
+            open_reclamation(seal, &encode_reclamation(&sample()).expect("encode")),
+            None,
+            "an unsealed entry is no journal"
         );
     }
 

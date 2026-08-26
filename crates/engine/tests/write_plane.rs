@@ -3190,6 +3190,51 @@ fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
     );
 }
 
+/// The pending half of the same law: a queued folder delete renders its whole
+/// detached subtree gone *before* the drain publishes anything, the way a delete
+/// another device published does. A host holds descendant ids as inodes, so one
+/// still answering is a path nothing can walk to.
+#[test]
+fn a_pending_folder_delete_renders_its_detached_subtree_gone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "trip".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let trip = child_id(&engine, photos, "trip");
+    assert!(
+        block_on(engine.view()).unwrap().attrs(trip).is_some(),
+        "the descendant is published and rendered"
+    );
+
+    // Queued only — no tick, so nothing has published and the overlay is the
+    // whole of the divergence.
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+
+    let view = block_on(engine.view()).unwrap();
+    assert!(view.attrs(photos).is_none(), "the delete target is gone");
+    assert!(
+        view.attrs(trip).is_none(),
+        "and so is the subtree the unlink detaches"
+    );
+}
+
 /// The one ordering this pass must not produce. Everything reclaimable happens
 /// after the unlink publishes, so a delete whose record never landed unpins
 /// nothing and retires nothing — the parent still names the target, and

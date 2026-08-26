@@ -60,5 +60,8 @@ cipherbox-desktop-seams = { path = ".", features = ["test-support"] }
 # The reusable per-seam conformance kits + the minimal single-future
 # executor live behind the engine's `test-kit` feature.
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
+# The retire-ledger kit constructs the engine's staging ledger, which seals
+# its entries to an `enc-subkey` — core's type, addressable only from `tests/`.
+cipherbox-core.workspace = true
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 tempfile = "3"

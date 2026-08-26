@@ -577,15 +577,25 @@
         "name": "invite-records",
         "discriminator": 3,
         "hpkeInfo": "cipherbox/v2/owner-local/invite-records"
+      },
+      {
+        "name": "retire-ledger",
+        "discriminator": 4,
+        "hpkeInfo": "cipherbox/v2/owner-local/retire-ledger"
+      },
+      {
+        "name": "doomed-journal",
+        "discriminator": 5,
+        "hpkeInfo": "cipherbox/v2/owner-local/doomed-journal"
       }
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 4
+      "count": 6
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 16,
+      "count": 30,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

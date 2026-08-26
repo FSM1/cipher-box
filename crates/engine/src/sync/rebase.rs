@@ -150,6 +150,15 @@ pub struct AppliedOp {
     /// The add/add auto-suffix fired.
     #[zeroize(skip)]
     pub suffixed: bool,
+    /// The destination node **this op** vacated, if any — a move that won the
+    /// conditional delete against the node holding the name it took.
+    ///
+    /// Reported rather than re-derived from the rebased snapshot: a node can
+    /// also leave that snapshot as the detached descendant of a delete earlier
+    /// in the same pass ([`Snapshot::remove_deleted`]), and dropping *that*
+    /// node's ref would unlink a node no conditional delete ever judged.
+    #[zeroize(skip)]
+    pub vacated: Option<crate::facade::NodeId>,
 }
 
 impl fmt::Debug for AppliedOp {
@@ -162,6 +171,7 @@ impl fmt::Debug for AppliedOp {
                 &self.effective_name.as_deref().map(RedactedText::of),
             )
             .field("suffixed", &self.suffixed)
+            .field("vacated", &self.vacated)
             .finish()
     }
 }
@@ -291,6 +301,14 @@ pub fn replay(
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
+        // Only this op mutates `working` across the call, so a node the move
+        // named as replaced and that leaves between these two reads is one
+        // *this* op vacated.
+        let replacing = match op.kind {
+            OpKind::Move { replacing, .. } => replacing.map(|replaced| replaced.node),
+            _ => None,
+        }
+        .filter(|node| working.contains(*node));
         match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
@@ -303,6 +321,7 @@ pub fn replay(
                     op: op.clone(),
                     effective_name: effective_name.map(|n| n.to_string()),
                     suffixed,
+                    vacated: replacing.filter(|node| !working.contains(*node)),
                 });
             }
             OpResolution::Dropped {
@@ -492,6 +511,11 @@ fn rebase_create(
 }
 
 /// Conditional delete: drop if the target advanced past the op's snapshot.
+///
+/// An applied delete takes the detached subtree with it
+/// ([`Snapshot::remove_deleted`]), so a later op in the same pass that targets a
+/// descendant resolves against the tree the user actually sees: it dead-letters
+/// as `TargetGone` rather than rebasing onto a node no walk can reach.
 fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpResolution {
     match working.record_sequence(op.target) {
         None => OpResolution::dropped(DropReason::AlreadySatisfied),
@@ -500,7 +524,7 @@ fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpRes
             OpResolution::dropped(DropReason::TargetAdvanced)
         }
         Some(_) => {
-            working.remove_node(op.target);
+            working.remove_deleted(op.target);
             OpResolution::applied(None)
         }
     }
@@ -954,6 +978,62 @@ mod tests {
         let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(!base.contains(id(1)));
+    }
+
+    /// An applied folder delete takes its detached subtree out of the working
+    /// base, so the pass's own later ops resolve against the tree the user sees.
+    #[test]
+    fn an_applied_delete_takes_its_detached_subtree_out_of_the_working_base() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "photos", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "trip", NodeKind::Folder);
+        with_node(&mut base, id(2), id(3), "deep.bin", NodeKind::File);
+
+        let local = base.clone();
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 1), SCOPE_ROOTS);
+
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(!base.contains(id(2)), "no parentless descendant survives");
+        assert!(!base.contains(id(3)));
+    }
+
+    /// The stated rebase decision for an op queued against a descendant of a
+    /// folder this same pass deleted: the destination it anchored on is gone, so
+    /// it dead-letters rather than publishing into a subtree no walk reaches.
+    #[test]
+    fn an_op_under_a_locally_deleted_folder_dead_letters() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "photos", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "trip.txt", NodeKind::File);
+
+        let local = base.clone();
+        rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 1), SCOPE_ROOTS);
+
+        assert_eq!(
+            rebase_one(
+                &mut base,
+                &local,
+                &Op::rename(id(2), "n.txt", 1, AT),
+                SCOPE_ROOTS
+            ),
+            OpResolution::DeadLetter(DeadLetterReason::TargetGone),
+            "a rename of a detached descendant"
+        );
+        assert_eq!(
+            rebase_one(
+                &mut base,
+                &local,
+                &Op::create(id(4), id(2), "x", NewNode::Folder, 1, AT),
+                SCOPE_ROOTS
+            ),
+            OpResolution::DeadLetter(DeadLetterReason::TargetGone),
+            "a create under a detached descendant"
+        );
+        assert_eq!(
+            rebase_one(&mut base, &local, &Op::delete(id(2), 1, AT, 1), SCOPE_ROOTS),
+            OpResolution::dropped(DropReason::AlreadySatisfied),
+            "a delete of one — the unlink above it already satisfied it"
+        );
     }
 
     /// The staged version a second edit authors, distinct from [`staged_k`] so
@@ -1812,6 +1892,82 @@ mod tests {
         }
     }
 
+    /// A move reports the node **it** vacated, so the publisher drops that ref
+    /// and no other. A node that merely left the rebased snapshot as the
+    /// detached descendant of an earlier delete is not this move's to unlink —
+    /// it never faced the conditional delete.
+    #[test]
+    fn a_move_reports_only_the_destination_it_vacated_itself() {
+        let mut gate_passing = tree();
+        with_node(&mut gate_passing, id(0), id(1), "doomed", NodeKind::Folder);
+        with_node(&mut gate_passing, id(1), id(2), "under.txt", NodeKind::File);
+        with_node(&mut gate_passing, id(0), id(3), "mover.txt", NodeKind::File);
+
+        let replacing = Some(Replaced {
+            node: id(2),
+            sequence: 1,
+        });
+        let ops = vec![
+            (OpId(1), Op::delete(id(1), 1, AT, 1)),
+            (
+                OpId(2),
+                Op::move_node(
+                    id(3),
+                    id(0),
+                    id(0),
+                    "under.txt",
+                    replacing,
+                    1,
+                    AT,
+                    ScopeCrossing::Intra,
+                ),
+            ),
+        ];
+        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
+
+        assert_eq!(report.applied.len(), 2);
+        assert!(
+            !report.rebased.contains(id(2)),
+            "the delete's cascade took it"
+        );
+        assert_eq!(
+            report.applied[1].vacated, None,
+            "but the move never vacated it, so its ref is not the move's to drop"
+        );
+    }
+
+    /// The other direction: a move that really does win the conditional delete
+    /// against the node holding its name reports it.
+    #[test]
+    fn a_move_that_wins_the_conditional_delete_reports_the_node_it_freed() {
+        let mut gate_passing = tree();
+        with_node(&mut gate_passing, id(0), id(1), "dest", NodeKind::Folder);
+        with_node(&mut gate_passing, id(1), id(2), "taken.txt", NodeKind::File);
+        with_node(&mut gate_passing, id(0), id(3), "mover.txt", NodeKind::File);
+
+        let replacing = Some(Replaced {
+            node: id(2),
+            sequence: 1,
+        });
+        let ops = vec![(
+            OpId(1),
+            Op::move_node(
+                id(3),
+                id(0),
+                id(1),
+                "taken.txt",
+                replacing,
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+        )];
+        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
+
+        assert_eq!(report.applied[0].vacated, Some(id(2)));
+        assert!(!report.rebased.contains(id(2)));
+    }
+
     #[test]
     fn replay_threads_the_base_and_buckets_every_outcome() {
         let mut gate_passing = tree();
@@ -2143,6 +2299,7 @@ mod tests {
             op: Op::rename(NodeId([1; 16]), "secret-name.txt", 1, AT),
             effective_name: Some("secret-name (2).txt".to_owned()),
             suffixed: true,
+            vacated: None,
         };
         let rendered = format!("{applied:?}");
 

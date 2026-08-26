@@ -45,6 +45,9 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// received-shares list, a contact book, or the owner's invite records. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
+///
+/// Which of these seal their values, and why the op-id marks do not, is
+/// [`crate::sync::bookkeeping`]'s rule.
 fn is_bookkeeping(key: &[u8]) -> bool {
     key.starts_with(DRAINED_OP_MARK_PREFIX)
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)

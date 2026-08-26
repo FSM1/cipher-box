@@ -41,7 +41,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             view.link_next(*parent, op.target);
         }
         OpKind::Delete { .. } => {
-            view.remove_node(op.target);
+            view.remove_deleted(op.target);
         }
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
@@ -251,6 +251,46 @@ mod tests {
         let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
         assert!(!view.contains(id(1)));
         assert!(base.contains(id(1)));
+    }
+
+    /// A pending folder delete renders the whole subtree gone: the host holds
+    /// descendant ids as inodes, and one still answering after its parent was
+    /// deleted is a path no walk reaches.
+    #[test]
+    fn overlay_delete_of_a_folder_renders_its_subtree_gone() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "photos", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "trip", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(3), "deep.bin", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(1), id(2), 1);
+        base.link(id(2), id(3), 1);
+
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
+
+        assert!(!view.contains(id(1)));
+        assert!(!view.contains(id(2)), "no descendant is left parentless");
+        assert!(!view.contains(id(3)));
+        assert!(base.contains(id(3)), "the base snapshot is untouched");
+    }
+
+    /// A descendant a second parent still names is that parent's node, not the
+    /// delete's to take.
+    #[test]
+    fn overlay_delete_keeps_a_descendant_another_parent_names() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "photos", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "shared", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(3), "deep.bin", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(0), id(2), 1);
+        base.link(id(1), id(3), 1);
+        base.link(id(2), id(3), 2);
+
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
+
+        assert!(!view.contains(id(1)));
+        assert_eq!(view.parent_of(id(3)), Some(id(2)));
     }
 
     #[test]
