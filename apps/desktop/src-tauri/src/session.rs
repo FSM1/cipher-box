@@ -12,8 +12,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::engine::{
-    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, SessionEnv, VaultStatus,
+    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, SessionEnv, Shell, VaultStatus,
 };
+use crate::tray;
 
 /// Fired when the engine emits, so the window re-reads what it renders.
 pub const VAULT_CHANGED: &str = "vault-changed";
@@ -32,9 +33,11 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(secret)
 }
 
-/// Where this session's stores live and how the window hears about changes.
+/// Where this session's stores live and how the window and tray hear about
+/// changes.
 fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
-    let app = app.clone();
+    let painting = app.clone();
+    let repainting = app.clone();
     Ok(SessionEnv {
         config: EngineConfig::compiled()?,
         data_local_dir: app
@@ -43,9 +46,12 @@ fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
             .map_err(|error| format!("this device has no local data directory: {error}"))?,
         home_dir: app.path().home_dir().ok(),
         keyring_service: app.config().identifier.clone(),
-        changed: Box::new(move || {
-            let _ = app.emit(VAULT_CHANGED, ());
-        }),
+        shell: Shell {
+            changed: Box::new(move || {
+                let _ = repainting.emit(VAULT_CHANGED, ());
+            }),
+            tray: Box::new(move |state| tray::paint(&painting, &state)),
+        },
     })
 }
 

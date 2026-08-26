@@ -22,6 +22,7 @@ mod errno;
 mod error;
 mod handle;
 mod inode;
+mod lease;
 mod name;
 mod ntstatus;
 mod ops;

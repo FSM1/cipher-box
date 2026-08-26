@@ -26,7 +26,7 @@ function vaultStatus(over: Partial<VaultStatus> = {}): VaultStatus {
     deadLetters: 0,
     provisioned: true,
     warnings: [],
-    mount: { path: '/home/member/CipherBox', refusal: null },
+    mount: { state: 'mounted', path: '/home/member/CipherBox' },
     ...over,
   };
 }
@@ -268,7 +268,7 @@ describe('the front door', () => {
         phase: 'signedIn',
         vault: vaultStatus({
           items: 4,
-          mount: { path: null, refusal: '/home/member/CipherBox cannot be mounted on' },
+          mount: { state: 'refused', reason: '/home/member/CipherBox cannot be mounted on' },
         }),
       }),
       actions()
@@ -278,6 +278,16 @@ describe('the front door', () => {
     expect(refused?.textContent).toBe('/home/member/CipherBox cannot be mounted on');
     // A mount failure is not a sign-in failure: the vault still reads.
     expect(root.querySelector('[data-vault="items"]')?.textContent).toBe('4 items in your vault');
+  });
+
+  it('says the vault is still being mounted rather than that it is missing', () => {
+    renderShell(
+      root,
+      model({ phase: 'signedIn', vault: vaultStatus({ mount: { state: 'opening' } }) }),
+      actions()
+    );
+    expect(root.querySelector('[data-vault="mount-opening"]')).not.toBeNull();
+    expect(root.querySelector('[data-vault="mount-refused"]')).toBeNull();
   });
 
   it('raises nothing when the engine raised nothing', () => {

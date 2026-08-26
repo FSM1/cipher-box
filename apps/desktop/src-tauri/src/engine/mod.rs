@@ -20,19 +20,20 @@ mod seams;
 
 use std::collections::VecDeque;
 use std::fs;
+use std::mem;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir, measured_storage_policy};
-use cipherbox_engine::facade::{Engine, Event, EventStream, LoginSecret};
+use cipherbox_engine::facade::{Command, Engine, Event, EventStream, LoginSecret};
 use cipherbox_engine::seams::CredentialStore;
 use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
-use crate::mount::{KernelOp, MountStatus, Projection};
+use crate::mount::{FromMount, MountStatus, Projection};
 
 pub use config::EngineConfig;
 pub use seams::DesktopSeamTypes;
@@ -91,6 +92,52 @@ pub struct VaultWarning {
     /// which record it happened to: an IPNS name resolves for anyone who reads
     /// it off this window, and links a member to one object's write history.
     pub detail: Option<String>,
+}
+
+/// What the tray renders. Off [`Engine::status`] rather than a rendered
+/// snapshot: the tray is a status line, and the snapshot's overlay rebuild has
+/// no place on the path the mount is served from.
+#[derive(Debug)]
+pub enum TrayState {
+    /// No session is live on this device.
+    SignedOut,
+    /// A live session.
+    Live {
+        /// The staleness rung at read time.
+        staleness: Staleness,
+        /// Whether the vault is also projected as a filesystem, and where. A
+        /// mount failure never fails the session, and the tray is the surface
+        /// that is up when the window is not (blueprint/desktop.md
+        /// "Lifecycle").
+        mount: MountStatus,
+        /// Queued changes that will never publish — the parked writes.
+        parked: usize,
+        /// Whether `parked` rose past what the member has already been told,
+        /// which is the edge the notification fires on.
+        newly_parked: bool,
+        /// Conditions the engine raised. A warning is a state of its own and
+        /// never a rung on the staleness ladder.
+        warnings: Vec<VaultWarning>,
+    },
+    /// A live session whose state could not be read. Never rendered as a
+    /// healthy one: a tray still reading "Synced" is worse than one saying it
+    /// does not know.
+    Unreadable(String),
+}
+
+/// The parked-writes anti-spam watermark: what the member has been told.
+#[derive(Default)]
+struct ParkedWrites(usize);
+
+impl ParkedWrites {
+    /// Whether `parked` is news. A count that holds or falls is not — and a
+    /// fall re-arms the notification, so the next parked write is announced
+    /// (blueprint/desktop.md "Conflicts, dead letters, and rotation").
+    fn rose_to(&mut self, parked: usize) -> bool {
+        let news = parked > self.0;
+        self.0 = parked;
+        news
+    }
 }
 
 /// The warnings this session has raised, newest last.
@@ -155,6 +202,8 @@ fn rung(staleness: Staleness) -> &'static str {
 enum Request {
     /// Read the vault's status, and answer here.
     Status(oneshot::Sender<Result<VaultStatus, String>>),
+    /// Force a refresh with nocache semantics — the tray's "Sync Now".
+    Refresh(oneshot::Sender<Result<(), String>>),
     /// Delete this device's stored refresh token. A logout is not a quit: the
     /// durable stores survive both, but the credential survives only the quit
     /// (blueprint/desktop.md, "Lifecycle").
@@ -263,15 +312,29 @@ impl EngineHost {
 
     /// Reads the live vault's status.
     pub async fn status(&self) -> Result<VaultStatus, String> {
+        self.ask(Request::Status)?.await.map_err(|_| NO_SESSION)?
+    }
+
+    /// Forces a refresh with nocache semantics — the tray's "Sync Now"
+    /// (blueprint/desktop.md "Tray").
+    pub async fn refresh(&self) -> Result<(), String> {
+        self.ask(Request::Refresh)?.await.map_err(|_| NO_SESSION)?
+    }
+
+    /// Files one request with the live session and hands back where its answer
+    /// will arrive, or refuses because there is no session to ask.
+    fn ask<T>(
+        &self,
+        request: impl FnOnce(oneshot::Sender<T>) -> Request,
+    ) -> Result<oneshot::Receiver<T>, String> {
         let (reply, answer) = oneshot::channel();
-        {
-            let live = self.live.lock().map_err(|_| POISONED)?;
-            let live = live.as_ref().ok_or(NO_SESSION)?;
-            live.requests
-                .send(Request::Status(reply))
-                .map_err(|_| NO_SESSION)?;
-        }
-        answer.await.map_err(|_| NO_SESSION)?
+        let live = self.live.lock().map_err(|_| POISONED)?;
+        live.as_ref()
+            .ok_or(NO_SESSION)?
+            .requests
+            .send(request(reply))
+            .map_err(|_| NO_SESSION)?;
+        Ok(answer)
     }
 
     /// Claims the one engine slot and spawns its thread, handing back where the
@@ -322,8 +385,42 @@ pub struct SessionEnv {
     pub home_dir: Option<PathBuf>,
     /// The OS keyring service name holding the rotating refresh token.
     pub keyring_service: String,
-    /// Called when the engine emits, so the shell re-reads what it renders.
+    /// What the session paints when its state moves.
+    pub shell: Shell,
+}
+
+/// The two surfaces a session paints: the window, which re-reads what it
+/// renders, and the tray, which is handed the state directly.
+pub struct Shell {
+    /// Called when the engine emits, so the window re-reads what it renders.
     pub changed: Box<dyn Fn() + Send>,
+    /// Called with the tray's state whenever it moves.
+    pub tray: Box<dyn Fn(TrayState) + Send>,
+}
+
+/// One repaint for a whole burst of events: repainting each one would cost a
+/// snapshot rebuild on the very engine the mount is served from.
+async fn repaint(
+    shell: &Shell,
+    projection: &mut Projection,
+    warnings: &Warnings,
+    parked: &mut ParkedWrites,
+) {
+    (shell.changed)();
+    let mount = projection.status();
+    (shell.tray)(match projection.engine_mut().status().await {
+        Ok(status) => {
+            let count = status.dead_letters.len();
+            TrayState::Live {
+                staleness: status.staleness,
+                mount,
+                parked: count,
+                newly_parked: parked.rose_to(count),
+                warnings: warnings.list(),
+            }
+        }
+        Err(error) => TrayState::Unreadable(error.to_string()),
+    });
 }
 
 /// The API's own account identifier for this login secret: the compressed SEC1
@@ -375,7 +472,7 @@ fn host_engine(
         let _ = verdict.send(Ok(()));
 
         let projection = Projection::open(engine, session.home_dir.as_deref(), &account_dir);
-        serve(projection, credentials, inbox, events, session.changed).await;
+        serve(projection, credentials, inbox, events, session.shell).await;
     });
 }
 
@@ -427,14 +524,15 @@ async fn start_engine(
 
 /// What woke the session loop. One loop and one owner: the projection holds the
 /// engine, so a status read, an engine event and a kernel operation are served
-/// in turn rather than contending for it.
+/// in turn rather than contending for it. The mount is a wake source of its own
+/// so that making it never becomes something the loop waits out.
 enum Woke {
     /// The host asked for something, or closed the channel — logout or quit.
     Request(Option<Request>),
     /// The engine emitted, or dropped its stream.
     Event(Option<Event>),
-    /// The kernel asked the mount for something, or its session ended.
-    Op(Option<KernelOp>),
+    /// The mount woke the session: an operation, its end, or its verdict.
+    Mount(FromMount),
 }
 
 /// Serves the session until the host closes the request channel (logout or
@@ -444,14 +542,16 @@ async fn serve(
     credentials: KeyringCredentialStore,
     mut inbox: mpsc::UnboundedReceiver<Request>,
     mut events: EventStream,
-    changed: Box<dyn Fn() + Send>,
+    shell: Shell,
 ) {
     let mut warnings = Warnings::default();
+    let mut parked = ParkedWrites::default();
+    repaint(&shell, &mut projection, &warnings, &mut parked).await;
     loop {
         let woke = tokio::select! {
             request = inbox.recv() => Woke::Request(request),
             event = events.next() => Woke::Event(event),
-            op = projection.next_op() => Woke::Op(op),
+            woken = projection.next() => Woke::Mount(woken),
         };
         match woke {
             // The engine only stops emitting by dropping, and this loop is what
@@ -460,6 +560,32 @@ async fn serve(
             Woke::Request(Some(Request::Status(reply))) => {
                 let _ = reply.send(status(&mut projection, &warnings).await);
             }
+            // The pass is filed here and awaited elsewhere: its network legs
+            // are the one thing a host may not serve a kernel behind
+            // (blueprint/desktop.md "the never-block law"). The mint that
+            // answers a refresh on a vault-less account is not a pass and has
+            // no filed form.
+            Woke::Request(Some(Request::Refresh(reply))) => {
+                match projection.engine_mut().file_forced_pass() {
+                    Ok(Some(pass)) => {
+                        tokio::task::spawn_local(async move {
+                            let _ = reply.send(pass.landed().await.map_err(|e| e.to_string()));
+                        });
+                    }
+                    Ok(None) => {
+                        let minted = projection
+                            .engine_mut()
+                            .command(Command::ManualRefresh)
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| error.to_string());
+                        let _ = reply.send(minted);
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error.to_string()));
+                    }
+                }
+            }
             // A keyring that refuses the delete is reported to no one: the
             // session is ending either way, and there is no surface left to
             // tell. It is the next login's `store` that overwrites it.
@@ -467,19 +593,56 @@ async fn serve(
                 let _ = credentials.clear_refresh_token().await;
             }
             Woke::Event(Some(event)) => {
-                warnings.record(&event);
-                projection.absorb(&event).await;
-                if moves_the_status(&event) {
-                    changed();
+                if absorb_burst(&mut projection, &mut warnings, &mut events, event).await {
+                    repaint(&shell, &mut projection, &warnings, &mut parked).await;
                 }
             }
-            Woke::Op(Some(op)) => projection.answer(op).await,
-            // Unmounted from outside the app: the status moved without an
-            // engine event behind it, so this is the only thing that repaints.
-            Woke::Op(None) => changed(),
+            Woke::Mount(FromMount::Op(op)) => projection.answer(op).await,
+            Woke::Mount(FromMount::Ended) => {
+                repaint(&shell, &mut projection, &warnings, &mut parked).await;
+            }
+            Woke::Mount(FromMount::Landed(landed)) => {
+                projection = projection.settled(landed);
+                repaint(&shell, &mut projection, &warnings, &mut parked).await;
+            }
         }
     }
-    projection.tear_down();
+    (shell.tray)(TrayState::SignedOut);
+    projection.tear_down().await;
+}
+
+/// The most events one wake folds together. The loop must return to its other
+/// wake sources: the kernel is served from here too, and it may not wait out an
+/// engine that keeps emitting. Anything past the cap wakes this arm again.
+const MAX_BURST: usize = 64;
+
+/// Fold `event` and what is already queued behind it into the warnings and the
+/// kernel's caches, and report whether any of it moved what a host renders.
+///
+/// One push invalidation per run of one kind: the render a later event of that
+/// kind drives subsumes what its predecessors would have pushed, so the run's
+/// last is the one worth folding in.
+async fn absorb_burst(
+    projection: &mut Projection,
+    warnings: &mut Warnings,
+    events: &mut EventStream,
+    event: Event,
+) -> bool {
+    let mut moved = false;
+    let mut current = event;
+    for folded in 1..=MAX_BURST {
+        warnings.record(&current);
+        moved |= moves_the_status(&current);
+        // Nothing is taken off the stream past the cap: an event taken and not
+        // folded in would be an invalidation the kernel never hears about.
+        let next = (folded < MAX_BURST).then(|| events.try_next()).flatten();
+        if next.as_ref().map(mem::discriminant) != Some(mem::discriminant(&current)) {
+            projection.absorb(&current).await;
+        }
+        let Some(next) = next else { break };
+        current = next;
+    }
+    moved
 }
 
 async fn status(projection: &mut Projection, warnings: &Warnings) -> Result<VaultStatus, String> {
@@ -513,6 +676,37 @@ mod tests {
     use cipherbox_engine::seams::OpId;
     use cipherbox_engine::sync::DeadLetterReason;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A session loop under a counting repaint seam: `painted` rises once per
+    /// rebuild the window is asked for.
+    struct Counted {
+        shell: Shell,
+        painted: Arc<AtomicUsize>,
+        credentials: KeyringCredentialStore,
+        requests: mpsc::UnboundedSender<Request>,
+        inbox: mpsc::UnboundedReceiver<Request>,
+    }
+
+    fn counted(session: &SessionEnv) -> Counted {
+        let painted = Arc::new(AtomicUsize::new(0));
+        let counting = painted.clone();
+        let (requests, inbox) = mpsc::unbounded_channel();
+        Counted {
+            shell: Shell {
+                changed: Box::new(move || {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                }),
+                tray: Box::new(|_| {}),
+            },
+            painted,
+            credentials: KeyringCredentialStore::new(&session.keyring_service)
+                .expect("a credential store"),
+            requests,
+            inbox,
+        }
+    }
 
     fn account_dir(data_local_dir: &Path, secret: &[u8]) -> Result<PathBuf, String> {
         account_data_dir(data_local_dir, &account_id(secret)?).map_err(|error| error.to_string())
@@ -535,7 +729,10 @@ mod tests {
             data_local_dir: data_local_dir.to_path_buf(),
             home_dir: Some(data_local_dir.join("home")),
             keyring_service: "com.cipherbox.desktop.test".to_owned(),
-            changed: Box::new(|| {}),
+            shell: Shell {
+                changed: Box::new(|| {}),
+                tray: Box::new(|_| {}),
+            },
         }
     }
 
@@ -627,8 +824,8 @@ mod tests {
     /// The session outlives a mount it could not make: the engine is still
     /// this session's to read from, and the refusal is reported beside the
     /// vault rather than instead of it (blueprint/desktop.md "Lifecycle").
-    #[test]
-    fn a_mount_that_cannot_be_made_leaves_the_session_standing() {
+    #[tokio::test]
+    async fn a_mount_that_cannot_be_made_leaves_the_session_standing() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let session = session_env(dir.path());
         let home = session.home_dir.clone().expect("the test env names a home");
@@ -642,16 +839,23 @@ mod tests {
             let account_dir = dir.path().join("account");
             let engine = unstarted_engine(&session, &account_dir);
             let mut projection = Projection::open(engine, home_dir, &account_dir);
+            if projection.status() == MountStatus::Opening {
+                let FromMount::Landed(landed) = projection.next().await else {
+                    panic!("a mount being made lands, whichever way it goes");
+                };
+                projection = projection.settled(landed);
+            }
 
-            let mount = projection.status();
-            assert_eq!(mount.path, None);
-            assert!(mount.refusal.is_some(), "a session with no mount says why");
+            assert!(
+                matches!(projection.status(), MountStatus::Refused { .. }),
+                "a session with no mount says why",
+            );
             assert_eq!(
                 projection.engine_mut().profile(),
                 &session.config.profile,
                 "the session's engine is still here to serve reads",
             );
-            projection.tear_down();
+            projection.tear_down().await;
         }
     }
 
@@ -848,6 +1052,120 @@ mod tests {
         assert!(moves_the_status(&Event::StalenessChanged {
             level: Staleness::Stale,
         }));
+    }
+
+    /// A burst of status-moving events costs the window one rebuild, not one
+    /// per event: every rebuild is a snapshot render on the engine the mount is
+    /// served from.
+    #[tokio::test]
+    async fn a_burst_of_events_costs_one_repaint_whatever_its_size() {
+        for burst in [1usize, 8, 64] {
+            let dir = tempfile::tempdir().expect("a temp dir");
+            let session = session_env(dir.path());
+            let account_dir = dir.path().join("account");
+            // No home: the engine stands alone, so the burst is the only thing
+            // this loop is answering.
+            let projection =
+                Projection::open(unstarted_engine(&session, &account_dir), None, &account_dir);
+            let Counted {
+                shell,
+                painted,
+                credentials,
+                // Held open, so the loop ends on the event stream rather than
+                // on a closed inbox.
+                requests: _requests,
+                inbox,
+            } = counted(&session);
+
+            let (sink, events) = EventStream::piped();
+            for _ in 0..burst {
+                sink.send(Event::SnapshotUpdated);
+            }
+            // Closing the stream ends the loop once the burst has drained.
+            drop(sink);
+
+            tokio::task::LocalSet::new()
+                .run_until(serve(projection, credentials, inbox, events, shell))
+                .await;
+
+            assert_eq!(
+                painted.load(Ordering::Relaxed),
+                2,
+                "{burst} events: one paint on start, one for the burst",
+            );
+        }
+    }
+
+    /// The mount is a wake source of its own, so a mount that takes seconds is
+    /// a mount point that is not there yet rather than a session that has
+    /// stopped answering.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn a_status_read_lands_while_the_mount_is_still_being_made() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let session = session_env(dir.path());
+        let account_dir = dir.path().join("account");
+        // A mount that does not land until this test lets it.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let projection = Projection::Opening {
+            engine: Box::new(unstarted_engine(&session, &account_dir)),
+            spill: cipherbox_fuse::SpillArea::production(&account_dir).expect("a spill area"),
+            at: dir.path().join("CipherBox"),
+            landing: tokio::task::spawn_blocking(move || {
+                let _ = held.recv();
+                Err("the test released the mount".to_owned())
+            }),
+        };
+        assert_eq!(projection.status(), MountStatus::Opening);
+
+        let Counted {
+            shell,
+            credentials,
+            requests,
+            inbox,
+            ..
+        } = counted(&session);
+        let (_sink, events) = EventStream::piped();
+
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let serving =
+                    tokio::task::spawn_local(serve(projection, credentials, inbox, events, shell));
+                let (reply, answer) = oneshot::channel();
+                requests
+                    .send(Request::Status(reply))
+                    .expect("the session is serving");
+                assert!(
+                    answer.await.is_ok(),
+                    "the session answers while the mount is outstanding",
+                );
+                // Ending the session is what stops the loop; the mount never
+                // did. The tear-down waits the mount out, so it is released
+                // here rather than left for the shutdown bound to expire on.
+                drop(requests);
+                drop(release);
+                serving.await.expect("the session loop ends cleanly");
+            })
+            .await;
+    }
+
+    /// A dead letter that keeps re-reporting is announced once: the watermark is
+    /// what the member has already been told, and only more than that is news.
+    #[test]
+    fn parked_writes_are_announced_on_the_rise_and_not_on_every_report() {
+        let mut parked = ParkedWrites::default();
+        assert!(!parked.rose_to(0), "an empty queue is not news");
+        assert!(parked.rose_to(1));
+        for _ in 0..8 {
+            assert!(
+                !parked.rose_to(1),
+                "the same parked write is announced once"
+            );
+        }
+        assert!(parked.rose_to(3), "more parked work is news again");
+        assert!(!parked.rose_to(2));
+        // …and once some of it clears, the next arrival is news once more.
+        assert!(parked.rose_to(3));
     }
 
     /// Hosts render the rung, so each one crosses as its stable name.

@@ -1283,10 +1283,15 @@ fn queued(staging: &InMemoryStagingStore) -> usize {
         .len()
 }
 
-/// Every spill file's bytes, in a stable order.
+/// Every spill file's bytes, in a stable order. Each area claims a directory of
+/// its own under the spill root, so the files sit one level down; the lock that
+/// claims each is a file beside those directories.
 fn spill_files(dir: &Path) -> Vec<Vec<u8>> {
     let mut files: Vec<Vec<u8>> = std::fs::read_dir(dir)
         .expect("the spill dir reads")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| path.is_dir())
+        .flat_map(|area| std::fs::read_dir(area).expect("an area reads"))
         .map(|entry| std::fs::read(entry.expect("an entry").path()).expect("spill bytes"))
         .collect();
     files.sort();

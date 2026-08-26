@@ -35,6 +35,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+use crate::adapters::stale;
 use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
@@ -408,10 +409,11 @@ pub struct FuseMount {
 }
 
 impl FuseMount {
-    /// Mount at `mountpoint`, preparing it first ([`prepare`]), under one
-    /// backend's [`MountProfile`] and the shared [`floor_options`].
+    /// Mount at `mountpoint`, cleared ([`stale::clear`]) and prepared
+    /// ([`prepare`]) first, under one backend's [`MountProfile`].
     pub(crate) fn at(mountpoint: &Path, profile: MountProfile) -> io::Result<Self> {
         let options = mount_options(profile.options)?;
+        stale::clear(mountpoint)?;
         prepare(mountpoint)?;
         let (sender, ops) = mpsc::unbounded();
         let session = Session::new(FuseSession { ops: sender }, mountpoint, &options)?;

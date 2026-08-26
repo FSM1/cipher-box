@@ -22,6 +22,10 @@ zeroize.workspace = true
 # own construction site — see `SpillArea::production`.
 getrandom.workspace = true
 
+# The spill area's lease: one exclusive OS file lock, `flock` on unix and
+# `LockFileEx` on Windows, without the `unsafe` this crate forbids.
+fs4 = { version = "1", default-features = false, features = ["sync"] }
+
 [target.'cfg(unix)'.dependencies]
 # errno constants for the shared VfsError mapping, which every unix mount
 # technology answers its kernel from.

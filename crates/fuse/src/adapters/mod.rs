@@ -7,3 +7,5 @@ pub mod fuse;
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod stale;
