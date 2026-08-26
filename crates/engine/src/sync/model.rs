@@ -234,12 +234,11 @@ impl Snapshot {
     /// no walk can reach. A node another link still names is kept, and so is
     /// everything under it.
     ///
-    /// Call it where the node is already unlinked; a node some parent still
-    /// links is left alone.
+    /// Call it where the node is already unlinked.
     pub fn remove_unreachable(&mut self, id: NodeId) {
         let mut pending = vec![id];
         while let Some(node) = pending.pop() {
-            if node == self.root || !self.links_to(node).is_empty() {
+            if node == self.root || self.links.iter().any(|l| l.child == node) {
                 continue;
             }
             let orphaned: Vec<NodeId> = self

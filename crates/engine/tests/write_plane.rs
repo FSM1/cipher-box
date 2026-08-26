@@ -3238,6 +3238,58 @@ fn a_delete_whose_unlink_never_published_reclaims_nothing() {
     );
 }
 
+/// A delete enumerates a subtree it cannot prove is reached from here alone —
+/// a child ref is wire data, and nothing binds a node to the folder naming it.
+/// A node a surviving parent also names is therefore not this delete's to stop
+/// paying for: its record has to stay held and re-PUT, or the availability cut
+/// lands on live data.
+#[test]
+fn a_delete_leaves_a_node_the_surviving_parent_still_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let deep = child_id(&engine, photos, "deep.bin");
+
+    // Another writer links the same node under the root as well.
+    concurrent_root_add(&world.record_store, &blocks, file_ref(deep.0, "deep.bin"));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(engine.view()).unwrap().attrs(deep).is_some(),
+        "the second link is in gate-passing state"
+    );
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.view()).unwrap();
+    assert!(view.attrs(photos).is_none(), "the delete's own target goes");
+    assert!(
+        view.attrs(deep).is_some(),
+        "a node the root still names survives the reclamation of the folder it also sat under"
+    );
+}
+
 /// A delete can ack its unlink and still lose the confirm — a crash in the
 /// window, or a registry that will not answer. Nothing local survives to
 /// re-derive the doomed set from: the parent no longer names the target, so the

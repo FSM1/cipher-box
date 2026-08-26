@@ -31,9 +31,8 @@ pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adop
 /// Merge one folder's gate-passing children into `snapshot` **in place**,
 /// reporting whether the merge changed anything. Children the folder no longer
 /// names are unlinked, and dropped with their whole detached subtree once no
-/// parent links them ([`Snapshot::remove_unreachable`]) — a delete another
-/// device published arrives here, and dropping only the named child would leave
-/// its descendants in the snapshot with no path from the root.
+/// parent links them ([`Snapshot::remove_unreachable`]) — this is where a delete
+/// another device published arrives.
 ///
 /// The change report is what keeps a repeated projection of the same body from
 /// repainting the host: the focus-window refresh re-merges a folder every tick.

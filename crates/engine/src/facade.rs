@@ -6590,13 +6590,10 @@ where {
     /// operation with no node in view.
     ///
     /// A folder becomes the focus window; a file joins
-    /// [`FocusWindow::open_files`], the queue the tick's file leg drains, most
-    /// recent last and capped at [`MAX_FOCUS_FILES`] — a window is about what is
-    /// in view now, so a full queue drops its oldest entry rather than refusing
-    /// the file the host just looked at. Only a node this
-    /// device's own gate-passing state calls a file takes the file path, so a
-    /// node it has not resolved yet keeps the window behaviour it had before it
-    /// was projected.
+    /// [`FocusWindow::open_files`], the queue the tick's file leg drains. Only a
+    /// node this device's own gate-passing state calls a file takes the file
+    /// path, so a node it has not resolved yet keeps the window behaviour it had
+    /// before it was projected.
     ///
     /// Nothing resolves here: a kernel callback never waits on the record plane
     /// (blueprint/desktop.md "the never-block law"). A `true` answer is the

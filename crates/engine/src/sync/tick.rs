@@ -20,7 +20,8 @@ use crate::sync::model::Snapshot;
 use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
-/// The open focus of the UI: the folder in view and any open shared scopes.
+/// The open focus of the UI: the folder in view, any open shared scopes, and
+/// the files in view.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FocusWindow {
     /// The open folder driving the window; `None` when no folder is open.
@@ -30,6 +31,10 @@ pub struct FocusWindow {
     pub open_shared_scopes: Vec<NodeId>,
     /// File nodes a host operation put in view, most recent last. The tick
     /// drains what it serves, so this is a queue rather than standing state.
+    ///
+    /// Bounded by `MAX_FOCUS_FILES`: a window is about what is in view now, so
+    /// a full queue drops its oldest entry rather than refusing the file the
+    /// host just looked at.
     pub open_files: Vec<NodeId>,
 }
 

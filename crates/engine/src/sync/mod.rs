@@ -19,7 +19,7 @@
 
 pub mod boot;
 pub(crate) mod cancel;
-pub mod doomed;
+pub(crate) mod doomed;
 pub(crate) mod drain;
 pub mod model;
 pub mod op;
@@ -36,10 +36,6 @@ pub mod tick;
 pub(crate) mod upload_mark;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
-pub use doomed::{
-    DOOMED_JOURNAL_PREFIX, Reclamation, decode_reclamation, doomed_journal_key, encode_reclamation,
-    journalled_keys,
-};
 pub use drain::{
     BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
     owner_scoped_key, owner_tag,

@@ -74,7 +74,8 @@ use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusa
 use crate::storage_policy::StoragePolicy;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::{
-    Reclamation, decode_reclamation, doomed_journal_key, encode_reclamation, journalled_keys,
+    MAX_JOURNAL_REPLAYS, Reclamation, decode_reclamation, doomed_journal_key, encode_reclamation,
+    journalled_keys,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -629,10 +630,13 @@ where
         let Ok(staged) = self.staging.staged_keys().await else {
             return report;
         };
-        self.settle_journalled_deletes(scope, &staged).await;
+        // An X25519 base-point multiply, so the pass derives it once and threads
+        // it through every consumer below.
+        let owner = owner_tag(scope.enc_secret);
+        self.settle_journalled_deletes(&owner, &staged).await;
         if let Some(owed) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, &staged),
-            &owner_tag(scope.enc_secret),
+            &owner,
             self.api,
             self.gateway,
             self.http,
@@ -1371,10 +1375,9 @@ where
     /// bytes pinned that nothing names, and a pin row left charged is a leak
     /// where unpinning live content is loss (blueprint/engine.md "Retirement").
     ///
-    /// The window between the ack and the confirm is the one local state cannot
-    /// recover from — the parent no longer names the target, so a retry finds
-    /// nothing to remove — so what the unlink earned goes to the doomed-name
-    /// journal first ([`Self::settle_journalled_deletes`] replays it).
+    /// What the unlink earns therefore goes to the doomed-name journal
+    /// ([`crate::sync::doomed`]), which [`Self::settle_journalled_deletes`]
+    /// replays.
     ///
     /// This is a reclamation and an availability cut, never a re-key. An
     /// unlinked node is in no eager set, so rotation never reaches it: its read
@@ -1419,12 +1422,20 @@ where
         .await
         .map_err(Halt::from)?;
         let reclamation = self.owed_by_delete(target, &doomed);
-        let journalled = self.journal_doomed(scope, target, &reclamation).await;
-        if self.settle_reclamation(scope, &reclamation).await && journalled {
-            let _ = self
-                .staging
-                .remove_staged_bytes(&doomed_journal_key(&owner_tag(scope.enc_secret), target))
-                .await;
+        let owner = owner_tag(scope.enc_secret);
+        let key = doomed_journal_key(&owner, target);
+        let journalled = self.journal_doomed(&key, target, &reclamation).await;
+        let residue = self.settle_reclamation(&owner, &reclamation).await;
+        match (journalled, residue) {
+            (true, residue) => self.update_journal(&key, &reclamation, residue).await,
+            // No durable entry to retry from, so the session-lived orphan set is
+            // the only retry there is.
+            (false, Some(residue)) => {
+                for name in residue.names() {
+                    self.orphan_heads.record(&name);
+                }
+            }
+            (false, None) => {}
         }
         Ok(())
     }
@@ -1432,41 +1443,63 @@ where
     /// Write what the unlink just earned to the doomed-name journal, reporting
     /// whether it landed. A store that will not take it leaves this pass's own
     /// retries as the only ones there are.
-    async fn journal_doomed(
-        &self,
-        scope: &DrainScope<'_>,
-        target: NodeId,
-        reclamation: &Reclamation,
-    ) -> bool {
-        if reclamation.is_empty() {
+    ///
+    /// Refuses an entry the replay would refuse, so no build can write one its
+    /// own settle path always rejects.
+    async fn journal_doomed(&self, key: &[u8], target: NodeId, reclamation: &Reclamation) -> bool {
+        if reclamation.is_empty() || !reclamation.is_for(target) {
             return false;
         }
         let Ok(entry) = encode_reclamation(reclamation) else {
             return false;
         };
-        self.staging
-            .put_staged_bytes(
-                &doomed_journal_key(&owner_tag(scope.enc_secret), target),
-                &entry,
-            )
-            .await
-            .is_ok()
+        self.staging.put_staged_bytes(key, &entry).await.is_ok()
+    }
+
+    /// Replace a journal entry with what its settle left owing: removed once
+    /// nothing is, rewritten when a leg landed, untouched when none did.
+    async fn update_journal(
+        &self,
+        key: &[u8],
+        previous: &Reclamation,
+        residue: Option<Reclamation>,
+    ) {
+        match residue {
+            None => {
+                let _ = self.staging.remove_staged_bytes(key).await;
+            }
+            Some(residue) if residue != *previous => {
+                if let Ok(entry) = encode_reclamation(&residue) {
+                    let _ = self.staging.put_staged_bytes(key, &entry).await;
+                }
+            }
+            Some(_) => {}
+        }
     }
 
     /// Replay every delete this owner journaled and did not settle, off the
     /// pass's own key listing. An entry only leaves once its reclamation lands,
     /// so a crashed or refused confirm is settled here rather than lost.
-    async fn settle_journalled_deletes(&self, scope: &DrainScope<'_>, staged: &[Vec<u8>]) {
-        for key in journalled_keys(&owner_tag(scope.enc_secret), staged) {
+    ///
+    /// An entry that does not answer to the target its key names is refused
+    /// rather than replayed ([`Reclamation::is_for`]).
+    ///
+    /// Bounded per pass: a device that deleted a great deal while the registry
+    /// was unreachable would otherwise spend a whole tick re-retiring, and the
+    /// entries a pass settles leave, so the rest are reached on the next one.
+    async fn settle_journalled_deletes(&self, owner: &[u8; 32], staged: &[Vec<u8>]) {
+        for (key, target) in journalled_keys(owner, staged)
+            .into_iter()
+            .take(MAX_JOURNAL_REPLAYS)
+        {
             let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
                 continue;
             };
-            let Some(reclamation) = decode_reclamation(&entry) else {
+            let Some(reclamation) = decode_reclamation(&entry).filter(|r| r.is_for(target)) else {
                 continue;
             };
-            if self.settle_reclamation(scope, &reclamation).await {
-                let _ = self.staging.remove_staged_bytes(&key).await;
-            }
+            let residue = self.settle_reclamation(owner, &reclamation).await;
+            self.update_journal(&key, &reclamation, residue).await;
         }
     }
 
@@ -1562,11 +1595,7 @@ where
     /// What the unlink just earned: the subtree's names, and the target's own
     /// content debt.
     ///
-    /// Quoted only once the shortened parent is live, so the debt is one the
-    /// publish already earned — that landing is what makes
-    /// [`OwingRecord::Retired`] a fact rather than a claim.
-    ///
-    /// The debt is still withheld unless the base agrees the target is now
+    /// The debt is withheld unless the base agrees the target is now
     /// unlinked: [`Self::publish_delete`] read and repainted the parent's own
     /// listing on the way in, so for the target — and only for the target —
     /// that answer is drawn from a record this pass actually resolved.
@@ -1593,36 +1622,54 @@ where
         }
     }
 
-    /// Settle one journaled reclamation, reporting whether every leg landed —
-    /// which is what licenses dropping its journal entry. A refused registry
-    /// call does not fail the op: the unlink is already live, and the entry that
-    /// stays behind is the retry.
+    /// Settle one journaled reclamation, returning what it still owes — `None`
+    /// once every leg has landed, which is what licenses dropping its journal
+    /// entry. A refused registry call does not fail the op: the unlink is
+    /// already live, and the residue is the retry.
     ///
-    /// Idempotent on every leg: the retire ledger holds an entry it already has,
-    /// registry retirement is a server-side no-op on a replay, and the local
-    /// drops are removals.
-    async fn settle_reclamation(&self, scope: &DrainScope<'_>, reclamation: &Reclamation) -> bool {
+    /// A leg that lands leaves the residue, so it never runs twice. The content
+    /// debt in particular must not: the retire ledger settles and deletes its
+    /// own entry, so re-owing a paid debt would re-inflate the pending-reclaim
+    /// figure on every pass a name retire keeps failing.
+    ///
+    /// Idempotent on what it does replay: registry retirement is a server-side
+    /// no-op on a repeat, and the local drops are removals.
+    async fn settle_reclamation(
+        &self,
+        owner: &[u8; 32],
+        reclamation: &Reclamation,
+    ) -> Option<Reclamation> {
         if !reclamation.owed.is_empty()
             && StagingRetireLedger::new(self.staging)
-                .owe(&owner_tag(scope.enc_secret), &reclamation.owed)
+                .owe(owner, &reclamation.owed)
                 .await
                 .is_err()
         {
             // Leaving the bytes pinned is the lawful side of this failure: the
             // unlink is already live, and an unpin the ledger never recorded is
             // one nothing can account for.
-            return false;
+            return Some(reclamation.clone());
         }
         let retired = retire(self.api, &reclamation.names()).await.is_ok();
-        // Unconditional: whatever the registry answered, this device must stop
-        // re-PUTting records no parent references.
+        // Whatever the registry answered, this device must stop re-PUTting
+        // records no parent references — but only those. The walk enumerates a
+        // subtree it cannot prove is reached from here alone, and the shortened
+        // parent's own repaint has already pruned what is unreachable
+        // ([`Snapshot::remove_unreachable`]), so a node still linked is one a
+        // surviving parent names and its record has to stay alive.
         let mut held = self.held.borrow_mut();
         let mut base = self.base.borrow_mut();
         for (node, _) in &reclamation.doomed {
+            if !base.links_to(*node).is_empty() {
+                continue;
+            }
             held.remove(&node.0);
             base.remove_node(*node);
         }
-        retired
+        (!retired).then(|| Reclamation {
+            doomed: reclamation.doomed.clone(),
+            owed: Vec::new(),
+        })
     }
 
     /// The one plan behind rename, relink, and move: relocate a child ref,

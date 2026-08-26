@@ -954,6 +954,7 @@ mod tests {
                 DRAINED_OP_MARK_PREFIX,
                 PUBLISHED_OP_MARK_PREFIX,
                 RETIRE_LEDGER_PREFIX,
+                DOOMED_JOURNAL_PREFIX,
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
                 INVITE_RECORDS_PREFIX,

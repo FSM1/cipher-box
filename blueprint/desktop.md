@@ -226,14 +226,18 @@ navigation (FSM1/cipher-box-next#33 D2):
   Finder windows behave like browser tabs. Everything else refreshes on
   access.
 - `getattr` on a file puts **that file** in view rather than its parent, so a
-  listing produces a correlated burst of per-child record resolves at the
-  routing endpoints — one per entry the host stats, inside one tick. Before this
-  leg existed, a child's own name was resolved only when someone deliberately
-  opened it, so the resolve pattern distinguished browsing from reading; it no
-  longer does. What an on-path or endpoint observer gains is the fan-out and
-  timing of a directory's contents, which the routing plane already exposes per
-  resolve; names, kinds, sizes and bodies stay sealed, and `MAX_FOCUS_FILES`
-  bounds the burst to the window rather than to the listing.
+  listing produces a correlated burst of per-child record resolves — one per
+  entry the host stats that is also past the staleness threshold, inside one
+  tick. Before this leg existed a child's own name was resolved only when
+  someone deliberately opened it, so the resolve pattern distinguished browsing
+  from reading; it no longer does. This is a **new** exposure, not a repackaged
+  one: child `ipnsName`s ride the parent's sealed read-body, so co-resolution is
+  the one signal that hands an endpoint a sibling-set fingerprint — a durable
+  linkage of names to a common folder, and at the CipherBox accelerator an
+  identity-linked one. Names, kinds, sizes and bodies stay sealed.
+  `MAX_FOCUS_FILES` bounds the burst **per tick**; an entry it evicts unresolved
+  is re-queued on the next stat, so a large directory's full sibling set still
+  reaches the endpoints across a browsing session.
 - When a background reconcile lands a new snapshot, the engine event stream
   drives the **push-invalidation callback**, and the kernel's next access
   re-reads through the adapter — replacing dir-TTL-0, drain choreography, and

@@ -96,8 +96,8 @@ impl InMemoryRecordStore {
         self.failing.lock().expect("lock").remove(endpoint);
     }
 
-    /// Make `endpoint` reject PUTs while still serving GETs — an endpoint that
-    /// already holds a strictly-newer record and ignores our stale write.
+    /// Make `endpoint` reject PUTs while still serving GETs, driving a lost CAS
+    /// race from the transport rather than from the record.
     pub fn fail_put_endpoint(&self, endpoint: &EndpointId) {
         self.put_failing
             .lock()
@@ -246,8 +246,8 @@ impl RecordTransport for InMemoryRecordStore {
 ///
 /// The routing key is the record's `ipnsName`, so both sequences are read from
 /// the verify chain rather than from unsigned bytes. A pair this fake cannot
-/// verify has no sequence to compare and is written through, which is what keeps
-/// the opaque-bytes fixtures working.
+/// verify has no sequence to compare and is written through, so a test may still
+/// stage opaque bytes through the seam.
 fn supersedes(routing_key: &str, held: &[u8], incoming: &[u8]) -> bool {
     let Ok(name) = IpnsName::parse(routing_key) else {
         return false;
@@ -258,10 +258,9 @@ fn supersedes(routing_key: &str, held: &[u8], incoming: &[u8]) -> bool {
             .and_then(|record| record.verify(&name).ok())
             .map(|verified| verified.sequence)
     };
-    match (sequence(held), sequence(incoming)) {
-        (Some(held), Some(incoming)) => held > incoming,
-        _ => false,
-    }
+    sequence(held)
+        .zip(sequence(incoming))
+        .is_some_and(|(held, incoming)| held > incoming)
 }
 
 #[cfg(test)]
@@ -269,18 +268,16 @@ mod tests {
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use super::*;
+    use crate::testkit::account::{EOL, TTL_NANOS};
     use crate::testkit::block_on;
 
     /// A real signed record at `sequence`, under the name its own signer mints.
+    fn signed_value(signer: &Ed25519Signer, sequence: u64, value: &[u8]) -> Vec<u8> {
+        IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, EOL).marshal()
+    }
+
     fn signed(signer: &Ed25519Signer, sequence: u64) -> Vec<u8> {
-        cipherbox_core::ipns::IpnsRecord::create_v2(
-            signer,
-            b"/ipfs/bafyvalue",
-            sequence,
-            60_000_000_000,
-            "2099-01-01T00:00:00.000000000Z",
-        )
-        .marshal()
+        signed_value(signer, sequence, b"/ipfs/bafyvalue")
     }
 
     #[test]
@@ -331,11 +328,9 @@ mod tests {
         );
         // Same sequence, so neither supersedes: the later write stands, which is
         // what lets a re-PUT refresh an EOL at an unchanged sequence.
-        block_on(store.put_record(&endpoint, name.as_str(), b"same-seq-stand-in")).expect("put");
-        assert_eq!(
-            store.record_at(&endpoint, name.as_str()),
-            Some(b"same-seq-stand-in".to_vec())
-        );
+        let refreshed = signed_value(&signer, 6, b"/ipfs/bafyrefreshed");
+        block_on(store.put_record(&endpoint, name.as_str(), &refreshed)).expect("put");
+        assert_eq!(store.record_at(&endpoint, name.as_str()), Some(refreshed));
     }
 
     #[test]
