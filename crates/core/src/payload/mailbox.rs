@@ -35,7 +35,7 @@ use super::{bytes_fixed, req};
 
 /// The sender-signature domain separator: the signature covers
 /// `[MAILBOX_SIG_DOMAIN, v, recipientEncPk, senderIdentityPk, payload]`.
-const MAILBOX_SIG_DOMAIN: &str = "cipherbox/v2/mailbox-sig";
+pub const MAILBOX_SIG_DOMAIN: &str = "cipherbox/v2/mailbox-sig";
 
 /// An opened, sender-verified mailbox item. The payload is HPKE plaintext, so
 /// it renders redacted.
@@ -72,7 +72,20 @@ fn mailbox_ctx(v: u64) -> AadContext {
 /// The sender-signature preimage. Binding `recipient_pk` closes the
 /// cross-recipient relay lift: an opened item cannot be re-sealed to a second
 /// recipient and still verify.
-fn sig_preimage(v: u64, recipient_pk: &[u8], sender_pk: &[u8], payload: &[u8]) -> Vec<u8> {
+///
+/// The one identity-signed preimage that is an array rather than a map, led by
+/// [`MAILBOX_SIG_DOMAIN`]: a CBOR array head can never decode as a map, so it is
+/// non-confusable with every other family by shape alone (the Preimage
+/// Separation KAT).
+///
+/// The returned buffer carries `payload` verbatim, so its caller is the terminal
+/// owner and must zeroize it — [`seal_mailbox_payload`] does.
+pub fn mailbox_sig_preimage(
+    v: u64,
+    recipient_pk: &[u8],
+    sender_pk: &[u8],
+    payload: &[u8],
+) -> Vec<u8> {
     let mut tree = Value::Array(vec![
         Value::Text(MAILBOX_SIG_DOMAIN.to_string()),
         Value::Unsigned(v),
@@ -97,7 +110,7 @@ pub fn seal_mailbox_payload(
     payload: &[u8],
 ) -> Vec<u8> {
     let sender_pk = sender_signer.verifying_key().to_sec1();
-    let mut preimage = sig_preimage(v, &recipient_enc_pub.to_bytes(), &sender_pk, payload);
+    let mut preimage = mailbox_sig_preimage(v, &recipient_enc_pub.to_bytes(), &sender_pk, payload);
     let sender_sig = sender_signer.sign_detcbor(&preimage);
     preimage.zeroize();
 
@@ -158,7 +171,7 @@ fn verify_inner(inner: &[u8], v: u64, recipient_pk: &[u8]) -> Result<MailboxItem
         EcdsaVerifier::from_sec1(sender_pk).ok_or(TrustViolation::IdentitySignatureInvalid)?;
     let sig =
         EcdsaSignature::from_compact(sig_bytes).ok_or(TrustViolation::IdentitySignatureInvalid)?;
-    let mut preimage = sig_preimage(v, recipient_pk, sender_pk, &payload);
+    let mut preimage = mailbox_sig_preimage(v, recipient_pk, sender_pk, &payload);
     let verified = sender_identity.verify_detcbor(&preimage, &sig);
     preimage.zeroize();
     if !verified {

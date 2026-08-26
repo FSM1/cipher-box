@@ -24,23 +24,28 @@ use cipherbox_core::content::{
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
-use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
-use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
+use cipherbox_core::payload::mailbox::{
+    MAILBOX_SIG_DOMAIN, mailbox_sig_preimage, open_mailbox_payload, seal_mailbox_payload,
+};
+use cipherbox_core::payload::pointer::{
+    RepointObject, open_pointer_payload, repoint_preimage, seal_pointer_payload,
+};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX,
-    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry, MAX_BLOCK_BYTES,
-    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
+    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
+    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
     MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX,
-    OWNER_LOCAL_V, OwnerLocalKind, Permission, READ_SEALED_ENVELOPE_HEADROOM_BYTES,
-    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
-    StructureSigInput, UNCUTTABLE_KEYS, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body,
-    build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    OWNER_LOCAL_V, OwnerLocalKind, Permission, PreservedFields,
+    READ_SEALED_ENVELOPE_HEADROOM_BYTES, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput,
+    UNCUTTABLE_KEYS, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad,
+    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
+    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
+    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
+    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
     encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
     encode_recipient_binding, encode_write_body, open_ascent_link, open_content_key,
     open_grant_blob, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
@@ -49,7 +54,7 @@ use cipherbox_core::seal::{
     verify_grant_set, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
-use cipherbox_core::suite::contact::import_contact_code;
+use cipherbox_core::suite::contact::{import_contact_code, subkey_binding_preimage};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use cipherbox_core::suite::hash::hash;
@@ -2470,6 +2475,201 @@ fn kdf_edge_outputs_are_frozen_and_pairwise_separated() {
         outputs.len(),
         file.edges.len(),
         "two KDF edges froze to the same output"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Identity-signature preimage separation (blueprint/core.md "KAT regime": the
+// mechanical separation law, here over the signing preimages rather than the
+// KDF edge table).
+// ---------------------------------------------------------------------------
+
+/// Every det-CBOR preimage the vault owner's secp256k1 identity key signs,
+/// fixed HERE independent of the codecs — the anti-vacuity anchor (mirrors
+/// ALL_EDGE_NAMES and ALL_STRUCT_TAGS). A new identity-signed structure must
+/// redden this test until it is listed and proved separate from the rest.
+const IDENTITY_SIGNED_PREIMAGES: &[&str] = &[
+    "subkey-binding",
+    "repoint-object",
+    "mailbox-sender-sig",
+    "grant-set-commitment",
+    "recipient-binding",
+];
+
+/// What a preimage's own bytes say it is. A canonical det-CBOR byte string
+/// decodes to exactly one value, so two families whose descriptors differ share
+/// no preimage at all — which is what non-confusability means here.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PreimageShape {
+    /// A map, identified by its key set.
+    Map(BTreeSet<String>),
+    /// The one array family, identified by the domain string it leads with.
+    DomainLedArray(String),
+}
+
+/// Read a family's descriptor back out of the bytes its own codec produced, so
+/// a field added to a codec moves the descriptor without anything here changing.
+fn preimage_shape(family: &str, bytes: &[u8]) -> PreimageShape {
+    match decode(bytes) {
+        Ok(Value::Map(m)) => PreimageShape::Map(
+            m.entries()
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect::<BTreeSet<String>>(),
+        ),
+        Ok(Value::Array(items)) => match items.first() {
+            Some(Value::Text(domain)) => PreimageShape::DomainLedArray(domain.clone()),
+            _ => panic!("{family}: an array preimage separates only by a leading domain string"),
+        },
+        Ok(_) => panic!("{family}: a signing preimage is a map or a domain-led array"),
+        Err(e) => panic!("{family}: a signing preimage must be strict det-CBOR: {e:?}"),
+    }
+}
+
+/// One preimage per family, built through the codecs the sign and verify paths
+/// use. A family with an optional field contributes every key set it can emit,
+/// since separation must hold for each.
+fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
+    let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("owner scalar");
+    let recipient_identity = EcdsaSigner::from_scalar(&[0x12; 32]).expect("recipient scalar");
+    let enc_subkey = X25519Secret::from_scalar([0x22; 32]).public();
+    let scope_root = b"scope-root-ipns-name".to_vec();
+
+    let repoint = |prev_root: Option<&str>| RepointObject {
+        scope_id: [0x33; 16],
+        current_root: IpnsName::parse(
+            "k51qzi5uqu5dgutdk6i1ynyzgkqngpha5xpgia3a5qqp4jsh0u4csozksxel2r",
+        )
+        .expect("current root parses"),
+        write_epoch: 7,
+        min_read_epoch: 3,
+        prev_root: prev_root.map(|n| IpnsName::parse(n).expect("prev root parses")),
+    };
+
+    let commitment = GrantSetCommitment {
+        ipns_name: scope_root.clone(),
+        owner_pseudonym_pk: [0x44; 32],
+        entries: vec![GrantSetEntry::new([0x55; 32], Permission::Read, [0x66; 32])],
+        unknown: PreservedFields::new(),
+    };
+
+    let ledger_entry = GrantLedgerEntry::new(
+        recipient_identity.verifying_key().to_sec1(),
+        enc_subkey.to_bytes(),
+        Permission::Write,
+        [0x55; 32],
+        [0x77; 64],
+    );
+
+    vec![
+        (
+            "subkey-binding",
+            vec![subkey_binding_preimage(&owner.verifying_key(), &enc_subkey)],
+        ),
+        (
+            "repoint-object",
+            vec![
+                repoint_preimage(&repoint(None)),
+                repoint_preimage(&repoint(Some(
+                    "k51qzi5uqu5dh9ihj4p2v5sl3hxvznpq4mcz1x0d3n4a4y0mrxlj0jczlpqrbx",
+                ))),
+            ],
+        ),
+        (
+            "mailbox-sender-sig",
+            vec![mailbox_sig_preimage(
+                1,
+                &enc_subkey.to_bytes(),
+                &owner.verifying_key().to_sec1(),
+                b"mailbox payload",
+            )],
+        ),
+        (
+            "grant-set-commitment",
+            vec![encode_grant_set_commitment(&commitment).expect("a commitment encodes")],
+        ),
+        (
+            "recipient-binding",
+            vec![encode_recipient_binding(&scope_root, &ledger_entry).expect("a binding encodes")],
+        ),
+    ]
+}
+
+/// The authority break this closes: one owner signature accepted as another
+/// family's. Structural today — the key sets are disjoint and det-CBOR fixes the
+/// head bytes — but nothing failed when a field addition collapsed two sets.
+#[test]
+fn identity_signed_preimages_are_pairwise_non_confusable() {
+    let families = identity_signed_preimages();
+    assert_eq!(
+        families.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        IDENTITY_SIGNED_PREIMAGES,
+        "the built families must be exactly the anchored list, in order"
+    );
+
+    let shapes: Vec<(&str, PreimageShape)> = families
+        .iter()
+        .flat_map(|(name, variants)| {
+            assert!(!variants.is_empty(), "{name}: a family with no preimage");
+            variants
+                .iter()
+                .map(move |bytes| (*name, preimage_shape(name, bytes)))
+        })
+        .collect();
+
+    // Several variants under one name is a claim that an optional field moves
+    // that family's key set. If they collapse to one descriptor the field has
+    // stopped being emitted and the extra variants test nothing.
+    for (name, variants) in &families {
+        if variants.len() > 1 {
+            let distinct: BTreeSet<PreimageShape> = variants
+                .iter()
+                .map(|bytes| preimage_shape(name, bytes))
+                .collect();
+            assert_eq!(
+                distinct.len(),
+                variants.len(),
+                "{name}: its optional fields no longer change the key set"
+            );
+        }
+    }
+
+    for (i, (a_name, a)) in shapes.iter().enumerate() {
+        for (b_name, b) in shapes.iter().skip(i + 1) {
+            if a_name == b_name {
+                continue;
+            }
+            assert_ne!(
+                a, b,
+                "{a_name} and {b_name} share a preimage descriptor: \
+                 an owner signature over one would verify as the other"
+            );
+            // Equality is not the whole hazard: a map family that preserves
+            // unknown fields emits its own keys *plus* whatever it carries, so a
+            // key set contained in another's is reachable by adding fields.
+            if let (PreimageShape::Map(a_keys), PreimageShape::Map(b_keys)) = (a, b) {
+                assert!(
+                    !a_keys.is_subset(b_keys),
+                    "{a_name}'s keys are contained in {b_name}'s: preserved unknown \
+                     fields would let a {b_name} preimage present as a {a_name} one"
+                );
+                assert!(
+                    !b_keys.is_subset(a_keys),
+                    "{b_name}'s keys are contained in {a_name}'s: preserved unknown \
+                     fields would let a {a_name} preimage present as a {b_name} one"
+                );
+            }
+        }
+    }
+
+    // The array family separates on its domain string alone, so that string is
+    // the whole of its separation and is pinned here.
+    assert!(
+        shapes
+            .iter()
+            .any(|(name, shape)| *name == "mailbox-sender-sig"
+                && *shape == PreimageShape::DomainLedArray(MAILBOX_SIG_DOMAIN.to_string())),
+        "the mailbox preimage must lead with its frozen domain string"
     );
 }
 

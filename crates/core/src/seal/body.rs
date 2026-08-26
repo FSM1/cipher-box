@@ -23,6 +23,8 @@ use core::cmp::Ordering;
 use core::fmt;
 use std::collections::BTreeSet;
 
+use zeroize::Zeroize;
+
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode, fmt_redacted_keys};
 use crate::error::{CodecError, Malformed, TrustViolation};
@@ -67,7 +69,11 @@ impl NodeKind {
 /// monotonic `link_counter`; `unknown` preserves any newer-client fields
 /// byte-stable.
 ///
-/// `name` and `ipns_name` are sealed-body plaintext, so they render redacted.
+/// `name` and `ipns_name` are sealed-body plaintext — user-private metadata in
+/// a zero-knowledge system — so they render redacted and the ref is their
+/// terminal owner: it wipes both on drop, and [`ChildRef::rename`] wipes the
+/// name a rewrite displaces. A clone owns its own buffers, so one instance's
+/// wipe never reaches another's.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ChildRef {
     /// The child's location-independent node id (16-byte UUID).
@@ -100,7 +106,22 @@ impl fmt::Debug for ChildRef {
     }
 }
 
+impl Drop for ChildRef {
+    fn drop(&mut self) {
+        self.name.zeroize();
+        self.ipns_name.zeroize();
+    }
+}
+
 impl ChildRef {
+    /// Rewrite the display name, wiping the one it displaces. An assignment to
+    /// the public field drops the old `String` unwiped, which the terminal-owner
+    /// rule does not allow for sealed-body plaintext.
+    pub fn rename(&mut self, name: String) {
+        self.name.zeroize();
+        self.name = name;
+    }
+
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let id = bytes_fixed::<16>(req(map, "id")?, "id")?;

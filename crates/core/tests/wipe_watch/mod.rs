@@ -53,8 +53,12 @@ fn is_armed(mask: &[u64; 4], byte: u8) -> bool {
 pub struct Watchdog;
 
 unsafe impl GlobalAlloc for Watchdog {
+    /// Zeroed, so the `dealloc` scan below never reads an uninitialised byte —
+    /// a block's spare capacity is otherwise uninit, and reading it is UB. This
+    /// can never mask a leak: [`watched`] refuses `0x00` as a marker, so a
+    /// never-written region cannot be what a hit reports.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { System.alloc(layout) }
+        unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {

@@ -15,6 +15,7 @@ use cipherbox_engine::testkit::{
     SeededEntropy, block_on, block_store, frame_version, frame_version_with, gateway, serve,
 };
 
+#[path = "../../core/tests/wipe_watch/mod.rs"]
 mod wipe_watch;
 
 use wipe_watch::{MARKER_LEN, Watchdog, watched};

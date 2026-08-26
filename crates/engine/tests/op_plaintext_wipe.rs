@@ -16,6 +16,7 @@ use cipherbox_engine::sync::{
 use cipherbox_engine::{NodeId, NodeKind};
 use zeroize::Zeroizing;
 
+#[path = "../../core/tests/wipe_watch/mod.rs"]
 mod wipe_watch;
 
 use wipe_watch::{MARKER_LEN, Watchdog, Watched, watched};
