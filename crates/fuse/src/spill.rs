@@ -93,8 +93,14 @@ impl SpillArea {
                 continue;
             };
             // The lease is the proof this slot is ours, so whatever a previous
-            // run left in it is ciphertext whose key died with that run.
-            let _ = fs::remove_dir_all(&dir);
+            // run left in it is ciphertext whose key died with that run. A
+            // sweep that did not go leaves that debris in the directory the
+            // area is about to open over, so only its absence is tolerated.
+            match fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
             fs::create_dir_all(&dir)?;
             restrict_dir(&dir)?;
             reclaim(&root, slot);

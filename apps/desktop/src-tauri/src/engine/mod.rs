@@ -560,14 +560,31 @@ async fn serve(
             Woke::Request(Some(Request::Status(reply))) => {
                 let _ = reply.send(status(&mut projection, &warnings).await);
             }
+            // The pass is filed here and awaited elsewhere: its network legs
+            // are the one thing a host may not serve a kernel behind
+            // (blueprint/desktop.md "the never-block law"). The mint that
+            // answers a refresh on a vault-less account is not a pass and has
+            // no filed form.
             Woke::Request(Some(Request::Refresh(reply))) => {
-                let refreshed = projection
-                    .engine_mut()
-                    .command(Command::ManualRefresh)
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| error.to_string());
-                let _ = reply.send(refreshed);
+                match projection.engine_mut().file_forced_pass() {
+                    Ok(Some(pass)) => {
+                        tokio::task::spawn_local(async move {
+                            let _ = reply.send(pass.landed().await.map_err(|e| e.to_string()));
+                        });
+                    }
+                    Ok(None) => {
+                        let minted = projection
+                            .engine_mut()
+                            .command(Command::ManualRefresh)
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| error.to_string());
+                        let _ = reply.send(minted);
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error.to_string()));
+                    }
+                }
             }
             // A keyring that refuses the delete is reported to no one: the
             // session is ending either way, and there is no surface left to

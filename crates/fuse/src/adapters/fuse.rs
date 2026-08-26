@@ -409,9 +409,8 @@ pub struct FuseMount {
 }
 
 impl FuseMount {
-    /// Mount at `mountpoint`, clearing a dead CipherBox's mount off it
-    /// ([`stale::clear`]) and preparing it ([`prepare`]) first, under one
-    /// backend's [`MountProfile`] and the shared [`floor_options`].
+    /// Mount at `mountpoint`, cleared ([`stale::clear`]) and prepared
+    /// ([`prepare`]) first, under one backend's [`MountProfile`].
     pub(crate) fn at(mountpoint: &Path, profile: MountProfile) -> io::Result<Self> {
         let options = mount_options(profile.options)?;
         stale::clear(mountpoint)?;

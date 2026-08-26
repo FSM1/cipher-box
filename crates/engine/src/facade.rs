@@ -111,6 +111,7 @@ use cipherbox_core::hex::lower as hex_lower;
 pub use crate::sync::drain::{BlockedOp, SettingsHold};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
+pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
@@ -5191,34 +5192,38 @@ where {
     /// ([`ManualRefresh`]). The drain rides that pass but reports through its
     /// own op events; this returns on the read legs.
     async fn manual_refresh(&self) -> Result<(), EngineError> {
-        let failed = |message: &str| EngineError::RefreshFailed {
-            message: message.to_owned(),
-        };
-        // An unconsumed spawner is a start that found no root to poll. The mint
-        // deposits exactly the state a pass would reconcile, so it answers for
-        // this refresh itself.
-        if self.tick_loop_spawner.borrow().is_some() {
-            return match self.api_base_url.configured() {
+        match self.file_forced_pass()? {
+            Some(pass) => pass.landed().await,
+            None => match self.api_base_url.configured() {
                 Some(_) => self.provision_in_session().await,
-                None => Err(failed("this account has no vault yet")),
-            };
+                None => Err(EngineError::RefreshFailed {
+                    message: "this account has no vault yet".to_owned(),
+                }),
+            },
         }
-        let verdict = self
-            .manual_refresh
-            .request()
-            .ok_or_else(|| failed("no sync loop is running to force a pass"))?;
-        match verdict.await {
-            Ok(RefreshVerdict::Reconciled) => Ok(()),
-            Ok(RefreshVerdict::Unreachable) => {
-                Err(failed("no endpoint served a record this pass could adopt"))
-            }
-            // Fail-closed, and reported as the verdict it is: a host retries
-            // availability and must never retry a rejection (rule 6).
-            Ok(RefreshVerdict::Rejected) => Err(EngineError::TrustViolation {
-                message: "the record plane served a record the adoption gate rejected".to_owned(),
-            }),
-            Err(_) => Err(failed("the sync loop stopped before the pass ran")),
+    }
+
+    /// File a forced pass and hand back where its verdict lands, so a host
+    /// that also serves a kernel awaits the network legs off the loop it filed
+    /// them from (blueprint/desktop.md "the never-block law"). Requests
+    /// coalesce onto one pass ([`ForcedPass`]).
+    ///
+    /// `None` when an unconsumed tick-loop spawner says the start found no root
+    /// to poll: what answers a refresh then is the mint, not a pass, and
+    /// [`Command::ManualRefresh`] is what runs it.
+    pub fn file_forced_pass(&self) -> Result<Option<ForcedPass>, EngineError> {
+        // The same gate [`command`](Self::command) files every other request
+        // behind: a host reaching this directly is not a weaker caller.
+        self.live_session()?;
+        if self.tick_loop_spawner.borrow().is_some() {
+            return Ok(None);
         }
+        self.manual_refresh
+            .filed()
+            .map(Some)
+            .ok_or_else(|| EngineError::RefreshFailed {
+                message: "no sync loop is running to force a pass".to_owned(),
+            })
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness

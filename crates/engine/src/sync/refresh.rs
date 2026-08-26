@@ -17,6 +17,8 @@ use std::rc::Rc;
 
 use futures_channel::oneshot;
 
+use crate::facade::EngineError;
+
 /// What a manual refresh reports back to the host. The two failures stay
 /// distinct all the way out: a host retries availability and must never retry a
 /// trust verdict (rule 6).
@@ -42,6 +44,35 @@ impl RefreshVerdict {
             (Self::Rejected, _) | (_, Self::Rejected) => Self::Rejected,
             (Self::Unreachable, _) | (_, Self::Unreachable) => Self::Unreachable,
             (Self::Reconciled, Self::Reconciled) => Self::Reconciled,
+        }
+    }
+}
+
+/// A filed pass, waiting for the verdict of the tick that answers it.
+///
+/// Owns nothing of the engine, so a host that also serves a kernel awaits the
+/// network legs off the loop it filed them from rather than freezing every
+/// callback behind them (blueprint/desktop.md "the never-block law").
+pub struct ForcedPass(oneshot::Receiver<RefreshVerdict>);
+
+impl ForcedPass {
+    /// What the pass reconciled, in the verdicts
+    /// [`Command::ManualRefresh`](crate::facade::Command::ManualRefresh)
+    /// reports — this is where that mapping lives.
+    pub async fn landed(self) -> Result<(), EngineError> {
+        match self.0.await {
+            Ok(RefreshVerdict::Reconciled) => Ok(()),
+            Ok(RefreshVerdict::Unreachable) => Err(EngineError::RefreshFailed {
+                message: "no endpoint served a record this pass could adopt".to_owned(),
+            }),
+            // Fail-closed, and reported as the verdict it is: a host retries
+            // availability and must never retry a rejection (rule 6).
+            Ok(RefreshVerdict::Rejected) => Err(EngineError::TrustViolation {
+                message: "the record plane served a record the adoption gate rejected".to_owned(),
+            }),
+            Err(_) => Err(EngineError::RefreshFailed {
+                message: "the sync loop stopped before the pass ran".to_owned(),
+            }),
         }
     }
 }
@@ -97,6 +128,12 @@ impl ManualRefresh {
             waker.wake();
         }
         Some(receiver)
+    }
+
+    /// Files a request as a pass its caller can await without holding the
+    /// engine. `None` for the reason [`request`](Self::request) gives.
+    pub(crate) fn filed(&self) -> Option<ForcedPass> {
+        self.request().map(ForcedPass)
     }
 
     /// Whether a request is waiting for a pass to start.
@@ -165,6 +202,49 @@ mod tests {
         }
         assert_eq!(Reconciled.worst(Unreachable), Unreachable);
         assert_eq!(Unreachable.worst(Reconciled), Unreachable);
+    }
+
+    /// A filed pass carries the verdict mapping, so a host that awaits it off
+    /// its loop reports exactly what `Command::ManualRefresh` would have.
+    #[test]
+    fn a_filed_pass_reports_the_verdict_the_command_would_have() {
+        for (verdict, expected) in [
+            (RefreshVerdict::Reconciled, Ok(())),
+            (
+                RefreshVerdict::Unreachable,
+                Err(EngineError::RefreshFailed {
+                    message: "no endpoint served a record this pass could adopt".to_owned(),
+                }),
+            ),
+            (
+                RefreshVerdict::Rejected,
+                Err(EngineError::TrustViolation {
+                    message: "the record plane served a record the adoption gate rejected"
+                        .to_owned(),
+                }),
+            ),
+        ] {
+            let manual = ManualRefresh::default();
+            manual.arm();
+            let pass = manual.filed().expect("armed");
+            manual.begin();
+            manual.settle(verdict);
+            assert_eq!(block_on(pass.landed()), expected, "{verdict:?}");
+        }
+    }
+
+    /// A pass no tick will answer must fail rather than park past the engine —
+    /// the host awaiting it off its loop has nothing else to end its wait.
+    #[test]
+    fn a_pass_a_closed_loop_abandoned_fails_rather_than_parking() {
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let pass = manual.filed().expect("armed");
+        manual.close();
+        assert!(matches!(
+            block_on(pass.landed()),
+            Err(EngineError::RefreshFailed { .. })
+        ));
     }
 
     #[test]
