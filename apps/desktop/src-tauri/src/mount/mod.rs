@@ -20,6 +20,10 @@ pub use detached::{KernelOp, Landing, Projection};
 /// What the mount woke the session with. Making the mount and serving it are
 /// the two states of one thing, so they reach the session loop as one wake
 /// source rather than contending for the projection.
+///
+/// The session loop matches every variant whatever platform it is built for; a
+/// platform with no host adapter constructs none of them.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub enum FromMount {
     /// The kernel asked the mount for something.
     Op(KernelOp),
@@ -30,9 +34,12 @@ pub enum FromMount {
     Landed(Landing),
 }
 
-/// Whether this session projects the vault as a filesystem, and where.
+/// Whether this session projects the vault as a filesystem, and where. Both
+/// hosts render every state; a platform with no host adapter only ever reaches
+/// `Refused`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub enum MountStatus {
     /// The mount is still being made. The session serves reads throughout, so
     /// this is a state a status read lands in rather than waits out — a mount
