@@ -1484,20 +1484,24 @@ where
     /// An entry that does not answer to the target its key names is refused
     /// rather than replayed ([`Reclamation::is_for`]).
     ///
-    /// Bounded per pass: a device that deleted a great deal while the registry
-    /// was unreachable would otherwise spend a whole tick re-retiring, and the
-    /// entries a pass settles leave, so the rest are reached on the next one.
+    /// Bounded per pass by the entries it settles, never by the keys it lists
+    /// ([`MAX_JOURNAL_REPLAYS`]). A refused or unreadable entry costs a local
+    /// read and no slot: nothing sweeps this prefix, so charging it one would
+    /// starve every entry sorting behind it for good. Settled entries leave, so
+    /// the rest are reached on the next pass.
     async fn settle_journalled_deletes(&self, owner: &[u8; 32], staged: &[Vec<u8>]) {
-        for (key, target) in journalled_keys(owner, staged)
-            .into_iter()
-            .take(MAX_JOURNAL_REPLAYS)
-        {
+        let mut replayed = 0usize;
+        for (key, target) in journalled_keys(owner, staged) {
+            if replayed == MAX_JOURNAL_REPLAYS {
+                break;
+            }
             let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
                 continue;
             };
             let Some(reclamation) = decode_reclamation(&entry).filter(|r| r.is_for(target)) else {
                 continue;
             };
+            replayed += 1;
             let residue = self.settle_reclamation(owner, &reclamation).await;
             self.update_journal(&key, &reclamation, residue).await;
         }
@@ -2239,7 +2243,7 @@ where
     /// what it failed to read, where a pin row left charged is only a leak.
     ///
     /// [`OwingRecord::Retired`] is the one class answered without a read, and
-    /// the entry's own existence is what earns that: [`Self::reclaim_doomed`]
+    /// the entry's own existence is what earns that: [`Self::publish_delete`]
     /// journals it only after the unlink is live, so the detachment is already a
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,

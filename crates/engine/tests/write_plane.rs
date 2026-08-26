@@ -46,9 +46,9 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
-    UPLOAD_MARK_PREFIX, encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid,
-    upload_mark_key,
+    DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, PUBLISHED_OP_MARK_PREFIX, ResolveMode,
+    StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark, owner_scoped_key,
+    owner_tag, record_content_root_cid, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -3365,6 +3365,73 @@ fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart(
     assert!(
         retired_since(&alice, settled).is_empty(),
         "the journal entry leaves once its reclamation lands"
+    );
+}
+
+/// The replay budget bounds the registry batches a pass spends, so it may only
+/// be charged for entries the pass can actually settle. An entry this build
+/// refuses is never removed, and nothing sweeps the journal prefix; charging it
+/// a slot would let a full budget's worth of them sit at the head of the sorted
+/// listing and starve every real delete behind them on every pass thereafter.
+#[test]
+fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+
+    // The unlink publishes and the retire is refused, so the delete's own debt
+    // is left standing in the journal for a later pass to replay.
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // A whole budget of entries this build's decoder refuses, filed under this
+    // owner ahead of the real one: a leading zero id sorts below any the engine
+    // mints.
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let real_key = doomed_journal_key(&owner, doomed);
+    for slot in 0..MAX_JOURNAL_REPLAYS {
+        let mut id = [0u8; 16];
+        id[15] = u8::try_from(slot).expect("the budget fits a byte");
+        let key = doomed_journal_key(&owner, NodeId(id));
+        assert!(
+            key < real_key,
+            "the planted entry sorts ahead of the real one"
+        );
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(&key, b"not a reclamation this build can decode"),
+        )
+        .expect("the staging store takes the planted entry");
+    }
+
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_since(&alice, mark).contains(&name.as_str().to_owned()),
+        "the real delete settles past the refused entries rather than queueing behind them"
     );
 }
 

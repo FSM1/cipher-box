@@ -36,6 +36,7 @@ pub mod tick;
 pub(crate) mod upload_mark;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
+pub use doomed::{MAX_JOURNAL_REPLAYS, doomed_journal_key};
 pub use drain::{
     BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
     owner_scoped_key, owner_tag,
