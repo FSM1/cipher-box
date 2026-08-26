@@ -120,19 +120,28 @@ impl FloorRaise {
     }
 }
 
-/// One identity's view of a device-wide [`FloorStore`]: every key is prefixed
-/// with that identity's [`owner_tag`], the way `sync::owner_scoped_key`
-/// namespaces the staging stores.
+/// One identity's view of a [`FloorStore`]: every key is prefixed with that
+/// identity's [`owner_tag`], the way `sync::owner_scoped_key` namespaces the
+/// staging stores.
 ///
-/// A vault's own root scope id is the anchored all-zero id16 for **every**
-/// account, so unprefixed epoch floors are shared by two identities on one
-/// device: one account's raised write-epoch floor then refuses the other's
-/// honest rotations, and a monotonic ratchet has no way back down.
+/// Which floors a session may reach is decided in-core, from the authenticated
+/// secret, and not by the container name the host passed in. Both hosts do open
+/// one floor container per account today (`<prefix>-<accountId>-floors` on web,
+/// `<accountDir>/floors` on desktop), but that name is a host argument: a host
+/// that opened one account's container and started a session under another's
+/// secret would corrupt a ratchet nothing can lower again. A vault's own root
+/// scope id is the anchored all-zero id16 for **every** account, so the root
+/// scope's floors are exactly where two identities would land on one key.
 ///
 /// The tag is bound once, from the session the engine derives at
 /// [`start`](crate::facade::Engine::start). Every read and every raise before
 /// that refuses — a key read out of the wrong namespace answers "no floor",
 /// which is fail-open on the gate's epoch stage.
+///
+/// The prefix changes the durable key shape with no migration, under the
+/// greenfield rule: a device holding pre-cutover floors reads none of them back
+/// and re-seeds from the record plane, so it must be forgotten rather than
+/// upgraded.
 #[derive(Clone)]
 pub struct OwnerScopedFloorStore<F> {
     inner: F,
@@ -150,7 +159,10 @@ impl<F> OwnerScopedFloorStore<F> {
         }
     }
 
-    /// Binds this view to the identity `enc_secret` belongs to.
+    /// Binds this view to the identity `enc_secret` belongs to. Called from
+    /// [`Engine::start`](crate::facade::Engine::start) and nowhere else: a
+    /// start that bound and then failed its login rebinds on the retry, which
+    /// is why this rebinds silently rather than refusing.
     pub(crate) fn bind(&self, enc_secret: &X25519Secret) {
         self.tag.set(Some(owner_tag(enc_secret)));
     }
@@ -204,9 +216,12 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
         self.inner.commit_floors(&scoped).await
     }
 
-    /// Device-scoped, like the [`Command::ForgetDevice`] it serves: the seams
-    /// never interpret their contents, so no per-identity filter could make the
-    /// erase complete.
+    /// The one method that does not scope, matching the device-scoped
+    /// [`Command::ForgetDevice`] it serves: the seams never interpret their
+    /// contents, so no per-identity filter could make the erase complete. Safe
+    /// because both hosts open a per-account backing — a host that ever shares
+    /// one across identities owes this seam a prefix-ranged erase before it
+    /// does.
     ///
     /// [`Command::ForgetDevice`]: crate::facade::Command::ForgetDevice
     async fn clear(&self) -> SeamResult<()> {
@@ -262,6 +277,38 @@ mod tests {
             Some(11),
             "and the first identity's ratchet is untouched by the second's"
         );
+    }
+
+    /// The tag is fixed-width, so no (identity, key) pair can spell another
+    /// pair's stored key — the property a variable-length prefix would lose.
+    #[test]
+    fn a_key_cannot_spell_another_identitys_key() {
+        let shared = InMemoryFloorStore::default();
+        let alice = view(&shared, &[7u8; 32]);
+        let bob = view(&shared, &[9u8; 32]);
+
+        block_on(alice.raise_sequence_floor(b"xy", 3)).expect("the floor raises");
+        assert_eq!(
+            block_on(bob.sequence_floor(b"y")).expect("floor read"),
+            None
+        );
+    }
+
+    /// Fail-closed at the consumer, not only at the seam: the gate must refuse,
+    /// never read an unbound store as a scope with no floor to enforce.
+    #[test]
+    fn an_unbound_store_makes_the_gate_refuse() {
+        let unbound = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+
+        let refused = block_on(crate::gate::floor::check(
+            &unbound,
+            NAME,
+            &ROOT_SCOPE,
+            9,
+            9,
+            crate::gate::floor::Strictness::StrictlyNewer,
+        ));
+        assert!(matches!(refused, Err(crate::gate::GateError::Seam(_))));
     }
 
     /// Fail-closed, not fail-open: an unscoped read would answer "no floor",

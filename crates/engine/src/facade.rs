@@ -3110,15 +3110,25 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// The gate every entry point shares: a forget latches the instance
-    /// terminal, and an engine that never started — or whose session a logout
-    /// ended — has nothing to serve.
-    fn live_session(&self) -> Result<(), EngineError> {
-        match (self.forgotten, self.started && self.session.is_some()) {
+    /// A forget latches the instance terminal, and an engine that never started
+    /// has nothing to end. The gate [`Command::Logout`] passes, since it is
+    /// idempotent and must stay retryable after it has cleared the session.
+    fn started_session(&self) -> Result<(), EngineError> {
+        match (self.forgotten, self.started) {
             (true, _) => Err(EngineError::Forgotten),
             (_, false) => Err(EngineError::NotStarted),
             _ => Ok(()),
         }
+    }
+
+    /// The gate every other entry point shares: [`started_session`](Self::started_session),
+    /// and a session a logout has not already ended.
+    fn live_session(&self) -> Result<(), EngineError> {
+        self.started_session()?;
+        if self.session.is_none() {
+            return Err(EngineError::NotStarted);
+        }
+        Ok(())
     }
 
     /// [`Command::Logout`]: end the session and revoke the credential it
@@ -3921,6 +3931,17 @@ where {
         if matches!(command, Command::ForgetDevice) {
             return self.forget_device().await.map(|()| CommandOutcome::Done);
         }
+        // Ahead of it too, and for the same shape of reason: the session a
+        // logout ends is gone by the time its credential drop can refuse, so
+        // gating on a live session would make that refusal unretryable.
+        if matches!(command, Command::Logout) {
+            self.started_session()?;
+            return self
+                .log_out()
+                .await
+                .map(|()| CommandOutcome::Done)
+                .map_err(EngineError::from_seam);
+        }
         self.live_session()?;
         // One clock read per command, journaled on the op: a retried publish
         // re-mints the same sequence, so authoring time must not be re-read.
@@ -4086,11 +4107,6 @@ where {
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
-            Command::Logout => self
-                .log_out()
-                .await
-                .map(|()| CommandOutcome::Done)
-                .map_err(EngineError::from_seam),
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
             }),
@@ -7876,6 +7892,26 @@ mod tests {
                     "the credential the session authenticated with does not outlive it"
                 );
             });
+        }
+
+        /// The credential drop is a verdict, and the session it belonged to is
+        /// gone by the time the store can refuse — so the command stays
+        /// reachable, or a refused drop would have no retry but a full erase.
+        #[test]
+        fn a_logout_can_be_issued_again_after_it_cleared_the_session() {
+            let (mut engine, device, _events) = started_and_loaded();
+            block_on(engine.command(Command::Logout)).unwrap();
+            block_on(device.credential_store.store_refresh_token(b"late")).unwrap();
+
+            assert_eq!(
+                block_on(engine.command(Command::Logout)),
+                Ok(CommandOutcome::Done)
+            );
+            assert_eq!(
+                block_on(device.credential_store.load_refresh_token()).unwrap(),
+                None,
+                "the retry reaches the store the first attempt left holding a token"
+            );
         }
 
         /// The session is over, not merely idle: an engine a logout ended has

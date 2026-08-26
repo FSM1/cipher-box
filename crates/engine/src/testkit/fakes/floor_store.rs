@@ -16,17 +16,21 @@ struct Inner {
 }
 
 impl Inner {
-    /// Matched on the key's tail: the engine reaches this store through
-    /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), which
-    /// prefixes the owner tag, and an injector names the floor, not the
-    /// identity holding it.
+    /// Matched on the key with the owner tag stripped: the engine reaches this
+    /// store through
+    /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), and an
+    /// injector names the floor, not the identity holding it. Exact past that,
+    /// so a fault injected for one name cannot fire for another that ends in it.
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
+        let floor = key.get(OWNER_TAG_LEN..)?;
         self.failing
-            .iter()
-            .any(|failing| key.ends_with(failing))
+            .contains(floor)
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
     }
 }
+
+/// The fixed-width owner tag `OwnerScopedFloorStore` prefixes every key with.
+const OWNER_TAG_LEN: usize = 32;
 
 /// In-memory monotonic-max floor store. Clones share state ("reopen").
 #[derive(Clone, Default)]
