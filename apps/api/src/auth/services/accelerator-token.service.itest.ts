@@ -41,13 +41,17 @@ describe('AcceleratorTokenService (real Postgres)', () => {
     await db.dataSource.query('TRUNCATE TABLE users CASCADE');
   });
 
-  function buildService(clock: FakeClock): AcceleratorTokenService {
+  function buildService(
+    clock: FakeClock,
+    env: Record<string, string> = {}
+  ): AcceleratorTokenService {
     return new AcceleratorTokenService(
       clock,
       new FakeEntropy(),
       fakeConfig({
         ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
         ACCELERATOR_TOKEN_CACHE_TTL_SECONDS: String(CACHE_TTL_SECONDS),
+        ...env,
       }).service,
       acceleratorTokens
     );
@@ -83,7 +87,8 @@ describe('AcceleratorTokenService (real Postgres)', () => {
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const [row] = await acceleratorTokens.find({ where: { userId } });
-    expect(row.tokenHash).not.toBe(token);
+    // The digest, not merely something other than the raw token.
+    expect(row.tokenHash).toBe(sha256Hex(token));
     expect(row.expiresAt.getTime()).toBe(clock.now().getTime() + ACCESS_TTL_SECONDS * 1000);
     expect(await service.verify(token)).toBe(true);
   });
@@ -158,15 +163,7 @@ describe('AcceleratorTokenService (real Postgres)', () => {
 
   it('walks past a full batch until nothing expired is left', async () => {
     const clock = new FakeClock();
-    const service = new AcceleratorTokenService(
-      clock,
-      new FakeEntropy(),
-      fakeConfig({
-        ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
-        ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE: '2',
-      }).service,
-      acceleratorTokens
-    );
+    const service = buildService(clock, { ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE: '2' });
     for (let i = 0; i < 5; i += 1) {
       const session = await startSession(clock);
       await service.mintForFamily(session.userId, session.familyId, db.dataSource.manager);

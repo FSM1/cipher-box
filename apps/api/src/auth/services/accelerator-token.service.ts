@@ -7,9 +7,10 @@ import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
 import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
-import { liveRefreshRowSql } from '../refresh-liveness';
+import { LIVE_REFRESH_ROW_SQL, REFRESH_ALIAS } from '../refresh-liveness';
 import { resolveAccessTtlSeconds } from './access-ttl';
 
 /**
@@ -30,12 +31,6 @@ const REFUSAL_CACHE_TTL_MS = 1000;
 /** Bounds on cached entries, so the verify path cannot grow memory without end. */
 const ACCEPTANCE_CACHE_MAX_ENTRIES = 10_000;
 export const REFUSAL_CACHE_MAX_ENTRIES = 1_000;
-
-/** Rows deleted per sweep batch; via ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE. */
-const DEFAULT_SWEEP_BATCH_SIZE = 1000;
-
-/** Ceiling on batches per tick, so one sweep cannot run unbounded. */
-const SWEEP_MAX_BATCHES = 1000;
 
 /**
  * The read accelerator's credential: an opaque per-session pseudonym minted
@@ -69,7 +64,8 @@ export class AcceleratorTokenService {
       ) * 1000;
     this.sweepBatchSize = positiveIntConfig(
       configService.get('ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE'),
-      DEFAULT_SWEEP_BATCH_SIZE
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
     );
   }
 
@@ -123,8 +119,8 @@ export class AcceleratorTokenService {
       // must still hold a live refresh row (see `refreshRowState`).
       .innerJoin(
         RefreshToken,
-        'refresh',
-        `refresh.family_id = accelerator.family_id AND refresh.user_id = accelerator.user_id AND ${liveRefreshRowSql('refresh')}`
+        REFRESH_ALIAS,
+        `${REFRESH_ALIAS}.family_id = accelerator.family_id AND ${REFRESH_ALIAS}.user_id = accelerator.user_id AND ${LIVE_REFRESH_ROW_SQL}`
       )
       .where('accelerator.token_hash = :tokenHash', { tokenHash })
       .andWhere('accelerator.expires_at > :now')
@@ -153,15 +149,7 @@ export class AcceleratorTokenService {
    */
   async sweepExpired(): Promise<number> {
     const cutoff = this.clock.now();
-    let total = 0;
-    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
-      const deleted = await this.deleteExpiredBatch(cutoff);
-      total += deleted;
-      if (deleted < this.sweepBatchSize) {
-        break;
-      }
-    }
-    return total;
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
   }
 
   /**

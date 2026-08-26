@@ -18,6 +18,7 @@ import {
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
 import { MetricsService } from '../../ops/metrics.service';
 import { UUID_RE } from '../../common/patterns';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
@@ -27,16 +28,6 @@ const MAX_BLOB_BYTES = 8192;
 
 /** 90-day unacked TTL, aligned with record EOLs (blueprint/api.md, Mailbox). */
 const TTL_MS = 90 * 24 * 60 * 60 * 1000;
-
-/** Rows deleted per global-sweep batch; via MAILBOX_SWEEP_BATCH_SIZE. */
-const DEFAULT_SWEEP_BATCH_SIZE = 1000;
-
-/**
- * Internal "don't loop forever" guard on batches per sweep run — not a per-deploy
- * knob. The loop already drains on `deleted < batchSize`; this only caps a
- * pathological backlog, leaving any remainder for the next scheduled run.
- */
-export const SWEEP_MAX_BATCHES = 1000;
 
 export interface PostMessageInput {
   recipientPublicKey: string;
@@ -88,7 +79,8 @@ export class MailboxService {
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     this.sweepBatchSize = positiveIntConfig(
       configService.get('MAILBOX_SWEEP_BATCH_SIZE'),
-      DEFAULT_SWEEP_BATCH_SIZE
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
     );
   }
 
@@ -285,15 +277,7 @@ export class MailboxService {
    */
   async sweepExpired(): Promise<number> {
     const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
-    let total = 0;
-    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
-      const deleted = await this.deleteExpiredBatch(cutoff);
-      total += deleted;
-      if (deleted < this.sweepBatchSize) {
-        break;
-      }
-    }
-    return total;
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
   }
 
   /**

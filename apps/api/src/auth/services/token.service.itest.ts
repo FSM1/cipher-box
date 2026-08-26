@@ -1,6 +1,7 @@
 import { JwtService } from '@nestjs/jwt';
 import { EntityManager, Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sessionCredentialLockKey } from '../../common/advisory-lock';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
@@ -51,7 +52,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
   let refreshTokens: Repository<RefreshToken>;
   let acceleratorTokens: Repository<AcceleratorToken>;
   let users: Repository<User>;
-  let gateway: FlakyAcceleratorTokens;
+  let accelerator: FlakyAcceleratorTokens;
   let service: TokenService;
   let userId: string;
 
@@ -66,18 +67,22 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     await db?.teardown();
   });
 
-  beforeEach(async () => {
-    await db.dataSource.query('TRUNCATE TABLE users CASCADE');
-    gateway = new FlakyAcceleratorTokens(new FakeClock());
-    service = new TokenService(
+  function buildService(env: Record<string, string> = {}): TokenService {
+    return new TokenService(
       new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } }),
       new FakeClock(),
       new FakeEntropy(),
-      gateway as unknown as AcceleratorTokenService,
-      fakeConfig({}).service,
+      accelerator as unknown as AcceleratorTokenService,
+      fakeConfig(env).service,
       refreshTokens,
       db.dataSource
     );
+  }
+
+  beforeEach(async () => {
+    await db.dataSource.query('TRUNCATE TABLE users CASCADE');
+    accelerator = new FlakyAcceleratorTokens(new FakeClock());
+    service = buildService();
     userId = (await users.save({ publicKey: randomCompressedPublicKey() })).id;
   });
 
@@ -85,7 +90,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     const pair = await service.createTokenPair(userId, PUBLIC_KEY);
     const [presented] = await refreshTokens.find({ where: { userId } });
 
-    gateway.fail = true;
+    accelerator.fail = true;
     await expect(service.rotate(pair.refreshToken, publicKeyByUserId)).rejects.toThrow(
       'accelerator mint unavailable'
     );
@@ -98,7 +103,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     expect(rows[0].usedAt).toBeNull();
     expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
 
-    gateway.fail = false;
+    accelerator.fail = false;
     const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
     expect(rotated.refreshToken).not.toBe(pair.refreshToken);
   });
@@ -106,7 +111,7 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
   it('starts no half-family when a login mints its refresh row but not its pseudonym', async () => {
     await service.createTokenPair(userId, PUBLIC_KEY);
 
-    gateway.fail = true;
+    accelerator.fail = true;
     await expect(service.createTokenPair(userId, PUBLIC_KEY)).rejects.toThrow(
       'accelerator mint unavailable'
     );
@@ -115,14 +120,72 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
   });
 
-  it('still hard-deletes the family when a rotation is refused as reuse', async () => {
+  it('lets exactly one of two concurrent rotations win, and kills the family for the loser', async () => {
     const pair = await service.createTokenPair(userId, PUBLIC_KEY);
-    await service.rotate(pair.refreshToken, publicKeyByUserId);
 
-    // The revocation must COMMIT while the request fails.
-    await expect(service.rotate(pair.refreshToken, publicKeyByUserId)).rejects.toThrow(
-      'Invalid refresh token'
-    );
+    const outcomes = await Promise.allSettled([
+      service.rotate(pair.refreshToken, publicKeyByUserId),
+      service.rotate(pair.refreshToken, publicKeyByUserId),
+    ]);
+
+    // One claims, one loses — and the loser's revocation COMMITS while its own
+    // request fails, so nothing of the family survives either way.
+    expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((o) => o.status === 'rejected')).toHaveLength(1);
     expect(await refreshTokens.count({ where: { userId } })).toBe(0);
+  });
+
+  it('revokes a successor a concurrent rotation commits while the family is being killed', async () => {
+    const pair = await service.createTokenPair(userId, PUBLIC_KEY);
+    const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
+
+    // Reuse of the spent token races the live successor's own rotation. Both
+    // revocation and rotation take the account's lock, so the delete cannot
+    // read a snapshot that predates a successor it must kill.
+    await Promise.allSettled([
+      service.rotate(pair.refreshToken, publicKeyByUserId),
+      service.rotate(rotated.refreshToken, publicKeyByUserId),
+    ]);
+
+    expect(await refreshTokens.count({ where: { userId } })).toBe(0);
+  });
+
+  it('logs out everywhere even while a rotation is committing a successor', async () => {
+    const pair = await service.createTokenPair(userId, PUBLIC_KEY);
+
+    await Promise.allSettled([
+      service.rotate(pair.refreshToken, publicKeyByUserId),
+      service.revokeAllForUser(userId),
+    ]);
+
+    // Whichever order wins, no refresh row may outlive the logout: a rotation
+    // that commits first is seen by the delete, and one that starts after finds
+    // its claim gone and revokes what it made.
+    expect(await refreshTokens.count({ where: { userId } })).toBe(0);
+  });
+
+  it('revokes a reused family even when the account lock is unavailable', async () => {
+    // A thief who can contend the account's key must not be able to suppress
+    // reuse detection: the revocation degrades, it never gets skipped.
+    const contended = buildService({ DB_ADVISORY_LOCK_TIMEOUT_MS: '50' });
+    const pair = await contended.createTokenPair(userId, PUBLIC_KEY);
+    await contended.rotate(pair.refreshToken, publicKeyByUserId);
+
+    const holder = db.dataSource.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    try {
+      await holder.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+        sessionCredentialLockKey(userId).toString(),
+      ]);
+
+      await expect(contended.rotate(pair.refreshToken, publicKeyByUserId)).rejects.toThrow(
+        'Invalid refresh token'
+      );
+      expect(await refreshTokens.count({ where: { userId } })).toBe(0);
+    } finally {
+      await holder.rollbackTransaction();
+      await holder.release();
+    }
   });
 });

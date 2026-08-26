@@ -61,7 +61,7 @@ describe('TokenService refresh rotation', () => {
     expect(repo.rows[0].usedAt).toBeNull();
   });
 
-  it('mints the gateway pseudonym against the family the login started', async () => {
+  it('mints the accelerator pseudonym against the family the login started', async () => {
     const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
 
     expect(pair.acceleratorToken).not.toBe(pair.refreshToken);

@@ -18,11 +18,13 @@ function buildTask(env: Record<string, string | undefined>): {
 }
 
 describe('AcceleratorTokenSweepTask', () => {
-  it('defaults to a 15m cadence and inherits the scheduler run bound', () => {
+  it('defaults to a 15m cadence and bounds a run well inside it', () => {
     const { task } = buildTask({});
     expect(task.taskName).toBe('accelerator-token-sweep');
     expect(task.intervalMs).toBe(DEFAULT_INTERVAL_MS);
-    expect((task as PeriodicTask).runTimeoutMs).toBeUndefined();
+    // A wedged sweep must be abandoned long before the next tick, so it cannot
+    // hold a pooled connection for the scheduler's hour-long default.
+    expect((task as PeriodicTask).runTimeoutMs).toBeLessThan(DEFAULT_INTERVAL_MS);
   });
 
   it('honors a positive-integer cadence override', () => {

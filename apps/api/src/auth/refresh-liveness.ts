@@ -21,14 +21,7 @@ export function refreshRowState(
   return row.expiresAt.getTime() <= now.getTime() ? 'expired' : 'live';
 }
 
-/**
- * The same rule as a SQL predicate over `alias`, binding `:now`. The alias is
- * interpolated, so it is refused unless it is a bare identifier — a caller can
- * only ever pass one of its own literals, and nothing else may reach here.
- */
-export function liveRefreshRowSql(alias: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) {
-    throw new Error(`Invalid SQL alias: ${alias}`);
-  }
-  return `${alias}.used_at IS NULL AND ${alias}.expires_at > :now`;
-}
+/** The join alias the SQL reading below is written against; bind it with `:now`. */
+export const REFRESH_ALIAS = 'refresh';
+
+export const LIVE_REFRESH_ROW_SQL = `${REFRESH_ALIAS}.used_at IS NULL AND ${REFRESH_ALIAS}.expires_at > :now`;

@@ -19,6 +19,7 @@ import {
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
 import { UUID_RE } from '../../common/patterns';
 import {
   approvalRequestPayload,
@@ -43,12 +44,6 @@ const MAX_PENDING_CAP = 50;
 
 /** A sealed 32-byte factor is ~125 bytes under any sane AEAD; this is slack, not a budget. */
 const MAX_SEALED_FACTOR_BYTES = 1024;
-
-/** Rows deleted per global-sweep batch; via DEVICE_APPROVAL_SWEEP_BATCH_SIZE. */
-const DEFAULT_SWEEP_BATCH_SIZE = 1000;
-
-/** Caps a pathological backlog; the loop already drains on a short batch. */
-const SWEEP_MAX_BATCHES = 1000;
 
 export interface CreateApprovalInput {
   devicePublicKey: string;
@@ -122,7 +117,8 @@ export class DeviceApprovalService {
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     this.sweepBatchSize = positiveIntConfig(
       configService.get('DEVICE_APPROVAL_SWEEP_BATCH_SIZE'),
-      DEFAULT_SWEEP_BATCH_SIZE
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
     );
   }
 
@@ -341,15 +337,7 @@ export class DeviceApprovalService {
    */
   async sweepExpired(): Promise<number> {
     const cutoff = this.clock.now();
-    let total = 0;
-    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
-      const deleted = await this.deleteExpiredBatch(cutoff);
-      total += deleted;
-      if (deleted < this.sweepBatchSize) {
-        break;
-      }
-    }
-    return total;
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
   }
 
   /**

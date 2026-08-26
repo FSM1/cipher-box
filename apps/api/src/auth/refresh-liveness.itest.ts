@@ -5,7 +5,7 @@ import { randomCompressedPublicKey } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
-import { liveRefreshRowSql, refreshRowState } from './refresh-liveness';
+import { LIVE_REFRESH_ROW_SQL, REFRESH_ALIAS, refreshRowState } from './refresh-liveness';
 
 /**
  * The two readings of one rule, run against the same rows in a real Postgres:
@@ -74,16 +74,12 @@ describe('refresh-family liveness (real Postgres)', () => {
     });
 
     const bySql = await refreshTokens
-      .createQueryBuilder('refresh')
-      .where('refresh.id = :id', { id: row.id })
-      .andWhere(liveRefreshRowSql('refresh'))
+      .createQueryBuilder(REFRESH_ALIAS)
+      .where(`${REFRESH_ALIAS}.id = :id`, { id: row.id })
+      .andWhere(LIVE_REFRESH_ROW_SQL)
       .setParameter('now', NOW)
       .getCount();
 
     expect(bySql === 1).toBe(refreshRowState(row, NOW) === 'live');
-  });
-
-  it('refuses an alias that is not a bare identifier', () => {
-    expect(() => liveRefreshRowSql('refresh; DROP TABLE users --')).toThrow(/Invalid SQL alias/);
   });
 });

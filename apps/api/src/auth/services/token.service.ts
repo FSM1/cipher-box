@@ -1,8 +1,13 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, IsNull, LessThan, Repository } from 'typeorm';
+import { DataSource, EntityManager, FindOptionsWhere, IsNull, LessThan, Repository } from 'typeorm';
 import {
   boundedAcquire,
   resolveAdvisoryLockTimeoutMs,
@@ -42,13 +47,6 @@ const DEFAULT_SCOPED_TTL_SECONDS = 600;
  * rather than turn the capability into a long-lived bearer credential.
  */
 const MAX_SCOPED_TTL_SECONDS = 3600;
-
-/**
- * A concurrent rotation of the same token won the single-use claim. Raised
- * inside the rotation transaction so its writes roll back, and answered outside
- * it — the family revocation that follows must commit while the request fails.
- */
-class LostClaimError extends Error {}
 
 /**
  * Short-lived access JWT + rotating refresh token (blueprint/api.md,
@@ -125,12 +123,10 @@ export class TokenService {
    * Rotate a refresh token: single-use, successor in the same family,
    * family-wide hard delete on reuse detection.
    *
-   * The claim, the successor, the accelerator pseudonym and the expired-row
-   * sweep commit together, so a failure part-way through leaves the presented
-   * token unspent and the client's retry succeeds. Everything that can fail on
-   * its own — the account lookup, the JWT signing, and the three revocations —
-   * stays outside that transaction: a revocation must commit while the request
-   * fails, and signing must not be able to fail after the token is spent.
+   * The claim and everything issued beside it commit together, so a failure
+   * part-way through leaves the presented token unspent and the client's retry
+   * succeeds rather than tripping reuse detection. A revocation must commit
+   * while the request fails, so revocations stay outside that transaction.
    */
   async rotate(
     rawToken: string,
@@ -147,52 +143,50 @@ export class TokenService {
     const state = refreshRowState(existing, now);
     if (state === 'spent') {
       // Reuse detected: the token was already rotated once. Someone —
-      // legitimate client or thief — is replaying. Kill the whole family.
-      await this.revokeFamily(existing.familyId);
+      // legitimate client or thief — is replaying. Logged before the delete so
+      // the signal survives however the revocation goes.
       this.logger.warn(
         `Refresh token reuse detected; family revoked (userId=${existing.userId}, familyId=${existing.familyId})`
       );
+      await this.revokeFamily(existing.userId, existing.familyId);
       throw new UnauthorizedException('Invalid refresh token');
     }
 
     if (state === 'expired') {
-      await this.revokeFamily(existing.familyId);
+      await this.revokeFamily(existing.userId, existing.familyId);
       throw new UnauthorizedException('Refresh token expired');
     }
 
+    // Signed before the transaction: nothing that can fail on its own may run
+    // once the presented token is spent.
     const publicKey = await publicKeyByUserId(existing.userId);
     const accessToken = await this.signAccessToken(existing.userId, publicKey);
 
-    try {
-      const session = await this.inSessionTransaction(existing.userId, async (manager) => {
-        // Atomic single-use claim: only one concurrent rotation can win.
-        const claim = await manager
-          .getRepository(RefreshToken)
-          .update({ id: existing.id, usedAt: IsNull() }, { usedAt: now });
-        if (!claim.affected) {
-          throw new LostClaimError();
-        }
-        // Expired rows are dead fuel — a replayed expired token dies in the
-        // expiry check regardless of reuse state — so rotation sweeps them out
-        // instead of letting them accumulate forever.
-        await manager
-          .getRepository(RefreshToken)
-          .delete({ userId: existing.userId, expiresAt: LessThan(now) });
-        return this.mintSessionCredentials(existing.userId, existing.familyId, manager);
-      });
-      return { accessToken, ...session };
-    } catch (error) {
-      if (!(error instanceof LostClaimError)) {
-        throw error;
+    const session = await this.inSessionTransaction(existing.userId, async (manager) => {
+      const rows = manager.getRepository(RefreshToken);
+      // Atomic single-use claim: only one concurrent rotation can win. The
+      // loser has written nothing, so it revokes once this releases the lock.
+      const claim = await rows.update({ id: existing.id, usedAt: IsNull() }, { usedAt: now });
+      if (!claim.affected) {
+        return null;
       }
-      await this.revokeFamily(existing.familyId);
+      // Expired rows are dead fuel — a replayed expired token dies in the
+      // expiry check regardless of reuse state — so rotation sweeps them out
+      // instead of letting them accumulate forever.
+      await rows.delete({ userId: existing.userId, expiresAt: LessThan(now) });
+      return this.mintSessionCredentials(existing.userId, existing.familyId, manager);
+    });
+
+    if (!session) {
+      await this.revokeFamily(existing.userId, existing.familyId);
       throw new UnauthorizedException('Invalid refresh token');
     }
+    return { accessToken, ...session };
   }
 
   /** Hard-delete every refresh token the user holds (logout everywhere). */
   async revokeAllForUser(userId: string): Promise<void> {
-    await this.refreshTokenRepository.delete({ userId });
+    await this.revoke(userId, { userId });
   }
 
   get refreshTokenTtlMs(): number {
@@ -203,16 +197,36 @@ export class TokenService {
     return this.jwtService.signAsync({ sub: userId, publicKey });
   }
 
-  /** Hard-delete a family; every descendant dies with it. */
-  private async revokeFamily(familyId: string): Promise<void> {
-    await this.refreshTokenRepository.delete({ familyId });
+  private async revokeFamily(userId: string, familyId: string): Promise<void> {
+    await this.revoke(userId, { familyId });
   }
 
   /**
-   * Serialize an account's session-credential writes: login and rotation both
-   * sweep rows the account's other sessions also delete, so they take one
-   * advisory key rather than racing into a deadlock. A wait past the bound is
-   * the retryable 503, which leaves the presented refresh token unspent.
+   * Hard-delete refresh rows under the same lock rotation takes: a bare DELETE
+   * reads the snapshot it opened with, so a successor a concurrent rotation
+   * commits after that point would survive the revocation meant to kill it.
+   *
+   * Contention must never cost a revocation, so a wait past the bound falls
+   * back to the unserialized delete rather than abandoning it — that can miss
+   * such a successor, but it can never leave the rows it does see alive.
+   */
+  private async revoke(userId: string, criteria: FindOptionsWhere<RefreshToken>): Promise<void> {
+    try {
+      await this.inSessionTransaction(userId, (manager) =>
+        manager.getRepository(RefreshToken).delete(criteria)
+      );
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) {
+        throw error;
+      }
+      await this.refreshTokenRepository.delete(criteria);
+    }
+  }
+
+  /**
+   * Serialize an account's session-credential writes on one advisory key. A wait
+   * past the bound is the retryable 503, which leaves the presented refresh
+   * token unspent — see `sessionCredentialLockKey`.
    */
   private inSessionTransaction<T>(
     userId: string,

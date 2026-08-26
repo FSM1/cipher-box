@@ -9,7 +9,8 @@ import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
-import { MailboxService, SWEEP_MAX_BATCHES } from './mailbox.service';
+import { SWEEP_MAX_BATCHES } from '../../common/sweep';
+import { MailboxService } from './mailbox.service';
 
 /**
  * The global dormant-mailbox TTL sweep proven against a REAL Postgres.

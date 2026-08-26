@@ -285,7 +285,7 @@ describe('auth HTTP flows (real Postgres)', () => {
         .get('/auth/gateway/verify')
         .set('Authorization', 'a'.repeat(64))
         .expect(401);
-      await verify('not-a-gateway-token').expect(401);
+      await verify('not-an-accelerator-token').expect(401);
       await verify('c'.repeat(64)).expect(401);
     });
 
