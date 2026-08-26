@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use cipherbox_engine::seams::{OpId, SeamResult, StagingStore};
 
 use crate::fs_util::{
-    atomic_write, ensure_dir, from_hex, list_file_names, read_file_opt, remove_file_durable,
-    seam_err, to_hex,
+    atomic_write, empty_dir, ensure_dir, from_hex, keep_first, list_file_names, read_file_opt,
+    remove_file_durable, seam_err, to_hex,
 };
 
 /// Suffix for op-record files (`ops/<id>.op`). The "json record" of the v1
@@ -194,6 +194,13 @@ impl StagingStore for FileStagingStore {
             }
         }
         Ok(total)
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        keep_first(
+            empty_dir(&self.ops_dir).map_err(|err| seam_err("staging_store clear ops", &err)),
+            empty_dir(&self.staged_dir).map_err(|err| seam_err("staging_store clear staged", &err)),
+        )
     }
 }
 

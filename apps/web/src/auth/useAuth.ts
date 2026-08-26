@@ -53,6 +53,8 @@ export interface Auth {
   /** `signature` is the `0x`-prefixed EIP-191 hex wagmi returns, sent verbatim. */
   loginWithWallet(message: string, signature: string): Promise<void>;
   logout(): Promise<void>;
+  /** Forget this device ({@link LoginFlow.forgetDevice}). */
+  forgetDevice(): Promise<void>;
   /** True while a login is held at a factor policy this device has no factor for. */
   recoveryRequired: boolean;
   /** Finishes such a login from the phrase alone (ADR 0009 D2). */
@@ -218,6 +220,7 @@ export function useAuth(): Auth {
     walletNonce: flow.walletNonce,
     loginWithWallet,
     logout: flow.logout,
+    forgetDevice: flow.forgetDevice,
     recoveryRequired,
     loginWithRecoveryPhrase,
     cancelRecovery,

@@ -11,6 +11,8 @@ struct Inner {
     sequence: HashMap<Vec<u8>, u64>,
     /// Floor keys whose raise is injected to fail.
     failing: HashSet<Vec<u8>>,
+    /// Whether [`FloorStore::clear`] is injected to fail.
+    failing_clear: bool,
 }
 
 impl Inner {
@@ -40,9 +42,18 @@ impl InMemoryFloorStore {
             .insert(key.to_vec());
     }
 
-    /// Restore every injected floor fault.
+    /// Restore every injected floor fault, the clear's included — one heal for
+    /// every injector this fake offers.
     pub fn heal_floors(&self) {
-        self.inner.lock().expect("lock").failing.clear();
+        let mut inner = self.inner.lock().expect("lock");
+        inner.failing.clear();
+        inner.failing_clear = false;
+    }
+
+    /// Make [`FloorStore::clear`] fail, so a test can drive the erase leg of
+    /// "forget this device" onto its refusal path with the floors left standing.
+    pub fn fail_clear(&self) {
+        self.inner.lock().expect("lock").failing_clear = true;
     }
 }
 
@@ -103,6 +114,16 @@ impl FloorStore for InMemoryFloorStore {
                 FloorNamespace::Sequence => raise(&mut inner.sequence, &r.key, r.value),
             };
         }
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        let mut inner = self.inner.lock().expect("lock");
+        if inner.failing_clear {
+            return Err(SeamError::new("floor clear injected to fail"));
+        }
+        inner.epoch.clear();
+        inner.sequence.clear();
         Ok(())
     }
 }

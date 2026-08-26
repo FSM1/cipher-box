@@ -35,6 +35,9 @@ const sdk = vi.hoisted(() => ({
   created: [] as Record<string, unknown>[],
   /** The `replaceExisting` flag each `setDeviceFactor` carried. */
   setDeviceFactors: [] as unknown[],
+  /** The factor scalars `deleteFactor` was asked to drop, hex. */
+  deleted: [] as string[],
+  deleteFactorError: undefined as Error | undefined,
   commits: 0,
   /** Which `commitChanges` call rejects, 1-based; `0` for none. */
   commitFailsAfter: 0,
@@ -99,6 +102,14 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.setDeviceFactors.push(replaceExisting);
         return Promise.resolve();
       }
+      deleteFactor(
+        _factorPub: unknown,
+        factorKey: { toString(base: string): string }
+      ): Promise<void> {
+        if (sdk.deleteFactorError) return Promise.reject(sdk.deleteFactorError);
+        sdk.deleted.push(factorKey.toString('hex'));
+        return Promise.resolve();
+      }
       getKeyDetails(): Record<string, unknown> {
         if (sdk.keyDetailsError) throw sdk.keyDetailsError;
         const key = sdk.accountKey;
@@ -154,6 +165,8 @@ beforeEach(() => {
   sdk.inputs = [];
   sdk.created = [];
   sdk.setDeviceFactors = [];
+  sdk.deleted = [];
+  sdk.deleteFactorError = undefined;
   sdk.commits = 0;
   sdk.commitFailsAfter = 0;
   sdk.shareDescriptions = {};
@@ -263,6 +276,63 @@ describe('the Core Kit store', () => {
     // A session short of reconstruction is still a live credential on the device.
     expect(sdk.logoutCalls).toBe(1);
     expect(window.localStorage.getItem(STORE_KEY)).toBeNull();
+  });
+});
+
+describe('forgetting this device with the account', () => {
+  const DEVICE_FACTOR = 'cd'.repeat(32);
+
+  /** An account carrying a recovery phrase, so a dropped factor is not the last. */
+  const enrolled = (): void => {
+    sdk.shareDescriptions = {
+      pub: [JSON.stringify({ module: FactorKeyTypeShareDescription.SeedPhrase })],
+    };
+  };
+
+  it('drops the factor this device holds, and syncs the removal', async () => {
+    enrolled();
+    sdk.deviceFactor = DEVICE_FACTOR;
+
+    await session().forgetDevice();
+
+    expect(sdk.deleted).toEqual([DEVICE_FACTOR]);
+    // Manual sync: an unsynced removal leaves the factor live on the account.
+    expect(sdk.commits).toBe(1);
+  });
+
+  /**
+   * The local erase destroys the only copy of this factor, so dropping it from
+   * an account with no phrase behind it is a permanent lockout, not a cleanup.
+   */
+  it("leaves the factor standing when it is the account's last way in", async () => {
+    sdk.shareDescriptions = {};
+    sdk.deviceFactor = DEVICE_FACTOR;
+
+    await session().forgetDevice();
+
+    expect(sdk.deleted).toEqual([]);
+  });
+
+  it('asks the account for nothing when this device holds no factor', async () => {
+    enrolled();
+    sdk.deviceFactor = undefined;
+
+    await session().forgetDevice();
+
+    expect(sdk.deleted).toEqual([]);
+    expect(sdk.commits).toBe(0);
+  });
+
+  /**
+   * The erase beside this one has to land offline, so a refused drop is a
+   * degraded outcome, never a failed forget.
+   */
+  it('does not fail the forget when the account cannot be reached', async () => {
+    enrolled();
+    sdk.deviceFactor = DEVICE_FACTOR;
+    sdk.deleteFactorError = REFUSED;
+
+    await expect(session().forgetDevice()).resolves.toBeUndefined();
   });
 });
 

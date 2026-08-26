@@ -98,6 +98,8 @@ extern "C" {
         ipns_name: &[u8],
         sequence: f64,
     ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = clear)]
+    async fn clear_floors(this: &JsFloorStoreSeam) -> Result<JsValue, JsValue>;
 }
 
 /// Bridges the per-key JS `FloorStoreSeam`; web batches ride the trait's
@@ -139,6 +141,11 @@ impl FloorStore for FloorStoreAdapter {
                 .await
                 .map_err(seam_error)?,
         ))
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.js.clear_floors().await.map_err(seam_error)?;
+        Ok(())
     }
 }
 
@@ -233,6 +240,8 @@ extern "C" {
     async fn staged_keys(this: &JsStagingStoreSeam) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = stagedBytesTotal)]
     async fn staged_bytes_total(this: &JsStagingStoreSeam) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = clear)]
+    async fn clear_staging(this: &JsStagingStoreSeam) -> Result<JsValue, JsValue>;
 }
 
 #[derive(Clone)]
@@ -312,6 +321,11 @@ impl StagingStore for StagingStoreAdapter {
         Ok(required_u64(
             self.js.staged_bytes_total().await.map_err(seam_error)?,
         ))
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.js.clear_staging().await.map_err(seam_error)?;
+        Ok(())
     }
 }
 

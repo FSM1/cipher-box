@@ -490,6 +490,7 @@ fn engine_error(error: EngineError) -> JsValue {
     let code = match &error {
         EngineError::NotStarted => "notStarted",
         EngineError::AlreadyStarted => "alreadyStarted",
+        EngineError::Forgotten => "forgotten",
         EngineError::InvalidSecret => "invalidSecret",
         EngineError::UnknownNode => "unknownNode",
         EngineError::NotAFolder => "notAFolder",

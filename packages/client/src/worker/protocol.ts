@@ -273,7 +273,8 @@ export type CommandDescriptor =
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
-  | { kind: 'logout' };
+  | { kind: 'logout' }
+  | { kind: 'forgetDevice' };
 
 /**
  * The buffers a command descriptor owns, for the `transfer` list of the send

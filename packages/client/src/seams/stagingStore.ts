@@ -44,6 +44,29 @@ export class StagingIoError extends Error {
   }
 }
 
+/**
+ * Every name directly in `dir`, collected before the caller removes any of
+ * them: removing during the walk mutates what it iterates.
+ */
+async function namesIn(dir: FileSystemDirectoryHandle): Promise<string[]> {
+  const names: string[] = [];
+  for await (const name of dir.keys()) names.push(name);
+  return names;
+}
+
+/**
+ * Runs `leg` and reports its refusal instead of throwing it, so a caller can
+ * finish the legs that do not depend on it.
+ */
+async function refusalOf(leg: () => Promise<void>): Promise<unknown> {
+  try {
+    await leg();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 /** Removes `name` from `dir`, treating an already-absent entry as success. */
 async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Promise<void> {
   try {
@@ -83,11 +106,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private async openStagedDir(): Promise<FileSystemDirectoryHandle> {
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(this.dirName, { create: true });
-    const debris: string[] = [];
-    for await (const name of dir.keys()) {
-      if (name.startsWith(TEMP_PREFIX)) debris.push(name);
-    }
-    // Collected first: removing during the walk mutates what it iterates.
+    const debris = (await namesIn(dir)).filter((name) => name.startsWith(TEMP_PREFIX));
     // Best-effort per entry, like the desktop sweep — a temp a killed writer
     // still holds open must not fail the open; the next one reclaims it.
     await Promise.all(debris.map((name) => removeIfPresent(dir, name).catch(() => undefined)));
@@ -216,6 +235,31 @@ export class OpfsStagingStore implements StagingStoreSeam {
       keys.push(fromHex(name));
     }
     return keys;
+  }
+
+  /**
+   * Sweeps in-flight temps too, which enumeration hides: a temp holds the bytes
+   * a killed write was staging, so an erase that stepped over it would leave
+   * that record behind. IndexedDB resets a key generator only when its store is
+   * deleted, so clearing leaves op ids strictly increasing and unreused.
+   */
+  async clear(): Promise<void> {
+    const queue = await refusalOf(async () => {
+      const db = await this.open();
+      const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+      tx.objectStore(STAGING_OPS_STORE).clear();
+      await transactionDone(tx);
+    });
+    const staged = await refusalOf(async () => {
+      const dir = await this.stagedDir();
+      const removals = await Promise.allSettled(
+        (await namesIn(dir)).map((name) => removeIfPresent(dir, name))
+      );
+      const refused = removals.find((removal) => removal.status === 'rejected');
+      if (refused) throw refused.reason as Error;
+    });
+    if (queue) throw queue;
+    if (staged) throw staged;
   }
 
   async stagedBytesTotal(): Promise<number> {

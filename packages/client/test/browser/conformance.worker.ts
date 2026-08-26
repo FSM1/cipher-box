@@ -174,6 +174,7 @@ const STAGED_AFTER_KIT: Record<string, number> = {
   ordering: 1,
   'failed-replacement': 1,
   'failed-first-put': 0,
+  cleared: 0,
 };
 
 /** Stores are per-fault: the kit asserts on leftover staged counts, so another

@@ -16,7 +16,8 @@ use cipherbox_desktop_seams::{
 };
 use cipherbox_engine::StagingRetireLedger;
 use cipherbox_engine::seams::{
-    CappedFetchError, CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, StagingStore,
+    CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
+    StagingStore,
 };
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
 use cipherbox_engine::testkit::{block_on, conformance};
@@ -50,7 +51,7 @@ fn file_staging_store_passes_the_staging_store_kit() {
     block_on(conformance::staging_store::check(
         async |backing: Backing| FileStagingStore::open(root.join(backing.label())).unwrap(),
         async |backing: Backing| match backing {
-            Backing::Ordering | Backing::FailedReplacement => denial.arm(),
+            Backing::Ordering | Backing::FailedReplacement | Backing::Cleared => denial.arm(),
             Backing::FailedFirstPut => {
                 std::fs::remove_dir(root.join(backing.label()).join("staged"))
                     .expect("the kit's lever must be armed, or it proves nothing");
@@ -115,6 +116,99 @@ fn the_file_staging_store_passes_the_retire_ledger_kit() {
     block_on(conformance::retire_ledger::check(async || {
         StagingRetireLedger::new(Box::leak(Box::new(FileStagingStore::open(&path).unwrap())))
     }));
+}
+
+/// The reason `clear` sweeps with `empty_dir` rather than the temp-skipping
+/// `list_file_names`: an in-flight temp still holds the staged ciphertext its
+/// killed writer was landing, so an erase that stepped over it would leave that
+/// record behind. Enumeration hides temps, so nothing else would ever reclaim it.
+#[test]
+fn clearing_a_staging_store_sweeps_the_temps_enumeration_hides() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let store = FileStagingStore::open(&path).unwrap();
+    block_on(store.put_staged_bytes(b"key", b"staged")).unwrap();
+    std::fs::write(
+        path.join("staged").join(".cbtmp.stranded"),
+        b"half a record",
+    )
+    .unwrap();
+
+    block_on(store.clear()).unwrap();
+
+    assert_eq!(
+        std::fs::read_dir(path.join("staged")).unwrap().count(),
+        0,
+        "a temp holding staged bytes must not survive the erase"
+    );
+}
+
+/// A refused leg must not spare the rest: forget is the only exit from a
+/// device's durable state, so a sweep that stopped at the first refusal would
+/// leave records standing on a device that reported itself erased. Unix-only —
+/// Windows honours a read-only file, not a read-only directory, so the denial
+/// has no per-directory lever there.
+#[cfg(unix)]
+#[test]
+fn a_refused_erase_leg_does_not_spare_the_ones_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    let store = FileStagingStore::open(&path).unwrap();
+    block_on(store.enqueue_op(b"queued-op")).unwrap();
+    block_on(store.put_staged_bytes(b"key", b"staged")).unwrap();
+
+    let denial = WriteDenial(path.join("ops"));
+    denial.arm();
+    let refusal = block_on(store.clear());
+    drop(denial);
+
+    assert!(
+        refusal.is_err(),
+        "a leg that could not be swept must reach the caller"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.join("staged")).unwrap().count(),
+        0,
+        "the leg after the refusal must still be swept"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.join("ops")).unwrap().count(),
+        1,
+        "only the leg that refused is left standing"
+    );
+}
+
+/// The same contract across the floor store's three directories, with the
+/// refusal in the middle: intents, then epoch, then sequence.
+#[cfg(unix)]
+#[test]
+fn a_refused_floor_erase_leg_does_not_spare_the_ones_around_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("floors");
+    let store = FileFloorStore::open(&path).unwrap();
+    block_on(store.raise_epoch_floor(b"scope", 4)).unwrap();
+    block_on(store.raise_sequence_floor(b"name", 9)).unwrap();
+    std::fs::write(path.join("intent").join("stranded"), b"replayable").unwrap();
+
+    let denial = WriteDenial(path.join("epoch"));
+    denial.arm();
+    let refusal = block_on(store.clear());
+    drop(denial);
+
+    assert!(
+        refusal.is_err(),
+        "a leg that could not be swept must reach the caller"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.join("intent")).unwrap().count(),
+        0,
+        "the leg before the refusal is swept"
+    );
+    assert_eq!(
+        std::fs::read_dir(path.join("seq")).unwrap().count(),
+        0,
+        "the leg after the refusal is swept too"
+    );
 }
 
 #[test]

@@ -104,6 +104,7 @@ impl From<EngineError> for VfsError {
             // contract on the mount's side, never a user-visible storage verdict.
             error @ (EngineError::NotStarted
             | EngineError::AlreadyStarted
+            | EngineError::Forgotten
             | EngineError::InvalidSecret
             | EngineError::ContentSizeMismatch { .. }
             | EngineError::UnknownWriteHandle

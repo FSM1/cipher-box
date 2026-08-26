@@ -303,6 +303,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'logout':
       return wasm.Command.logout();
+    case 'forgetDevice':
+      return wasm.Command.forgetDevice();
     default:
       throw unknownCommand(descriptor);
   }

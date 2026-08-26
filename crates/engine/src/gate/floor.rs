@@ -985,6 +985,10 @@ mod tests {
         async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
             self.inner.raise_sequence_floor(ipns_name, sequence).await
         }
+
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
     }
 
     /// The lease covers the raise itself, not just the moment before it. A host

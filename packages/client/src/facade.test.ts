@@ -156,6 +156,20 @@ describe('EngineFacade', () => {
     expect(transport.closed).toBe(true);
   });
 
+  it('sends the erase and leaves the transport to the logout that follows it', async () => {
+    const transport = new FakeTransport();
+    await new EngineFacade(transport).forgetDevice();
+    expect(transport.commands.map((entry) => entry.kind)).toEqual(['forgetDevice']);
+    expect(transport.closed).toBe(false);
+  });
+
+  /** Unlike a logout, an erase that did not land must not report success. */
+  it('reports a refused erase rather than swallowing it', async () => {
+    const transport = new FakeTransport();
+    transport.command = () => Promise.reject(new Error('floors unreachable'));
+    await expect(new EngineFacade(transport).forgetDevice()).rejects.toThrow('floors unreachable');
+  });
+
   it('sends a create carrying no content', async () => {
     const transport = new FakeTransport();
     await new EngineFacade(transport).create(new Uint8Array(16), 'docs', 'folder');

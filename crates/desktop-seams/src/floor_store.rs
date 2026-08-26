@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
 use crate::fs_util::{
-    atomic_write, ensure_dir, list_file_names, read_file_opt, remove_file_durable, seam_err,
-    to_hex, unique_component,
+    atomic_write, empty_dir, ensure_dir, keep_first, list_file_names, read_file_opt,
+    remove_file_durable, seam_err, to_hex, unique_component,
 };
 
 /// Durable monotonic-max floor store backed by one small file per key
@@ -188,6 +188,23 @@ impl FloorStore for FileFloorStore {
             .map_err(|err| seam_err("floor_store clear intent", &err))?;
         Ok(())
     }
+
+    /// Intents go first: a clear interrupted after them has nothing left for
+    /// [`open`](Self::open)'s roll-forward replay to re-raise.
+    async fn clear(&self) -> SeamResult<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| SeamError::new("floor_store clear: floor write lock poisoned"))?;
+        [
+            (&self.intent_dir, "floor_store clear intents"),
+            (&self.epoch_dir, "floor_store clear epoch"),
+            (&self.seq_dir, "floor_store clear seq"),
+        ]
+        .into_iter()
+        .map(|(dir, op)| empty_dir(dir).map_err(|err| seam_err(op, &err)))
+        .fold(Ok(()), keep_first)
+    }
 }
 
 /// The 4-byte little-endian key-length prefix. Fails closed on a key the
@@ -264,6 +281,33 @@ fn decode_intent(bytes: &[u8]) -> SeamResult<Vec<FloorRaise>> {
 mod tests {
     use super::*;
     use cipherbox_engine::testkit::block_on;
+
+    /// The whole security argument for `clear` on this store: `open` replays
+    /// leftover intents unconditionally, so a sweep that took the floors before
+    /// the intents would re-raise every floor in a crashed batch on reopen.
+    #[test]
+    fn a_cleared_floor_is_not_resurrected_by_a_leftover_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        let store = FileFloorStore::open(&path).unwrap();
+        block_on(store.raise_epoch_floor(b"scope", 9)).unwrap();
+        // A batch commit killed mid-apply: its intent is still on the platter.
+        let raises = [FloorRaise::epoch(b"scope".to_vec(), 9)];
+        atomic_write(
+            &path.join("intent").join("crashed"),
+            &encode_intent(&raises).unwrap(),
+        )
+        .unwrap();
+
+        block_on(store.clear()).unwrap();
+
+        let reopened = FileFloorStore::open(&path).unwrap();
+        assert_eq!(
+            block_on(reopened.epoch_floor(b"scope")).unwrap(),
+            None,
+            "the replay must have nothing left to re-raise"
+        );
+    }
 
     #[test]
     fn intent_round_trips() {

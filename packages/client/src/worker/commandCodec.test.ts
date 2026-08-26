@@ -103,6 +103,21 @@ describe('buildCommand', () => {
     () =>
       buildCommand(permissiveWasm, descriptor as CommandDescriptor);
 
+  /** An erase routed to the logout beside it would silently keep the seams. */
+  it('routes each zero-argument command to the builder of its own name', () => {
+    const built: string[] = [];
+    const wasm = {
+      ...fakeWasmEnums,
+      Command: new Proxy({}, { get: (_target, name: string) => () => built.push(name) }),
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, { kind: 'forgetDevice' });
+    buildCommand(wasm, { kind: 'logout' });
+    buildCommand(wasm, { kind: 'manualRefresh' });
+
+    expect(built).toEqual(['forgetDevice', 'logout', 'manualRefresh']);
+  });
+
   it('fails closed on an unknown command kind', () => {
     expect(refuses({ kind: 'telepathy' })).toThrow('unknown command kind: telepathy');
   });

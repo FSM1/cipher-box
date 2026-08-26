@@ -114,6 +114,56 @@ pub(crate) fn list_file_names(dir: &Path) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
+/// Durably removes every file directly in `dir`, in-flight temps included
+/// ("forget this device"). Subdirectories are left alone.
+///
+/// Unlike [`list_file_names`], this does not skip temps: a temp still holds the
+/// bytes a store was in the middle of writing, so an erase that stepped over it
+/// would leave that record behind. Every entry is attempted even after one
+/// refuses ([`keep_first`]) — stopping there would strand records the caller
+/// has no second exit for.
+///
+/// One barrier for the whole sweep, not one per file
+/// ([`remove_file_durable`]'s): nothing here is ordered against anything else in
+/// the same directory, so a crash mid-sweep strands an arbitrary subset either
+/// way. The trailing barrier still gives a caller sweeping several directories
+/// the ordering between them.
+pub(crate) fn empty_dir(dir: &Path) -> io::Result<()> {
+    let listing = match fs::read_dir(dir) {
+        Ok(listing) => listing,
+        // Already gone is the state an erase was asking for; reporting failure
+        // would tell a member their forget did not land.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let mut refusal = Ok(());
+    // Collected first: removing during the walk mutates what it iterates.
+    let mut names = Vec::new();
+    for entry in listing {
+        match entry.and_then(|entry| Ok((entry.file_type()?.is_file(), entry.file_name()))) {
+            Ok((true, name)) => names.push(name),
+            Ok((false, _)) => {}
+            Err(err) => refusal = keep_first(refusal, Err(err)),
+        }
+    }
+    for name in names {
+        match fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => refusal = keep_first(refusal, Err(err)),
+        }
+    }
+    let barrier =
+        fsync_dir(dir).map_err(|err| io::Error::new(err.kind(), format!("sweep barrier: {err}")));
+    keep_first(refusal, barrier)
+}
+
+/// Sequences two erase legs that are independent of each other: both have
+/// already run, and the first refusal is what the caller sees.
+pub(crate) fn keep_first<E>(kept: Result<(), E>, next: Result<(), E>) -> Result<(), E> {
+    kept.and(next)
+}
+
 /// Barriers a directory so a create/rename/unlink inside it is durable
 /// before the next one is issued.
 #[cfg(unix)]

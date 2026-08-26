@@ -95,6 +95,7 @@ export function fakeEngineClient(
           holds(null);
         }
       },
+      forgetDevice: () => Promise.resolve(),
       subscribe: () => () => undefined,
       snapshot: () => new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
@@ -168,6 +169,7 @@ export function fakeCoreKitSession(
       loggedIn = false;
       return Promise.resolve();
     },
+    forgetDevice: () => Promise.resolve(),
     _UNSAFE_exportTssKey() {
       calls.exports += 1;
       return Promise.resolve(SECRET_HEX);

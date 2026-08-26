@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use cipherbox_engine::seams::{SeamResult, SnapshotCache};
 
 use crate::fs_util::{
-    atomic_write, ensure_dir, list_file_names, read_file_opt, remove_file_durable, seam_err, to_hex,
+    atomic_write, empty_dir, ensure_dir, read_file_opt, remove_file_durable, seam_err, to_hex,
 };
 
 /// Durable last-known-good cache backed by one sealed file per key
@@ -55,12 +55,6 @@ impl SnapshotCache for FileSnapshotCache {
     }
 
     async fn clear(&self) -> SeamResult<()> {
-        let names = list_file_names(&self.dir)
-            .map_err(|err| seam_err("snapshot_cache clear list", &err))?;
-        for name in names {
-            remove_file_durable(&self.dir.join(name))
-                .map_err(|err| seam_err("snapshot_cache clear", &err))?;
-        }
-        Ok(())
+        empty_dir(&self.dir).map_err(|err| seam_err("snapshot_cache clear", &err))
     }
 }

@@ -249,3 +249,92 @@ describe('the login flow', () => {
     expect(parts.rebuilds()).toBe(1);
   });
 });
+
+describe('forgetting this device', () => {
+  it('erases each half before it tears that half down', async () => {
+    const order: string[] = [];
+    const facade = fakeFacade({
+      forgetDevice: () => {
+        order.push('erase');
+        return Promise.resolve();
+      },
+      logout: () => {
+        order.push('teardown');
+        return Promise.resolve();
+      },
+    });
+    const parts = build({ facade });
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await parts.flow.forgetDevice();
+
+    // The seam wipe rides the transport the teardown closes.
+    expect(order).toEqual(['erase', 'teardown']);
+    expect(parts.session.calls.forgets).toBe(1);
+    expect(parts.session.calls.logouts).toBe(1);
+    expect(parts.account.signOuts()).toBe(1);
+  });
+
+  /** A logout that erased would destroy a vault nobody asked it to. */
+  it('is never what a logout does', async () => {
+    const parts = build();
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await parts.flow.logout();
+
+    expect(parts.facade.calls.forgets).toBe(0);
+    expect(parts.session.calls.forgets).toBe(0);
+  });
+
+  /**
+   * The remote leg needs a live session and the network; the local erase is
+   * what this device's safety rests on and must land without either.
+   */
+  it('tears the session down even when the erase refused, and still reports it', async () => {
+    const facade = fakeFacade({ forgetDevice: () => Promise.reject(new Error('seam gone')) });
+    const parts = build({ facade });
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await expect(parts.flow.forgetDevice()).rejects.toThrow('seam gone');
+
+    expect(parts.facade.calls.logouts).toBe(1);
+    expect(parts.session.calls.forgets).toBe(1);
+    expect(parts.session.calls.logouts).toBe(1);
+    expect(parts.armed.at(-1)).toBeNull();
+    expect(parts.account.signOuts()).toBe(1);
+  });
+
+  /**
+   * The erase is the leg the caller asked for, so a teardown that also refused
+   * must not stand in front of it — reporting "transport closed" would read as
+   * an unrelated hiccup on a device whose seams are still full.
+   */
+  it('reports the refused erase, not the teardown that refused behind it', async () => {
+    const facade = fakeFacade({
+      forgetDevice: () => Promise.reject(new Error('seam gone')),
+      logout: () => Promise.reject(new Error('transport closed')),
+    });
+    const parts = build({ facade });
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await expect(parts.flow.forgetDevice()).rejects.toThrow('seam gone');
+
+    expect(parts.facade.calls.logouts).toBe(1);
+    expect(parts.session.calls.forgets).toBe(1);
+    expect(parts.session.calls.logouts).toBe(1);
+    expect(parts.account.signOuts()).toBe(1);
+  });
+
+  /** Fail-closed: a plain logout must never pass for an erase. */
+  it('refuses on a host whose facade cannot erase', async () => {
+    const facade = fakeFacade();
+    delete (facade.facade as Partial<typeof facade.facade>).forgetDevice;
+    const parts = build({ facade });
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await expect(parts.flow.forgetDevice()).rejects.toThrow('cannot be forgotten');
+
+    expect(parts.facade.calls.logouts).toBe(0);
+    expect(parts.account.signOuts()).toBe(0);
+  });
+});

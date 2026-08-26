@@ -71,4 +71,13 @@ export class IdbFloorStore implements FloorStoreSeam {
   raiseSequenceFloor(ipnsName: Uint8Array, sequence: number): Promise<number> {
     return this.raise(SEQUENCE_STORE, ipnsName, sequence);
   }
+
+  /** Both namespaces in one transaction, so no floor outlives the other's erase. */
+  async clear(): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction([EPOCH_STORE, SEQUENCE_STORE], 'readwrite');
+    tx.objectStore(EPOCH_STORE).clear();
+    tx.objectStore(SEQUENCE_STORE).clear();
+    await transactionDone(tx);
+  }
 }

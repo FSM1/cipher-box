@@ -51,6 +51,16 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
   recoverWithPhrase(phrase: string): Promise<void>;
   logout(): Promise<void>;
   /**
+   * Forget this device: everything a logout does, and first the erase a logout
+   * deliberately does not do — the engine's durable seams, this device's Core
+   * Kit store and wrapping key, and a best-effort drop of its factor.
+   *
+   * Never reached from a logout, which is the whole point of the affordance
+   * (blueprint/web-client.md "Logout"). Offline-capable: the only network leg
+   * is the factor drop, whose failure the local erase does not wait on.
+   */
+  forgetDevice(): Promise<void>;
+  /**
    * Hands the engine its secret for a Core Kit session that outlived the page.
    * A no-op unless one is live, and it never rejects: nothing asked for it.
    * Every caller awaits the one attempt, so a host gating a route on "still
@@ -71,6 +81,19 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
 let inFlight = false;
 let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promise<void> } | null =
   null;
+
+/**
+ * Runs `leg` and reports its refusal instead of throwing it, so a caller can
+ * finish the legs that do not depend on it.
+ */
+async function refusalOf(leg: () => Promise<void> | undefined): Promise<unknown> {
+  try {
+    await leg();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
 
 export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>(
   host: LoginHost<C>
@@ -130,6 +153,43 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       await handOff();
     });
 
+  /**
+   * Ends the session on this device, `'erase'` also wiping what it leaves
+   * behind.
+   *
+   * Each half erases before its own teardown — the engine's seam wipe rides the
+   * transport the facade logout closes, and the factor drop needs the Core Kit
+   * session the session logout ends — and tears down even when its erase
+   * refused. Every leg runs: a refused engine zeroize must not strand the Core
+   * Kit session, and a failed Core Kit logout must not leave the host signed in.
+   * The erase refusal is what a half reports: it is the leg the caller asked
+   * for, and a teardown that also refused must not stand in front of it.
+   */
+  const endSession = (mode: 'keep' | 'erase') => {
+    const endHalf = async (
+      half: {
+        forgetDevice?(): Promise<void>;
+        logout(): Promise<void>;
+      } | null
+    ): Promise<void> => {
+      const erase = mode === 'erase' ? await refusalOf(() => half?.forgetDevice?.()) : undefined;
+      const teardown = await refusalOf(() => half?.logout());
+      const refusal = erase ?? teardown;
+      if (refusal !== undefined) throw refusal;
+    };
+    return exclusively(async () => {
+      const outcomes = await Promise.allSettled([endHalf(facade), endHalf(session)]);
+      secrets?.use(null);
+      restore = null;
+      account.signedOut();
+      afterLogout?.();
+      // The halves run concurrently, so which one refuses *first* is a race;
+      // the engine half is reported by position instead, deterministically.
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed) throw failed.reason as Error;
+    });
+  };
+
   const unavailable = <T>(method: IdentityMethod): Promise<T> =>
     Promise.reject(new Error(`${method} sign-in is not available on this device`));
 
@@ -184,20 +244,16 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     logout() {
-      return exclusively(async () => {
-        // Every leg runs: a refused engine zeroize must not strand the Core Kit
-        // session, and a failed Core Kit logout must not leave the host signed in.
-        const outcomes = await Promise.allSettled([
-          facade?.logout() ?? Promise.resolve(),
-          session?.logout() ?? Promise.resolve(),
-        ]);
-        secrets?.use(null);
-        restore = null;
-        account.signedOut();
-        afterLogout?.();
-        const failed = outcomes.find((outcome) => outcome.status === 'rejected');
-        if (failed) throw failed.reason as Error;
-      });
+      return endSession('keep');
+    },
+
+    forgetDevice() {
+      // Fail-closed: a host missing the seam wipe would otherwise get a plain
+      // logout under the name of an erase.
+      if (!facade?.forgetDevice) {
+        return Promise.reject(new Error('this device cannot be forgotten from here'));
+      }
+      return endSession('erase');
     },
 
     resume() {

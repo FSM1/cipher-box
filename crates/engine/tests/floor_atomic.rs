@@ -88,6 +88,10 @@ impl FloorStore for SplitFaultyStore {
         self.tick()?;
         self.inner.raise_sequence_floor(ipns_name, sequence).await
     }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.clear().await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,10 @@ impl FloorStore for AtomicFaultyStore {
             return Err(SeamError::new("injected seam I/O fault (atomic commit)"));
         }
         self.inner.commit_floors(raises).await
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.clear().await
     }
 }
 

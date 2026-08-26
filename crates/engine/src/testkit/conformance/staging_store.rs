@@ -23,16 +23,19 @@ pub enum Backing {
     FailedReplacement,
     /// Failure atomicity of a put at a key that held nothing.
     FailedFirstPut,
+    /// The "forget this device" erase.
+    Cleared,
 }
 
 impl Backing {
     /// Every backing the kit asks for, so a host that has to enumerate them
     /// (one behind a string boundary, say) reads the set off the kit rather
     /// than transcribing it.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::Ordering,
         Self::FailedReplacement,
         Self::FailedFirstPut,
+        Self::Cleared,
     ];
 
     /// A stable label a host can key a directory, database name, or map entry
@@ -42,6 +45,7 @@ impl Backing {
             Self::Ordering => "ordering",
             Self::FailedReplacement => "failed-replacement",
             Self::FailedFirstPut => "failed-first-put",
+            Self::Cleared => "cleared",
         }
     }
 }
@@ -64,6 +68,7 @@ where
     ordering_and_durability(&mut open).await;
     failed_replacement_put(&mut open, &mut arm_failed_put).await;
     failed_first_put(&mut open, &mut arm_failed_put).await;
+    clearing(&mut open).await;
 }
 
 /// FIFO ordering, id progression, staged-byte accounting, orphan-GC support,
@@ -179,6 +184,37 @@ where
     assert!(
         id_f > id_e,
         "an op id must never be reused, not even after the queue drains empty"
+    );
+}
+
+/// The "forget this device" erase: the queue and the staged bytes go together,
+/// durably, without releasing an id the queue already used.
+async fn clearing<S, F>(open: &mut F)
+where
+    S: StagingStore,
+    F: AsyncFnMut(Backing) -> S,
+{
+    let store = open(Backing::Cleared).await;
+    let id = store.enqueue_op(b"op-to-erase").await.unwrap();
+    store.put_staged_bytes(b"key", b"staged").await.unwrap();
+
+    store.clear().await.unwrap();
+    assert!(store.queued_ops().await.unwrap().is_empty());
+    assert!(store.staged_keys().await.unwrap().is_empty());
+    assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
+
+    let reopened = open(Backing::Cleared).await;
+    assert!(
+        reopened.queued_ops().await.unwrap().is_empty(),
+        "a cleared op queue must stay cleared across reopen"
+    );
+    assert!(
+        reopened.staged_keys().await.unwrap().is_empty(),
+        "cleared staged bytes must stay cleared across reopen"
+    );
+    assert!(
+        reopened.enqueue_op(b"op-after").await.unwrap() > id,
+        "a clear must not restart the id progression, any more than a drain does"
     );
 }
 
