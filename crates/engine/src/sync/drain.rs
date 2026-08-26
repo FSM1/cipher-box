@@ -36,7 +36,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::content::{
@@ -1727,8 +1727,7 @@ where
             .cloned()
             .ok_or(Halt::Unclassified)?;
         if let Some(new_name) = new_name {
-            moved.name.zeroize();
-            moved.name = new_name.to_string();
+            moved.rename(new_name.to_string());
         }
         if source != dest {
             // Only a newly-established link advances the counter, to the winner

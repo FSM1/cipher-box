@@ -72,6 +72,16 @@ impl fmt::Debug for RepointObject {
     }
 }
 
+/// The det-CBOR preimage the owner identity signs to authorise a re-point:
+/// `{currentRootName, minReadEpoch, prevRootName?, scopeId, writeEpoch}` in
+/// canonical key order. [`seal_pointer_payload`] signs exactly these bytes.
+///
+/// The returned buffer carries the scope's root names verbatim, so its caller is
+/// the terminal owner and must zeroize it — the seal path does.
+pub fn repoint_preimage(object: &RepointObject) -> Vec<u8> {
+    encode_fixed_depth(&object.to_value())
+}
+
 impl RepointObject {
     fn to_value(&self) -> Value {
         let mut m = Map::new();
@@ -131,7 +141,7 @@ pub fn seal_pointer_payload(
     object: &RepointObject,
 ) -> Vec<u8> {
     let object_value = object.to_value();
-    let mut object_bytes = encode_fixed_depth(&object_value);
+    let mut object_bytes = repoint_preimage(object);
     let owner_sig = owner_signer.sign_detcbor(&object_bytes);
     object_bytes.zeroize();
 

@@ -353,8 +353,8 @@ fn published_children(
 /// The names a node's published folder body lists, sorted.
 fn published_names(records: &InMemoryRecordStore, blocks: &Blocks, node: NodeId) -> Vec<String> {
     let mut names: Vec<String> = published_children(records, blocks, node)
-        .into_iter()
-        .map(|child| child.name)
+        .iter()
+        .map(|child| child.name.clone())
         .collect();
     names.sort();
     names

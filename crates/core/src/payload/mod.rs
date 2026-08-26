@@ -17,8 +17,11 @@
 pub mod mailbox;
 pub mod pointer;
 
-pub use mailbox::{MailboxItem, open_mailbox_payload, seal_mailbox_payload};
-pub use pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
+pub use mailbox::{
+    MAILBOX_SIG_DOMAIN, MailboxItem, mailbox_sig_preimage, open_mailbox_payload,
+    seal_mailbox_payload,
+};
+pub use pointer::{RepointObject, open_pointer_payload, repoint_preimage, seal_pointer_payload};
 
 use crate::codec::{Map, Value};
 use crate::error::{CodecError, Malformed};

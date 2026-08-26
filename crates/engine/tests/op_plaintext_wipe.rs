@@ -16,6 +16,9 @@ use cipherbox_engine::sync::{
 use cipherbox_engine::{NodeId, NodeKind};
 use zeroize::Zeroizing;
 
+// The harness lives with the crate whose types it was first written to prove
+// wipe, and the engine reaches it by path rather than duplicating it.
+#[path = "../../core/tests/wipe_watch/mod.rs"]
 mod wipe_watch;
 
 use wipe_watch::{MARKER_LEN, Watchdog, Watched, watched};

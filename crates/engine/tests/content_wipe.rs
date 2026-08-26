@@ -15,6 +15,9 @@ use cipherbox_engine::testkit::{
     SeededEntropy, block_on, block_store, frame_version, frame_version_with, gateway, serve,
 };
 
+// The harness lives with the crate whose types it was first written to prove
+// wipe, and the engine reaches it by path rather than duplicating it.
+#[path = "../../core/tests/wipe_watch/mod.rs"]
 mod wipe_watch;
 
 use wipe_watch::{MARKER_LEN, Watchdog, watched};
