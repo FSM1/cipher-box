@@ -28,7 +28,9 @@ mod snapshot_cache;
 mod staging_store;
 
 pub use credential_store::CredentialStore;
-pub use floor_store::{FloorNamespace, FloorRaise, FloorStore, OwnerScopedFloorStore};
+pub use floor_store::{
+    FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, OwnerScopedFloorStore,
+};
 pub use http::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,
     bearer_header, check_bearer,

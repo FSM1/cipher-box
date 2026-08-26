@@ -147,8 +147,12 @@ pub struct OwnerScopedFloorStore<F> {
     inner: F,
     /// Shared across clones so the handles the spawned loops hold see the bind,
     /// whichever side of it they were cloned on.
-    tag: Rc<Cell<Option<[u8; 32]>>>,
+    tag: Rc<Cell<Option<[u8; OWNER_TAG_LEN]>>>,
 }
+
+/// The fixed-width prefix [`OwnerScopedFloorStore`] puts on every key. Exposed
+/// because a reader that strips it back off must strip exactly this many bytes.
+pub const OWNER_TAG_LEN: usize = 32;
 
 impl<F> OwnerScopedFloorStore<F> {
     /// An unbound view over `inner` — [`bind`](Self::bind) before any floor.

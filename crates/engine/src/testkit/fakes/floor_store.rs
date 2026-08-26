@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
+use crate::seams::{FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, SeamError, SeamResult};
 
 #[derive(Default)]
 struct Inner {
@@ -28,9 +28,6 @@ impl Inner {
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
     }
 }
-
-/// The fixed-width owner tag `OwnerScopedFloorStore` prefixes every key with.
-const OWNER_TAG_LEN: usize = 32;
 
 /// In-memory monotonic-max floor store. Clones share state ("reopen").
 #[derive(Clone, Default)]
