@@ -113,7 +113,9 @@ pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
-use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
+use crate::sync::staging::{
+    LiveBlocks, PreservedBounds, reconcile_staging, release_version_blocks, stage_op,
+};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_folders,
@@ -2951,8 +2953,19 @@ impl<T: SeamTypes> Engine<T> {
 
         // A crash between staging a version's blocks and journaling its op
         // leaves them referenced by nothing, so cold start is the first place
-        // that residue can be reclaimed.
-        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
+        // that residue can be reclaimed — and the first place a preserved set
+        // that was already over its bounds when this store opened is cut back to
+        // them, before a single tick runs.
+        reconcile_staging(
+            &self.seams.staging_store,
+            &self.live_blocks,
+            PreservedBounds::new(
+                self.storage_policy.preserved_budget_bytes(),
+                self.profile.preserved_dead_letter_ttl,
+                self.seams.scheduler.now(),
+            ),
+        )
+        .await;
 
         self.spawn_liveness_loop(api.clone());
         *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
@@ -3790,6 +3803,7 @@ where {
                             placement: &decision,
                             profile: &profile,
                             preserved_budget_bytes: storage_policy.preserved_budget_bytes(),
+                            live_blocks: &live_blocks,
                             content_profile: &content_profile,
                             entropy: &entropy,
                             base: &base,
@@ -3811,10 +3825,21 @@ where {
                         })
                         .await;
                         surface_drain_report(&events, &dead_letters, &report);
+                    } else {
+                        // The drain sweeps staging on the listing it already
+                        // took; without one, an abandoned write handle's residue
+                        // still has to be reclaimed at the poll cadence.
+                        reconcile_staging(
+                            &staging,
+                            &live_blocks,
+                            PreservedBounds::new(
+                                storage_policy.preserved_budget_bytes(),
+                                profile.preserved_dead_letter_ttl,
+                                scheduler.now(),
+                            ),
+                        )
+                        .await;
                     }
-                    // After the drain, so the pass's own removals are swept in the
-                    // same tick rather than a cadence later.
-                    collect_orphans(&staging, &live_blocks).await;
                     // Last, and after the settle above: the grantee's own read
                     // leg is the slowest in the pass, and a host refresh waits
                     // on nothing it reports.

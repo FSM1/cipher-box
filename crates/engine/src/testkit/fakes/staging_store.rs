@@ -18,6 +18,7 @@ struct Inner {
     partial_write_budget: Option<(Vec<u8>, u64)>,
     staged_removal_budget: Option<(Vec<u8>, u64)>,
     dropped_removal_budget: Option<(Vec<u8>, u64)>,
+    key_listings: u64,
 }
 
 impl Default for Inner {
@@ -34,6 +35,7 @@ impl Default for Inner {
             partial_write_budget: None,
             staged_removal_budget: None,
             dropped_removal_budget: None,
+            key_listings: 0,
         }
     }
 }
@@ -96,6 +98,13 @@ impl InMemoryStagingStore {
             Some((staging_key.to_vec(), budget));
     }
 
+    /// How many whole-key-space enumerations this store has served. A desktop
+    /// vault stages tens of thousands of keys, so a pass that lists more than
+    /// once is paying for the same answer twice.
+    pub fn key_listings(&self) -> u64 {
+        self.inner.lock().expect("lock").key_listings
+    }
+
     /// Reports the next removal at `staging_key` past `budget` as done without
     /// dropping the bytes — an unlink that never reached the disk while a later
     /// write did, which is what a host that releases staged bytes without a
@@ -109,9 +118,12 @@ impl InMemoryStagingStore {
 /// Charge one call at `staging_key` against a one-shot injected failure.
 /// `true` when this is the call that must fail, which also disarms it. Each
 /// injector holds one armed key, so arming a second replaces the first.
+/// `key` matches by **prefix**, so a test can arm a whole key family — the
+/// per-version upload marks — before it knows which member the engine will
+/// write.
 fn interrupts(budget: &mut Option<(Vec<u8>, u64)>, staging_key: &[u8]) -> bool {
     match budget {
-        Some((key, _)) if key != staging_key => false,
+        Some((key, _)) if !staging_key.starts_with(key) => false,
         Some((_, 0)) => {
             *budget = None;
             true
@@ -198,14 +210,9 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
-        Ok(self
-            .inner
-            .lock()
-            .expect("lock")
-            .staged
-            .keys()
-            .cloned()
-            .collect())
+        let mut inner = self.inner.lock().expect("lock");
+        inner.key_listings += 1;
+        Ok(inner.staged.keys().cloned().collect())
     }
 
     async fn staged_bytes_total(&self) -> SeamResult<u64> {

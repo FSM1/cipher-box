@@ -59,6 +59,11 @@ pub struct SyncTimingProfile {
     /// move; it is the ceiling on the name-registry rows one rotating scope
     /// accretes.
     pub migration_window: Duration,
+    /// How long a preserved dead letter stays parked before the reconcile pass
+    /// purges it and releases its staged version (v1's 30 days, carried
+    /// forward). Without it a vault that stays under the count and byte
+    /// ceilings parks state nothing ever reclaims.
+    pub preserved_dead_letter_ttl: Duration,
     /// Ceiling on the vault settings load. A settings record that will not
     /// resolve must never block cold start, so once this elapses the load
     /// yields the device's last-known-good settings, or the documented defaults
@@ -86,6 +91,7 @@ impl SyncTimingProfile {
         pointer_consult_interval: Duration::from_secs(30),
         sweep_cadence: Duration::from_secs(900),
         migration_window: Duration::from_secs(7 * 24 * 60 * 60),
+        preserved_dead_letter_ttl: Duration::from_secs(30 * 24 * 60 * 60),
         settings_load_budget: Duration::from_secs(10),
     };
 
@@ -100,6 +106,7 @@ impl SyncTimingProfile {
         pointer_consult_interval: Duration::from_secs(1),
         sweep_cadence: Duration::from_secs(2),
         migration_window: Duration::from_secs(5),
+        preserved_dead_letter_ttl: Duration::from_secs(60),
         settings_load_budget: Duration::from_secs(1),
     };
 }
@@ -172,6 +179,16 @@ mod tests {
             assert!(
                 profile.focus_horizon > profile.stale_after,
                 "a window that closed first would make an on-access refresh unreachable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parked_dead_letter_outlives_the_staleness_threshold() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.preserved_dead_letter_ttl > profile.stale_after,
+                "a notice purged inside the ladder's own window could never be acted on"
             );
         }
     }
