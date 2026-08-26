@@ -12,5 +12,22 @@ fn main() {
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
+    link_fuse_t_rpath();
     tauri_build::build();
+}
+
+/// The shell links the macOS host adapter, so its binary needs FUSE-T's search
+/// path stated on this package too — see `crates/fuse/build.rs`.
+fn link_fuse_t_rpath() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    if let Ok(lib) = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("fuse-t")
+    {
+        for path in &lib.link_paths {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
+        }
+    }
 }

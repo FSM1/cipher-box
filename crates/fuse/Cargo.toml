@@ -7,6 +7,10 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[build-dependencies]
+# Reads FUSE-T's libdir back out of `fuse-t.pc` for the macOS rpath.
+pkg-config = "0.3"
+
 [features]
 # Compiles the seam constructor the vfs suite drives the spill area through.
 # Never enabled in a production build: it is activated only by this crate's own
