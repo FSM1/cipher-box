@@ -120,10 +120,6 @@ jobs:
         env:
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
-      - name: Fix rpath for FUSE-T (macOS)
-        if: runner.os == 'macOS'
-        run: install_name_tool -add_rpath /usr/local/lib target/debug/${{ matrix.binary-name }} || true
-
       # --- Install backend services ---
 
       - name: Setup PostgreSQL

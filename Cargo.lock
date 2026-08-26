@@ -713,6 +713,7 @@ dependencies = [
  "cipherbox-engine",
  "cipherbox-fuse",
  "getrandom 0.3.4",
+ "pkg-config",
  "serde",
  "serde_json",
  "tauri",
@@ -769,6 +770,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "nix",
+ "pkg-config",
  "tempfile",
  "zeroize",
 ]
