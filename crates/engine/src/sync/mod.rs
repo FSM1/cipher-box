@@ -17,6 +17,7 @@
 //! [`consume_scope_exit_triggers`](crate::rotation::consume_scope_exit_triggers)
 //! cuts them.
 
+pub mod bookkeeping;
 pub mod boot;
 pub(crate) mod cancel;
 pub(crate) mod doomed;
@@ -35,6 +36,7 @@ pub mod staleness;
 pub mod tick;
 pub(crate) mod upload_mark;
 
+pub use bookkeeping::BookkeepingSeal;
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use doomed::{MAX_JOURNAL_REPLAYS, doomed_journal_key};
 pub use drain::{

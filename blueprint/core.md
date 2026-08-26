@@ -457,15 +457,17 @@ malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
 open path would refuse is a version whose key is gone.
 
 The `owner-local` structure carries **every durable store the owner alone
-authors and reads** — received shares, the contact book, and the invite records
-— under one format rather than one module per store (FSM1/cipher-box-next ADR
-0006). It seals HPKE **auth mode** to the owner's own enc subkey over the same
-three-key clear header as the settings record (`v`, `enc`, `ciphertext`), with
-the owner tag bound into the AAD and never serialized. What is new is the
-**store kind**: a frozen registry of `(name, discriminator)` pairs —
-`received-shares` (`0x01`), `contact-book` (`0x02`), `invite-records` (`0x03`) —
-whose discriminator rides the AAD and whose name completes the HPKE `info`
-string `cipherbox/v2/owner-local/<name>`. The kind is a key-schedule input and
+authors and reads** — received shares, the contact book, the invite records, and
+the engine's per-owner staging bookkeeping (the retire ledger and the
+doomed-name journal) — under one format rather than one module per store
+(FSM1/cipher-box-next ADR 0006). It seals HPKE **auth mode** to the owner's own
+enc subkey over the same three-key clear header as the settings record (`v`,
+`enc`, `ciphertext`), with the owner tag bound into the AAD and never
+serialized. What is new is the **store kind**: a frozen registry of
+`(name, discriminator)` pairs — `received-shares` (`0x01`), `contact-book`
+(`0x02`), `invite-records` (`0x03`), `retire-ledger` (`0x04`), `doomed-journal`
+(`0x05`) — whose discriminator rides the AAD and whose name completes the HPKE
+`info` string `cipherbox/v2/owner-local/<name>`. The kind is a key-schedule input and
 **never a wire field**, so a blob offered as the wrong store is refused by the
 AEAD rather than by a comparison: a decryption failure, not a parse failure. The
 KAT set is `owner_local_accept` (an empty body, plus one populated body per kind,

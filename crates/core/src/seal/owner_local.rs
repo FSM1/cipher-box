@@ -55,11 +55,22 @@ pub enum OwnerLocalKind {
     /// The invite records conversion reads a link's permission and deadline
     /// from.
     InviteRecords,
+    /// The pinned bytes a published prune or delete still owes the registry.
+    RetireLedger,
+    /// What a delete still owes once its unlink is live: the detached subtree's
+    /// write-plane names, and the target's own retire debt.
+    DoomedJournal,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 3] = [Self::ReceivedShares, Self::ContactBook, Self::InviteRecords];
+    pub const ALL: [Self; 5] = [
+        Self::ReceivedShares,
+        Self::ContactBook,
+        Self::InviteRecords,
+        Self::RetireLedger,
+        Self::DoomedJournal,
+    ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
     pub const fn name(self) -> &'static str {
@@ -67,6 +78,8 @@ impl OwnerLocalKind {
             Self::ReceivedShares => "received-shares",
             Self::ContactBook => "contact-book",
             Self::InviteRecords => "invite-records",
+            Self::RetireLedger => "retire-ledger",
+            Self::DoomedJournal => "doomed-journal",
         }
     }
 
@@ -76,6 +89,8 @@ impl OwnerLocalKind {
             Self::ReceivedShares => 0x01,
             Self::ContactBook => 0x02,
             Self::InviteRecords => 0x03,
+            Self::RetireLedger => 0x04,
+            Self::DoomedJournal => 0x05,
         }
     }
 
@@ -275,6 +290,8 @@ mod tests {
                 OwnerLocalKind::ReceivedShares => 0,
                 OwnerLocalKind::ContactBook => 1,
                 OwnerLocalKind::InviteRecords => 2,
+                OwnerLocalKind::RetireLedger => 3,
+                OwnerLocalKind::DoomedJournal => 4,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

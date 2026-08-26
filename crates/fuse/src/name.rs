@@ -104,10 +104,13 @@ const JUNK_NAMES: &[&str] = &[
 /// Platform-junk name prefixes, already folded.
 const JUNK_PREFIXES: &[&str] = &["._", ".trash-"];
 
-/// Case-folded name equality, matching the engine's `collation_key` fold
-/// rather than an ASCII one — U+212A KELVIN SIGN lowercases to `k`, so
-/// `des\u{212A}top.ini` is `desktop.ini` to the engine's comparator and must
-/// be to the junk filter too. Folds lazily so a listing allocates nothing.
+/// Case-folded name equality against an already-folded ASCII literal, using the
+/// engine's Unicode fold rather than an ASCII one — U+212A KELVIN SIGN
+/// lowercases to `k`, so `des\u{212A}top.ini` is `desktop.ini` to the engine's
+/// comparator and must be to the junk filter too. It skips the comparator's NFC
+/// step, which every entry in the lists below being ASCII is what makes safe: no
+/// composition reaches an ASCII string from a name that is not already one.
+/// Folds lazily so a listing allocates nothing.
 fn folds_to(name: &str, folded: &str) -> bool {
     name.chars().flat_map(char::to_lowercase).eq(folded.chars())
 }

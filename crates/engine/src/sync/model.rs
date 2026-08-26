@@ -17,6 +17,7 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
+use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::facade::{NodeId, NodeKind};
@@ -252,6 +253,18 @@ impl Snapshot {
         }
     }
 
+    /// Removes `id` as a **delete** does: detached from every parent that names
+    /// it, and taking with it every node only `id` reached.
+    ///
+    /// The same cascade the observed-remote direction reaches through
+    /// [`unlink`](Self::unlink) then [`remove_unreachable`](Self::remove_unreachable),
+    /// where only the shortened parent's ref departed. Here the node itself is
+    /// going, so a dual-link residue must not keep it — or its subtree — alive.
+    pub fn remove_deleted(&mut self, id: NodeId) {
+        self.links.retain(|l| l.child != id);
+        self.remove_unreachable(id);
+    }
+
     /// Every link naming `child` as the child. One entry in a well-formed
     /// snapshot; two on a dual-link crash residue.
     pub fn links_to(&self, child: NodeId) -> Vec<Link> {
@@ -368,19 +381,26 @@ impl Snapshot {
 }
 
 /// The single strict name comparator (blueprint/engine.md rebase table:
-/// "one strict comparator everywhere … identical at create and merge on all
-/// platforms, names stored as-entered"). Case-folded so `Report.txt` and
-/// `report.txt` collide; the stored name is never mutated.
+/// "one strict comparator everywhere — NFC-normalized + case-folded, identical
+/// at create and merge on all platforms, names stored as-entered").
 ///
-/// Canonical Unicode NFC normalization is the cross-language KAT'd surface
-/// core owns (its `name_cmp` is the wire-order sibling); this engine-side key
-/// folds case with the platform-stable Unicode default mapping and is applied
-/// identically at create and at merge.
+/// Canonical composition runs before the fold, so `café` composed and
+/// decomposed key the same, and **again after** it, because the case map is not
+/// closed under canonical equivalence: `J` + U+030C folds to a decomposed `ǰ`
+/// whose precomposed twin U+01F0 folds to itself, and the two would key apart
+/// while rendering identically. Compatibility equivalence is deliberately not
+/// folded — `ﬁle` and `file` are names a user can tell apart. The stored name
+/// is never mutated.
 ///
-/// Zeroizing because the fold is a verbatim copy of the name for any name that
-/// is already lowercase, and it is built per sibling on every lookup.
+/// Zeroizing because the key is a near-verbatim copy of the name, built per
+/// sibling on every lookup. Sized exactly: a growth realloc would free an
+/// intermediate holding the name that zeroizing the result cannot reach
+/// ([`suffix_name`] pre-sizes for the same reason).
 pub fn collation_key(name: &str) -> Zeroizing<String> {
-    Zeroizing::new(name.to_lowercase())
+    let folded = || name.nfc().flat_map(char::to_lowercase).nfc();
+    let mut key = Zeroizing::new(String::with_capacity(folded().map(char::len_utf8).sum()));
+    key.extend(folded());
+    key
 }
 
 /// The auto-suffix for an add/add collision loser: ` (n)` inserted before the
@@ -486,6 +506,45 @@ mod tests {
         assert!(snap.contains(id(0)));
     }
 
+    /// The delete direction takes the node itself, so no surviving link to it
+    /// may keep the subtree alive — unlike the observed direction, where a
+    /// second parent naming the child is exactly what licenses keeping it.
+    #[test]
+    fn remove_deleted_detaches_from_every_parent_before_cascading() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(0), id(4));
+        folder(&mut snap, id(1), id(2));
+        folder(&mut snap, id(2), id(3));
+        // A dual-link residue on the delete target itself.
+        snap.link(id(4), id(1), 2);
+
+        snap.remove_deleted(id(1));
+
+        assert!(!snap.contains(id(1)), "the residual link does not save it");
+        assert!(!snap.contains(id(2)), "nor its descendants");
+        assert!(!snap.contains(id(3)));
+        assert!(snap.contains(id(4)), "a bystander parent survives");
+    }
+
+    #[test]
+    fn remove_deleted_keeps_a_descendant_another_parent_still_names() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+        folder(&mut snap, id(0), id(4));
+        snap.link(id(4), id(2), 2);
+
+        snap.remove_deleted(id(1));
+
+        assert!(!snap.contains(id(1)));
+        assert_eq!(
+            snap.parent_of(id(2)),
+            Some(id(4)),
+            "still linked from the surviving parent"
+        );
+    }
+
     #[test]
     fn remove_unreachable_never_removes_the_root() {
         let mut snap = Snapshot::new(id(0));
@@ -522,6 +581,56 @@ mod tests {
     fn collation_key_folds_case() {
         assert_eq!(collation_key("Report.TXT"), collation_key("report.txt"));
         assert_ne!(collation_key("a"), collation_key("b"));
+    }
+
+    /// The comparator's frozen vectors: each pair is one name typed two ways,
+    /// and the vault holds one entry for both however a client composed them
+    /// (blueprint/engine.md rebase table, blueprint/desktop.md "Names and
+    /// attributes"). Written as escapes rather than literals so the file's own
+    /// encoding cannot silently normalize a case away.
+    #[test]
+    fn collation_key_normalizes_to_nfc() {
+        for (case, composed, decomposed) in [
+            ("latin e-acute", "caf\u{e9}", "cafe\u{301}"),
+            ("latin o-diaeresis", "\u{d6}sterreich", "O\u{308}sterreich"),
+            (
+                "vietnamese e-circumflex-acute",
+                "b\u{1ebf}",
+                "be\u{302}\u{301}",
+            ),
+            (
+                "hangul syllable gag",
+                "\u{ac01}",
+                "\u{1100}\u{1161}\u{11a8}",
+            ),
+            ("hiragana voiced ga", "\u{304c}", "\u{304b}\u{3099}"),
+            // The fold's own output must be re-composed: this pair keys apart
+            // under an NFC-then-fold that stops there.
+            ("j-caron under an uppercase base", "J\u{30c}", "\u{1f0}"),
+        ] {
+            assert_ne!(composed, decomposed, "{case}: the inputs differ as bytes");
+            assert_eq!(
+                collation_key(composed),
+                collation_key(decomposed),
+                "{case}: one name, however it was typed"
+            );
+        }
+
+        // Compatibility equivalence is *not* folded: NFKC would collapse these,
+        // and a comparator that did would refuse names users can tell apart.
+        assert_ne!(collation_key("\u{fb01}le"), collation_key("file"));
+        assert_ne!(collation_key("\u{2460}"), collation_key("1"));
+    }
+
+    /// Normalization runs before the fold, so a decomposed name still collides
+    /// with a differently-cased composed sibling.
+    #[test]
+    fn name_taken_folds_case_across_a_decomposition_boundary() {
+        let mut snap = Snapshot::new(id(0));
+        snap.upsert_node(NodeMeta::new(id(1), "Cafe\u{301}.txt", NodeKind::File));
+        snap.link(id(0), id(1), 1);
+        assert!(snap.name_taken(id(0), "caf\u{e9}.txt", None));
+        assert!(!snap.name_taken(id(0), "caf\u{e9}.txt", Some(id(1))));
     }
 
     #[test]

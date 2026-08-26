@@ -72,10 +72,11 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
 use crate::storage_policy::StoragePolicy;
+use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::{
-    MAX_JOURNAL_REPLAYS, Reclamation, decode_reclamation, doomed_journal_key, encode_reclamation,
-    journalled_keys,
+    MAX_JOURNAL_REPLAYS, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
+    seal_reclamation,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -614,6 +615,12 @@ where
     St: StagingStore,
     Sch: Scheduler + Clone + 'static,
 {
+    /// This session's custody of its per-owner staging bookkeeping — the retire
+    /// ledger and the doomed-name journal alike (`crate::sync::bookkeeping`).
+    fn bookkeeping_seal<'s>(&'s self, scope: &'s DrainScope<'_>) -> BookkeepingSeal<'s> {
+        BookkeepingSeal::new(scope.enc_secret, self.entropy)
+    }
+
     /// Run one pass: rebase the queue onto gate-passing state and publish every
     /// applied op it can, stopping at the first it cannot, then clear what the
     /// pass orphaned.
@@ -633,9 +640,10 @@ where
         // An X25519 base-point multiply, so the pass derives it once and threads
         // it through every consumer below.
         let owner = owner_tag(scope.enc_secret);
-        self.settle_journalled_deletes(&owner, &staged).await;
+        let seal = self.bookkeeping_seal(scope);
+        self.settle_journalled_deletes(seal, &owner, &staged).await;
         if let Some(owed) = drain_owed_retires(
-            &StagingRetireLedger::over(self.staging, &staged),
+            &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
             self.api,
             self.gateway,
@@ -1224,7 +1232,6 @@ where
             OpKind::Move {
                 from_parent,
                 new_parent,
-                replacing,
                 crossing: ScopeCrossing::Intra,
                 ..
             } => {
@@ -1237,9 +1244,7 @@ where
                     // Only the node the rebase actually vacated loses its ref:
                     // one that won the conditional delete keeps its entry, and
                     // the move already resolved onto a name beside it.
-                    vacated: replacing
-                        .map(|replaced| replaced.node)
-                        .filter(|node| !rebased.contains(*node)),
+                    vacated: applied.vacated,
                 };
                 self.publish_ref_move(scope, pass, applied, rebased, plan)
                     .await
@@ -1423,11 +1428,12 @@ where
         .map_err(Halt::from)?;
         let reclamation = self.owed_by_delete(target, &doomed);
         let owner = owner_tag(scope.enc_secret);
+        let seal = self.bookkeeping_seal(scope);
         let key = doomed_journal_key(&owner, target);
-        let journalled = self.journal_doomed(&key, target, &reclamation).await;
-        let residue = self.settle_reclamation(&owner, &reclamation).await;
+        let journalled = self.journal_doomed(seal, &key, target, &reclamation).await;
+        let residue = self.settle_reclamation(seal, &owner, &reclamation).await;
         match (journalled, residue) {
-            (true, residue) => self.update_journal(&key, &reclamation, residue).await,
+            (true, residue) => self.update_journal(seal, &key, &reclamation, residue).await,
             // No durable entry to retry from, so the session-lived orphan set is
             // the only retry there is.
             (false, Some(residue)) => {
@@ -1441,16 +1447,24 @@ where
     }
 
     /// Write what the unlink just earned to the doomed-name journal, reporting
-    /// whether it landed. A store that will not take it leaves this pass's own
-    /// retries as the only ones there are.
+    /// whether it landed. Anything short of a durable entry — a store that will
+    /// not take it, an entropy seam that will not seal it, or an entry the
+    /// replay would refuse — leaves this pass's own retries as the only ones
+    /// there are.
     ///
-    /// Refuses an entry the replay would refuse, so no build can write one its
-    /// own settle path always rejects.
-    async fn journal_doomed(&self, key: &[u8], target: NodeId, reclamation: &Reclamation) -> bool {
+    /// Refusing what the replay would refuse is what keeps a build from writing
+    /// an entry its own settle path always rejects.
+    async fn journal_doomed(
+        &self,
+        seal: BookkeepingSeal<'_>,
+        key: &[u8],
+        target: NodeId,
+        reclamation: &Reclamation,
+    ) -> bool {
         if reclamation.is_empty() || !reclamation.is_for(target) {
             return false;
         }
-        let Ok(entry) = encode_reclamation(reclamation) else {
+        let Ok(entry) = seal_reclamation(seal, reclamation) else {
             return false;
         };
         self.staging.put_staged_bytes(key, &entry).await.is_ok()
@@ -1460,6 +1474,7 @@ where
     /// nothing is, rewritten when a leg landed, untouched when none did.
     async fn update_journal(
         &self,
+        seal: BookkeepingSeal<'_>,
         key: &[u8],
         previous: &Reclamation,
         residue: Option<Reclamation>,
@@ -1469,7 +1484,7 @@ where
                 let _ = self.staging.remove_staged_bytes(key).await;
             }
             Some(residue) if residue != *previous => {
-                if let Ok(entry) = encode_reclamation(&residue) {
+                if let Ok(entry) = seal_reclamation(seal, &residue) {
                     let _ = self.staging.put_staged_bytes(key, &entry).await;
                 }
             }
@@ -1486,10 +1501,15 @@ where
     ///
     /// Bounded per pass by the entries it settles, never by the keys it lists
     /// ([`MAX_JOURNAL_REPLAYS`]). A refused or unreadable entry costs a local
-    /// read and no slot: nothing sweeps this prefix, so charging it one would
-    /// starve every entry sorting behind it for good. Settled entries leave, so
-    /// the rest are reached on the next pass.
-    async fn settle_journalled_deletes(&self, owner: &[u8; 32], staged: &[Vec<u8>]) {
+    /// read and an HPKE open, but no slot: nothing sweeps this prefix, so
+    /// charging it one would starve every entry sorting behind it for good.
+    /// Settled entries leave, so the rest are reached on the next pass.
+    async fn settle_journalled_deletes(
+        &self,
+        seal: BookkeepingSeal<'_>,
+        owner: &[u8; 32],
+        staged: &[Vec<u8>],
+    ) {
         let mut replayed = 0usize;
         for (key, target) in journalled_keys(owner, staged) {
             if replayed == MAX_JOURNAL_REPLAYS {
@@ -1498,12 +1518,13 @@ where
             let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
                 continue;
             };
-            let Some(reclamation) = decode_reclamation(&entry).filter(|r| r.is_for(target)) else {
+            let Some(reclamation) = open_reclamation(seal, &entry).filter(|r| r.is_for(target))
+            else {
                 continue;
             };
             replayed += 1;
-            let residue = self.settle_reclamation(owner, &reclamation).await;
-            self.update_journal(&key, &reclamation, residue).await;
+            let residue = self.settle_reclamation(seal, owner, &reclamation).await;
+            self.update_journal(seal, &key, &reclamation, residue).await;
         }
     }
 
@@ -1640,11 +1661,12 @@ where
     /// no-op on a repeat, and the local drops are removals.
     async fn settle_reclamation(
         &self,
+        seal: BookkeepingSeal<'_>,
         owner: &[u8; 32],
         reclamation: &Reclamation,
     ) -> Option<Reclamation> {
         if !reclamation.owed.is_empty()
-            && StagingRetireLedger::new(self.staging)
+            && StagingRetireLedger::new(self.staging, seal)
                 .owe(owner, &reclamation.owed)
                 .await
                 .is_err()
@@ -2124,7 +2146,7 @@ where
         // history it was read from standing, not a shortened one it never
         // journaled.
         let owed = self.prune_debt(target, &plan.retire_targets).await?;
-        StagingRetireLedger::new(self.staging)
+        StagingRetireLedger::new(self.staging, self.bookkeeping_seal(scope))
             .owe(&owner_tag(scope.enc_secret), &owed)
             .await
             .map_err(seam)?;

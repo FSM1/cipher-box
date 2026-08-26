@@ -10,17 +10,21 @@
 //! [`KeyringCredentialStore`](cipherbox_desktop_seams::KeyringCredentialStore)
 //! on whichever OS backend the host provides.
 
+use core::cell::RefCell;
+
+use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_desktop_seams::{
     FileCredentialStore, FileFloorStore, FileSnapshotCache, FileStagingStore, ReqwestHttp,
     ReqwestRecordTransport, TokioScheduler,
 };
-use cipherbox_engine::StagingRetireLedger;
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
     SeamResult, StagingStore,
 };
+use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
-use cipherbox_engine::testkit::{block_on, conformance};
+use cipherbox_engine::testkit::{SeededEntropy, block_on, conformance};
+use cipherbox_engine::{Entropy, StagingRetireLedger};
 
 mod mock_http;
 use mock_http::MockServer;
@@ -113,8 +117,15 @@ fn set_denied(path: &std::path::Path, denied: bool) -> std::io::Result<()> {
 fn the_file_staging_store_passes_the_retire_ledger_kit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("retire-ledger");
+    // The seal outlives every handle the kit opens, so one identity's entries
+    // stay readable across a reopen.
+    let secret: &X25519Secret = Box::leak(Box::new(X25519Secret::from_scalar([0x4c; 32])));
+    let entropy: &RefCell<dyn Entropy> = Box::leak(Box::new(RefCell::new(SeededEntropy::new(7))));
     block_on(conformance::retire_ledger::check(async || {
-        StagingRetireLedger::new(Box::leak(Box::new(FileStagingStore::open(&path).unwrap())))
+        StagingRetireLedger::new(
+            Box::leak(Box::new(FileStagingStore::open(&path).unwrap())),
+            BookkeepingSeal::new(secret, entropy),
+        )
     }));
 }
 
