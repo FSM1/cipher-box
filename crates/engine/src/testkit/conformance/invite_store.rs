@@ -13,6 +13,7 @@ use crate::seams::UnixMillis;
 
 fn record(byte: u8, expires_at: Option<UnixMillis>) -> RecordedInvite {
     RecordedInvite {
+        scope_id: [byte ^ 0x33; 16],
         tag: [byte; 32],
         ephemeral_identity_pk: [byte ^ 0x0f; IDENTITY_PUBLIC_LEN],
         ephemeral_enc_pk: [byte ^ 0xf0; SECRET_LEN],

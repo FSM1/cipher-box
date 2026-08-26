@@ -255,6 +255,10 @@ impl EphemeralInvitee {
 /// converts against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedInvite {
+    /// The scope the link was minted over. Written at mint so attributing a
+    /// record to its scope is a comparison rather than a per-record ECDH, and
+    /// epoch-stable where the tag's bound scope root name is not.
+    pub scope_id: [u8; 16],
     /// The link's blinded tag.
     pub tag: [u8; 32],
     /// The ephemeral identity a fragment holder signs its claim with.
@@ -313,6 +317,7 @@ pub fn mint_invite_grant(
     row.ledger_entry.expires_at = deadline;
     Ok(MintedInvite {
         link: RecordedInvite {
+            scope_id: *scope_id,
             tag: row.tag,
             ephemeral_identity_pk: invitee.identity_pk().to_sec1(),
             ephemeral_enc_pk: invitee.enc_public().to_bytes(),
@@ -793,20 +798,32 @@ pub fn convert_invite_claim(
     })
 }
 
+/// The tag `link`'s own key material derives at `scope_root_name`, from the
+/// owner's half of the pairwise ECDH.
+///
+/// A write rotation moves the scope root's name and re-mints every committed row
+/// under a new tag ([`crate::net::rotation`]), so this is what the current set
+/// carries — the record's stored tag is what it was minted under.
+fn derived_tag(
+    owner_enc_secret: &X25519Secret,
+    link: &RecordedInvite,
+    scope_root_name: &[u8],
+) -> Option<[u8; 32]> {
+    X25519Public::from_bytes(link.ephemeral_enc_pk)
+        .and_then(|enc| recipient_blinded_tag(owner_enc_secret, &enc, scope_root_name))
+}
+
 /// Whether `link` records a link on the scope root at `scope_root_name`.
 ///
-/// Re-derives the record's blinded tag from the owner's own half of the
-/// pairwise ECDH: the tag binds the scope root's name, so a record made against
-/// another scope root cannot be replayed against this one, and a record whose
-/// stored tag does not match its own key material is not this owner's.
+/// The tag binds the scope root's name, so a record made against another scope
+/// root cannot be replayed against this one, and a record whose stored tag does
+/// not match its own key material is not this owner's.
 pub fn link_binds_scope(
     owner_enc_secret: &X25519Secret,
     link: &RecordedInvite,
     scope_root_name: &[u8],
 ) -> bool {
-    X25519Public::from_bytes(link.ephemeral_enc_pk).is_some_and(|enc| {
-        recipient_blinded_tag(owner_enc_secret, &enc, scope_root_name) == Some(link.tag)
-    })
+    derived_tag(owner_enc_secret, link, scope_root_name) == Some(link.tag)
 }
 
 /// This owner's link records at one scope, split by whether the scope's own
@@ -819,31 +836,36 @@ pub struct ScopeLinks {
     pub spent: BTreeSet<[u8; 32]>,
 }
 
-/// Split this owner's records for the scope root at `scope_root_name`.
+/// Split this owner's records for the scope `scope_id`, against the set
+/// `commitment` commits at the scope root it names.
 ///
-/// A record that does not re-derive its own tag from this owner's half of the
-/// pairwise ECDH is neither half of the split: it is not this owner's record at
-/// this scope, so it is neither cuttable nor prunable here.
+/// A record the commitment still carries whose tag its own key material does not
+/// re-derive is in neither half: it names a row that is not this link's, so it
+/// is not cuttable. Neither is one whose row the commitment carries under a tag
+/// re-minted at a moved name — that link is live, and forgetting it would
+/// destroy the owner's only note that a committed row is a link at all.
 pub fn partition_scope_links(
     owner_enc_secret: &X25519Secret,
     links: &[RecordedInvite],
     commitment: &GrantSetCommitment,
-    scope_root_name: &[u8],
+    scope_id: &[u8; 16],
 ) -> ScopeLinks {
+    let name = commitment.ipns_name.as_slice();
     let carried: BTreeSet<[u8; 32]> = commitment.entries.iter().map(|entry| entry.tag).collect();
     let mut split = ScopeLinks {
         committed: Vec::new(),
         spent: BTreeSet::new(),
     };
-    // Both halves are this owner's records, so every one pays the ECDH; only
-    // which half it lands in is a lookup.
-    for link in links
-        .iter()
-        .filter(|link| link_binds_scope(owner_enc_secret, link, scope_root_name))
-    {
+    // Attribution is the recorded scope id, so only this scope's records reach
+    // the ECDH — and a spend, which is destructive and irreversible, is decided
+    // against the tag the record itself derives rather than the stored one.
+    for link in links.iter().filter(|link| link.scope_id == *scope_id) {
+        let derived = derived_tag(owner_enc_secret, link, name);
         if carried.contains(&link.tag) {
-            split.committed.push(*link);
-        } else {
+            if derived == Some(link.tag) {
+                split.committed.push(*link);
+            }
+        } else if !derived.is_some_and(|tag| carried.contains(&tag)) {
             split.spent.insert(link.tag);
         }
     }
@@ -852,29 +874,23 @@ pub fn partition_scope_links(
 
 /// The one live link the owner recorded at `scope` — the link a revoke cuts.
 ///
-/// Owner-only, and only a link the owner recorded **and** the owner-signed
-/// commitment still carries: a tag that is merely committed belongs to some
-/// grantee (a claim's personal grant among them) and is not a link's to cut,
-/// and a recorded tag the commitment has dropped names a link that is already
-/// gone. Ambiguity is refused rather than resolved to the first match.
-pub fn locate_invite_link<'a>(
+/// Owner-only, and the committed half of [`partition_scope_links`], so what a
+/// revoke cuts cannot disagree with what the sharing read renders. A tag that is
+/// merely committed belongs to some grantee (a claim's personal grant among
+/// them) and is not a link's to cut. Ambiguity is refused rather than resolved
+/// to the first match.
+pub fn locate_invite_link(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
-    links: &'a [RecordedInvite],
-) -> Result<&'a RecordedInvite, InviteError> {
+    links: &[RecordedInvite],
+) -> Result<RecordedInvite, InviteError> {
     owner.authorise(scope)?;
-    let name = scope.commitment.ipns_name.as_slice();
-    // Membership first: it costs a lookup, where binding the record to this
-    // scope costs an ECDH.
-    let mut live = links.iter().filter(|link| {
-        scope.commitment.entries.iter().any(|e| e.tag == link.tag)
-            && link_binds_scope(owner.enc_secret, link, name)
-    });
-    let link = live.next().ok_or(InviteError::LinkNotCommitted)?;
-    if live.next().is_some() {
-        return Err(InviteError::LinkNotCommitted);
+    let live =
+        partition_scope_links(owner.enc_secret, links, scope.commitment, scope.scope_id).committed;
+    match live.as_slice() {
+        [link] => Ok(*link),
+        _ => Err(InviteError::LinkNotCommitted),
     }
-    Ok(link)
 }
 
 /// The produce-side mirror of what a resolver hard-rejects: the grant-set
@@ -1387,8 +1403,16 @@ mod tests {
 
     /// The owner-signed set committing exactly `rows`.
     fn committed(rows: &[GrantRow]) -> (GrantSetCommitment, EcdsaSignature, Vec<GrantLedgerEntry>) {
+        committed_at(scope_name(), rows)
+    }
+
+    /// The owner-signed set committing exactly `rows` at the scope root `name`.
+    fn committed_at(
+        name: Vec<u8>,
+        rows: &[GrantRow],
+    ) -> (GrantSetCommitment, EcdsaSignature, Vec<GrantLedgerEntry>) {
         let commitment = GrantSetCommitment {
-            ipns_name: scope_name(),
+            ipns_name: name,
             owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
             entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
             unknown: PreservedFields::new(),
@@ -1438,12 +1462,23 @@ mod tests {
 
     /// A minted link over `SCOPE`, keyed by its fragment secret.
     fn link(secret: u8, permission: Permission, expires_at: Option<UnixMillis>) -> MintedInvite {
+        link_under(secret, permission, expires_at, &WRITE_SCOPE_SEED)
+    }
+
+    /// The same, at the scope root `write_scope_seed` derives — the name a write
+    /// rotation moves the scope to.
+    fn link_under(
+        secret: u8,
+        permission: Permission,
+        expires_at: Option<UnixMillis>,
+        write_scope_seed: &[u8; 32],
+    ) -> MintedInvite {
         mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
             &EphemeralInvitee::from_secret(&[secret; 32]).expect("valid"),
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            write_scope_seed,
             permission,
             expires_at,
         )
@@ -1853,7 +1888,7 @@ mod tests {
 
         assert_eq!(
             locate_invite_link(&owner, &scope, &[write.link]).expect("locates"),
-            &write.link,
+            write.link,
         );
         // A link the owner never recorded is nobody's to cut, and neither is a
         // recorded one the commitment has already dropped.
@@ -1887,6 +1922,85 @@ mod tests {
                 .unwrap_err()
                 .check(),
             "link-not-committed",
+        );
+    }
+
+    /// A record minted elsewhere is neither cuttable nor prunable here, even
+    /// where this scope's commitment happens to carry its tag and its own key
+    /// material re-derives it.
+    #[test]
+    fn a_record_minted_at_another_scope_is_neither_half_nor_locatable() {
+        let l = link(0x71, Permission::Read, None);
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+        let scope = committed_scope(&commitment, &sig, &ledger);
+        let elsewhere = RecordedInvite {
+            scope_id: [0xa1; 16],
+            ..l.link
+        };
+
+        let split = partition_scope_links(owner.enc_secret, &[elsewhere], &commitment, &SCOPE);
+        assert!(split.committed.is_empty() && split.spent.is_empty());
+        assert_eq!(
+            locate_invite_link(&owner, &scope, &[elsewhere])
+                .unwrap_err()
+                .check(),
+            "link-not-committed",
+        );
+
+        // Only the recorded id differs, so it is what decided the refusal.
+        let split = partition_scope_links(owner.enc_secret, &[l.link], &commitment, &SCOPE);
+        assert_eq!(split.committed, vec![l.link]);
+    }
+
+    /// A record whose tag this scope's own commitment has dropped is spent — a
+    /// revoke cut it, or a later mint at the same node superseded it.
+    #[test]
+    fn a_record_the_commitment_dropped_is_spent() {
+        let live = link(0x71, Permission::Read, None);
+        let dropped = link(0x73, Permission::Read, None);
+        let (commitment, ..) = committed(&[live.row.clone()]);
+
+        let split = partition_scope_links(
+            &owner_enc(),
+            &[live.link, dropped.link],
+            &commitment,
+            &SCOPE,
+        );
+        assert_eq!(split.spent, BTreeSet::from([dropped.link.tag]));
+        assert_eq!(split.committed, vec![live.link]);
+    }
+
+    /// A write rotation moves the scope root's name and re-mints every committed
+    /// row under a new tag, so a record from an earlier epoch holds a tag the
+    /// current set does not carry while its row is still live. Forgetting it
+    /// would destroy the owner's only note that a committed row is a link, and
+    /// the key material a later build would re-derive the new tag from.
+    #[test]
+    fn a_record_whose_row_was_re_minted_at_a_moved_name_is_not_spent() {
+        const MOVED_WRITE_SEED: [u8; 32] = [0x5b; 32];
+        let before = link(0x71, Permission::Read, None);
+        let after = link_under(0x71, Permission::Read, None, &MOVED_WRITE_SEED);
+        assert_ne!(
+            before.link.tag, after.link.tag,
+            "the rotation moved the tag"
+        );
+
+        let moved = derive_write_name(&MOVED_WRITE_SEED, &SCOPE)
+            .as_str()
+            .as_bytes()
+            .to_vec();
+        let (commitment, ..) = committed_at(moved, &[after.row.clone()]);
+
+        let split = partition_scope_links(&owner_enc(), &[before.link], &commitment, &SCOPE);
+        assert!(
+            split.spent.is_empty(),
+            "the link's row is live at the moved name"
+        );
+        assert!(
+            split.committed.is_empty(),
+            "and its stored tag is not what a cut would name"
         );
     }
 

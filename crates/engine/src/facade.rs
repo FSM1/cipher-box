@@ -4646,7 +4646,7 @@ where {
             session.enc_subkey(),
             &records.links,
             &current.commitment,
-            &target.scope.ipns_name,
+            &target.scope.scope_id,
         )
         .spent;
         if dead.is_empty() {
@@ -5973,7 +5973,7 @@ where {
                 session.enc_subkey(),
                 &records.links,
                 &current.commitment,
-                &target.scope.ipns_name,
+                &target.scope.scope_id,
             )
         });
         // One committed record is the live link; two have no defined cut, so the

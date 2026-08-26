@@ -321,6 +321,7 @@ fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
     let store = StagingInviteStore::new(&device.staging_store, &enc_subkey, &entropy);
     let records = InviteRecords {
         links: vec![RecordedInvite {
+            scope_id: root.0,
             tag: [0x4e; 32],
             ephemeral_identity_pk: [0x02; 33],
             ephemeral_enc_pk: [0x5f; 32],
