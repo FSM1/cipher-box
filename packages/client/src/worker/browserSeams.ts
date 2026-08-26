@@ -1,12 +1,11 @@
 /**
- * Constructs the eight browser seams for one engine instance, inside the worker
+ * Constructs the seven browser seams for one engine instance, inside the worker
  * realm (blueprint/web-client.md "Browser seams"). The seam bag's property names
  * are the constructor contract the WASM `EngineHandle` reads.
  */
 
 import { deleteDatabase, openDatabase, requestResult } from '../seams/idb.js';
 import {
-  ApiMailbox,
   FetchHttp,
   FetchRecordTransport,
   IdbFloorStore,
@@ -22,8 +21,6 @@ import {
 export interface BrowserSeamsConfig {
   /** Delegated-routing endpoint set for `RecordTransport` (someguy + public). */
   recordEndpoints: string[];
-  /** Absolute base URL of the API; `Mailbox` appends its own routes. */
-  apiBaseUrl: string;
   /** Prefix for the IndexedDB/OPFS store names (namespaces per origin/test). */
   dbPrefix?: string;
 }
@@ -55,7 +52,6 @@ export interface BrowserSeams {
   floorStore: IdbFloorStore;
   recordTransport: FetchRecordTransport;
   http: FetchHttp;
-  mailbox: ApiMailbox;
   scheduler: WorkerScheduler;
   stagingStore: OpfsStagingStore;
   snapshotCache: IdbSnapshotCache;
@@ -82,12 +78,10 @@ function namesAccountStore(dbPrefix: string, name: string, suffixes: readonly st
 export function makeBrowserSeams(config: BrowserSeamsConfig, accountId: string): BrowserSeams {
   if (!ACCOUNT_ID.test(accountId)) throw new Error('account id is not a store namespace');
   const prefix = `${config.dbPrefix ?? DEFAULT_DB_PREFIX}-${accountId}`;
-  const http = new FetchHttp();
   return {
     floorStore: new IdbFloorStore(`${prefix}-floors`),
     recordTransport: new FetchRecordTransport(config.recordEndpoints),
-    http,
-    mailbox: new ApiMailbox(http, config.apiBaseUrl),
+    http: new FetchHttp(),
     scheduler: new WorkerScheduler(),
     stagingStore: new OpfsStagingStore(`${prefix}-staging`),
     snapshotCache: new IdbSnapshotCache(`${prefix}-snapshot-cache`),

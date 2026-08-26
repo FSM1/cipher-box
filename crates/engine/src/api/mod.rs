@@ -9,6 +9,7 @@
 
 mod client;
 mod error;
+mod mailbox;
 mod signer;
 mod types;
 

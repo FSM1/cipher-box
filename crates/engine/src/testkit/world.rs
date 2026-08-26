@@ -15,7 +15,6 @@ impl SeamTypes for FakeSeamTypes {
     type FloorStore = InMemoryFloorStore;
     type RecordTransport = InMemoryRecordStore;
     type Http = ScriptedHttp;
-    type Mailbox = InMemoryMailbox;
     type Scheduler = VirtualScheduler;
     type StagingStore = InMemoryStagingStore;
     type SnapshotCache = InMemorySnapshotCache;
@@ -54,13 +53,14 @@ impl FakeWorld {
     /// stores, shared network and clock. `recipient_public_key` binds the
     /// device's mailbox inbox.
     pub fn device(&self, recipient_public_key: &[u8]) -> FakeDevice {
+        let mailbox = self.mailbox_hub.mailbox_for(recipient_public_key);
         FakeDevice {
             floor_store: InMemoryFloorStore::default(),
             staging_store: InMemoryStagingStore::default(),
             snapshot_cache: InMemorySnapshotCache::default(),
             credential_store: InMemoryCredentialStore::default(),
-            http: ScriptedHttp::default(),
-            mailbox: self.mailbox_hub.mailbox_for(recipient_public_key),
+            http: ScriptedHttp::with_mailbox(mailbox.clone()),
+            mailbox,
             received_share_store: InMemoryReceivedShareStore::default(),
             scheduler: self.scheduler.clone(),
             record_store: self.record_store.clone(),
@@ -86,9 +86,10 @@ pub struct FakeDevice {
     pub snapshot_cache: InMemorySnapshotCache,
     /// Device-local refresh-token store.
     pub credential_store: InMemoryCredentialStore,
-    /// Device-local scripted HTTP.
+    /// Device-local scripted HTTP, serving this device's inbox from the hub.
     pub http: ScriptedHttp,
-    /// This device's inbox on the shared hub.
+    /// This device's inbox on the shared hub — the same one [`Self::http`]
+    /// answers the API's mailbox routes from.
     pub mailbox: InMemoryMailbox,
     /// Device-local durable received-shares bookmark (the grants accept flow's
     /// [`ReceivedShareStore`](crate::grants::ReceivedShareStore)).
@@ -107,7 +108,6 @@ impl FakeDevice {
             floor_store: self.floor_store.clone(),
             record_transport: self.record_store.clone(),
             http: self.http.clone(),
-            mailbox: self.mailbox.clone(),
             scheduler: self.scheduler.clone(),
             staging_store: self.staging_store.clone(),
             snapshot_cache: self.snapshot_cache.clone(),

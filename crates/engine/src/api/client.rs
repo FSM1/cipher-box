@@ -419,7 +419,17 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     }
 
     /// Ack (delete) a mailbox item by id.
+    ///
+    /// The id is transport-supplied and lands in a path segment, so anything
+    /// outside the RFC 3986 unreserved set is refused fail-closed: an
+    /// integrity-untrusted mailbox must not be able to steer this authenticated
+    /// DELETE at another route.
     pub async fn mailbox_ack(&self, id: &str) -> Result<(), ApiError> {
+        if !is_path_segment(id) {
+            return Err(ApiError::Decode(
+                "mailbox item id is not a path segment".into(),
+            ));
+        }
         let response = self
             .request_authed(HttpMethod::Delete, &format!("/mailbox/messages/{id}"))
             .await?;
@@ -654,6 +664,17 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
 fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
+}
+
+/// Whether `value` is safe to interpolate verbatim into a URL path: 1-128 RFC
+/// 3986 unreserved characters, which admits the API's UUID ids and excludes
+/// every byte that could end the segment or open a query.
+fn is_path_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
 }
 
 /// The domain tag the API stamps on an identity login challenge

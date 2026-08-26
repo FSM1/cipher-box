@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use super::InMemoryMailbox;
 use crate::seams::{Http, HttpRequest, HttpResponse, SeamError, SeamResult};
 
 /// A reply computed from the request it answers.
@@ -24,9 +25,24 @@ struct Inner {
 /// every request is recorded for assertion. An unscripted request is a
 /// seam error — a test that hits the network unexpectedly should fail
 /// loudly.
+///
+/// The mailbox routes are the one exception: they are answered from the world's
+/// shared hub rather than the queue, so a scenario's scripted call budget stays
+/// about the API calls the test is actually reasoning over.
 #[derive(Clone, Default)]
 pub struct ScriptedHttp {
     inner: Arc<Mutex<Inner>>,
+    mailbox: Option<InMemoryMailbox>,
+}
+
+impl ScriptedHttp {
+    /// Scripted HTTP that additionally serves this device's inbox.
+    pub fn with_mailbox(mailbox: InMemoryMailbox) -> Self {
+        Self {
+            inner: Arc::default(),
+            mailbox: Some(mailbox),
+        }
+    }
 }
 
 impl ScriptedHttp {
@@ -62,6 +78,12 @@ impl ScriptedHttp {
 
 impl Http for ScriptedHttp {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
+        if let Some(mailbox) = &self.mailbox
+            && let Some(response) = mailbox.serve(&request)
+        {
+            self.inner.lock().expect("lock").requests.push(request);
+            return response;
+        }
         let mut inner = self.inner.lock().expect("lock");
         let reply = inner.responses.pop_front();
         inner.requests.push(request);

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { readBody, send } from './mockMailbox.js';
+import { readBody, send } from './mockHttp.js';
 
 /**
  * In-memory mock of the API's identity-login exchange (blueprint/api.md
@@ -8,6 +8,10 @@ import { readBody, send } from './mockMailbox.js';
  * unless it echoes a challenge this mock issued, so an engine that came up
  * without logging in fails its cold start here. The signature itself is checked
  * where the crypto lives, in `crates/engine` and the contract suite.
+ *
+ * It owns the whole `/mock-api/` prefix: an unserved route under it answers 404
+ * rather than falling through to the dev server's HTML, so a call the mock does
+ * not implement fails as a missing route instead of a decode error.
  */
 
 /** Challenges issued and not yet spent, by the publicKey that asked for one. */
@@ -22,12 +26,14 @@ export function mockAuthRequest(req: IncomingMessage, res: ServerResponse): bool
     send(res, 200, completed);
     return true;
   }
-  if (req.method !== 'POST') return false;
-
   let respond;
-  if (url.endsWith('/auth/challenge')) respond = challenge;
+  if (req.method !== 'POST') respond = undefined;
+  else if (url.endsWith('/auth/challenge')) respond = challenge;
   else if (url.endsWith('/auth/login')) respond = login;
-  else return false;
+  if (!respond) {
+    send(res, 404, { error: 'no such mock-api route' });
+    return true;
+  }
 
   void readBody(req).then(
     (body) => respond(res, parse(body)),

@@ -1,7 +1,7 @@
 //! JS-seam → engine-seam adapters (wasm, browser target).
 //!
 //! Every browser seam is JavaScript (`packages/client` — IndexedDB, OPFS,
-//! `fetch`), so it cannot implement a Rust trait directly. For each of the eight
+//! `fetch`), so it cannot implement a Rust trait directly. For each of the seven
 //! engine seam traits this module declares the JS object's method surface as a
 //! wasm-bindgen import and wraps it in a Rust adapter that implements the trait.
 //! Two consumers share these adapters:
@@ -20,8 +20,8 @@
 
 use cipherbox_engine::seams::{
     BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpCredentials,
-    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport, Scheduler,
-    SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    HttpMethod, HttpRequest, HttpResponse, OpId, RecordTransport, Scheduler, SeamError, SeamResult,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use core::time::Duration;
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -669,76 +669,6 @@ impl Http for HttpAdapter {
 fn capped_count(result: &JsValue, field: &str) -> usize {
     let value = Reflect::get(result, &JsValue::from_str(field)).unwrap_or(JsValue::UNDEFINED);
     usize::try_from(required_u64(value)).unwrap_or(usize::MAX)
-}
-
-// ---------------------------------------------------------------------------
-// Mailbox.
-// ---------------------------------------------------------------------------
-
-#[wasm_bindgen]
-extern "C" {
-    /// JS `MailboxSeam` (packages/client).
-    pub type JsMailboxSeam;
-
-    #[wasm_bindgen(method, catch, js_name = post)]
-    async fn post(
-        this: &JsMailboxSeam,
-        recipient_public_key: &[u8],
-        sealed_payload: &[u8],
-        idempotency_key: &str,
-    ) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(method, catch, js_name = poll)]
-    async fn poll(this: &JsMailboxSeam) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(method, catch, js_name = ack)]
-    async fn ack(this: &JsMailboxSeam, item_id: &str) -> Result<JsValue, JsValue>;
-}
-
-pub(crate) struct MailboxAdapter {
-    pub(crate) js: JsMailboxSeam,
-}
-
-impl Mailbox for MailboxAdapter {
-    async fn post(
-        &self,
-        recipient_public_key: &[u8],
-        sealed_payload: &[u8],
-        idempotency_key: &str,
-    ) -> SeamResult<()> {
-        self.js
-            .post(recipient_public_key, sealed_payload, idempotency_key)
-            .await
-            .map_err(seam_error)?;
-        Ok(())
-    }
-
-    async fn poll(&self) -> SeamResult<Vec<MailboxItem>> {
-        let value = self.js.poll().await.map_err(seam_error)?;
-        let array: Array = value
-            .dyn_into()
-            .map_err(|_| SeamError::new("mailbox poll must return an array"))?;
-        let mut items = Vec::with_capacity(array.length() as usize);
-        for entry in array.iter() {
-            let item_id = Reflect::get(&entry, &JsValue::from_str("itemId"))
-                .ok()
-                .and_then(|id| id.as_string())
-                .ok_or_else(|| SeamError::new("mailbox item missing itemId"))?;
-            let sealed_payload = optional_bytes(
-                Reflect::get(&entry, &JsValue::from_str("sealedPayload"))
-                    .map_err(|_| SeamError::new("mailbox item missing sealedPayload"))?,
-            )
-            .unwrap_or_default();
-            items.push(MailboxItem {
-                item_id,
-                sealed_payload,
-            });
-        }
-        Ok(items)
-    }
-
-    async fn ack(&self, item_id: &str) -> SeamResult<()> {
-        self.js.ack(item_id).await.map_err(seam_error)?;
-        Ok(())
-    }
 }
 
 // Capped-fetch boundary tests. Crate-private adapters, so these live here rather

@@ -23,7 +23,6 @@ async function boot(): Promise<void> {
   const apiBaseUrl = `${origin}/mock-api/engine`;
   const seamConfig = {
     recordEndpoints: [`${origin}/routing`],
-    apiBaseUrl,
     dbPrefix: `engine-${Date.now()}`,
   };
   const host = new EngineHost(wasm, (accountId) => makeBrowserSeams(seamConfig, accountId), {

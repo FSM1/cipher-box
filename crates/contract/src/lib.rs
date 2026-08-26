@@ -137,12 +137,6 @@ pub fn hex_to_bytes(hex_str: &str) -> Option<Vec<u8>> {
     hex::decode(hex_str).ok()
 }
 
-/// Lowercase hex — how the mailbox seam's byte address reaches the API's hex
-/// `recipientPublicKey` field.
-pub fn bytes_to_hex(bytes: &[u8]) -> String {
-    hex::encode(bytes)
-}
-
 /// The API base URL for the live stack, from `CONTRACT_API_URL`. When unset the
 /// suite skips (there is no stack to hit); the merge-blocking CI job always
 /// sets it, so the assertions always run there.

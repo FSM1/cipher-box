@@ -31,9 +31,11 @@ pub struct MailboxItem {
 ///   `idempotency_key` is 1-128 RFC 3986 unreserved characters, both as the
 ///   API's `PostMessageDto` fixes them.
 ///
-/// v2.0 rides the API mailbox via the engine's own API client on both
-/// platforms; a decentralized inbox stays swappable behind this trait
-/// (#25 D2).
+/// Not a host seam: every mailbox route is JWT-guarded, and the access bearer
+/// never leaves the engine. v2.0 therefore rides the API mailbox through the
+/// engine's own [`ApiClient`](crate::api::ApiClient) on both platforms, which
+/// is where the token and its refresh already live; a decentralized inbox stays
+/// swappable behind this trait (#25 D2).
 pub trait Mailbox {
     /// Posts a sealed payload to a recipient's inbox.
     async fn post(

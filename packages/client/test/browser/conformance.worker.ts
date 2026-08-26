@@ -11,7 +11,6 @@
 import init, {
   runCredentialStoreConformance,
   runFloorStoreConformance,
-  runMailboxConformance,
   runRecordTransportConformance,
   runSchedulerConformance,
   runSnapshotCacheConformance,
@@ -21,7 +20,6 @@ import init, {
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
 import {
-  ApiMailbox,
   FetchHttp,
   FetchRecordTransport,
   IdbFloorStore,
@@ -274,7 +272,6 @@ async function runHttpBehavioral(): Promise<void> {
 async function runStoreReclaimBehavioral(): Promise<void> {
   const config = {
     recordEndpoints: [`${scope.location.origin}/routing`],
-    apiBaseUrl: `${scope.location.origin}/mock-api/reclaim`,
     // Fresh per run: a previous run's residue would answer for the sweep.
     dbPrefix: `reclaim-${Date.now()}`,
   };
@@ -411,17 +408,6 @@ async function run(seam: string): Promise<void> {
       const routingKey = `conf-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const record = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 0]);
       await runRecordTransportConformance(transport, routingKey, record);
-      return;
-    }
-    case 'mailbox': {
-      // A fresh compressed-secp256k1-shaped key per run: it names both the
-      // recipient the DTO carries and the mock account whose inbox is polled.
-      const ownPublicKey = new Uint8Array(33);
-      crypto.getRandomValues(ownPublicKey);
-      ownPublicKey[0] = 0x02;
-      const { origin } = scope.location;
-      const mailbox = new ApiMailbox(new FetchHttp(), `${origin}/mock-api/${toHex(ownPublicKey)}`);
-      await runMailboxConformance(mailbox, ownPublicKey);
       return;
     }
     case 'stagingStoreDebris': {

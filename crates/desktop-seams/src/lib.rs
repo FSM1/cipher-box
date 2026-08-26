@@ -11,7 +11,7 @@
 //! [`KeyringCredentialStore`] keeps only the rotating refresh token and the
 //! last-account id in the OS keyring — never a seed or an unwrapped key.
 //!
-//! The eight seams split by concern:
+//! The seven seams split by concern:
 //!
 //! - [`FileFloorStore`], [`FileStagingStore`], [`FileSnapshotCache`] —
 //!   fsync-barriered files (the v1 high-water / write-journal discipline
@@ -24,11 +24,8 @@
 //! host-to-engine storage measurement: not a seam trait, a construction-time
 //! figure the shell hands [`cipherbox_engine::Engine::new`].
 //!
-//! `Mailbox` is not implemented here: it is a transport over the API's mailbox
-//! routes with nothing desktop-specific about it, so the shell supplies it —
-//! today with a seam that refuses, the routes being bearer-authenticated and no
-//! host holding the session credential. This crate constructs no engine and
-//! touches no webview — the desktop shell does both.
+//! This crate constructs no engine and touches no webview — the desktop shell
+//! does both.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

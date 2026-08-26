@@ -25,9 +25,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::seams_bridge::{
-    CredentialStoreAdapter, FloorStoreAdapter, JsMailboxSeam, JsRecordTransportSeam,
-    JsSchedulerSeam, MailboxAdapter, RecordTransportAdapter, SchedulerAdapter,
-    SnapshotCacheAdapter, StagingStoreAdapter,
+    CredentialStoreAdapter, FloorStoreAdapter, JsRecordTransportSeam, JsSchedulerSeam,
+    RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
 };
 
 /// Calls a JS `(arg) => Promise<T>` and awaits its resolution, labelling any
@@ -145,15 +144,6 @@ pub async fn run_record_transport_conformance(
     console_error_panic_hook::set_once();
     let adapter = RecordTransportAdapter { js: transport };
     conformance::record_transport::check(&adapter, &routing_key, &record).await;
-}
-
-/// Runs the `Mailbox` conformance kit against a JS `MailboxSeam`. The caller
-/// supplies the recipient public key naming the inbox the seam is bound to.
-#[wasm_bindgen(js_name = runMailboxConformance)]
-pub async fn run_mailbox_conformance(mailbox: JsMailboxSeam, own_recipient_public_key: Vec<u8>) {
-    console_error_panic_hook::set_once();
-    let adapter = MailboxAdapter { js: mailbox };
-    conformance::mailbox::check(&adapter, &own_recipient_public_key).await;
 }
 
 /// Test-only: builds a `deadLetter` facade event carrying `opId`. The op id is

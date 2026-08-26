@@ -4,7 +4,6 @@ import { makeBrowserSeams, reclaimOtherAccountStores } from './browserSeams.js';
 
 const CONFIG = {
   recordEndpoints: ['https://routing.example.test'],
-  apiBaseUrl: 'https://api.test',
 };
 
 /**

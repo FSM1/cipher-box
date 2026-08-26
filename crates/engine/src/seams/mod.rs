@@ -1,13 +1,13 @@
 //! Host seams — the trait contracts a host implements (blueprint/engine.md
 //! "Host seams").
 //!
-//! The eight [`SeamTypes`] name the capabilities a host must supply, injected as
-//! a constructor argument via [`SeamSet`]. [`RetireLedger`] is the exception
-//! that proves the shape: the same trait contract, with a conformance kit of its
-//! own, but the engine ships the implementation
-//! ([`StagingRetireLedger`](crate::net::StagingRetireLedger)) over a seam every
-//! host already provides, so a host swaps it in only if it has a better store to
-//! back it with.
+//! The seven [`SeamTypes`] name the capabilities a host must supply, injected as
+//! a constructor argument via [`SeamSet`]. [`RetireLedger`] and [`Mailbox`] are
+//! the exceptions that prove the shape: the same trait contract, with a
+//! conformance kit of its own, but the engine ships the implementation
+//! ([`StagingRetireLedger`](crate::net::StagingRetireLedger) over the staging
+//! store; [`ApiClient`](crate::api::ApiClient) over the [`Http`] seam) — a host
+//! swaps one in only if it has a better backing to offer.
 //!
 //! Traits move opaque bytes and events — no seam holds logic, no domain type
 //! leaks into a seam; the engine owns all interpretation.
@@ -83,10 +83,10 @@ impl std::error::Error for SeamError {}
 /// Result alias used by every seam method.
 pub type SeamResult<T> = Result<T, SeamError>;
 
-/// The type family binding one host's eight concrete seam implementations.
+/// The type family binding one host's seven concrete seam implementations.
 ///
 /// A host (web worker realm, desktop process, the test kit) implements this
-/// trait once, naming its concrete type for every seam. Collapsing the eight
+/// trait once, naming its concrete type for every seam. Collapsing the seven
 /// generics into one type parameter keeps [`SeamSet`] and
 /// [`crate::facade::Engine`] signatures readable while preserving full
 /// static dispatch — no boxing, no `Send` assumptions, so the same engine
@@ -100,8 +100,6 @@ pub trait SeamTypes {
     type RecordTransport: RecordTransport + Clone + 'static;
     /// Plain HTTP ([`Http`]).
     type Http: Http;
-    /// Sealed-blob mailbox transport ([`Mailbox`]).
-    type Mailbox: Mailbox;
     /// Timers, background tasks, wall clock ([`Scheduler`]). `Clone + 'static`
     /// for the same reason as [`RecordTransport`](Self::RecordTransport): the
     /// spawned task owns a handle of its own.
@@ -127,8 +125,6 @@ pub struct SeamSet<T: SeamTypes> {
     pub record_transport: T::RecordTransport,
     /// HTTP for the API client, trustless gateway, and BYO providers.
     pub http: T::Http,
-    /// Post/poll/ack of sealed blobs to/from a recipient public key.
-    pub mailbox: T::Mailbox,
     /// Timers, background task execution, wall clock.
     pub scheduler: T::Scheduler,
     /// Durable op queue plus staged upload bytes.

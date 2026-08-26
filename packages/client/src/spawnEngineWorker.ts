@@ -10,7 +10,7 @@ import type { EngineWorkerBootstrap } from './worker/engineWorker.js';
 
 /** What a host tab must know to stand the engine worker up. */
 export interface EngineHostConfig {
-  /** Base URL of the CipherBox API; the `Mailbox` seam appends its own routes. */
+  /** Base URL of the CipherBox API; the engine's API client appends its routes. */
   apiBaseUrl: string;
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
   recordEndpoints: string[];
