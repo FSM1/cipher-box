@@ -359,6 +359,12 @@ pub enum DeadLetterReason {
     /// Every attempt authored a record over the block ceiling, so the node's
     /// listing has to be split rather than retried.
     HeadTooLarge,
+    /// The op was abandoned and its staged version could not be kept: this
+    /// device holds a preserved dead-letter record another build wrote.
+    PreservationRefused,
+    /// The record plane already carries the node this create mints, while
+    /// nothing durable on this device remembers publishing it.
+    AlreadyPublished,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -378,6 +384,8 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             }
             facade::DeadLetterReason::BaseSuperseded => DeadLetterReason::BaseSuperseded,
             facade::DeadLetterReason::HeadTooLarge => DeadLetterReason::HeadTooLarge,
+            facade::DeadLetterReason::PreservationRefused => DeadLetterReason::PreservationRefused,
+            facade::DeadLetterReason::AlreadyPublished => DeadLetterReason::AlreadyPublished,
         }
     }
 }

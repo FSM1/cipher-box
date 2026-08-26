@@ -134,6 +134,18 @@ pub enum DeadLetterReason {
     /// these is recoverable — the abandonment **releases** the version's staged
     /// blocks rather than preserving bytes no key opens.
     ContentUnrecoverable,
+    /// The op is abandoned and its staged version could **not** be kept: this
+    /// device holds a preserved dead-letter record another build wrote, which
+    /// nothing may overwrite. Distinct from
+    /// [`Self::ContentUnrecoverable`] because the version is intact — it is the
+    /// set that would have held it that this build cannot read.
+    PreservationRefused,
+    /// The record plane already carries the node this create mints, while
+    /// nothing durable on this device remembers publishing it — the shape a data
+    /// directory restored from before its own drain has. Republishing would
+    /// re-author a node the account may since have deleted, so the op is
+    /// abandoned with its staged version kept.
+    AlreadyPublished,
 }
 
 /// One applied op, resolved for republish.

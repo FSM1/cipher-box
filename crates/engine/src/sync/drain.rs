@@ -57,7 +57,7 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    OrphanHeads, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+    OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
@@ -432,6 +432,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Pinned bytes the retire ledger still owes, shared with the facade's read
     /// surface. Rewritten at the end of every pass from the ledger itself.
     pub(crate) pending_reclaim: &'a Cell<u64>,
+    /// Why the debts the last pass could not settle did not settle, shared with
+    /// the facade's read surface. Replaced whole on every pass that reads the
+    /// ledger, so a stall that clears stops being reported.
+    pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The upload-cancel interlock, shared with the facade's cancel command.
@@ -642,7 +646,7 @@ where
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
         self.settle_journalled_deletes(seal, &owner, &staged).await;
-        if let Some(owed) = drain_owed_retires(
+        if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
             self.api,
@@ -653,7 +657,8 @@ where
         )
         .await
         {
-            self.pending_reclaim.set(owed);
+            self.pending_reclaim.set(pass.still_owed);
+            *self.reclaim_stalls.borrow_mut() = pass.stalls;
         }
         reconcile_staging_over(
             self.staging,
@@ -804,11 +809,15 @@ where
                         .push((op_id, op.target, preserved.observed(reason)));
                 }
             }
-            // A conditional-edit loser keeps its staged version and retires
-            // nothing: its own bytes may already be registered from a halted
-            // upload of the version now at the name, and unpinning content a
-            // live record names is loss where leaving rows charged is a leak.
-            Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
+            // Both keep their staged version and retire nothing, because a live
+            // record already stands at the name each would hand back: the
+            // conditional-edit loser's own bytes may be registered from a halted
+            // upload of the version now there, and a replayed create's node
+            // record is on the record plane by definition. Unpinning content a
+            // live record names is loss, where leaving rows charged is a leak.
+            Halt::Permanent(
+                reason @ (DeadLetterReason::BaseSuperseded | DeadLetterReason::AlreadyPublished),
+            ) => {
                 let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
                     return;
                 };
@@ -1284,6 +1293,12 @@ where
         parent: NodeId,
         node: &NewNode,
     ) -> Result<(), Halt> {
+        if self
+            .create_replays_a_publish(scope, applied.op.target)
+            .await?
+        {
+            return Err(Halt::Permanent(DeadLetterReason::AlreadyPublished));
+        }
         let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
         self.ensure_folder(scope, pass, parent).await?;
 
@@ -3017,6 +3032,56 @@ where
         retire(self.api, &[name])
             .await
             .map_err(|_| Halt::UploadAttempt)
+    }
+
+    /// Whether this create would re-author a node the record plane already
+    /// carries — the shape of a data directory restored from before its own
+    /// drain, where the queue comes back and the marks that record what already
+    /// published do not.
+    ///
+    /// Two reads, and each answers half of it. The name derives from the node id
+    /// this op minted, so a record that resolves there **and passes the child
+    /// gate** is one this op published: the gate binds the record to this node
+    /// id under this scope root, which nothing jammed at the name satisfies. The
+    /// durable sequence floor is then what separates a create this device has
+    /// forgotten from one still mid-publish — a confirmed publish self-adopts
+    /// through the same gate, which raises that floor before the parent naming
+    /// it publishes, so a crash in that window keeps the floor and re-authors.
+    ///
+    /// Fails toward publishing: nothing resolvable, a gate rejection and a seam
+    /// failure all read the same here, and a create the drain cannot probe is
+    /// one whose own publish would not land either.
+    async fn create_replays_a_publish(
+        &self,
+        scope: &DrainScope<'_>,
+        target: NodeId,
+    ) -> Result<bool, Halt> {
+        let name = derive_write_name(scope.write_scope_seed, &target.0);
+        if floor::sequence_floor(self.floors, name.as_str().as_bytes())
+            .await
+            .map_err(seam)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            scope.root.0,
+            scope.read_scope_seed.clone(),
+            target.0,
+        );
+        let resolved = resolve(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            &name,
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(seam)?;
+        Ok(matches!(resolved.outcome, ResolveOutcome::Adopted(_)))
     }
 
     /// The name a create derived, where nothing published references it yet: a

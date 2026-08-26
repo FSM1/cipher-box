@@ -63,7 +63,7 @@ use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
-use crate::net::retire::{OrphanHeads, retire};
+use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
@@ -2701,6 +2701,12 @@ pub struct Engine<T: SeamTypes> {
     /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
     /// In-memory: the durable record is the retire ledger, which every pass re-reads.
     pending_reclaim: Rc<Cell<u64>>,
+    /// Why the debts the last reclaim pass could not settle did not settle,
+    /// written by the drain tick and read by
+    /// [`reclaim_stalls`](Self::reclaim_stalls). In-memory for the same reason
+    /// [`pending_reclaim`](Self::pending_reclaim) is: every pass re-derives it
+    /// from the retire ledger.
+    reclaim_stalls: Rc<RefCell<Vec<ReclaimStall>>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass.
@@ -2809,6 +2815,7 @@ impl<T: SeamTypes> Engine<T> {
                 blocked: Rc::new(RefCell::new(None)),
                 settings_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
+                reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
                 manual_refresh: ManualRefresh::default(),
@@ -3563,6 +3570,7 @@ where {
         let blocked = self.blocked.clone();
         let settings_hold = self.settings_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
+        let reclaim_stalls = self.reclaim_stalls.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
         let orphan_heads = self.orphan_heads.clone();
@@ -3836,6 +3844,7 @@ where {
                             blocked: &blocked,
                             settings_hold: &settings_hold,
                             pending_reclaim: &pending_reclaim,
+                            reclaim_stalls: &reclaim_stalls,
                             orphan_heads: &orphan_heads,
                             cancels: &cancels,
                             events: &events,
@@ -5908,6 +5917,18 @@ where {
     #[must_use]
     pub fn pending_reclaim_bytes(&self) -> u64 {
         self.pending_reclaim.get()
+    }
+
+    /// Why the debts the last reclaim pass could not settle did not settle.
+    ///
+    /// Reclaim has no attempt budget and no dead-letter class, so a debt that
+    /// never settles is otherwise invisible: the pending figure counts only what
+    /// a pass could price, and a stalled debt prices at nothing. Empty once the
+    /// ledger drains, and re-derived on every pass, so a cleared stall clears
+    /// here too (blueprint/engine.md "never a silent failure").
+    #[must_use]
+    pub fn reclaim_stalls(&self) -> Vec<ReclaimStall> {
+        self.reclaim_stalls.borrow().clone()
     }
 
     /// A key-free [`SnapshotView`] of `folder` — its children (with pending/

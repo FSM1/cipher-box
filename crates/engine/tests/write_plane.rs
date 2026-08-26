@@ -35,7 +35,8 @@ use cipherbox_engine::net::author::{
     author_scope_root_with_section,
 };
 use cipherbox_engine::net::{
-    ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, StagingRetireLedger, resolve,
+    ChildAdopter, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason, ResolveOutcome,
+    StagingRetireLedger, resolve,
 };
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
@@ -5306,6 +5307,69 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
     );
 }
 
+/// The staging key the preserved dead-letter set lives under. A durable-format
+/// fact of the store, so it is spelled out here rather than reached for through
+/// an engine internal.
+const PRESERVED_DEAD_LETTERS: &[u8] = b"cipherbox/preserved-dead-letters";
+
+/// A preserved set this build cannot read is never overwritten — it holds dead
+/// letters whose records carry the only copy of their content keys. That refusal
+/// is terminal rather than a retry: returning the op to a strict-FIFO head would
+/// freeze the whole queue behind bytes nothing will ever explain, and say nothing
+/// on the event stream while it did.
+#[test]
+fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let planted = b"not a preserved record".to_vec();
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, &planted),
+    )
+    .expect("the foreign set stages");
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    jam_name(&world.record_store, child_id(&engine, ROOT, "photo.bin"));
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    let refused = DeadLetter {
+        op_id,
+        reason: DeadLetterReason::PreservationRefused,
+    };
+    assert_eq!(dead_letters, vec![refused]);
+    assert!(
+        events_so_far(&mut events).contains(&Event::DeadLetter {
+            op_id: refused.op_id,
+            reason: refused.reason
+        }),
+        "the abandonment the refusal decided reaches the host, not only the read surface"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "and the FIFO head it was holding is free"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.staged_bytes(PRESERVED_DEAD_LETTERS)).unwrap(),
+        Some(planted),
+        "the dead letters the foreign set already holds are left byte for byte"
+    );
+}
+
 /// Register-first stops a publish only after its head block has uploaded and
 /// charged its own pin row, and each attempt re-authors under a fresh seal
 /// nonce — so a retrying op orphans a byte-different head every pass. Each
@@ -6828,6 +6892,123 @@ fn a_create_the_rebase_drops_as_already_satisfied_is_never_retired() {
     assert!(
         retire_targets(&alice).is_empty(),
         "retiring a landed create's name would cut a record its parent references"
+    );
+}
+
+/// A queued op as a backup took it: the durable record, and every block its
+/// version has staged, each under its own CID.
+struct Backup {
+    record: Vec<u8>,
+    staged: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// Take one.
+fn back_up(device: &FakeDevice, op_id: OpId) -> Backup {
+    let cids = queued_version(device, op_id);
+    block_on(async move {
+        let record = device
+            .staging_store
+            .queued_ops()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| *id == op_id)
+            .expect("the op is queued")
+            .1;
+        let mut staged = Vec::new();
+        for cid in cids {
+            let bytes = device
+                .staging_store
+                .staged_bytes(&cid)
+                .await
+                .unwrap()
+                .expect("the version's blocks are staged");
+            staged.push((cid, bytes));
+        }
+        Backup { record, staged }
+    })
+}
+
+/// Write one back over the store. The record re-enqueues under a fresh id, so no
+/// drained-op mark this device still holds can take it for the op that already
+/// published.
+fn restore(device: &FakeDevice, backup: &Backup) {
+    block_on(async {
+        for (cid, bytes) in &backup.staged {
+            device
+                .staging_store
+                .put_staged_bytes(cid, bytes)
+                .await
+                .expect("a block restores");
+        }
+        device
+            .staging_store
+            .enqueue_op(&backup.record)
+            .await
+            .expect("the record restores");
+    });
+}
+
+/// A data directory restored from before its own drain: the queue is back, the
+/// marks and floors that record what already published are not, and the record
+/// plane kept everything. Republishing the create would re-author a node the
+/// account deleted in the meantime — on every device that adopts the parent.
+#[test]
+fn a_restored_queue_never_republishes_a_create_the_record_plane_already_carries() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let backup = back_up(&alice, op_id);
+    tick(&world, &engine, &mut tasks);
+    let photo = child_id(&engine, ROOT, "photo.bin");
+
+    block_on(engine.command(Command::Delete { node: photo })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        Vec::<String>::new(),
+        "the delete landed: the root names nothing"
+    );
+    let retired_before = retire_targets(&alice).len();
+    drop(engine);
+    drop(tasks);
+
+    restore(&alice, &backup);
+    block_on(FloorStore::clear(&alice.floor_store)).expect("the ratchet resets");
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        Vec::<String>::new(),
+        "the deleted node is not resurrected in its parent"
+    );
+    assert_eq!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AlreadyPublished],
+    );
+    assert_eq!(
+        retired_since(&alice, retired_before),
+        Vec::<String>::new(),
+        "the record already on the plane is not this replay's to cut"
     );
 }
 
@@ -9334,5 +9515,134 @@ fn a_retained_version_this_device_cannot_expand_still_lets_the_prune_publish() {
     assert!(
         retire_targets(&alice).is_empty(),
         "a pass that cannot establish the live set names nothing"
+    );
+}
+
+/// One file with two published versions, its newest-first history, and a
+/// journaled debt against the older one that the registry refused — the shape
+/// every stall below starts from.
+fn debt_owed_on_a_pruned_version(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, Vec<CoreVersion>) {
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(world, engine, tasks, &bodies);
+    let history = published_versions(&world.record_store, blocks, file);
+
+    blocks.refuse_retire(true);
+    stage_prune(device, world, file, 1);
+    tick(world, engine, tasks);
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the debt is journaled and unpaid"
+    );
+    assert!(
+        engine.reclaim_stalls().is_empty(),
+        "a registry that answered nothing is self-clearing, not a stall"
+    );
+    blocks.refuse_retire(false);
+    (file, history)
+}
+
+/// A debt whose owing node's published record still names the doomed root is one
+/// whose shortening has not landed, so it retires nothing and prices at nothing.
+/// The byte figure therefore reads exactly as an empty ledger does, and only the
+/// stall tells the two apart — a retained version naming the root pins the debt
+/// for as long as that version stands.
+#[test]
+fn a_reclaim_stall_names_the_debt_a_live_target_prices_at_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) =
+        debt_owed_on_a_pruned_version(&world, &blocks, &alice, &mut engine, &mut tasks);
+    let doomed = encode_content_cid_str(&history[1].content_cid);
+
+    // A co-writer republishes the whole history, so the target the debt names is
+    // live again at the node's own name.
+    plant_versions(&world, &blocks, file, history.clone());
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        engine.reclaim_stalls(),
+        vec![ReclaimStall {
+            node: file.0,
+            target: doomed.clone(),
+            reason: ReclaimStallReason::TargetStillLive,
+        }]
+    );
+    assert_eq!(
+        engine.pending_reclaim_bytes(),
+        0,
+        "live content is not pending reclaim, which is what hides the debt"
+    );
+    assert!(
+        !retire_targets(&alice).contains(&doomed),
+        "and nothing a live record still names is unpinned"
+    );
+
+    // The shortening lands after all, and the stall clears with the debt.
+    plant_versions(&world, &blocks, file, vec![history[0].clone()]);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(engine.reclaim_stalls().is_empty());
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+    assert!(
+        retire_targets(&alice).contains(&doomed),
+        "the debt settles on the publish that dropped its target"
+    );
+}
+
+/// A node whose record this pass cannot establish stands its debts down: a
+/// partial live set unpins what it failed to read. The figure that stands in the
+/// meantime is the ceiling the prune quoted, which is what a debt merely waiting
+/// on the registry reports too.
+#[test]
+fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (file, history) =
+        debt_owed_on_a_pruned_version(&world, &blocks, &alice, &mut engine, &mut tasks);
+    let doomed = encode_content_cid_str(&history[1].content_cid);
+
+    let name = write_name(file);
+    world.record_store.fail_get_for(name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        engine.reclaim_stalls(),
+        vec![ReclaimStall {
+            node: file.0,
+            target: doomed.clone(),
+            reason: ReclaimStallReason::NodeUnreadable,
+        }]
+    );
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the debt stands at the figure the prune quoted"
+    );
+    assert!(
+        !retire_targets(&alice).contains(&doomed),
+        "a pass that cannot establish the live set names nothing"
+    );
+
+    world.record_store.heal_get_for(name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    assert!(engine.reclaim_stalls().is_empty());
+    assert_eq!(engine.pending_reclaim_bytes(), 0);
+    assert!(
+        retire_targets(&alice).contains(&doomed),
+        "the debt settles on the pass that could read the record again"
     );
 }

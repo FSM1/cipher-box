@@ -619,6 +619,19 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the two reasons an abandonment reports about the record plane', () => {
+    expect(readEvent(fakeWasm, { kind: 'deadLetter', opId: 1n, deadLetterReason: 10 })).toEqual({
+      kind: 'deadLetter',
+      opId: 1n,
+      reason: 'preservationRefused',
+    });
+    expect(readEvent(fakeWasm, { kind: 'deadLetter', opId: 2n, deadLetterReason: 11 })).toEqual({
+      kind: 'deadLetter',
+      opId: 2n,
+      reason: 'alreadyPublished',
+    });
+  });
+
   it('fails closed on an unknown or absent dead letter reason', () => {
     expect(() =>
       readEvent(fakeWasm, { kind: 'deadLetter', opId: 7n, deadLetterReason: 42 })

@@ -371,9 +371,10 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
     })
 }
 
-/// Work the ledger once and report the pinned bytes still owed afterwards — the
-/// vault's pending-reclaim figure. `None` when the ledger could not be read, so
-/// a store hiccup reports nothing rather than reporting no debt.
+/// Work the ledger once and report what it left behind: the pinned bytes still
+/// owed — the vault's pending-reclaim figure — and why every debt that did not
+/// settle did not ([`ReclaimStall`]). `None` when the ledger could not be read,
+/// so a store hiccup reports nothing rather than reporting no debt.
 ///
 /// Each entry is expanded from its own root block, fetched keyless (plaintext
 /// det-CBOR), and retired in [`expand_retire_targets`] order, less every CID
@@ -407,13 +408,14 @@ pub async fn drain_owed_retires<L, H, C>(
     http: &H,
     profile: &ContentProfile,
     live: impl AsyncFn([u8; 16], OwingRecord) -> Option<BTreeSet<String>>,
-) -> Option<u64>
+) -> Option<ReclaimPass>
 where
     L: RetireLedger,
     H: Http,
     C: CredentialStore,
 {
     let owed = ledger.owed(owner_tag).await.ok()?;
+    let mut stalls: Vec<ReclaimStall> = Vec::new();
     let retired: BTreeSet<[u8; 16]> = owed
         .iter()
         .filter(|entry| entry.owing == OwingRecord::Retired)
@@ -438,8 +440,14 @@ where
             Entry::Occupied(held) => held.into_mut(),
             Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
         };
+        let stall = |reason| ReclaimStall {
+            node: entry.node,
+            target: entry.target.clone(),
+            reason,
+        };
         let Some(node) = node else {
             still_owed = still_owed.saturating_add(entry.owed_bytes);
+            stalls.push(stall(ReclaimStallReason::NodeUnreadable));
             continue;
         };
         // A target its own node's record still reaches is one whose shortening
@@ -447,10 +455,12 @@ where
         // nothing to the figure and the entry waits for the record that drops
         // it.
         if node.contains(&entry.target) {
+            stalls.push(stall(ReclaimStallReason::TargetStillLive));
             continue;
         }
         let Some(expansion) = expand_owed(&entry, gateway, http, profile).await else {
             still_owed = still_owed.saturating_add(entry.owed_bytes);
+            stalls.push(stall(ReclaimStallReason::TargetUnexpandable));
             continue;
         };
         let retirable = expansion.minus(node);
@@ -470,7 +480,53 @@ where
             SendOutcome::RegistryDown => registry_up = false,
         }
     }
-    Some(still_owed)
+    Some(ReclaimPass { still_owed, stalls })
+}
+
+/// What one reclaim pass left behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReclaimPass {
+    /// The pinned bytes still owed after the pass — the vault's pending figure.
+    pub still_owed: u64,
+    /// One entry per debt the pass could not settle, in ledger order.
+    pub stalls: Vec<ReclaimStall>,
+}
+
+/// A debt the reclaim pass left owed, and why.
+///
+/// Reclaim is the one path with no attempt budget and no dead-letter class, so a
+/// debt that never settles otherwise sits behind a byte figure that says nothing
+/// is pending — a stall a host cannot tell from an empty ledger
+/// (blueprint/engine.md "never a silent failure").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReclaimStall {
+    /// The node owing the debt.
+    pub node: [u8; 16],
+    /// The doomed version's root `contentCid`.
+    pub target: String,
+    /// What stopped it.
+    pub reason: ReclaimStallReason,
+}
+
+/// Why a debt did not settle. Public-plane classification only — node ids and
+/// content addresses, never key material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReclaimStallReason {
+    /// The owing node's currently published record, or a version it names,
+    /// could not be established this pass, so nothing may be named against it.
+    /// Self-clearing while it is an outage; permanent while a version of that
+    /// node has a root no source will serve, which anyone holding the scope's
+    /// write seed can author.
+    NodeUnreadable,
+    /// The node's currently published record still names this doomed root, so
+    /// the shortening it belongs to has not landed. Self-clearing on the
+    /// publish that drops it; permanent where a retained version names it, which
+    /// pins the debt for as long as that version stands.
+    TargetStillLive,
+    /// The doomed root itself could not be expanded — no source served the block,
+    /// or the manifest is not this version's — so what the retire would name is
+    /// unknown. The figure falls back to the ceiling the prune quoted.
+    TargetUnexpandable,
 }
 
 /// One owed entry's whole expansion, off its own fetched root block. `None`
@@ -774,7 +830,10 @@ mod tests {
             async |_, _| live.clone(),
         ))
         .expect("the ledger reads");
-        (remaining, block_on(ledger.owed(owner)).expect("owed"))
+        (
+            remaining.still_owed,
+            block_on(ledger.owed(owner)).expect("owed"),
+        )
     }
 
     /// A pass whose node's record reaches nothing but the doomed versions.
@@ -1165,7 +1224,8 @@ mod tests {
         for leaf in leaf_cids {
             assert!(retired.contains(&leaf), "every leaf retires");
         }
-        assert_eq!(remaining, 0);
+        assert_eq!(remaining.still_owed, 0);
+        assert!(remaining.stalls.is_empty(), "and stalls on nothing");
         assert!(
             block_on(Session::new().ledger(&store).owed(OWNER))
                 .expect("owed")
