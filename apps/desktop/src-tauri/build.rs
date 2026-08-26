@@ -22,12 +22,15 @@ fn link_fuse_t_rpath() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    if let Ok(lib) = pkg_config::Config::new()
+    match pkg_config::Config::new()
         .cargo_metadata(false)
         .probe("fuse-t")
     {
-        for path in &lib.link_paths {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
+        Ok(lib) => {
+            for path in &lib.link_paths {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{}", path.display());
+            }
         }
+        Err(e) => println!("cargo:warning=fuse-t.pc not found, linking no rpath: {e}"),
     }
 }

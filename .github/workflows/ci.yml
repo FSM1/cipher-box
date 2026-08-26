@@ -805,14 +805,14 @@ jobs:
       - name: Cargo check (workspace)
         run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
+      # Cargo hands a test run an explicit DYLD_FALLBACK_LIBRARY_PATH with the
+      # macOS default `/usr/local/lib` spliced in, which resolves
+      # `@rpath/libfuse-t.dylib` even when nothing linked an `LC_RPATH` — so a
+      # broken adapter link would surface only as an unlaunchable bundle. A
+      # sentinel replaces that tail and makes this leg prove the rpath. Inline
+      # rather than `env:`: SIP strips `DYLD_*` before bash execs.
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
-        env:
-          # dyld's default fallback path still resolves `@rpath/libfuse-t.dylib`
-          # when nothing linked an `LC_RPATH` in, which would hide the break
-          # here and surface it as an unlaunchable bundle. Emptying the fallback
-          # makes this leg prove the rpath `.cargo/config.toml` links.
-          DYLD_FALLBACK_LIBRARY_PATH: /nonexistent
+        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
 
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
@@ -1103,6 +1103,17 @@ jobs:
       # Builds the frontend too, through `beforeBuildCommand`.
       - name: Tauri build (unsigned, no bundle)
         run: pnpm --filter @cipherbox/desktop tauri build --no-bundle
+
+      # The shipped binary links FUSE-T's `@rpath` install name but sits outside
+      # the guarded workspace test leg, so the rpath its build script emits is
+      # asserted on the artifact itself.
+      - name: FUSE-T rpath reaches the shell binary
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          libdir=$(pkg-config --variable=libdir fuse-t)
+          otool -L target/release/cipherbox-desktop | grep -q '@rpath/libfuse-t.dylib'
+          otool -l target/release/cipherbox-desktop | grep -A2 LC_RPATH | grep -q "path ${libdir}"
 
   # Single always-reporting gate for the path-filtered desktop matrix. Branch
   # protection requires this stable context instead of the per-OS matrix legs:
