@@ -79,7 +79,9 @@ impl fmt::Debug for RepointObject {
 /// The returned buffer carries the scope's root names verbatim, so its caller is
 /// the terminal owner and must zeroize it — the seal path does.
 pub fn repoint_preimage(object: &RepointObject) -> Vec<u8> {
-    encode_fixed_depth(&object.to_value())
+    let mut tree = object.to_value();
+    let guard = ScrubOnDrop(&mut tree);
+    encode_fixed_depth(guard.0)
 }
 
 impl RepointObject {
