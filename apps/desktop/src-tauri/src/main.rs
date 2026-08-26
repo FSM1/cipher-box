@@ -23,7 +23,6 @@ const MAIN_WINDOW: &str = "main";
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // Parked writes are announced here, edge-triggered by the tray.
         .plugin(tauri_plugin_notification::init())
         .manage(engine::EngineHost::default())
         .invoke_handler(tauri::generate_handler![

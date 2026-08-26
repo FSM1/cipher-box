@@ -16,8 +16,8 @@ const NO_ADAPTER: &str = "CipherBox does not mount your vault on this platform y
 /// One decoded kernel request. There is no mount to decode one from.
 pub enum KernelOp {}
 
-/// A mounting thread's verdict. There is no mount to make, so none arrives.
-pub enum Mounted {}
+/// A mounting thread's verdict. There is no mount to make.
+pub enum Landing {}
 
 /// The session's engine, held where a mounted platform holds an operation core.
 pub struct Projection(Engine<DesktopSeamTypes>);
@@ -43,7 +43,7 @@ impl Projection {
         core::future::pending().await
     }
 
-    pub fn settled(self, landed: Mounted) -> Self {
+    pub fn settled(self, landed: Landing) -> Self {
         match landed {}
     }
 
@@ -53,5 +53,5 @@ impl Projection {
 
     pub async fn absorb(&mut self, _event: &Event) {}
 
-    pub fn tear_down(self) {}
+    pub async fn tear_down(self) {}
 }

@@ -762,6 +762,7 @@ dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
  "cipherbox-fuse",
+ "fs4",
  "fuser",
  "futures-channel",
  "futures-core",

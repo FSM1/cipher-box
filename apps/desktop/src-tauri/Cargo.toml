@@ -20,8 +20,7 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 # Minisign-verified updates over the one GitHub release stream; the key it
 # verifies against is `plugins.updater.pubkey` in tauri.conf.json.
 tauri-plugin-updater = "2"
-# Parked writes reach the member as a system notification, edge-triggered so a
-# dead letter that keeps reporting is announced once.
+# The tray's system notifications.
 tauri-plugin-notification = "2"
 # The engine this shell hosts, and the seam set it is constructed over.
 cipherbox-engine.workspace = true

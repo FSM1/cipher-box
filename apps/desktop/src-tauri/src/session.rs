@@ -73,9 +73,8 @@ pub async fn session_start(
 /// IPC thread: this waits on the engine thread, and the keyring delete inside
 /// it is a blocking OS call.
 #[tauri::command(async)]
-pub fn session_logout(app: AppHandle, engine: State<'_, EngineHost>) {
+pub fn session_logout(engine: State<'_, EngineHost>) {
     engine.log_out();
-    tray::signed_out(&app);
 }
 
 /// Forgets this device: everything a logout does, and then the durable stores a
@@ -84,10 +83,8 @@ pub fn session_logout(app: AppHandle, engine: State<'_, EngineHost>) {
 /// `async` for the same reason [`session_logout`] is — this waits on the engine
 /// thread and then on the filesystem.
 #[tauri::command(async)]
-pub fn session_forget_device(app: AppHandle, engine: State<'_, EngineHost>) -> Result<(), String> {
-    let forgotten = engine.forget_device();
-    tray::signed_out(&app);
-    forgotten
+pub fn session_forget_device(engine: State<'_, EngineHost>) -> Result<(), String> {
+    engine.forget_device()
 }
 
 /// The live vault's status, as the signed-in window renders it.

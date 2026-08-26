@@ -22,13 +22,14 @@ zeroize.workspace = true
 # own construction site — see `SpillArea::production`.
 getrandom.workspace = true
 
+# The spill area's lease: one exclusive OS file lock, `flock` on unix and
+# `LockFileEx` on Windows, without the `unsafe` this crate forbids.
+fs4 = { version = "1", default-features = false, features = ["sync"] }
+
 [target.'cfg(unix)'.dependencies]
 # errno constants for the shared VfsError mapping, which every unix mount
 # technology answers its kernel from.
 libc = "0.2"
-# The spill area's lease, and the mount's own uid/gid — both without `unsafe`,
-# which the crate forbids.
-nix = { version = "0.29", features = ["fs", "user"] }
 
 # Both FUSE backends — libfuse3 on Linux, FUSE-T's libfuse2 shim on macOS —
 # speak the FUSE wire through the one vendored `fuser`, so the session plumbing
@@ -38,6 +39,9 @@ nix = { version = "0.29", features = ["fs", "user"] }
 # runtime-agnostic, matching the engine's own event stream.
 futures-channel.workspace = true
 futures-core.workspace = true
+# The mount's own uid/gid, without `unsafe` — the crate forbids it. Same
+# version fuser already resolves, so this costs no extra tree.
+nix = { version = "0.29", features = ["user"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The one vendored copy, carrying the socket-read patch (blueprint/desktop.md

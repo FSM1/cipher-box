@@ -10,12 +10,12 @@ use serde::Serialize;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod projected;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use projected::{KernelOp, Mounted, Projection};
+pub use projected::{KernelOp, Landing, Projection};
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod detached;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub use detached::{KernelOp, Mounted, Projection};
+pub use detached::{KernelOp, Landing, Projection};
 
 /// What the mount woke the session with. Making the mount and serving it are
 /// the two states of one thing, so they reach the session loop as one wake
@@ -24,10 +24,10 @@ pub enum FromMount {
     /// The kernel asked the mount for something.
     Op(KernelOp),
     /// The kernel session ended under a live app — an unmount from outside
-    /// CipherBox. The mount status moved with no engine event behind it.
+    /// CipherBox.
     Ended,
     /// The mounting thread reached its verdict.
-    Landed(Mounted),
+    Landed(Landing),
 }
 
 /// Whether this session projects the vault as a filesystem, and where.
@@ -35,7 +35,9 @@ pub enum FromMount {
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum MountStatus {
     /// The mount is still being made. The session serves reads throughout, so
-    /// this is a state a status read lands in rather than waits out.
+    /// this is a state a status read lands in rather than waits out — a mount
+    /// that takes seconds is a mount point that is not there yet, never a
+    /// session that has stopped answering.
     Opening,
     /// The vault is projected, at this mount point.
     Mounted {

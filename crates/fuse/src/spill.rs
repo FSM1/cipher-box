@@ -12,7 +12,6 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_engine::Entropy;
@@ -26,9 +25,9 @@ use crate::lease::{self, Lease};
 /// the account directory is shared and this is the part of it the mount owns.
 const SPILL_DIR: &str = "spill";
 
-/// Distinguishes the areas one process opens; the pid distinguishes processes.
-/// Together they name a directory no other live area writes into.
-static AREA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// The most areas one account's spill root holds at once. Reaching it means
+/// live instances are holding every slot.
+const MAX_AREAS: usize = 32;
 
 /// AAD domain for a spill block. The block index rides in the AAD, so a slot
 /// moved to another offset in the same file no longer opens.
@@ -47,6 +46,14 @@ pub struct SpillArea {
     /// directory is not debris to reclaim.
     _lease: Lease,
     entropy: Box<dyn Entropy>,
+}
+
+/// Where slot `slot`'s directory and the lock claiming it live.
+fn slot_paths(root: &Path, slot: usize) -> (PathBuf, PathBuf) {
+    (
+        root.join(format!("area.{slot}")),
+        root.join(format!("area.{slot}.lock")),
+    )
 }
 
 impl SpillArea {
@@ -74,30 +81,32 @@ impl SpillArea {
         Self::open(root, entropy)
     }
 
-    /// Claim a directory under `root` and sweep it, reclaiming whatever an
-    /// instance that is no longer running left beside it.
+    /// Take the first slot under `root` no live area holds, and reclaim what
+    /// instances that are no longer running left in the others.
     fn open(root: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
         fs::create_dir_all(&root)?;
         restrict_dir(&root)?;
 
-        let dir = root.join(format!(
-            "area.{}.{}",
-            std::process::id(),
-            AREA_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&dir)?;
-        restrict_dir(&dir)?;
-        let lease = lease::claim(&dir)?.ok_or_else(|| {
-            io::Error::other("another CipherBox is already writing to this spill area")
-        })?;
-
-        reclaim(&root, &dir)?;
-        sweep(&dir)?;
-        Ok(Self {
-            dir,
-            _lease: lease,
-            entropy,
-        })
+        for slot in 0..MAX_AREAS {
+            let (dir, lock) = slot_paths(&root, slot);
+            let Some(lease) = lease::claim(&lock)? else {
+                continue;
+            };
+            // The lease is the proof this slot is ours, so whatever a previous
+            // run left in it is ciphertext whose key died with that run.
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir)?;
+            restrict_dir(&dir)?;
+            reclaim(&root, slot);
+            return Ok(Self {
+                dir,
+                _lease: lease,
+                entropy,
+            });
+        }
+        Err(io::Error::other(
+            "every spill area under this account is already claimed",
+        ))
     }
 
     /// Mint a spill file under a fresh per-handle key, framed in `block_bytes`
@@ -128,37 +137,18 @@ impl SpillArea {
     }
 }
 
-/// Delete what `root` holds beside `mine` and beside every directory a live
-/// area still claims. Taking the lease is what proves a sibling is gone; it is
-/// held across the delete so a sibling that starts meanwhile is not swept.
-fn reclaim(root: &Path, mine: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path == mine {
-            continue;
-        }
-        if !entry.file_type()?.is_dir() {
-            fs::remove_file(&path)?;
-            continue;
-        }
-        if let Some(_dead) = lease::claim(&path)? {
-            fs::remove_dir_all(&path)?;
+/// Delete every slot but `mine` that no live area claims. Best-effort by
+/// design: a directory that will not go is disk left behind, while refusing
+/// the area over it would cost the session its whole projection.
+fn reclaim(root: &Path, mine: usize) {
+    for slot in (0..MAX_AREAS).filter(|slot| *slot != mine) {
+        let (dir, lock) = slot_paths(root, slot);
+        // Held across the delete, so a sibling that starts meanwhile takes a
+        // free slot rather than the one being swept.
+        if matches!(lease::claim(&lock), Ok(Some(_dead))) {
+            let _ = fs::remove_dir_all(&dir);
         }
     }
-    Ok(())
-}
-
-/// Delete the spill files in this area's own directory — a previous run's,
-/// whose keys died with it. The lease file stays: it is this run's claim.
-fn sweep(dir: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() && !lease::is_lock_file(&entry.file_name()) {
-            fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(())
 }
 
 /// The target's CSPRNG. Fail-closed: a draw that cannot be served is an error,
@@ -393,15 +383,9 @@ mod tests {
         SpillArea::seeded(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
     }
 
-    /// The spill files an area's directory holds, by name.
-    fn spilled(area: &SpillArea) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(&area.dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| !lease::is_lock_file(name.as_ref()))
-            .collect();
-        names.sort();
-        names
+    /// How many spill files an area's directory holds.
+    fn spilled(area: &SpillArea) -> usize {
+        fs::read_dir(&area.dir).unwrap().count()
     }
 
     /// A seam reporting success having written nothing would seal every spill
@@ -416,7 +400,7 @@ mod tests {
             matches!(area.create(8), Err(VfsError::Internal { message }) if message.contains("all-zero")),
             "the refusal is the entropy guard, not any internal error"
         );
-        assert!(spilled(&area).is_empty(), "no spill file is left behind");
+        assert_eq!(spilled(&area), 0, "no spill file is left behind");
     }
 
     /// Two instances sign into one account and each opens an area over its
@@ -426,18 +410,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut first = area(root.path());
         let live = first.create(8).unwrap();
-        assert_eq!(spilled(&first).len(), 1);
+        assert_eq!(spilled(&first), 1);
 
         let second = area(root.path());
-        assert_ne!(second.dir, first.dir, "each area claims its own directory");
+        assert_ne!(second.dir, first.dir, "each area claims its own slot");
         assert!(
             live.path.exists(),
             "an open spill file survives a sibling area opening"
         );
-        assert!(
-            spilled(&second).is_empty(),
-            "and is not the sibling's to see"
-        );
+        assert_eq!(spilled(&second), 0, "and is not the sibling's to see");
     }
 
     /// A killed instance leaves its directory behind with nothing holding it;
@@ -445,9 +426,10 @@ mod tests {
     #[test]
     fn a_dead_areas_directory_is_reclaimed() {
         let root = tempfile::tempdir().unwrap();
-        // What a killed process leaves: its directory and its unopenable
+        // What a killed process leaves: a slot's directory and its unopenable
         // ciphertext, with nothing holding the claim.
-        let abandoned = root.path().join("area.4294967295.0");
+        let live = area(root.path());
+        let (abandoned, _) = slot_paths(root.path(), MAX_AREAS - 1);
         fs::create_dir_all(&abandoned).unwrap();
         fs::write(
             abandoned.join("spill.0011"),
@@ -455,8 +437,9 @@ mod tests {
         )
         .unwrap();
 
-        let _live = area(root.path());
+        let _next = area(root.path());
         assert!(!abandoned.exists(), "a dead area's directory is reclaimed");
+        assert!(live.dir.is_dir(), "and a live one's is not");
     }
 
     #[test]
@@ -567,10 +550,14 @@ mod tests {
 
     #[test]
     fn opening_the_area_sweeps_a_previous_runs_debris() {
-        let dir = tempfile::tempdir().unwrap();
-        let debris = dir.path().join("spill.1.1");
+        let root = tempfile::tempdir().unwrap();
+        let (dir, _) = slot_paths(root.path(), 0);
+        fs::create_dir_all(&dir).unwrap();
+        let debris = dir.join("spill.0011");
         fs::write(&debris, b"unopenable ciphertext").unwrap();
-        let _area = area(dir.path());
+
+        let taken = area(root.path());
+        assert_eq!(taken.dir, dir, "the first free slot is the one taken");
         assert!(!debris.exists());
     }
 

@@ -2,10 +2,11 @@
 //! host adapter for.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
 use cipherbox_fuse::{CacheBudget, FuseInvalidator, FuseMount, OperationCore, SpillArea};
-use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};
 use crate::engine::DesktopSeamTypes;
@@ -13,7 +14,7 @@ use crate::engine::DesktopSeamTypes;
 pub use cipherbox_fuse::KernelOp;
 
 /// What the mounting thread hands back: the mount it made, or why it made none.
-pub type Mounted = Result<FuseMount, String>;
+pub type Landing = Result<FuseMount, String>;
 
 /// Shown once the kernel session has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
@@ -24,9 +25,13 @@ const ENDED: &str = "the vault was unmounted outside CipherBox; sign out and bac
 /// composed. A mount refusal, not a reason to refuse the session.
 const NO_HOME: &str = "this device has no home directory to mount the vault under";
 
-/// Shown when the mounting thread ended without a verdict, which leaves the
-/// session with no mount and no reason from the mount itself.
+/// Shown when the mounting thread ended without a verdict.
 const NO_VERDICT: &str = "the mount stopped before it said whether it had been made";
+
+/// How long a session that is ending waits for a mount still being made. The
+/// mount unmounts itself when the handle it lands in is dropped, so the wait
+/// bounds an orderly shutdown rather than gating one.
+const SHUTDOWN_WITHIN: Duration = Duration::from_secs(5);
 
 /// The vault's mount point: `~/CipherBox`, the name v1 taught members to look
 /// for.
@@ -36,15 +41,13 @@ fn mount_point(home_dir: &Path) -> PathBuf {
 
 /// The session's engine, and the filesystem it is projected through.
 pub enum Projection {
-    /// The mount is being made on a thread of its own, and the verdict will
-    /// arrive on `landing`. The engine serves reads meanwhile: a mount that
-    /// takes seconds is a mount point that is not there yet, never a session
-    /// that has stopped answering.
+    /// The mount is being made off this thread, and its verdict will arrive on
+    /// `landing`.
     Opening {
         engine: Box<Engine<DesktopSeamTypes>>,
         spill: SpillArea,
         at: PathBuf,
-        landing: oneshot::Receiver<Mounted>,
+        landing: JoinHandle<Landing>,
     },
     /// No mount: the engine stands alone, and `refusal` is why the vault is not
     /// also a filesystem.
@@ -68,6 +71,9 @@ impl Projection {
     /// Returns without waiting on the mount: the spill area opens here because
     /// a mount with nowhere to spill would have to be torn down again, and the
     /// mount itself lands through [`next`](Self::next).
+    ///
+    /// Must be called on a runtime: the blocking mount is dispatched onto its
+    /// own thread rather than run here.
     pub fn open(
         engine: Engine<DesktopSeamTypes>,
         home_dir: Option<&Path>,
@@ -91,23 +97,12 @@ impl Projection {
             }
         };
 
-        let (verdict, landing) = oneshot::channel();
         let mounting = at.clone();
-        match std::thread::Builder::new()
-            .name("cipherbox-mount".to_owned())
-            .spawn(move || {
-                let _ = verdict.send(mount(&mounting));
-            }) {
-            Ok(_) => Self::Opening {
-                engine,
-                spill,
-                at,
-                landing,
-            },
-            Err(error) => Self::Detached {
-                engine,
-                refusal: format!("the mount could not be started: {error}"),
-            },
+        Self::Opening {
+            engine,
+            spill,
+            at,
+            landing: tokio::task::spawn_blocking(move || mount(&mounting)),
         }
     }
 
@@ -132,7 +127,7 @@ impl Projection {
 
     /// Folds the mounting thread's verdict in: the engine moves into the
     /// operation core the mount feeds, or stands alone with the refusal.
-    pub fn settled(self, landed: Mounted) -> Self {
+    pub fn settled(self, landed: Landing) -> Self {
         let Self::Opening {
             engine, spill, at, ..
         } = self
@@ -158,8 +153,7 @@ impl Projection {
     ///
     /// Cancel-safe, and never resolves while there is nothing to wake for, so a
     /// host waits on it beside its other wake sources whether or not this
-    /// session projects anything. Making the mount and serving it are the two
-    /// states of one thing, which is why one wake source carries both.
+    /// session projects anything.
     pub async fn next(&mut self) -> FromMount {
         match self {
             Self::Opening { landing, .. } => FromMount::Landed(
@@ -215,26 +209,36 @@ impl Projection {
 
     /// Ends the session's projection: quiesce the adapter, unmount, then let the
     /// engine stop (blueprint/desktop.md "Lifecycle").
-    pub fn tear_down(self) {
-        let Self::Projected {
-            mut core,
-            mut mount,
-            ..
-        } = self
-        else {
-            return;
-        };
-        if let Some(mount) = mount.as_mut() {
-            mount.quiesce();
+    ///
+    /// A mount still being made is waited out rather than abandoned, so a
+    /// session that has ended leaves no mount work behind it to land on the
+    /// mount point the next sign-in wants.
+    pub async fn tear_down(self) {
+        match self {
+            Self::Opening { landing, .. } => {
+                // Whatever it lands is dropped, and dropping a `FuseMount` is
+                // the unmount.
+                let _ = tokio::time::timeout(SHUTDOWN_WITHIN, landing).await;
+            }
+            Self::Projected {
+                mut core,
+                mut mount,
+                ..
+            } => {
+                if let Some(mount) = mount.as_mut() {
+                    mount.quiesce();
+                }
+                drop(mount);
+                core.unmount();
+            }
+            Self::Detached { .. } => {}
         }
-        drop(mount);
-        core.unmount();
     }
 }
 
 /// Mount at `at`, naming the mount point in whatever refused it — the member's
 /// next move is to go and look at it.
-fn mount(at: &Path) -> Mounted {
+fn mount(at: &Path) -> Landing {
     cipherbox_fuse::mount(at)
         .map_err(|error| format!("{} could not be mounted: {error}", at.display()))
 }

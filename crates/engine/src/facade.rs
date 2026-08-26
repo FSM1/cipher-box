@@ -1644,9 +1644,8 @@ impl EventStream {
         self.receiver.try_recv().ok()
     }
 
-    /// A stream fed by hand, so a host can drive its own session loop over the
-    /// events it would see (`test-kit`). Never reachable from a production
-    /// build: the engine is the only thing that emits.
+    /// A stream fed by hand, for a host driving its own session loop
+    /// (`test-kit`).
     #[cfg(any(test, feature = "test-kit"))]
     pub fn piped() -> (EventSink, Self) {
         let (sender, receiver) = mpsc::unbounded();
