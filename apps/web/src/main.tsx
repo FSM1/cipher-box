@@ -10,6 +10,7 @@ import './styles/vault-actions.css';
 import './styles/modal.css';
 import './styles/dialogs.css';
 import './styles/context-menu.css';
+import './styles/settings.css';
 import './styles/responsive.css';
 
 import { StrictMode } from 'react';
@@ -45,7 +46,7 @@ createRoot(rootElement).render(
     <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <EngineProvider
-          createClient={(secrets) => installIntrospection(createEngineClient(secrets))}
+          createClient={(secrets) => installIntrospection(createEngineClient(secrets), secrets)}
         >
           <CoreKitProvider
             createSession={() => createCoreKitSession(import.meta.env, sealedCoreKitStore())}

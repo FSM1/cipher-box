@@ -36,8 +36,13 @@ export interface GrantRow {
 /** What one scope's own record says, as the engine last reported it. */
 export interface ScopeSharing {
   readonly grants: readonly GrantRow[];
-  /** A further share here would be accepted, so a mint is worth offering. */
-  readonly canMintShare: boolean;
+  /**
+   * The refusal a contact grant here would report, or `null` where the engine
+   * would accept one. Named by the engine, never derived here.
+   */
+  readonly grantRefusal: string | null;
+  /** The refusal an invite-link mint here would report, or `null`. */
+  readonly inviteLinkRefusal: string | null;
   /** `null` where the engine reached the scope but not the owner's link records. */
   readonly inviteLinks: SharingInviteLinksDescriptor | null;
 }
@@ -97,7 +102,8 @@ export const sharingStore = {
               })
             )
           ),
-          canMintShare: view.state.canMintShare,
+          grantRefusal: view.state.grantRefusal,
+          inviteLinkRefusal: view.state.inviteLinkRefusal,
           inviteLinks:
             view.state.inviteLinks === null ? null : Object.freeze(view.state.inviteLinks),
         })

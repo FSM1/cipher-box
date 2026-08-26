@@ -160,8 +160,14 @@ export interface SharingInviteLinksDescriptor {
 /** What one scope's own record says, as data (mirrors `ScopeSharing`). */
 export interface ScopeSharingDescriptor {
   grants: SharingGrantDescriptor[];
-  /** A further share of this scope would be accepted, so a mint is worth offering. */
-  canMintShare: boolean;
+  /**
+   * The refusal a contact grant here would report, or `null` where the engine
+   * would accept one. The engine's own check name, so a host offers exactly what
+   * `share_scope` accepts without re-deriving a rule of its own.
+   */
+  grantRefusal: string | null;
+  /** The refusal an invite-link mint here would report, or `null`. */
+  inviteLinkRefusal: string | null;
   /** `null` where the engine reached the scope but not the owner's link records. */
   inviteLinks: SharingInviteLinksDescriptor | null;
 }

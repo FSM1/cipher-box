@@ -58,6 +58,7 @@ export function fakeEngineClient(
     siweChallenges: 0,
   };
   const sessionListeners = new Set<() => void>();
+  const sessionEndListeners = new Set<() => void>();
   let account: string | null = null;
   const holds = (next: string | null): void => {
     if (account === next) return;
@@ -70,6 +71,10 @@ export function fakeEngineClient(
       return () => sessionListeners.delete(listener);
     },
     signedInAccount: () => account,
+    subscribeSessionEnd(listener: () => void) {
+      sessionEndListeners.add(listener);
+      return () => sessionEndListeners.delete(listener);
+    },
     facade: {
       async start(secret: ArrayBuffer, accountId: string) {
         calls.started.push(secret);
@@ -106,7 +111,12 @@ export function fakeEngineClient(
       return Promise.resolve();
     },
   } as unknown as EngineClient;
-  return { client, calls };
+  /** Replays the origin-wide session end a sibling tab would have announced. */
+  const endSessionElsewhere = (): void => {
+    holds(null);
+    for (const listener of [...sessionEndListeners]) listener();
+  };
+  return { client, calls, endSessionElsewhere };
 }
 
 export interface CoreKitCalls {

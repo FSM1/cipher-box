@@ -23,15 +23,33 @@ export class VaultPage {
    * no fixture setup. It is minted in the page because an `evaluate` argument is
    * recorded verbatim in the trace this suite uploads from a public repo.
    */
-  async coldStart(): Promise<void> {
-    await this.page.evaluate(async () => {
+  async coldStart(): Promise<string> {
+    // Its own store namespace, so a second cold start in one context never
+    // inherits the first account's epoch floor. Not secret — the account id is
+    // a namespace, which is what lets a second tab join this vault by name.
+    const accountId = crypto.randomUUID();
+    await this.joinAs(accountId);
+    return accountId;
+  }
+
+  /**
+   * Signs this tab in on `accountId`. Only the leader's engine holds a key, so
+   * a follower's start scrubs the secret it was handed and is adopted on the
+   * account name alone (`EngineClient.start`) — which is why each tab mints its
+   * own and none is ever an `evaluate` argument in the uploaded trace.
+   */
+  async joinAs(accountId: string): Promise<void> {
+    await this.page.evaluate(async (account) => {
       const secret = crypto.getRandomValues(new Uint8Array(32));
       const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
-      // Its own store namespace, so a second cold start in one context never
-      // inherits the first account's epoch floor.
-      await window.__CIPHERBOX_ENGINE__!.signIn(hex, crypto.randomUUID());
-    });
+      await window.__CIPHERBOX_ENGINE__!.signIn(hex, account);
+    }, accountId);
     await this.page.waitForURL('**/files');
+  }
+
+  /** How many times this tab re-exported its secret for a promotion. */
+  reExports(): Promise<number> {
+    return this.page.evaluate(() => window.__CIPHERBOX_ENGINE__!.exports());
   }
 
   /**

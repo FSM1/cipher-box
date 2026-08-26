@@ -1,7 +1,6 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { LogoutButton } from '../auth/LogoutButton';
-import { RecoveryPhraseSetup } from '../auth/RecoveryPhraseSetup';
-import { useAuth } from '../../auth/useAuth';
 import { useAuthState } from '../../stores/auth.store';
 
 /**
@@ -10,9 +9,7 @@ import { useAuthState } from '../../stores/auth.store';
  */
 export function UserMenu() {
   const { email } = useAuthState();
-  const { recoveryEnrolled } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  const [settingUpRecovery, setSettingUpRecovery] = useState(false);
 
   return (
     <div
@@ -38,25 +35,14 @@ export function UserMenu() {
 
       {isOpen && (
         <div className="user-menu-dropdown" role="menu">
-          {recoveryEnrolled ? (
-            <span className="user-menu-note" data-testid="recovery-enrolled">
-              recovery phrase on
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="logout-link"
-              data-testid="recovery-setup-open"
-              onClick={() => setSettingUpRecovery(true)}
-            >
-              set up recovery phrase
-            </button>
-          )}
+          {/* The recovery phrase, this device and the vault's own settings all
+              live on the settings route (blueprint/web-client.md "Composition"). */}
+          <Link className="logout-link" to="/settings" data-testid="user-menu-settings">
+            settings
+          </Link>
           <LogoutButton />
         </div>
       )}
-
-      {settingUpRecovery && <RecoveryPhraseSetup onClose={() => setSettingUpRecovery(false)} />}
     </div>
   );
 }

@@ -156,7 +156,31 @@ export type LeaderMessage =
   /** Where a follower may open its private port to this leadership. */
   | { type: 'cb:portHost'; token: string; address: string };
 
-export type BroadcastMessage = FollowerMessage | LeaderMessage;
+/**
+ * Any tab → every tab. The origin has one engine and one session; ending it in
+ * one tab ends it in all of them, or the tab that kept its claim wins the
+ * released lock and cold-starts a replacement engine over state the end just
+ * erased.
+ *
+ * It carries no leadership token, because no leadership mints it, and names no
+ * account, because the channel never does. Same origin remains the trust
+ * boundary: the most a forged one does is sign the origin's own tabs out.
+ */
+export type SessionMessage = { type: 'cb:sessionEnded' };
+
+export type BroadcastMessage = FollowerMessage | LeaderMessage | SessionMessage;
+
+/** The one session-end post, so every sender and reader agrees on its shape. */
+export const SESSION_ENDED: SessionMessage = { type: 'cb:sessionEnded' };
+
+/** Whether a channel message is the origin-wide session end. */
+export function isSessionEnded(data: unknown): boolean {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { type?: unknown }).type === SESSION_ENDED.type
+  );
+}
 
 /** The channel name pairing the broadcast wire with the `cipherbox-engine` lock. */
 export const BROADCAST_CHANNEL_NAME = 'cipherbox-engine';

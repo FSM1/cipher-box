@@ -34,6 +34,8 @@ function grantsFor(scopeKey: string): readonly GrantRow[] | null {
 
 /** One engine sharing read: the book always holds the one contact under test. */
 function view(grants: Permission[], links: SharingInviteLinksDescriptor): SharingDescriptor {
+  // A share of the folder mints a scope at it, which a second share cannot.
+  const shared = grants.length > 0 || links.live;
   return {
     scope: DOCS,
     contacts: [{ identityPublicKey: IDENTITY }],
@@ -42,8 +44,8 @@ function view(grants: Permission[], links: SharingInviteLinksDescriptor): Sharin
         recipientIdentityPublicKey: IDENTITY,
         permission,
       })),
-      // A share of the folder mints a scope at it, which a second share cannot.
-      canMintShare: grants.length === 0 && !links.live,
+      grantRefusal: shared ? 'grant-target-already-names-a-scope' : null,
+      inviteLinkRefusal: shared ? 'invite-target-already-names-a-scope' : null,
       inviteLinks: links,
     },
   };

@@ -1,11 +1,15 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from './auth/RequireAuth';
+import { useSessionEndAcrossTabs } from './auth/useSessionEnd';
 import { FilesPage } from './routes/FilesPage';
 import { InvitePage } from './routes/InvitePage';
 import { LoginPage } from './routes/LoginPage';
+import { SettingsPage } from './routes/SettingsPage';
 import { INVITE_ROUTE } from './sharing/inviteLink';
 
 export function App() {
+  useSessionEndAcrossTabs();
+
   return (
     <Routes>
       <Route path="/" element={<LoginPage />} />
@@ -14,6 +18,14 @@ export function App() {
         element={
           <RequireAuth>
             <FilesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <SettingsPage />
           </RequireAuth>
         }
       />

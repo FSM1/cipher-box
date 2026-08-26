@@ -10,6 +10,7 @@
 
 import { fromHex, toHex } from '@cipherbox/client';
 import { handOffLoginSecret } from '@cipherbox/login';
+import type { SecretRearm } from '@cipherbox/login';
 import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
 
 /**
@@ -42,7 +43,15 @@ export interface EngineIntrospection {
   download(nodeHex: string): Promise<string>;
   /** Every engine event this tab has seen, in emission order. */
   events(): Plain<EventDescriptor>[];
+  /**
+   * How many times this tab has re-exported its login secret for a promotion.
+   * Counted for the tab, not the client, so a rebuilt one cannot reset it.
+   */
+  exports(): number;
 }
+
+/** Survives the client rebuild a session end drives, which is the point. */
+let reExports = 0;
 
 declare global {
   interface Window {
@@ -54,7 +63,7 @@ declare global {
  * Publishes the taps for `client` on `window`, and returns it so a host can
  * wrap its client factory. A no-op outside an e2e build.
  */
-export function installIntrospection(client: EngineClient): EngineClient {
+export function installIntrospection(client: EngineClient, secrets?: SecretRearm): EngineClient {
   if (import.meta.env.VITE_E2E_HOOK !== 'true') return client;
 
   const seen: Plain<EventDescriptor>[] = [];
@@ -64,9 +73,20 @@ export function installIntrospection(client: EngineClient): EngineClient {
 
   window.__CIPHERBOX_ENGINE__ = {
     signIn(loginSecretHex, accountId) {
-      return handOffLoginSecret(client.facade, {
-        _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
+      const exporter = {
+        _UNSAFE_exportTssKey: () => {
+          reExports += 1;
+          return Promise.resolve(loginSecretHex);
+        },
         accountId: () => accountId,
+      };
+      // Armed as the real flow arms it (`createLoginFlow`), so a promotion in
+      // this tab re-exports rather than failing for want of a source the suite
+      // never installed — and `exports()` can see when one did.
+      secrets?.use(exporter);
+      return handOffLoginSecret(client.facade, exporter).finally(() => {
+        // The hand-off itself is not a promotion's re-export.
+        reExports = 0;
       });
     },
     async snapshot() {
@@ -77,6 +97,7 @@ export function installIntrospection(client: EngineClient): EngineClient {
       return toHex(new Uint8Array(await client.facade.download(fromHex(nodeHex))));
     },
     events: () => seen,
+    exports: () => reExports,
   };
   return client;
 }

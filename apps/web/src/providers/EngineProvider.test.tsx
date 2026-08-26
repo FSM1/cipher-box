@@ -110,7 +110,8 @@ describe('EngineProvider', () => {
       ],
       state: {
         grants: [],
-        canMintShare: true,
+        grantRefusal: null,
+        inviteLinkRefusal: null,
         inviteLinks: { live: false, expired: false, expiresAt: null, spent: 0 },
       },
     });

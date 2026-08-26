@@ -16,7 +16,13 @@
  *   it, an accepted op survives the handoff.
  */
 
-import { BROADCAST_CHANNEL_NAME, newClientId, type BroadcastChannelLike } from './broadcast.js';
+import {
+  BROADCAST_CHANNEL_NAME,
+  isSessionEnded,
+  newClientId,
+  SESSION_ENDED,
+  type BroadcastChannelLike,
+} from './broadcast.js';
 import { BroadcastTransport, EngineHeldElsewhereError } from './broadcastTransport.js';
 import { fanOut, unknownHandle } from './correlatedTransport.js';
 import { asError } from './errorMessage.js';
@@ -161,6 +167,10 @@ export class EngineClient implements EngineTransport {
   // promotion cold-starts for and what stops a signed-in tab yielding.
   private pendingLogin: string | null = null;
   private readonly sessionListeners = new Set<() => void>();
+  private readonly sessionEndListeners = new Set<() => void>();
+  // Held here rather than read off `config`, because a session end drops it: the
+  // capability to re-export the login secret must not outlive the session.
+  private secretSource: SecretSource | null;
   // Starts parked on an engine for this tab becoming reachable (`awaitEngine`).
   private readonly parkedStarts = new Set<ParkedStart>();
   private ownFocus: Uint8Array | null = null;
@@ -169,7 +179,9 @@ export class EngineClient implements EngineTransport {
     this.clientId = config.clientId ?? newClientId();
     this.channel = (config.createChannel ?? defaultChannel)();
     this.courier = config.courier ?? defaultCourier();
+    this.secretSource = config.secretSource ?? null;
 
+    this.channel.addEventListener('message', this.onChannelMessage);
     this.installFollower();
 
     // Requested before any tab can enqueue: an evicted origin loses the durable
@@ -208,6 +220,34 @@ export class EngineClient implements EngineTransport {
    * the same, because none of them backs a vault.
    */
   readonly signedInAccount = (): string | null => this.accountId;
+
+  /**
+   * Subscribes to the origin-wide session end another tab announced. This client
+   * has already dropped its claim and torn itself down by the time a listener
+   * runs; what is left is the host's own half — its login provider's session and
+   * whatever it renders over one. Returns an unsubscribe.
+   */
+  readonly subscribeSessionEnd = (listener: () => void): (() => void) => {
+    this.sessionEndListeners.add(listener);
+    return () => this.sessionEndListeners.delete(listener);
+  };
+
+  private readonly onChannelMessage = (event: MessageEvent): void => {
+    if (!isSessionEnded(event.data)) return;
+    this.endSession();
+    fanOut(this.sessionEndListeners, undefined);
+  };
+
+  /**
+   * Ends this tab's session: drops the re-export capability, then tears the tab
+   * out of the engine. Both halves land before this returns, so a promotion the
+   * released lock triggers finds no claim to cold-start for and no exporter to
+   * cold-start it with.
+   */
+  private endSession(): void {
+    this.secretSource = null;
+    void this.dispose();
+  }
 
   // --- EngineTransport ---
 
@@ -420,8 +460,20 @@ export class EngineClient implements EngineTransport {
     return () => this.listeners.delete(listener);
   }
 
+  /**
+   * The teardown a facade logout runs, which on this client ends the session for
+   * the whole origin rather than only this tab: the engine it tears down is the
+   * origin's only one, and a sibling that kept its claim would win the released
+   * lock and cold-start a replacement — re-seeding the durable seams a forget
+   * just erased and minting a login for the session it just revoked.
+   *
+   * The provider's own lifecycle teardown goes to {@link dispose}, which ends no
+   * session and announces nothing.
+   */
   close(): void {
-    void this.dispose();
+    if (this.role === 'closed') return;
+    this.channel.postMessage(SESSION_ENDED);
+    this.endSession();
   }
 
   // --- leadership + swaps ---
@@ -443,6 +495,7 @@ export class EngineClient implements EngineTransport {
     this.holdsAccount(null);
     this.settleParkedStarts(new Error('engine client closed'));
     await this.election.close();
+    this.channel.removeEventListener('message', this.onChannelMessage);
     this.channel.close();
   }
 
@@ -541,6 +594,13 @@ export class EngineClient implements EngineTransport {
         this.holdParkedStarts();
         const { secret, accountId } = await this.provideFailoverSecret();
         try {
+          // The session can end origin-wide while the export runs. Cold-starting
+          // past that re-seeds the seams the end erased, so the latch is read
+          // again here rather than only at entry.
+          if ((this.role as EngineClientRole) === 'closed') {
+            local.close();
+            return;
+          }
           await local.start(secret, accountId);
           this.holdsAccount(accountId);
         } finally {
@@ -574,7 +634,7 @@ export class EngineClient implements EngineTransport {
   }
 
   private async provideFailoverSecret(): Promise<LoginSecret> {
-    const source = this.config.secretSource;
+    const source = this.secretSource;
     if (!source) throw new Error('failover leader has no SecretSource; engine cannot start');
     return source.provideSecret();
   }

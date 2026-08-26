@@ -829,7 +829,8 @@ fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
 
 /// A share mints a fresh scope at the node, so a node that is not one yet is
 /// exactly where a host may still offer the mint — and nothing is shared there
-/// to report, by grant or by link.
+/// to report, by grant or by link. The vault root is refused on its own ground,
+/// which is not the one a node that already names a scope reports.
 #[test]
 fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
     let world = FakeWorld::new();
@@ -843,7 +844,8 @@ fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
         .expect("a sharing read")
         .state
         .expect("a node that is not a scope root settles the read");
-    assert!(plain.can_mint_share);
+    assert_eq!(plain.grant_refusal, None);
+    assert_eq!(plain.invite_link_refusal, None);
     assert_eq!(plain.grants, Vec::new());
     assert_eq!(plain.invite_links, Some(SharingInviteLinks::default()));
 
@@ -851,9 +853,100 @@ fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
         .expect("a sharing read")
         .state
         .expect("the vault root resolved");
-    assert!(
-        !scope.can_mint_share,
-        "a node that already names a scope refuses the mint, so a host must not offer it"
+    assert_eq!(
+        scope.grant_refusal,
+        Some("grant-target-is-the-vault-root"),
+        "the vault root's scope is the session's, and a host must be told that \
+         rather than a rule it does not break"
+    );
+    assert_eq!(
+        scope.invite_link_refusal,
+        Some("invite-target-is-the-vault-root")
+    );
+}
+
+/// A grant and a link are different actions to a user, so the vault root refuses
+/// each under its own name — and the read a share dialog is drawn from reports
+/// exactly what dispatching those commands returns.
+#[test]
+fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
+    let mut fx = GrantScenario::new();
+
+    let state = block_on(fx.engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: state.grant_refusal.expect("the read refuses the grant"),
+        }),
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: ROOT,
+            permission: Permission::Read,
+            expires_at: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: state
+                .invite_link_refusal
+                .expect("the read refuses the link"),
+        }),
+    );
+    assert_eq!(state.grant_refusal, Some("grant-target-is-the-vault-root"));
+    assert_eq!(
+        state.invite_link_refusal,
+        Some("invite-target-is-the-vault-root")
+    );
+}
+
+/// A second share of a folder would mint another scope at epoch 1, replacing the
+/// seed every existing grantee holds. The read and the commands decide that on
+/// one rule, so a host offers nothing the mint would then refuse — and each
+/// command still answers under its own name.
+#[test]
+fn a_second_share_of_a_scope_is_refused_with_the_names_its_read_reports() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let state = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the granted scope root resolved");
+    assert_eq!(
+        state.grant_refusal,
+        Some("grant-target-already-names-a-scope")
+    );
+    assert_eq!(
+        state.invite_link_refusal,
+        Some("invite-target-already-names-a-scope")
+    );
+
+    let grant_refusal = state.grant_refusal.expect("the read refuses the grant");
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: grant_refusal
+        }),
+        "a reported standing and the refusal the command returns cannot disagree"
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Read,
+            expires_at: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: state
+                .invite_link_refusal
+                .expect("the read refuses the link"),
+        }),
     );
 }
 

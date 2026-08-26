@@ -125,7 +125,8 @@ export interface WasmSharingInviteLinks {
 /** wasm-bindgen `ScopeSharing` — what one scope's own record says. */
 export interface WasmScopeSharing {
   readonly grants: readonly WasmSharingGrant[];
-  readonly canMintShare: boolean;
+  readonly grantRefusal?: string;
+  readonly inviteLinkRefusal?: string;
   readonly inviteLinks?: WasmSharingInviteLinks;
 }
 

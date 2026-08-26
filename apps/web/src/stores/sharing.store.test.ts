@@ -39,7 +39,8 @@ function view(
   contacts: number[],
   grants: Array<[number, Permission]> | null = [],
   scopeState: Partial<{
-    canMintShare: boolean;
+    grantRefusal: string | null;
+    inviteLinkRefusal: string | null;
     inviteLinks: SharingInviteLinksDescriptor | null;
   }> = {}
 ): SharingDescriptor {
@@ -56,7 +57,8 @@ function view(
               recipientIdentityPublicKey: identity(seed),
               permission,
             })),
-            canMintShare: true,
+            grantRefusal: null,
+            inviteLinkRefusal: null,
             inviteLinks: NO_LINKS,
             ...scopeState,
           },
@@ -165,13 +167,19 @@ describe('invite links', () => {
     expiresAt: 1_700_000_000_000n,
     spent: 2,
   };
-  const linked = () => view(DOCS, [1], [[1, 'read']], { canMintShare: false, inviteLinks: LIVE });
+  const linked = () =>
+    view(DOCS, [1], [[1, 'read']], {
+      grantRefusal: 'grant-target-already-names-a-scope',
+      inviteLinkRefusal: 'invite-target-already-names-a-scope',
+      inviteLinks: LIVE,
+    });
 
   it('holds the standing the engine reported alongside that scope’s grants', () => {
     sharingStore.reported(linked());
 
     expect(sharingFor(sharingStore.getState(), DOCS_KEY)).toMatchObject({
-      canMintShare: false,
+      grantRefusal: 'grant-target-already-names-a-scope',
+      inviteLinkRefusal: 'invite-target-already-names-a-scope',
       inviteLinks: LIVE,
     });
   });

@@ -1,0 +1,118 @@
+/* The /settings route: stacked sections over the app shell's main column. */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 46rem;
+  padding: 1rem;
+}
+
+.settings-heading {
+  margin: 0;
+  color: var(--color-text-primary);
+  text-transform: lowercase;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.settings-section h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
+  text-transform: lowercase;
+}
+
+.settings-section--danger {
+  border-color: var(--color-warning-dim);
+}
+
+.settings-note {
+  margin: 0;
+  color: var(--color-text-dim);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.settings-ok {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.settings-error {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.8rem;
+}
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.settings-facts dt {
+  color: var(--color-text-dim);
+}
+
+.settings-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--color-text-dim);
+}
+
+.settings-field input,
+.settings-field select {
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.settings-field input:focus-visible,
+.settings-field select:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.settings-confirm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.terminal-btn--danger {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}

@@ -3,6 +3,7 @@ import {
   expiryLabel,
   inviteLinkState,
   LINK_LIFETIMES,
+  refusalLabel,
   type LinkLifetime,
 } from '../../sharing/inviteLink';
 import type { ScopeSharing } from '../../stores/sharing.store';
@@ -100,8 +101,8 @@ export function InviteLinkPanel({
 
     case 'refused':
       return (
-        <p className="sharing-note" data-testid="share-no-mint">
-          {'// this folder is already shared, so no further link can be minted here'}
+        <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
+          {`// ${refusalLabel(state.check)}`}
         </p>
       );
   }

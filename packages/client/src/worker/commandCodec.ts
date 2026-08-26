@@ -561,7 +561,8 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
               recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
               permission: permissionFrom(wasm, grant.permission),
             })),
-            canMintShare: state.canMintShare,
+            grantRefusal: state.grantRefusal ?? null,
+            inviteLinkRefusal: state.inviteLinkRefusal ?? null,
             inviteLinks:
               links === undefined
                 ? null
