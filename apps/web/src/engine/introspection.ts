@@ -47,7 +47,7 @@ export interface EngineIntrospection {
    * How many times this tab has re-exported its login secret for a promotion.
    * Counted for the tab, not the client, so a rebuilt one cannot reset it.
    */
-  exports(): number;
+  reExports(): number;
 }
 
 /** Survives the client rebuild a session end drives, which is the point. */
@@ -73,20 +73,21 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
 
   window.__CIPHERBOX_ENGINE__ = {
     signIn(loginSecretHex, accountId) {
-      const exporter = {
+      const source = { accountId: () => accountId };
+      // Armed as the real flow arms it (`createLoginFlow`), so a promotion in
+      // this tab re-exports rather than failing for want of a source the suite
+      // never installed. Two exporters over the one secret: only a promotion's
+      // export counts, so the cold start below leaves the tally alone.
+      secrets?.use({
+        ...source,
         _UNSAFE_exportTssKey: () => {
           reExports += 1;
           return Promise.resolve(loginSecretHex);
         },
-        accountId: () => accountId,
-      };
-      // Armed as the real flow arms it (`createLoginFlow`), so a promotion in
-      // this tab re-exports rather than failing for want of a source the suite
-      // never installed — and `exports()` can see when one did.
-      secrets?.use(exporter);
-      return handOffLoginSecret(client.facade, exporter).finally(() => {
-        // The hand-off itself is not a promotion's re-export.
-        reExports = 0;
+      });
+      return handOffLoginSecret(client.facade, {
+        ...source,
+        _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
       });
     },
     async snapshot() {
@@ -97,7 +98,7 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
       return toHex(new Uint8Array(await client.facade.download(fromHex(nodeHex))));
     },
     events: () => seen,
-    exports: () => reExports,
+    reExports: () => reExports,
   };
   return client;
 }

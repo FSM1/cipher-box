@@ -3,9 +3,9 @@ import {
   expiryLabel,
   inviteLinkState,
   LINK_LIFETIMES,
-  refusalLabel,
   type LinkLifetime,
 } from '../../sharing/inviteLink';
+import { refusalLabel } from '../../sharing/shareRefusals';
 import type { ScopeSharing } from '../../stores/sharing.store';
 
 interface InviteLinkPanelProps {

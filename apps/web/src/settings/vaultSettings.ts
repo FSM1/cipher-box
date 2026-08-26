@@ -10,7 +10,7 @@
 
 import type { ByoKind, PinMode, VaultSettingsDescriptor } from '@cipherbox/client';
 
-export interface VaultSettingsForm {
+export interface VaultSettingsFields {
   pinMode: PinMode;
   byoEndpoint: string;
   byoKind: ByoKind;
@@ -19,7 +19,7 @@ export interface VaultSettingsForm {
   keepLatestVersions: string;
 }
 
-export const DEFAULT_VAULT_SETTINGS_FORM: VaultSettingsForm = {
+export const DEFAULT_VAULT_SETTINGS_FORM: VaultSettingsFields = {
   pinMode: 'hosted',
   byoEndpoint: '',
   byoKind: 'kubo',
@@ -36,9 +36,9 @@ export type VaultSettingsDraft =
  * bearer rides a transferable buffer that `saveVaultSettings` detaches, so a
  * descriptor sent twice would carry a spent credential the second time.
  */
-export function buildVaultSettings(form: VaultSettingsForm): VaultSettingsDraft {
-  const keep = retention(form.keepLatestVersions);
-  if (keep === 'invalid') {
+export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraft {
+  const keep = form.keepLatestVersions.trim();
+  if (keep !== '' && !/^\d+$/.test(keep)) {
     return {
       ok: false,
       problem: 'keep-latest wants a whole number of versions, or nothing at all',
@@ -53,27 +53,13 @@ export function buildVaultSettings(form: VaultSettingsForm): VaultSettingsDraft 
         endpoint === ''
           ? null
           : { endpoint, kind: form.byoKind, accessToken: bearer(form.byoAccessToken) },
-      keepLatestVersions: keep,
+      keepLatestVersions: keep === '' ? null : Number(keep),
     },
   };
 }
 
-/**
- * The bearer as a buffer of its own, so the transfer moves it out of this realm.
- * Copied into an exactly-sized one rather than handing over the encoder's
- * backing store, which a pooled allocation would make larger than the token.
- */
+/** The bearer in a buffer of its own, so the send transfers it out of this realm. */
 function bearer(token: string): ArrayBuffer | null {
   if (token === '') return null;
-  const encoded = new TextEncoder().encode(token);
-  const buffer = new ArrayBuffer(encoded.byteLength);
-  new Uint8Array(buffer).set(encoded);
-  return buffer;
-}
-
-function retention(value: string): number | null | 'invalid' {
-  const trimmed = value.trim();
-  if (trimmed === '') return null;
-  if (!/^\d+$/.test(trimmed)) return 'invalid';
-  return Number(trimmed);
+  return new TextEncoder().encode(token).buffer as ArrayBuffer;
 }

@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildVaultSettings,
   DEFAULT_VAULT_SETTINGS_FORM,
-  type VaultSettingsForm,
+  type VaultSettingsFields,
 } from './vaultSettings';
 
-const form = (overrides: Partial<VaultSettingsForm> = {}): VaultSettingsForm => ({
+const form = (overrides: Partial<VaultSettingsFields> = {}): VaultSettingsFields => ({
   ...DEFAULT_VAULT_SETTINGS_FORM,
   ...overrides,
 });
@@ -42,8 +42,9 @@ describe('the vault settings a save publishes', () => {
       buildVaultSettings(form({ byoEndpoint: 'https://kubo.example', byoAccessToken: 'opaque' }))
     );
 
-    expect(built.byo?.accessToken).toBeInstanceOf(ArrayBuffer);
-    expect(built.byo?.accessToken?.byteLength).toBe('opaque'.length);
+    const carried = built.byo?.accessToken;
+    expect(carried?.byteLength).toBe('opaque'.length);
+    expect(new TextDecoder().decode(new Uint8Array(carried!))).toBe('opaque');
   });
 
   it('mints a fresh bearer buffer per build, because the send detaches it', () => {

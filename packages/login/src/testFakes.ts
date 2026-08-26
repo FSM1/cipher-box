@@ -116,6 +116,9 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
 }
 
 export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
+  // Records the teardown legs in order, so a test can assert sequencing rather
+  // than only that each leg ran.
+  let onCall: ((step: string) => void) | undefined;
   const calls = {
     secrets: [] as Uint8Array[],
     accounts: [] as string[],
@@ -130,14 +133,16 @@ export function fakeFacade(overrides: Partial<LoginFacade> = {}) {
     },
     logout() {
       calls.logouts += 1;
+      onCall?.('facade.logout');
       return overrides.logout?.() ?? Promise.resolve();
     },
     forgetDevice() {
       calls.forgets += 1;
+      onCall?.('facade.forgetDevice');
       return overrides.forgetDevice?.() ?? Promise.resolve();
     },
   };
-  return { facade, calls };
+  return { facade, calls, onCall: (record: (step: string) => void) => (onCall = record) };
 }
 
 /** A host whose UI collected the material before it called, as web's does. */

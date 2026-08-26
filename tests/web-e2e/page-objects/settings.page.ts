@@ -21,8 +21,9 @@ export class SettingsPage {
     await expect(this.panel).toBeVisible();
   }
 
-  /** Saves the vault settings form as it currently stands. */
+  /** Acknowledges the whole-record replace, then saves the form as it stands. */
   async save(): Promise<void> {
+    await this.page.getByLabel(/replaces every stored setting/).check();
     await this.page.getByTestId('settings-save').click();
   }
 

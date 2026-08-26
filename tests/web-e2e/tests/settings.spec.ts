@@ -25,17 +25,6 @@ async function sibling(page: Page, accountId: string): Promise<VaultPage> {
   return vault;
 }
 
-test('a signed-in tab reaches settings from the vault browser', async ({ page }) => {
-  await coldStart(page);
-  const settings = new SettingsPage(page);
-
-  await page.getByTestId('nav-item-settings').click();
-
-  await expect(page).toHaveURL(/\/settings$/);
-  await expect(settings.panel).toBeVisible();
-  await expect(settings.accountId).toBeVisible();
-});
-
 test('@full a byo endpoint round-trips through the settings save', async ({ page }) => {
   await coldStart(page);
   const settings = new SettingsPage(page);
@@ -69,6 +58,9 @@ test('forgetting the device signs every tab out and re-seeds none', async ({ pag
   const other = await sibling(page, accountId);
   const settings = new SettingsPage(page);
   await settings.open();
+  // Reached through the sidebar, so this is also the route's own smoke check.
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(settings.accountId).toBeVisible();
 
   await settings.forgetDevice();
 

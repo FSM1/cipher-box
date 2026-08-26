@@ -1,21 +1,14 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import type { VaultSettingsDescriptor } from '@cipherbox/client';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { VaultSettingsForm } from './VaultSettingsForm';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from '../../test/authFakes';
 
 /** Records what a save carried, and what the engine answered it with. */
 function engineTaking(refusal?: Error) {
-  const engine = fakeEngineClient();
-  const saves: VaultSettingsDescriptor[] = [];
-  const facade = engine.client.facade as unknown as {
-    saveVaultSettings(settings: VaultSettingsDescriptor): Promise<unknown>;
-  };
-  facade.saveVaultSettings = vi.fn((settings: VaultSettingsDescriptor) => {
-    saves.push(settings);
-    return refusal === undefined ? Promise.resolve({ kind: 'done' }) : Promise.reject(refusal);
-  });
-  return { engine, saves };
+  const engine = fakeEngineClient(
+    refusal === undefined ? {} : { saveVaultSettings: () => Promise.reject(refusal) }
+  );
+  return { engine, saves: engine.calls.vaultSettings };
 }
 
 function renderForm(taking = engineTaking()) {
@@ -34,7 +27,16 @@ function renderForm(taking = engineTaking()) {
 const type = (label: RegExp | string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
-const save = () => act(async () => void fireEvent.click(screen.getByTestId('settings-save')));
+const ack = () => screen.getByLabelText(/replaces every stored setting/) as HTMLInputElement;
+
+const acknowledge = () => fireEvent.click(ack());
+
+const saveButton = () => screen.getByTestId('settings-save') as HTMLButtonElement;
+
+const save = () => {
+  acknowledge();
+  return act(async () => void fireEvent.click(saveButton()));
+};
 
 describe('the vault settings form', () => {
   it('publishes the placement, provider and retention as one command', async () => {
@@ -76,6 +78,50 @@ describe('the vault settings form', () => {
       'byo-endpoint-insecure-transport'
     );
     expect(screen.queryByTestId('settings-saved')).toBeNull();
+  });
+
+  it('leaves no readable bearer behind where the send never took the buffer', async () => {
+    const taking = renderForm();
+
+    type('your ipfs provider', 'https://kubo.example');
+    type('provider access token', 'opaque');
+    await save();
+
+    // The fake takes the descriptor in-process rather than transferring it, so
+    // the buffer is still this realm's to scrub — as a refused dispatch leaves it.
+    const carried = taking.saves[0].byo?.accessToken;
+    expect(new Uint8Array(carried!)).toEqual(new Uint8Array('opaque'.length));
+  });
+
+  it('scrubs the bearer the engine refused rather than leaving it in memory', async () => {
+    const taking = renderForm(engineTaking(new Error('unsupported target: byo-endpoint-refused')));
+
+    type('your ipfs provider', 'https://kubo.example');
+    type('provider access token', 'opaque');
+    await save();
+
+    const carried = taking.saves[0].byo?.accessToken;
+    expect(new Uint8Array(carried!)).toEqual(new Uint8Array('opaque'.length));
+  });
+
+  it('sends nothing until the member takes on replacing the whole record', () => {
+    const taking = renderForm();
+
+    type('keep newest versions', '5');
+
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(saveButton());
+    expect(taking.saves).toEqual([]);
+  });
+
+  it('asks for the acknowledgement again once a save has spent it', async () => {
+    renderForm();
+
+    type('keep newest versions', '5');
+    await save();
+
+    expect(ack().checked).toBe(false);
+    expect(saveButton().disabled).toBe(true);
   });
 
   it('never sends a retention the descriptor cannot carry', async () => {

@@ -4,7 +4,7 @@ import { useCommandRunner } from '../../hooks/useCommandRunner';
 import {
   buildVaultSettings,
   DEFAULT_VAULT_SETTINGS_FORM,
-  type VaultSettingsForm as Fields,
+  type VaultSettingsFields,
 } from '../../settings/vaultSettings';
 
 const PIN_MODES: { value: PinMode; label: string }[] = [
@@ -25,16 +25,19 @@ const BYO_KINDS: { value: ByoKind; label: string }[] = [
  *
  * The form starts at the defaults every time, because the wasm boundary is
  * write-only by design — no getter reads a stored config back, so a saved bearer
- * never crosses into JS (`crates/wasm/src/lib.rs`). Saving therefore replaces the
- * record rather than editing it, which the copy has to say.
+ * never crosses into JS (`crates/wasm/src/lib.rs`). A save therefore replaces the
+ * whole record with what is on the form, tearing down a provider the member
+ * configured earlier and cannot see here — so it is gated on an acknowledgement.
  */
 export function VaultSettingsForm() {
-  const [fields, setFields] = useState<Fields>(DEFAULT_VAULT_SETTINGS_FORM);
+  const [fields, setFields] = useState<VaultSettingsFields>(DEFAULT_VAULT_SETTINGS_FORM);
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
   const { busy, error, run } = useCommandRunner<'saveVaultSettings'>();
+  const message = problem ?? error;
 
-  const set = <K extends keyof Fields>(key: K, value: Fields[K]) => {
+  const set = <K extends keyof VaultSettingsFields>(key: K, value: VaultSettingsFields[K]) => {
     setFields((current) => ({ ...current, [key]: value }));
     setSaved(false);
   };
@@ -45,10 +48,17 @@ export function VaultSettingsForm() {
     if (!draft.ok) return;
     void run('saveVaultSettings', (facade) => facade.saveVaultSettings(draft.settings)).then(
       (accepted) => {
+        // The form is the bearer's terminal owner: a send transfers the buffer
+        // out and detaches it, so a still-readable one never left this realm.
+        const bearer = draft.settings.byo?.accessToken;
+        if (bearer && bearer.byteLength > 0) new Uint8Array(bearer).fill(0);
         setSaved(accepted);
         // The bearer is spent by the send that carried it; a retry types it
         // again rather than re-sending a buffer this realm no longer owns.
-        if (accepted) setFields((current) => ({ ...current, byoAccessToken: '' }));
+        if (accepted) {
+          setFields((current) => ({ ...current, byoAccessToken: '' }));
+          setAcknowledged(false);
+        }
       }
     );
   };
@@ -66,6 +76,7 @@ export function VaultSettingsForm() {
         <span>where versions are pinned</span>
         <select
           id="settings-pin-mode"
+          className="dialog-input"
           value={fields.pinMode}
           onChange={(event) => set('pinMode', event.target.value as PinMode)}
         >
@@ -81,6 +92,7 @@ export function VaultSettingsForm() {
         <span>your ipfs provider</span>
         <input
           id="settings-byo-endpoint"
+          className="dialog-input"
           type="url"
           inputMode="url"
           autoComplete="off"
@@ -94,6 +106,7 @@ export function VaultSettingsForm() {
         <span>provider api</span>
         <select
           id="settings-byo-kind"
+          className="dialog-input"
           value={fields.byoKind}
           onChange={(event) => set('byoKind', event.target.value as ByoKind)}
         >
@@ -109,6 +122,7 @@ export function VaultSettingsForm() {
         <span>provider access token</span>
         <input
           id="settings-byo-token"
+          className="dialog-input"
           type="password"
           autoComplete="off"
           spellCheck={false}
@@ -124,6 +138,7 @@ export function VaultSettingsForm() {
             which here means "keep every version" — a different choice. */}
         <input
           id="settings-retention"
+          className="dialog-input"
           type="text"
           inputMode="numeric"
           placeholder="blank keeps every version"
@@ -132,17 +147,30 @@ export function VaultSettingsForm() {
         />
       </label>
 
-      <p className="settings-note">
-        {'// this replaces the stored settings record — the engine never reads a saved'}
+      <p className="sharing-note">
+        {'// the engine never reads a saved provider credential back out, so nothing'}
         <br />
-        {'// provider credential back out, so nothing here is filled in for you.'}
+        {'// here is filled in from what you stored before.'}
       </p>
+
+      <label className="recovery-ack" htmlFor="settings-replace-ack">
+        <input
+          id="settings-replace-ack"
+          type="checkbox"
+          checked={acknowledged}
+          onChange={(event) => setAcknowledged(event.target.checked)}
+        />
+        <span>
+          i understand saving replaces every stored setting with exactly what is on this form,
+          including any provider i configured before
+        </span>
+      </label>
 
       <div className="settings-actions">
         <button
           type="submit"
           className="terminal-btn terminal-btn--filled"
-          disabled={busy !== null}
+          disabled={busy !== null || !acknowledged}
           data-testid="settings-save"
         >
           {busy !== null ? 'saving...' : 'save settings'}
@@ -154,9 +182,9 @@ export function VaultSettingsForm() {
         )}
       </div>
 
-      {(problem ?? error) !== null && (
-        <p className="settings-error" role="alert" data-testid="settings-error">
-          {problem ?? error}
+      {message !== null && (
+        <p className="dialog-error" role="alert" data-testid="settings-error">
+          {message}
         </p>
       )}
     </form>

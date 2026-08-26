@@ -49,7 +49,7 @@ export class VaultPage {
 
   /** How many times this tab re-exported its secret for a promotion. */
   reExports(): Promise<number> {
-    return this.page.evaluate(() => window.__CIPHERBOX_ENGINE__!.exports());
+    return this.page.evaluate(() => window.__CIPHERBOX_ENGINE__!.reExports());
   }
 
   /**

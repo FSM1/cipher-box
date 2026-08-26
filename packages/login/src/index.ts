@@ -11,7 +11,7 @@ export {
   type EmailAnswer,
   type WalletProof,
 } from './collector';
-export { createLoginFlow, type LoginFlow, type LoginHost } from './flow';
+export { createLoginFlow, resetLoginFlowLatches, type LoginFlow, type LoginHost } from './flow';
 export {
   createIdentityExchange,
   isIdentityMethod,

@@ -739,19 +739,14 @@ describe('EngineClient leadership + transport swap', () => {
 });
 
 describe('EngineClient origin-wide session end', () => {
-  /** Counts every re-export the origin asks for, so a cold start cannot hide. */
-  function countingSecrets() {
-    let asked = 0;
-    return {
-      asked: () => asked,
-      source: {
-        provideSecret: () => {
-          asked += 1;
-          return Promise.resolve(fakeLoginSecret());
-        },
-      },
-    };
-  }
+  /**
+   * The two steps a host's session end drives, in the order `createLoginFlow`
+   * drives them: announce to the origin, then tear this tab's own engine down.
+   */
+  const endSession = (client: EngineClient): void => {
+    client.endOriginSession();
+    void client.facade.logout();
+  };
 
   it('signs a sibling out when the leader ends the session', async () => {
     const { tab } = origin();
@@ -762,7 +757,7 @@ describe('EngineClient origin-wide session end', () => {
     await startTab(b);
     expect(b.signedInAccount()).toBe(TEST_ACCOUNT_ID);
 
-    a.facade.logout();
+    endSession(a);
     await tick();
 
     expect(b.signedInAccount()).toBeNull();
@@ -773,9 +768,9 @@ describe('EngineClient origin-wide session end', () => {
 
   it('leaves no sibling to cold-start a replacement engine over the erased state', async () => {
     const { tab, liveWorkers } = origin();
-    const secrets = countingSecrets();
+    const provideSecret = vi.fn(() => Promise.resolve(fakeLoginSecret()));
     const a = tab();
-    const b = tab({ secretSource: secrets.source });
+    const b = tab({ secretSource: { provideSecret } });
     await tick();
     await startTab(a);
     await startTab(b);
@@ -783,10 +778,10 @@ describe('EngineClient origin-wide session end', () => {
 
     // The leader's teardown releases the engine lock, which is all a promotion
     // needs; the sibling must have dropped its claim before that lands.
-    a.facade.logout();
+    endSession(a);
     for (let i = 0; i < 4; i += 1) await tick();
 
-    expect(secrets.asked()).toBe(0);
+    expect(provideSecret).not.toHaveBeenCalled();
     expect(liveWorkers()).toBe(0);
     await a.dispose();
     await b.dispose();
@@ -803,7 +798,7 @@ describe('EngineClient origin-wide session end', () => {
     await startTab(bystander);
     expect(leader.currentRole()).toBe('leader');
 
-    ending.facade.logout();
+    endSession(ending);
     for (let i = 0; i < 4; i += 1) await tick();
 
     expect(leader.signedInAccount()).toBeNull();
@@ -824,7 +819,7 @@ describe('EngineClient origin-wide session end', () => {
     await startTab(a);
     await startTab(b);
 
-    a.facade.logout();
+    endSession(a);
     await tick();
 
     expect(ended).toHaveBeenCalledTimes(1);
@@ -835,9 +830,9 @@ describe('EngineClient origin-wide session end', () => {
 
   it('ends no session when a tab merely tears its own client down', async () => {
     const { tab, liveWorkers } = origin();
-    const secrets = countingSecrets();
+    const provideSecret = vi.fn(() => Promise.resolve(fakeLoginSecret()));
     const a = tab();
-    const b = tab({ secretSource: secrets.source });
+    const b = tab({ secretSource: { provideSecret } });
     await tick();
     await startTab(a);
     await startTab(b);
@@ -849,7 +844,7 @@ describe('EngineClient origin-wide session end', () => {
 
     expect(b.signedInAccount()).toBe(TEST_ACCOUNT_ID);
     expect(b.currentRole()).toBe('leader');
-    expect(secrets.asked()).toBe(1);
+    expect(provideSecret).toHaveBeenCalledTimes(1);
     expect(liveWorkers()).toBe(1);
     await b.dispose();
   });

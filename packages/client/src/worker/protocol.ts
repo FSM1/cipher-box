@@ -161,9 +161,11 @@ export interface SharingInviteLinksDescriptor {
 export interface ScopeSharingDescriptor {
   grants: SharingGrantDescriptor[];
   /**
-   * The refusal a contact grant here would report, or `null` where the engine
-   * would accept one. The engine's own check name, so a host offers exactly what
-   * `share_scope` accepts without re-deriving a rule of its own.
+   * The refusal a contact grant here would report, or `null` where none of the
+   * grounds this read consults stands in the way — a command may still refuse on
+   * one it does not, so this narrows what a host offers rather than promising a
+   * command will be accepted. The engine's own check name either way, so the
+   * host re-derives no rule of its own.
    */
   grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */

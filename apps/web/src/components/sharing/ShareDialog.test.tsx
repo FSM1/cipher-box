@@ -600,10 +600,16 @@ describe('what the dialog offers for each ground the engine refuses on', () => {
     );
   });
 
-  it('still offers a grant where no read reached the scope, which is not a refusal', async () => {
-    await share(sharingEngine({}, held([1], null)));
+  it('offers no grant where no read reached the scope, and says so in its own words', async () => {
+    const engine = await share(sharingEngine({}, held([1], null)));
 
-    expect(screen.getByLabelText('contact')).toBeTruthy();
+    // Absence is its own state: neither an offer, nor a refusal the engine made.
+    expect(screen.getByTestId('share-standing-unknown')).toBeTruthy();
     expect(screen.queryByTestId('share-no-grant')).toBeNull();
+    expect(screen.queryByLabelText('contact')).toBeNull();
+    expect(screen.getByTestId('share-grant').hasAttribute('disabled')).toBe(true);
+
+    await click('share-grant');
+    expect(engine.facade.grant).not.toHaveBeenCalled();
   });
 });

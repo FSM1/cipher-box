@@ -1,7 +1,7 @@
 import type { SharingInviteLinksDescriptor } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
 import type { ScopeSharing } from '../stores/sharing.store';
-import { expiryAt, expiryLabel, inviteLinkState, inviteUrl, refusalLabel } from './inviteLink';
+import { expiryAt, expiryLabel, inviteLinkState, inviteUrl } from './inviteLink';
 
 const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
@@ -77,10 +77,5 @@ describe('which link situation a scope is in', () => {
     ]) {
       expect(inviteLinkState(scope(NO_LINKS, check))).toEqual({ kind: 'refused', check });
     }
-  });
-
-  it('says a refusal in words, and falls back to the engine’s name for one it has none for', () => {
-    expect(refusalLabel('invite-target-is-the-vault-root')).toContain('folder inside it');
-    expect(refusalLabel('some-rule-a-later-build-added')).toBe('some-rule-a-later-build-added');
   });
 });

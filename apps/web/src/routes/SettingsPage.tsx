@@ -40,7 +40,7 @@ export function SettingsPage() {
 
         <section className="settings-section" data-testid="settings-recovery">
           <h3>recovery phrase</h3>
-          <p className="settings-note">
+          <p className="sharing-note">
             the one export that opens this account without any device it is enrolled on. shown once,
             at enrollment.
           </p>
@@ -70,7 +70,7 @@ export function SettingsPage() {
           data-testid="settings-device"
         >
           <h3>this device</h3>
-          <p className="settings-note">
+          <p className="sharing-note">
             signing out leaves this browser&apos;s cached blocks, queued uploads and staged bytes in
             place. forgetting the device erases them.
           </p>

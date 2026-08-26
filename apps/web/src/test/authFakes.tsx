@@ -4,7 +4,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { EngineClient } from '@cipherbox/client';
+import type { EngineClient, VaultSettingsDescriptor } from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
@@ -40,6 +40,10 @@ export interface EngineCalls {
   siwe: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
   logouts: number;
+  /** How many times this tab announced the session end to the origin. */
+  originSessionEnds: number;
+  /** The settings each accepted or refused save carried. */
+  vaultSettings: VaultSettingsDescriptor[];
 }
 
 /**
@@ -48,7 +52,7 @@ export interface EngineCalls {
  * engine, exactly as `EngineClient` publishes it.
  */
 export function fakeEngineClient(
-  overrides: Partial<Record<'start' | 'logout', () => Promise<void>>> = {}
+  overrides: Partial<Record<'start' | 'logout' | 'saveVaultSettings', () => Promise<void>>> = {}
 ) {
   const calls: EngineCalls = {
     started: [],
@@ -56,6 +60,8 @@ export function fakeEngineClient(
     logouts: 0,
     siwe: [],
     siweChallenges: 0,
+    originSessionEnds: 0,
+    vaultSettings: [],
   };
   const sessionListeners = new Set<() => void>();
   const sessionEndListeners = new Set<() => void>();
@@ -71,6 +77,10 @@ export function fakeEngineClient(
       return () => sessionListeners.delete(listener);
     },
     signedInAccount: () => account,
+    // Announce-only, as the real client is: a tab is not its own sibling.
+    endOriginSession() {
+      calls.originSessionEnds += 1;
+    },
     subscribeSessionEnd(listener: () => void) {
       sessionEndListeners.add(listener);
       return () => sessionEndListeners.delete(listener);
@@ -101,6 +111,10 @@ export function fakeEngineClient(
         }
       },
       forgetDevice: () => Promise.resolve(),
+      saveVaultSettings(settings: VaultSettingsDescriptor) {
+        calls.vaultSettings.push(settings);
+        return overrides.saveVaultSettings?.() ?? Promise.resolve();
+      },
       subscribe: () => () => undefined,
       snapshot: () => new Promise(() => undefined),
       setFocus: () => Promise.resolve(),

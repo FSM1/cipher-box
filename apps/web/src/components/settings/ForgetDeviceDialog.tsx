@@ -37,7 +37,7 @@ export function ForgetDeviceDialog({ onClose }: { onClose: () => void }) {
           your vault and its contents are not touched. you can sign in again here from any login
           method the account still has.
         </p>
-        <label className="settings-confirm" htmlFor="forget-device-ack">
+        <label className="recovery-ack" htmlFor="forget-device-ack">
           <input
             id="forget-device-ack"
             type="checkbox"

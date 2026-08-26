@@ -4,17 +4,19 @@
  * `EngineClient` has already dropped its claim on the engine and torn itself out
  * by the time this runs (`subscribeSessionEnd`). What is left is the host's own
  * half — the Core Kit session and the auth chrome over it — which would
- * otherwise hand its secret straight back to the engine the rebuild spawns.
- *
- * Mounted once, at the app root: every `useAuth` consumer would otherwise drive
- * the teardown again.
+ * otherwise hand its secret back to the engine the rebuild spawns.
  */
 
 import { useEffect } from 'react';
 import { useEngine } from '../providers/EngineProvider';
 import { useAuth } from './useAuth';
 
-export function useSessionEndAcrossTabs(): void {
+/**
+ * Renders nothing, and is mounted once beside the routes rather than in the root
+ * component: `useAuth` subscribes to five sources, and the root would re-render
+ * the whole matched route on every one of them.
+ */
+export function SessionEndWatcher() {
   const client = useEngine();
   const { logout } = useAuth();
 
@@ -26,4 +28,6 @@ export function useSessionEndAcrossTabs(): void {
       void logout().catch(() => undefined);
     });
   }, [client, logout]);
+
+  return null;
 }

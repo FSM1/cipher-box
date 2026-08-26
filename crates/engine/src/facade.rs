@@ -386,8 +386,10 @@ pub struct ScopeSharing {
     /// Empty for a node that is not a scope root: nothing is granted there.
     pub grants: Vec<SharingGrant>,
     /// The refusal a contact grant at this scope would report, or `None` where
-    /// `share_scope` would accept one. Carries the same `ShareChecks` name the
-    /// command itself would return, so a host offers nothing the engine refuses.
+    /// none of the grounds this read consults stands in its way — `share_scope`
+    /// refuses on others it does not reach here, so this narrows what a host
+    /// offers rather than promising acceptance. Carries the same `ShareChecks`
+    /// name the command itself would return.
     pub grant_refusal: Option<&'static str>,
     /// The refusal an invite-link mint at this scope would report, or `None`.
     pub invite_link_refusal: Option<&'static str>,
@@ -1868,6 +1870,7 @@ enum ScopeShare<'a> {
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
 /// command: a grant and an invite link are different actions to a user, so they
 /// do not report each other's.
+#[derive(Clone, Copy)]
 struct ShareChecks {
     /// The vault root is refused as a target.
     vault_root: &'static str,
@@ -1904,7 +1907,7 @@ impl ShareChecks {
 
     /// The name this command reports for `standing`, or `None` where nothing
     /// refuses.
-    fn refusal(&self, standing: ShareStanding) -> Option<&'static str> {
+    fn refusal(self, standing: ShareStanding) -> Option<&'static str> {
         match standing {
             ShareStanding::Accepted => None,
             ShareStanding::VaultRoot => Some(self.vault_root),
@@ -1923,9 +1926,10 @@ impl ScopeShare<'_> {
     }
 }
 
-/// The rule a parent scope root's record refuses a further share of `node` on.
-/// `share_scope` and the `sharing` read decide it here together, so a reported
-/// standing and a returned refusal cannot disagree.
+/// The grounds a parent scope root's resolved record refuses a further share of
+/// `node` on. `share_scope` and the `sharing` read take both from here, so
+/// neither reports one the other would not; the vault-root ground is settled
+/// before any resolve, in `share_scope`'s guard and `owner_scope_standing`.
 ///
 /// A second share of the same folder would mint another scope at epoch 1,
 /// replacing the seed every existing grantee holds — a silent revocation dressed
@@ -4096,9 +4100,9 @@ where {
             .ok_or(EngineError::UnsupportedTarget { check })
     }
 
-    /// [`owner_scope`](Self::owner_scope) together with the standing the same
-    /// resolve settles for a further share of `node`, so a caller that reports
-    /// both reads the parent once.
+    /// [`owner_scope`](Self::owner_scope) together with the standing a further
+    /// share of `node` would carry, so a caller that reports both reads the
+    /// parent once.
     ///
     /// The scope is `None` for a node the index does not name under
     /// [`UnindexedScope::Refuse`] — a miss whose refusal shape is the caller's.
@@ -5994,8 +5998,9 @@ where {
     /// The authority for what is a scope root is the vault root's owner-signed
     /// direct-child-scope index, which
     /// [`owner_scope_standing`](Self::owner_scope_standing) owns — so a node it
-    /// does not name has an empty grant list and nothing standing in a mint's
-    /// way. A read reports, it does not repair, so an index miss refuses rather
+    /// does not name has an empty grant list, and only the parent record's own
+    /// grounds stand in a mint's way.
+    /// A read reports, it does not repair, so an index miss refuses rather
     /// than reaching for a derived name ([`UnindexedScope`]).
     /// A resolve that failed answers `None`, so a host cannot paint "shared with
     /// nobody" over a subtree it simply could not read, nor offer a mint the
@@ -6693,19 +6698,15 @@ mod tests {
                 Some("grant-parent-envelope-version-unsupported"),
                 Some("invite-parent-envelope-version-unsupported"),
             ),
+            (
+                ShareStanding::VaultRoot,
+                Some("grant-target-is-the-vault-root"),
+                Some("invite-target-is-the-vault-root"),
+            ),
         ] {
             assert_eq!(ShareChecks::GRANT.refusal(standing), grant);
             assert_eq!(ShareChecks::INVITE_LINK.refusal(standing), link);
         }
-
-        assert_eq!(
-            ShareChecks::GRANT.refusal(ShareStanding::VaultRoot),
-            Some("grant-target-is-the-vault-root")
-        );
-        assert_eq!(
-            ShareChecks::INVITE_LINK.refusal(ShareStanding::VaultRoot),
-            Some("invite-target-is-the-vault-root")
-        );
     }
 
     /// A destination the render cannot walk to the root is refused, and one it
