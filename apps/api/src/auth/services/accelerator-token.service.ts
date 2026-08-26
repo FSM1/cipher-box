@@ -1,14 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
-import { GatewayToken } from '../entities/gateway-token.entity';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
+import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import { LIVE_REFRESH_ROW_SQL, REFRESH_ALIAS } from '../refresh-liveness';
 import { resolveAccessTtlSeconds } from './access-ttl';
 
 /**
@@ -38,9 +40,10 @@ export const REFUSAL_CACHE_MAX_ENTRIES = 1_000;
  * leaf block, so every answer — accept or refuse — is cached in process.
  */
 @Injectable()
-export class GatewayTokenService {
+export class AcceleratorTokenService {
   private readonly ttlSeconds: number;
   private readonly cacheTtlMs: number;
+  private readonly sweepBatchSize: number;
   /** tokenHash → the epoch ms that answer stops being trusted. */
   private readonly accepted = new Map<string, number>();
   private readonly refused = new Map<string, number>();
@@ -49,34 +52,40 @@ export class GatewayTokenService {
     private readonly clock: Clock,
     private readonly entropy: Entropy,
     configService: ConfigService,
-    @InjectRepository(GatewayToken)
-    private readonly gatewayTokenRepository: Repository<GatewayToken>
+    @InjectRepository(AcceleratorToken)
+    private readonly acceleratorTokenRepository: Repository<AcceleratorToken>
   ) {
     this.ttlSeconds = resolveAccessTtlSeconds(configService);
     this.cacheTtlMs =
       positiveIntConfig(
-        configService.get('GATEWAY_TOKEN_CACHE_TTL_SECONDS'),
+        configService.get('ACCELERATOR_TOKEN_CACHE_TTL_SECONDS'),
         DEFAULT_CACHE_TTL_SECONDS,
         MAX_CACHE_TTL_SECONDS
       ) * 1000;
+    this.sweepBatchSize = positiveIntConfig(
+      configService.get('ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE'),
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
+    );
   }
 
   /**
    * Mint this session's pseudonym, then sweep the family's previous one and the
-   * account's expired rows. Insert precedes sweep so a failure between them
-   * cannot leave the session with no accelerator credential at all.
+   * account's expired rows. Runs on the caller's transaction so the pseudonym
+   * and the refresh row that defines its validity commit together.
    */
-  async mintForFamily(userId: string, familyId: string): Promise<string> {
+  async mintForFamily(userId: string, familyId: string, manager: EntityManager): Promise<string> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
     const tokenHash = sha256Hex(rawToken);
     const now = this.clock.now();
-    await this.gatewayTokenRepository.insert({
+    const repository = manager.getRepository(AcceleratorToken);
+    await repository.insert({
       userId,
       familyId,
       tokenHash,
       expiresAt: new Date(now.getTime() + this.ttlSeconds * 1000),
     });
-    await this.gatewayTokenRepository
+    await repository
       .createQueryBuilder()
       .delete()
       .where('user_id = :userId', { userId })
@@ -103,20 +112,18 @@ export class GatewayTokenService {
       return false;
     }
 
-    const live = await this.gatewayTokenRepository
-      .createQueryBuilder('gateway')
-      .select('gateway.expiresAt', 'expires_at')
+    const live = await this.acceleratorTokenRepository
+      .createQueryBuilder('accelerator')
+      .select('accelerator.expiresAt', 'expires_at')
       // A pseudonym is only as alive as the session that minted it: the family
-      // must still hold an unused, unexpired refresh row. Logout, reuse
-      // detection, and the account cascade all delete those rows, so each
-      // revokes gateway reads without a second path to keep in step.
+      // must still hold a live refresh row (see `refreshRowState`).
       .innerJoin(
         RefreshToken,
-        'refresh',
-        'refresh.family_id = gateway.family_id AND refresh.user_id = gateway.user_id AND refresh.used_at IS NULL AND refresh.expires_at > :now'
+        REFRESH_ALIAS,
+        `${REFRESH_ALIAS}.family_id = accelerator.family_id AND ${REFRESH_ALIAS}.user_id = accelerator.user_id AND ${LIVE_REFRESH_ROW_SQL}`
       )
-      .where('gateway.token_hash = :tokenHash', { tokenHash })
-      .andWhere('gateway.expires_at > :now')
+      .where('accelerator.token_hash = :tokenHash', { tokenHash })
+      .andWhere('accelerator.expires_at > :now')
       .setParameter('now', new Date(now))
       .limit(1)
       .getRawOne<{ expires_at: Date }>();
@@ -133,6 +140,36 @@ export class GatewayTokenService {
       Math.min(live.expires_at.getTime(), now + this.cacheTtlMs)
     );
     return true;
+  }
+
+  /**
+   * Hard-delete every expired row, whoever owns it. A mint only reclaims the
+   * minting account's rows, so an account that logs in once and never returns
+   * would otherwise keep its row forever.
+   */
+  async sweepExpired(): Promise<number> {
+    const cutoff = this.clock.now();
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
+  }
+
+  /**
+   * Postgres has no `DELETE ... LIMIT`, so the batch is bounded by selecting
+   * `ctid`s under the cutoff and deleting exactly those; `expires_at` ordering
+   * lets `idx_accelerator_tokens_expires_at` drive the scan. `SKIP LOCKED` yields
+   * any row a concurrent mint is already deleting, so the two paths take their
+   * row locks in whatever order they like without ever forming a cycle.
+   */
+  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
+    const result = await this.acceleratorTokenRepository
+      .createQueryBuilder()
+      .delete()
+      .from(AcceleratorToken)
+      .where(
+        'ctid IN (SELECT ctid FROM accelerator_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
+        { cutoff, limit: this.sweepBatchSize }
+      )
+      .execute();
+    return result.affected ?? 0;
   }
 }
 

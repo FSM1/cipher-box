@@ -72,8 +72,10 @@ function login(res: ServerResponse, dto: Fields): void {
   completed.logins += 1;
   send(res, 200, {
     accessToken: 'browser-suite-access',
-    refreshToken: 'r'.repeat(64),
-    gatewayToken: 'g'.repeat(64),
+    // Both are 32 random bytes in lowercase hex, as the API mints them; the
+    // two values differ so a swapped bearer shows up in a failure.
+    refreshToken: 'be'.repeat(32),
+    acceleratorToken: 'ac'.repeat(32),
     isNewUser: true,
   });
 }

@@ -14,14 +14,14 @@ import { MetricsService } from '../ops/metrics.service';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
-import { GatewayToken } from './entities/gateway-token.entity';
+import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
 import { GatewayController } from './gateway.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { ChallengeService } from './services/challenge.service';
-import { GatewayTokenService } from './services/gateway-token.service';
+import { AcceleratorTokenService } from './services/accelerator-token.service';
 import { IdentityService } from './services/identity.service';
 import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
@@ -69,7 +69,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, GatewayToken],
+      entities: [User, AuthMethod, RefreshToken, AcceleratorToken],
       controllers: [AuthController, GatewayController],
       providers: [
         MetricsService,
@@ -77,7 +77,7 @@ describe('auth HTTP flows (real Postgres)', () => {
         AuthService,
         TestAuthService,
         TokenService,
-        GatewayTokenService,
+        AcceleratorTokenService,
         ChallengeService,
         IdentityService,
         SiweService,
@@ -268,10 +268,10 @@ describe('auth HTTP flows (real Postgres)', () => {
     it('mints a pseudonym at login that is neither the access nor the refresh token', async () => {
       const { loginRes } = await identityLogin();
 
-      expect(loginRes.body.gatewayToken).toMatch(/^[0-9a-f]{64}$/);
-      expect(loginRes.body.gatewayToken).not.toBe(loginRes.body.refreshToken);
-      expect(loginRes.body.gatewayToken).not.toBe(loginRes.body.accessToken);
-      await verify(loginRes.body.gatewayToken).expect(204);
+      expect(loginRes.body.acceleratorToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(loginRes.body.acceleratorToken).not.toBe(loginRes.body.refreshToken);
+      expect(loginRes.body.acceleratorToken).not.toBe(loginRes.body.accessToken);
+      await verify(loginRes.body.acceleratorToken).expect(204);
     });
 
     it('refuses the session access token at the gateway leg', async () => {
@@ -285,7 +285,7 @@ describe('auth HTTP flows (real Postgres)', () => {
         .get('/auth/gateway/verify')
         .set('Authorization', 'a'.repeat(64))
         .expect(401);
-      await verify('not-a-gateway-token').expect(401);
+      await verify('not-an-accelerator-token').expect(401);
       await verify('c'.repeat(64)).expect(401);
     });
 
@@ -296,9 +296,9 @@ describe('auth HTTP flows (real Postgres)', () => {
         .send({ refreshToken: loginRes.body.refreshToken })
         .expect(200);
 
-      expect(rotated.body.gatewayToken).not.toBe(loginRes.body.gatewayToken);
-      await verify(rotated.body.gatewayToken).expect(204);
-      await verify(loginRes.body.gatewayToken).expect(401);
+      expect(rotated.body.acceleratorToken).not.toBe(loginRes.body.acceleratorToken);
+      await verify(rotated.body.acceleratorToken).expect(204);
+      await verify(loginRes.body.acceleratorToken).expect(401);
     });
 
     it('dies with the session at logout', async () => {
@@ -308,7 +308,7 @@ describe('auth HTTP flows (real Postgres)', () => {
         .set('Authorization', `Bearer ${loginRes.body.accessToken}`)
         .expect(200);
 
-      await verify(loginRes.body.gatewayToken).expect(401);
+      await verify(loginRes.body.acceleratorToken).expect(401);
     });
 
     it('dies with the family that reuse detection revokes', async () => {
@@ -322,7 +322,7 @@ describe('auth HTTP flows (real Postgres)', () => {
         .send({ refreshToken: loginRes.body.refreshToken })
         .expect(401);
 
-      await verify(rotated.body.gatewayToken).expect(401);
+      await verify(rotated.body.acceleratorToken).expect(401);
     });
   });
 

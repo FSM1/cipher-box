@@ -1,21 +1,33 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, LessThan, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, FindOptionsWhere, IsNull, LessThan, Repository } from 'typeorm';
+import {
+  boundedAcquire,
+  resolveAdvisoryLockTimeoutMs,
+  runLockGuardedTransaction,
+  sessionCredentialLockKey,
+} from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
-import { GatewayTokenService } from './gateway-token.service';
+import { refreshRowState } from '../refresh-liveness';
+import { AcceleratorTokenService } from './accelerator-token.service';
 
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
-  /** The read accelerator's opaque pseudonym, minted by GatewayTokenService. */
-  gatewayToken: string;
+  /** The read accelerator's opaque pseudonym, minted by AcceleratorTokenService. */
+  acceleratorToken: string;
 }
 
 export interface ScopedToken {
@@ -54,15 +66,18 @@ export class TokenService {
   private readonly logger = new Logger(TokenService.name);
   private readonly refreshTtlMs: number;
   private readonly scopedTtlSeconds: number;
+  private readonly lockTimeoutMs: number;
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly clock: Clock,
     private readonly entropy: Entropy,
-    private readonly gatewayTokenService: GatewayTokenService,
+    private readonly acceleratorTokenService: AcceleratorTokenService,
     configService: ConfigService,
     @InjectRepository(RefreshToken)
-    private readonly refreshTokenRepository: Repository<RefreshToken>
+    private readonly refreshTokenRepository: Repository<RefreshToken>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource
   ) {
     const days = Number(configService.get('REFRESH_TOKEN_TTL_DAYS') ?? 7);
     this.refreshTtlMs = days * 24 * 60 * 60 * 1000;
@@ -71,12 +86,16 @@ export class TokenService {
       DEFAULT_SCOPED_TTL_SECONDS,
       MAX_SCOPED_TTL_SECONDS
     );
+    this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
   }
 
   /** Issue an access JWT and start a fresh refresh-token family. */
   async createTokenPair(userId: string, publicKey: string): Promise<TokenPair> {
     const accessToken = await this.signAccessToken(userId, publicKey);
-    const session = await this.mintSessionCredentials(userId, this.entropy.randomUuid());
+    const familyId = this.entropy.randomUuid();
+    const session = await this.inSessionTransaction(userId, (manager) =>
+      this.mintSessionCredentials(userId, familyId, manager)
+    );
     return { accessToken, ...session };
   }
 
@@ -103,6 +122,11 @@ export class TokenService {
   /**
    * Rotate a refresh token: single-use, successor in the same family,
    * family-wide hard delete on reuse detection.
+   *
+   * The claim and everything issued beside it commit together, so a failure
+   * part-way through leaves the presented token unspent and the client's retry
+   * succeeds rather than tripping reuse detection. A revocation must commit
+   * while the request fails, so revocations stay outside that transaction.
    */
   async rotate(
     rawToken: string,
@@ -116,48 +140,53 @@ export class TokenService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (existing.usedAt !== null) {
+    const state = refreshRowState(existing, now);
+    if (state === 'spent') {
       // Reuse detected: the token was already rotated once. Someone —
-      // legitimate client or thief — is replaying. Kill the whole family.
-      await this.refreshTokenRepository.delete({ familyId: existing.familyId });
+      // legitimate client or thief — is replaying. Logged before the delete so
+      // the signal survives however the revocation goes.
       this.logger.warn(
         `Refresh token reuse detected; family revoked (userId=${existing.userId}, familyId=${existing.familyId})`
       );
+      await this.revokeFamily(existing.userId, existing.familyId);
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (existing.expiresAt.getTime() <= now.getTime()) {
-      await this.refreshTokenRepository.delete({ familyId: existing.familyId });
+    if (state === 'expired') {
+      await this.revokeFamily(existing.userId, existing.familyId);
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    // Atomic single-use claim: only one concurrent rotation can win.
-    const claim = await this.refreshTokenRepository.update(
-      { id: existing.id, usedAt: IsNull() },
-      { usedAt: now }
-    );
-    if (!claim.affected) {
-      await this.refreshTokenRepository.delete({ familyId: existing.familyId });
-      throw new UnauthorizedException('Invalid refresh token');
-    }
-
-    // Opportunistic housekeeping: expired rows are dead fuel — a replayed
-    // expired token dies in the expiry check regardless of reuse state — so
-    // rotation sweeps them out instead of letting them accumulate forever.
-    await this.refreshTokenRepository.delete({
-      userId: existing.userId,
-      expiresAt: LessThan(now),
-    });
-
+    // Signed before the transaction: nothing that can fail on its own may run
+    // once the presented token is spent.
     const publicKey = await publicKeyByUserId(existing.userId);
     const accessToken = await this.signAccessToken(existing.userId, publicKey);
-    const session = await this.mintSessionCredentials(existing.userId, existing.familyId);
+
+    const session = await this.inSessionTransaction(existing.userId, async (manager) => {
+      const rows = manager.getRepository(RefreshToken);
+      // Atomic single-use claim: only one concurrent rotation can win. The
+      // loser has written nothing, so it revokes once this releases the lock.
+      const claim = await rows.update({ id: existing.id, usedAt: IsNull() }, { usedAt: now });
+      if (!claim.affected) {
+        return null;
+      }
+      // Expired rows are dead fuel — a replayed expired token dies in the
+      // expiry check regardless of reuse state — so rotation sweeps them out
+      // instead of letting them accumulate forever.
+      await rows.delete({ userId: existing.userId, expiresAt: LessThan(now) });
+      return this.mintSessionCredentials(existing.userId, existing.familyId, manager);
+    });
+
+    if (!session) {
+      await this.revokeFamily(existing.userId, existing.familyId);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
     return { accessToken, ...session };
   }
 
   /** Hard-delete every refresh token the user holds (logout everywhere). */
   async revokeAllForUser(userId: string): Promise<void> {
-    await this.refreshTokenRepository.delete({ userId });
+    await this.revoke(userId, { userId });
   }
 
   get refreshTokenTtlMs(): number {
@@ -168,16 +197,59 @@ export class TokenService {
     return this.jwtService.signAsync({ sub: userId, publicKey });
   }
 
+  private async revokeFamily(userId: string, familyId: string): Promise<void> {
+    await this.revoke(userId, { familyId });
+  }
+
+  /**
+   * Hard-delete refresh rows under the same lock rotation takes: a bare DELETE
+   * reads the snapshot it opened with, so a successor a concurrent rotation
+   * commits after that point would survive the revocation meant to kill it.
+   *
+   * Contention must never cost a revocation, so a wait past the bound falls
+   * back to the unserialized delete rather than abandoning it — that can miss
+   * such a successor, but it can never leave the rows it does see alive.
+   */
+  private async revoke(userId: string, criteria: FindOptionsWhere<RefreshToken>): Promise<void> {
+    try {
+      await this.inSessionTransaction(userId, (manager) =>
+        manager.getRepository(RefreshToken).delete(criteria)
+      );
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) {
+        throw error;
+      }
+      await this.refreshTokenRepository.delete(criteria);
+    }
+  }
+
+  /**
+   * Serialize an account's session-credential writes on one advisory key. A wait
+   * past the bound is the retryable 503, which leaves the presented refresh
+   * token unspent — see `sessionCredentialLockKey`.
+   */
+  private inSessionTransaction<T>(
+    userId: string,
+    work: (manager: EntityManager) => Promise<T>
+  ): Promise<T> {
+    return runLockGuardedTransaction(this.dataSource, async (manager) => {
+      await boundedAcquire(manager, [sessionCredentialLockKey(userId)], this.lockTimeoutMs);
+      return work(manager);
+    });
+  }
+
   /**
    * A family's two stored credentials, born together: the refresh row that
    * defines the session, and the pseudonym whose validity derives from it.
+   * Both writes ride the caller's transaction so neither can outlive the other.
    */
   private async mintSessionCredentials(
     userId: string,
-    familyId: string
-  ): Promise<{ refreshToken: string; gatewayToken: string }> {
+    familyId: string,
+    manager: EntityManager
+  ): Promise<{ refreshToken: string; acceleratorToken: string }> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
-    await this.refreshTokenRepository.save({
+    await manager.getRepository(RefreshToken).save({
       userId,
       familyId,
       tokenHash: this.hashToken(rawToken),
@@ -186,7 +258,7 @@ export class TokenService {
     });
     return {
       refreshToken: rawToken,
-      gatewayToken: await this.gatewayTokenService.mintForFamily(userId, familyId),
+      acceleratorToken: await this.acceleratorTokenService.mintForFamily(userId, familyId, manager),
     };
   }
 

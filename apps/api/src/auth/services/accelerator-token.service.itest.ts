@@ -5,10 +5,10 @@ import { sha256Hex } from '../../common/hash';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { randomCompressedPublicKey } from '../../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
-import { GatewayToken } from '../entities/gateway-token.entity';
+import { AcceleratorToken } from '../entities/accelerator-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { User } from '../entities/user.entity';
-import { GatewayTokenService, REFUSAL_CACHE_MAX_ENTRIES } from './gateway-token.service';
+import { AcceleratorTokenService, REFUSAL_CACHE_MAX_ENTRIES } from './accelerator-token.service';
 
 /**
  * The accelerator pseudonym against a REAL Postgres: its validity is a join
@@ -20,15 +20,15 @@ const ACCESS_TTL_SECONDS = 900;
 const CACHE_TTL_SECONDS = 30;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-describe('GatewayTokenService (real Postgres)', () => {
+describe('AcceleratorTokenService (real Postgres)', () => {
   let db: IntegrationDatabase;
-  let gatewayTokens: Repository<GatewayToken>;
+  let acceleratorTokens: Repository<AcceleratorToken>;
   let refreshTokens: Repository<RefreshToken>;
   let users: Repository<User>;
 
   beforeAll(async () => {
     db = await createIntegrationDatabase();
-    gatewayTokens = db.dataSource.getRepository(GatewayToken);
+    acceleratorTokens = db.dataSource.getRepository(AcceleratorToken);
     refreshTokens = db.dataSource.getRepository(RefreshToken);
     users = db.dataSource.getRepository(User);
   });
@@ -41,15 +41,19 @@ describe('GatewayTokenService (real Postgres)', () => {
     await db.dataSource.query('TRUNCATE TABLE users CASCADE');
   });
 
-  function buildService(clock: FakeClock): GatewayTokenService {
-    return new GatewayTokenService(
+  function buildService(
+    clock: FakeClock,
+    env: Record<string, string> = {}
+  ): AcceleratorTokenService {
+    return new AcceleratorTokenService(
       clock,
       new FakeEntropy(),
       fakeConfig({
         ACCESS_TOKEN_TTL_SECONDS: String(ACCESS_TTL_SECONDS),
-        GATEWAY_TOKEN_CACHE_TTL_SECONDS: String(CACHE_TTL_SECONDS),
+        ACCELERATOR_TOKEN_CACHE_TTL_SECONDS: String(CACHE_TTL_SECONDS),
+        ...env,
       }).service,
-      gatewayTokens
+      acceleratorTokens
     );
   }
 
@@ -79,11 +83,12 @@ describe('GatewayTokenService (real Postgres)', () => {
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
 
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
-    const [row] = await gatewayTokens.find({ where: { userId } });
-    expect(row.tokenHash).not.toBe(token);
+    const [row] = await acceleratorTokens.find({ where: { userId } });
+    // The digest, not merely something other than the raw token.
+    expect(row.tokenHash).toBe(sha256Hex(token));
     expect(row.expiresAt.getTime()).toBe(clock.now().getTime() + ACCESS_TTL_SECONDS * 1000);
     expect(await service.verify(token)).toBe(true);
   });
@@ -106,11 +111,11 @@ describe('GatewayTokenService (real Postgres)', () => {
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
 
-    const first = await service.mintForFamily(userId, familyId);
-    const second = await service.mintForFamily(userId, familyId);
+    const first = await service.mintForFamily(userId, familyId, db.dataSource.manager);
+    const second = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(second).not.toBe(first);
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
     expect(await service.verify(second)).toBe(true);
     expect(await service.verify(first)).toBe(false);
   });
@@ -121,8 +126,8 @@ describe('GatewayTokenService (real Postgres)', () => {
     const { userId, familyId } = await startSession(clock);
     const other = await startSession(clock, userId);
 
-    const otherToken = await service.mintForFamily(userId, other.familyId);
-    await service.mintForFamily(userId, familyId);
+    const otherToken = await service.mintForFamily(userId, other.familyId, db.dataSource.manager);
+    await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(await service.verify(otherToken)).toBe(true);
   });
@@ -131,34 +136,63 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const abandoned = await startSession(clock);
-    await service.mintForFamily(abandoned.userId, abandoned.familyId);
+    await service.mintForFamily(abandoned.userId, abandoned.familyId, db.dataSource.manager);
 
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
     const relogin = await startSession(clock, abandoned.userId);
-    await service.mintForFamily(relogin.userId, relogin.familyId);
+    await service.mintForFamily(relogin.userId, relogin.familyId, db.dataSource.manager);
 
-    expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
+  });
+
+  it('sweeps every account’s expired rows on a tick, and spares the live ones', async () => {
+    const clock = new FakeClock();
+    const service = buildService(clock);
+    const abandoned = await startSession(clock);
+    await service.mintForFamily(abandoned.userId, abandoned.familyId, db.dataSource.manager);
+
+    clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
+    const active = await startSession(clock);
+    await service.mintForFamily(active.userId, active.familyId, db.dataSource.manager);
+
+    // No mint by the abandoned account: only the scheduled sweep can reclaim it.
+    expect(await service.sweepExpired()).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId: abandoned.userId } })).toBe(0);
+    expect(await acceleratorTokens.count({ where: { userId: active.userId } })).toBe(1);
+  });
+
+  it('walks past a full batch until nothing expired is left', async () => {
+    const clock = new FakeClock();
+    const service = buildService(clock, { ACCELERATOR_TOKEN_SWEEP_BATCH_SIZE: '2' });
+    for (let i = 0; i < 5; i += 1) {
+      const session = await startSession(clock);
+      await service.mintForFamily(session.userId, session.familyId, db.dataSource.manager);
+    }
+    clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
+
+    expect(await service.sweepExpired()).toBe(5);
+    expect(await acceleratorTokens.count()).toBe(0);
   });
 
   it('stops verifying once the session it names is gone', async () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     // What logout and reuse detection both do: hard-delete the family.
     await refreshTokens.delete({ familyId });
 
     expect(await service.verify(token)).toBe(false);
     // The row itself outlives the session; only the join makes it worthless.
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(1);
   });
 
   it('stops verifying once every refresh row in the family has been spent', async () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await refreshTokens.update({ familyId }, { usedAt: clock.now() });
 
@@ -169,19 +203,19 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await users.delete({ id: userId });
 
     expect(await service.verify(token)).toBe(false);
-    expect(await gatewayTokens.count({ where: { userId } })).toBe(0);
+    expect(await acceleratorTokens.count({ where: { userId } })).toBe(0);
   });
 
   it('serves a verified token from cache, and re-reads once the entry ages out', async () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
     expect(await service.verify(token)).toBe(true);
 
     await refreshTokens.delete({ familyId });
@@ -196,7 +230,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 - 1);
     expect(await service.verify(token)).toBe(true);
@@ -211,9 +245,17 @@ describe('GatewayTokenService (real Postgres)', () => {
     const live = await startSession(clock);
     const revoked = await startSession(clock);
 
-    const liveToken = await service.mintForFamily(live.userId, live.familyId);
+    const liveToken = await service.mintForFamily(
+      live.userId,
+      live.familyId,
+      db.dataSource.manager
+    );
     expect(await service.verify(liveToken)).toBe(true);
-    const revokedToken = await service.mintForFamily(revoked.userId, revoked.familyId);
+    const revokedToken = await service.mintForFamily(
+      revoked.userId,
+      revoked.familyId,
+      db.dataSource.manager
+    );
     await refreshTokens.delete({ familyId: revoked.familyId });
     expect(await service.verify(revokedToken)).toBe(false);
 
@@ -238,7 +280,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await refreshTokens.delete({ familyId });
     expect(await service.verify(token)).toBe(false);

@@ -20,3 +20,5 @@ pub use types::{
     LoginOutcome, MailboxItem, NameRegistration, Quota, RetireResult, SiweNonce, TestLoginOutcome,
     UploadResult,
 };
+#[cfg(test)]
+pub(crate) use types::{login_response, new_user_login_response};

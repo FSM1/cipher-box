@@ -1,11 +1,12 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Repository } from 'typeorm';
+import type { EntityManager, Repository } from 'typeorm';
+import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { RefreshToken } from '../entities/refresh-token.entity';
-import type { GatewayTokenService } from './gateway-token.service';
+import type { AcceleratorTokenService } from './accelerator-token.service';
 import { TokenService } from './token.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -14,39 +15,44 @@ const publicKeyByUserId = async (): Promise<string> => PUBLIC_KEY;
 
 /**
  * Records the `(userId, familyId)` each mint was asked for — the binding this
- * suite asserts. The pseudonym's own storage is SQL, covered by
- * gateway-token.service.itest.ts against a real database.
+ * suite asserts — and the manager it rode, so a mint that opens its own
+ * connection instead of joining the session transaction is visible here. The
+ * pseudonym's own storage is SQL, covered by accelerator-token.service.itest.ts
+ * against a real database.
  */
-class RecordingGatewayTokens {
+class RecordingAcceleratorTokens {
   readonly minted: Array<{ userId: string; familyId: string }> = [];
+  readonly managers: EntityManager[] = [];
 
-  async mintForFamily(userId: string, familyId: string): Promise<string> {
+  async mintForFamily(userId: string, familyId: string, manager: EntityManager): Promise<string> {
     this.minted.push({ userId, familyId });
+    this.managers.push(manager);
     return this.minted.length.toString(16).padStart(64, '0');
   }
 }
 
-function asGatewayTokenService(recorder: RecordingGatewayTokens): GatewayTokenService {
-  return recorder as unknown as GatewayTokenService;
+function asAcceleratorTokenService(recorder: RecordingAcceleratorTokens): AcceleratorTokenService {
+  return recorder as unknown as AcceleratorTokenService;
 }
 
 describe('TokenService refresh rotation', () => {
   let clock: FakeClock;
   let repo: FakeRepository<RefreshToken>;
-  let gatewayTokens: RecordingGatewayTokens;
+  let acceleratorTokens: RecordingAcceleratorTokens;
   let service: TokenService;
 
   beforeEach(() => {
     clock = new FakeClock();
     repo = new FakeRepository<RefreshToken>();
-    gatewayTokens = new RecordingGatewayTokens();
+    acceleratorTokens = new RecordingAcceleratorTokens();
     service = new TokenService(
       new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } }),
       clock,
       new FakeEntropy(),
-      asGatewayTokenService(gatewayTokens),
+      asAcceleratorTokenService(acceleratorTokens),
       fakeConfig({}).service,
-      repo as unknown as Repository<RefreshToken>
+      repo as unknown as Repository<RefreshToken>,
+      new FakeDataSource(repo as never) as never
     );
   });
 
@@ -59,12 +65,21 @@ describe('TokenService refresh rotation', () => {
     expect(repo.rows[0].usedAt).toBeNull();
   });
 
-  it('mints the gateway pseudonym against the family the login started', async () => {
+  it('mints the accelerator pseudonym against the family the login started', async () => {
     const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
 
-    expect(pair.gatewayToken).not.toBe(pair.refreshToken);
-    expect(pair.gatewayToken).not.toBe(pair.accessToken);
-    expect(gatewayTokens.minted).toEqual([{ userId: USER_ID, familyId: repo.rows[0].familyId }]);
+    expect(pair.acceleratorToken).not.toBe(pair.refreshToken);
+    expect(pair.acceleratorToken).not.toBe(pair.accessToken);
+    expect(acceleratorTokens.minted).toEqual([
+      { userId: USER_ID, familyId: repo.rows[0].familyId },
+    ]);
+  });
+
+  it('mints on the transaction that stores the refresh row, so the two commit together', async () => {
+    await service.createTokenPair(USER_ID, PUBLIC_KEY);
+
+    expect(acceleratorTokens.managers).toHaveLength(1);
+    expect(acceleratorTokens.managers[0].getRepository(RefreshToken)).toBe(repo);
   });
 
   it('rotation re-mints the pseudonym into the same family, so it dies with the session', async () => {
@@ -73,8 +88,8 @@ describe('TokenService refresh rotation', () => {
 
     const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
 
-    expect(rotated.gatewayToken).not.toBe(pair.gatewayToken);
-    expect(gatewayTokens.minted).toEqual([
+    expect(rotated.acceleratorToken).not.toBe(pair.acceleratorToken);
+    expect(acceleratorTokens.minted).toEqual([
       { userId: USER_ID, familyId },
       { userId: USER_ID, familyId },
     ]);
@@ -84,7 +99,7 @@ describe('TokenService refresh rotation', () => {
     await expect(service.rotate('f'.repeat(64), publicKeyByUserId)).rejects.toThrow(
       UnauthorizedException
     );
-    expect(gatewayTokens.minted).toHaveLength(0);
+    expect(acceleratorTokens.minted).toHaveLength(0);
   });
 
   it('rotates: old token becomes used, successor joins the same family', async () => {
@@ -161,9 +176,10 @@ describe('TokenService scoped tokens', () => {
       jwtService,
       new FakeClock(),
       new FakeEntropy(),
-      asGatewayTokenService(new RecordingGatewayTokens()),
+      asAcceleratorTokenService(new RecordingAcceleratorTokens()),
       fakeConfig(config).service,
-      repo as unknown as Repository<RefreshToken>
+      repo as unknown as Repository<RefreshToken>,
+      new FakeDataSource(repo as never) as never
     );
     return { service, repo };
   }

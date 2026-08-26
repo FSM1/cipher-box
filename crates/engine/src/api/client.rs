@@ -247,7 +247,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         self.store_tokens(TokenResponse {
             access_token: body.access_token,
             refresh_token: body.refresh_token,
-            gateway_token: body.gateway_token,
+            accelerator_token: body.accelerator_token,
             is_new_user: body.is_new_user,
         })
         .await?;
@@ -629,12 +629,26 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         };
         let response = self.http.send(request).await?;
         if !is_success(response.status) {
-            // Session is dead: drop the stale access + refresh material so it
-            // is never replayed.
-            self.clear_session().await?;
+            // A refusal means the session is dead: drop the stale access +
+            // refresh material so it is never replayed. Anything else — the
+            // API's contended-resource 503, a gateway error — left the token
+            // unspent, so discarding it would turn a retryable blip into a
+            // forced re-login.
+            if is_session_refusal(response.status) {
+                self.clear_session().await?;
+            }
             return Err(error_from_response(&response));
         }
-        let tokens: TokenResponse = decode(&response)?;
+        // A 2xx spent the presented token whatever the body says — the API
+        // commits the rotation before answering. Keeping it would replay a used
+        // token into reuse detection, which revokes the whole family.
+        let tokens: TokenResponse = match decode(&response) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                self.clear_session().await?;
+                return Err(error);
+            }
+        };
         self.store_tokens(tokens).await
     }
 
@@ -646,7 +660,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .store_refresh_token(refresh_token.as_bytes())
             .await?;
         self.session.set(tokens.access_token);
-        self.accelerator.set(tokens.gateway_token);
+        self.accelerator.set(tokens.accelerator_token);
         Ok(())
     }
 
@@ -661,6 +675,12 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
 fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
+}
+
+/// A refusal of the credential itself, as opposed to a transport or capacity
+/// failure that says nothing about whether the session is still good.
+fn is_session_refusal(status: u16) -> bool {
+    status == 401 || status == 403
 }
 
 /// The domain tag the API stamps on an identity login challenge
@@ -733,6 +753,8 @@ fn decode<T: serde::de::DeserializeOwned>(response: &HttpResponse) -> Result<T, 
 mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+
+    use super::super::types::{login_response, new_user_login_response};
 
     use crate::seams::{AUTHORIZATION, Mailbox};
     use crate::testkit::block_on;
@@ -808,7 +830,7 @@ mod tests {
         ));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
     }
@@ -970,7 +992,7 @@ mod tests {
 
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         block_on(client.refresh()).expect("refresh");
 
@@ -999,12 +1021,53 @@ mod tests {
     }
 
     #[test]
+    fn a_contended_refresh_keeps_the_token_it_could_not_spend() {
+        // The API serializes an account's rotation and answers a wait past its
+        // bound with 503, having spent nothing. Discarding the credential here
+        // would turn that retryable blip into a forced re-login.
+        let (http, creds, client) = fakes();
+        block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
+        http.enqueue_response(json_response(
+            503,
+            json!({ "message": "Contended resource; retry shortly" }),
+        ));
+
+        assert!(block_on(client.refresh()).is_err());
+
+        let stored = block_on(creds.load_refresh_token()).unwrap().unwrap();
+        assert_eq!(stored, b"seed-refresh-token");
+    }
+
+    #[test]
+    fn a_login_body_without_the_accelerator_token_fails_closed() {
+        // The accelerator bearer must never fall back to the session JWT: the
+        // gateway tier would then see an identity-bearing credential. The 2xx
+        // spent the presented token, so the dead session goes with it.
+        let (http, creds, client) = fakes();
+        let accelerator = SessionBearer::default();
+        let client = client.with_session_bearers(SessionBearer::default(), accelerator.clone());
+        login(&http, &client);
+        http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64) }),
+        ));
+
+        assert!(matches!(
+            block_on(client.refresh()).unwrap_err(),
+            ApiError::Decode(_)
+        ));
+        assert!(!accelerator.is_held());
+        assert!(!client.is_authenticated());
+        assert!(block_on(creds.load_refresh_token()).unwrap().is_none());
+    }
+
+    #[test]
     fn refresh_sends_the_stored_token_and_rotates() {
         let (http, creds, client) = fakes();
         block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
 
         block_on(client.refresh()).expect("refresh");
@@ -1027,7 +1090,7 @@ mod tests {
         let (http, _creds, client) = fakes();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "c".repeat(64), "gatewayToken": "gw-c" }),
+            login_response("jwt", &"c".repeat(64), "gw-c"),
         ));
         block_on(client.refresh()).expect("refresh via cookie");
         assert_eq!(body_json(&http.requests()[0]), json!({}));
@@ -1058,7 +1121,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "jwt expired" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
+            login_response("jwt-2", &"d".repeat(64), "gw-d"),
         ));
         http.enqueue_response(json_response(200, json!({ "success": true })));
 
@@ -1082,7 +1145,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "expired" }))); // quota attempt
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
+            login_response("jwt-2", &"d".repeat(64), "gw-d"),
         )); // refresh ok
         http.enqueue_response(json_response(401, json!({ "message": "still bad" }))); // retry 401
 
@@ -1096,17 +1159,10 @@ mod tests {
     fn test_login_returns_the_keypair_and_redacts_the_private_key() {
         let (http, _creds, client) = fakes();
         let private_key = "11".repeat(32);
-        http.enqueue_response(json_response(
-            200,
-            json!({
-                "accessToken": "jwt",
-                "refreshToken": "e".repeat(64),
-                "gatewayToken": "gw-e",
-                "isNewUser": true,
-                "publicKey": "02cafe",
-                "privateKey": private_key,
-            }),
-        ));
+        let mut body = new_user_login_response("jwt", &"e".repeat(64), "gw-e");
+        body["publicKey"] = json!("02cafe");
+        body["privateKey"] = json!(private_key);
+        http.enqueue_response(json_response(200, body));
 
         let outcome = block_on(client.test_login("alice@test", "the-secret")).expect("test login");
         assert!(outcome.is_new_user);
@@ -1288,7 +1344,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "expired" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         http.enqueue_response(json_response(200, json!({ "messages": [] })));
 
@@ -1461,7 +1517,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
+            login_response("jwt", &"f".repeat(64), "gw-f"),
         ));
 
         assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
@@ -1493,7 +1549,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
+            login_response("jwt", &"f".repeat(64), "gw-f"),
         ));
         assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert!(client.is_authenticated());
@@ -1535,11 +1591,7 @@ mod tests {
         ));
         http.enqueue_response(json_response(
             200,
-            json!({
-                "accessToken": "jwt-1\r\nX-Injected: yes",
-                "refreshToken": "a".repeat(64),
-                "gatewayToken": "gw-a",
-            }),
+            login_response("jwt-1\r\nX-Injected: yes", &"a".repeat(64), "gw-a"),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
 
@@ -1555,7 +1607,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "no bearer" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         http.enqueue_response(json_response(
             200,

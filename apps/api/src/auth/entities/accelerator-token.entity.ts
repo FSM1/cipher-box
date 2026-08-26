@@ -12,14 +12,14 @@ import { User } from './user.entity';
 /**
  * One session's read accelerator token (CONTEXT.md, Accelerator token). Its
  * validity is derived from the refresh family rather than stored here — see
- * `GatewayTokenService.verify`.
+ * `AcceleratorTokenService.verify`.
  */
-@Entity('gateway_tokens')
-export class GatewayToken {
+@Entity('accelerator_tokens')
+export class AcceleratorToken {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index('idx_gateway_tokens_user_id')
+  @Index('idx_accelerator_tokens_user_id')
   @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
@@ -30,13 +30,15 @@ export class GatewayToken {
   @Column({ name: 'token_hash', type: 'varchar', length: 64, unique: true })
   tokenHash: string;
 
+  /** Indexed to drive the scheduled expiry sweep's ordered scan. */
+  @Index('idx_accelerator_tokens_expires_at')
   @Column({ name: 'expires_at', type: 'timestamptz' })
   expiresAt: Date;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
-  @ManyToOne(() => User, (user) => user.gatewayTokens, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (user) => user.acceleratorTokens, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 }
