@@ -4,7 +4,6 @@
  */
 export const SWEEP_MAX_BATCHES = 1000;
 
-/** Rows deleted per batch when a sweep's own config gives no value. */
 export const DEFAULT_SWEEP_BATCH_SIZE = 1000;
 
 /**

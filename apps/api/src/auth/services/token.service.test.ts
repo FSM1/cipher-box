@@ -1,7 +1,7 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Repository } from 'typeorm';
+import type { EntityManager, Repository } from 'typeorm';
 import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
@@ -15,14 +15,18 @@ const publicKeyByUserId = async (): Promise<string> => PUBLIC_KEY;
 
 /**
  * Records the `(userId, familyId)` each mint was asked for — the binding this
- * suite asserts. The pseudonym's own storage is SQL, covered by
- * accelerator-token.service.itest.ts against a real database.
+ * suite asserts — and the manager it rode, so a mint that opens its own
+ * connection instead of joining the session transaction is visible here. The
+ * pseudonym's own storage is SQL, covered by accelerator-token.service.itest.ts
+ * against a real database.
  */
 class RecordingAcceleratorTokens {
   readonly minted: Array<{ userId: string; familyId: string }> = [];
+  readonly managers: EntityManager[] = [];
 
-  async mintForFamily(userId: string, familyId: string): Promise<string> {
+  async mintForFamily(userId: string, familyId: string, manager: EntityManager): Promise<string> {
     this.minted.push({ userId, familyId });
+    this.managers.push(manager);
     return this.minted.length.toString(16).padStart(64, '0');
   }
 }
@@ -69,6 +73,13 @@ describe('TokenService refresh rotation', () => {
     expect(acceleratorTokens.minted).toEqual([
       { userId: USER_ID, familyId: repo.rows[0].familyId },
     ]);
+  });
+
+  it('mints on the transaction that stores the refresh row, so the two commit together', async () => {
+    await service.createTokenPair(USER_ID, PUBLIC_KEY);
+
+    expect(acceleratorTokens.managers).toHaveLength(1);
+    expect(acceleratorTokens.managers[0].getRepository(RefreshToken)).toBe(repo);
   });
 
   it('rotation re-mints the pseudonym into the same family, so it dies with the session', async () => {

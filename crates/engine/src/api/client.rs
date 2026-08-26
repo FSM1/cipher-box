@@ -639,7 +639,16 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             }
             return Err(error_from_response(&response));
         }
-        let tokens: TokenResponse = decode(&response)?;
+        // A 2xx spent the presented token whatever the body says — the API
+        // commits the rotation before answering. Keeping it would replay a used
+        // token into reuse detection, which revokes the whole family.
+        let tokens: TokenResponse = match decode(&response) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                self.clear_session().await?;
+                return Err(error);
+            }
+        };
         self.store_tokens(tokens).await
     }
 
@@ -1032,10 +1041,12 @@ mod tests {
     #[test]
     fn a_login_body_without_the_accelerator_token_fails_closed() {
         // The accelerator bearer must never fall back to the session JWT: the
-        // gateway tier would then see an identity-bearing credential.
-        let (http, _creds, client) = fakes();
+        // gateway tier would then see an identity-bearing credential. The 2xx
+        // spent the presented token, so the dead session goes with it.
+        let (http, creds, client) = fakes();
         let accelerator = SessionBearer::default();
         let client = client.with_session_bearers(SessionBearer::default(), accelerator.clone());
+        login(&http, &client);
         http.enqueue_response(json_response(
             200,
             json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64) }),
@@ -1046,6 +1057,8 @@ mod tests {
             ApiError::Decode(_)
         ));
         assert!(!accelerator.is_held());
+        assert!(!client.is_authenticated());
+        assert!(block_on(creds.load_refresh_token()).unwrap().is_none());
     }
 
     #[test]
