@@ -27,7 +27,7 @@ use super::types::{
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
-    bearer_header,
+    bearer_header, item_id_is_legal,
 };
 
 /// Control-plane deadline: small JSON round trips must not park a UI flow.
@@ -420,15 +420,12 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
     /// Ack (delete) a mailbox item by id.
     ///
-    /// The id is transport-supplied and lands in a path segment, so anything
-    /// outside the RFC 3986 unreserved set is refused fail-closed: an
-    /// integrity-untrusted mailbox must not be able to steer this authenticated
-    /// DELETE at another route.
+    /// The id comes from an integrity-untrusted transport and lands in this
+    /// authenticated request's path, so an id the seam contract does not admit
+    /// ([`item_id_is_legal`]) is refused before a request is built.
     pub async fn mailbox_ack(&self, id: &str) -> Result<(), ApiError> {
-        if !is_path_segment(id) {
-            return Err(ApiError::Decode(
-                "mailbox item id is not a path segment".into(),
-            ));
+        if !item_id_is_legal(id) {
+            return Err(ApiError::Decode("illegal mailbox item id".into()));
         }
         let response = self
             .request_authed(HttpMethod::Delete, &format!("/mailbox/messages/{id}"))
@@ -666,17 +663,6 @@ fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
 }
 
-/// Whether `value` is safe to interpolate verbatim into a URL path: 1-128 RFC
-/// 3986 unreserved characters, which admits the API's UUID ids and excludes
-/// every byte that could end the segment or open a query.
-fn is_path_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
-}
-
 /// The domain tag the API stamps on an identity login challenge
 /// (`apps/api/src/auth/services/challenge.service.ts`). Versioned, so a format
 /// change bumps it rather than silently widening what this key will sign.
@@ -748,7 +734,7 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 
-    use crate::seams::AUTHORIZATION;
+    use crate::seams::{AUTHORIZATION, Mailbox};
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
     use serde_json::{Value, json};
@@ -1266,6 +1252,102 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "m1");
         assert_eq!(items[0].blob, blob);
+    }
+
+    /// The defect this client's `Mailbox` impl exists to fix: the browser seam
+    /// it replaced sent no bearer, so every mailbox route 401'd.
+    #[test]
+    fn every_mailbox_seam_call_carries_the_session_bearer() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(201, json!({ "id": "m1" })));
+        http.enqueue_response(json_response(200, json!({ "messages": [] })));
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(Mailbox::post(&client, &[0x02; 33], b"sealed", "idem")).expect("post");
+        block_on(Mailbox::poll(&client)).expect("poll");
+        block_on(Mailbox::ack(&client, "m1")).expect("ack");
+
+        let requests = http.requests();
+        for request in &requests[2..] {
+            assert_eq!(
+                bearer_value(request),
+                Some("Bearer jwt-1"),
+                "{} must present the session bearer",
+                request.url
+            );
+        }
+    }
+
+    /// The defect's other half: the browser seam had no 401-refresh-retry, so
+    /// an expired token wedged it permanently.
+    #[test]
+    fn a_mailbox_401_refreshes_once_and_retries() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(401, json!({ "message": "expired" })));
+        http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+        ));
+        http.enqueue_response(json_response(200, json!({ "messages": [] })));
+
+        block_on(Mailbox::poll(&client)).expect("poll after refresh");
+
+        let urls: Vec<_> = http.requests().iter().map(|r| r.url.clone()).collect();
+        assert_eq!(
+            urls[2..],
+            [
+                "http://api.test/mailbox/messages",
+                "http://api.test/auth/refresh",
+                "http://api.test/mailbox/messages",
+            ],
+            "one refresh, then one retry of the same route"
+        );
+    }
+
+    /// Routing addresses the recipient's identity key as the API's lowercase-hex
+    /// `recipientPublicKey`.
+    #[test]
+    fn the_mailbox_seam_posts_a_lowercase_hex_recipient() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(201, json!({ "id": "m1" })));
+
+        block_on(Mailbox::post(&client, &[0x02; 33], b"sealed", "idem")).expect("post");
+
+        let body = body_json(&http.requests()[2]);
+        assert_eq!(body["recipientPublicKey"], "02".repeat(33));
+        assert_eq!(body["blob"], BASE64.encode(b"sealed"));
+    }
+
+    /// The item id is transport-supplied and lands in this request's path, so
+    /// an id that could move the ack elsewhere never reaches the wire. `.` and
+    /// `..` are in the unreserved alphabet but resolve away in a URL.
+    #[test]
+    fn an_item_id_that_could_steer_the_ack_route_is_refused() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+
+        for hostile in [
+            "..",
+            ".",
+            "../../account",
+            "m1/../account",
+            "m 1",
+            "m1?x=1",
+            "",
+        ] {
+            assert!(
+                block_on(client.mailbox_ack(hostile)).is_err(),
+                "{hostile:?} must not reach the transport"
+            );
+        }
+        assert_eq!(
+            http.requests().len(),
+            2,
+            "a refused ack sends nothing beyond the login"
+        );
     }
 
     #[test]

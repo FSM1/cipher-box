@@ -4,9 +4,7 @@
  * The seams key durable stores (IndexedDB records, OPFS file names) by opaque
  * engine-chosen byte strings. A stable lowercase-hex encoding gives every
  * `Uint8Array` a deterministic, collision-free, filesystem-safe string key —
- * no seam ever interprets the bytes it stores, only addresses them. Base64 is
- * the same kind of addressing, for the API's JSON wire framing of an opaque
- * blob.
+ * no seam ever interprets the bytes it stores, only addresses them.
  */
 
 const HEX = '0123456789abcdef';
@@ -44,33 +42,6 @@ export function fromHex(hex: string): Uint8Array {
       throw new TypeError('fromHex: hex string contains a non-hex character');
     }
     out[i] = (high << 4) | low;
-  }
-  return out;
-}
-
-/** Standard-alphabet base64 encoding of a byte string. */
-export function toBase64(bytes: Uint8Array): string {
-  // Chunked: `String.fromCharCode` spreads one argument per byte, and a whole
-  // blob at once can overflow the call-stack argument limit.
-  const CHUNK = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-
-/** Inverse of {@link toBase64}; throws on anything that is not base64. */
-export function fromBase64(text: string): Uint8Array {
-  let binary: string;
-  try {
-    binary = atob(text);
-  } catch {
-    throw new TypeError('fromBase64: not a base64 string');
-  }
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < out.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
   }
   return out;
 }

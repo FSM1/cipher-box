@@ -39,6 +39,8 @@ pub(crate) use http::AUTHORIZATION;
 // An engine-internal adapter over three of the seams, not a host contract.
 pub(crate) use live::LiveSeam;
 pub use mailbox::{Mailbox, MailboxItem};
+// Wire-shape predicates the API DTO fixes; a host states no policy of its own.
+pub(crate) use mailbox::{is_unreserved_1_128, item_id_is_legal};
 pub use record_transport::{EndpointId, RecordTransport};
 pub use retire_ledger::{OwedRetire, OwingRecord, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};

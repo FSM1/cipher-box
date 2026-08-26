@@ -79,7 +79,7 @@ fn the_api_client_passes_the_mailbox_kit() {
     let address = [0x02u8; 33];
     let hub = InMemoryMailboxHub::default();
     let client = ApiClient::new(
-        ScriptedHttp::with_mailbox(hub.mailbox_for(&address)),
+        ScriptedHttp::with_route(hub.mailbox_for(&address).http_route()),
         InMemoryCredentialStore::default(),
         "http://api.test",
     );

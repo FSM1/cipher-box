@@ -59,7 +59,7 @@ impl FakeWorld {
             staging_store: InMemoryStagingStore::default(),
             snapshot_cache: InMemorySnapshotCache::default(),
             credential_store: InMemoryCredentialStore::default(),
-            http: ScriptedHttp::with_mailbox(mailbox.clone()),
+            http: ScriptedHttp::with_route(mailbox.http_route()),
             mailbox,
             received_share_store: InMemoryReceivedShareStore::default(),
             scheduler: self.scheduler.clone(),
@@ -86,10 +86,10 @@ pub struct FakeDevice {
     pub snapshot_cache: InMemorySnapshotCache,
     /// Device-local refresh-token store.
     pub credential_store: InMemoryCredentialStore,
-    /// Device-local scripted HTTP, serving this device's inbox from the hub.
+    /// Device-local scripted HTTP. It also answers the API's mailbox routes
+    /// from [`Self::mailbox`], which is how an engine reaches its inbox.
     pub http: ScriptedHttp,
-    /// This device's inbox on the shared hub — the same one [`Self::http`]
-    /// answers the API's mailbox routes from.
+    /// This device's inbox on the shared hub.
     pub mailbox: InMemoryMailbox,
     /// Device-local durable received-shares bookmark (the grants accept flow's
     /// [`ReceivedShareStore`](crate::grants::ReceivedShareStore)).

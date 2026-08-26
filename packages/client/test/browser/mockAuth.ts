@@ -27,9 +27,10 @@ export function mockAuthRequest(req: IncomingMessage, res: ServerResponse): bool
     return true;
   }
   let respond;
-  if (req.method !== 'POST') respond = undefined;
-  else if (url.endsWith('/auth/challenge')) respond = challenge;
-  else if (url.endsWith('/auth/login')) respond = login;
+  if (req.method === 'POST') {
+    if (url.endsWith('/auth/challenge')) respond = challenge;
+    else if (url.endsWith('/auth/login')) respond = login;
+  }
   if (!respond) {
     send(res, 404, { error: 'no such mock-api route' });
     return true;

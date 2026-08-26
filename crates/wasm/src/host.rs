@@ -110,9 +110,9 @@ impl EngineHandle {
     /// Builds the engine over the browser seams. `seams` is a plain object with
     /// one property per engine seam (`floorStore`, `recordTransport`, `http`,
     /// `scheduler`, `stagingStore`, `snapshotCache`, `credentialStore`); a
-    /// missing seam fails closed. `profile` selects the
-    /// sync timing policy (`"ci"` for the compressed e2e cadences, production
-    /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
+    /// missing seam fails closed. `profile` selects the sync timing policy
+    /// (`"ci"` for the compressed e2e cadences, production otherwise).
+    /// `apiBaseUrl` is required and non-blank. The content gateway
     /// is configured from `acceleratorBaseUrl` and `publicGateways` — the
     /// accelerator's credential is the read-scoped pseudonym login mints, so
     /// there is no host-supplied bearer to pass.

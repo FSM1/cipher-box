@@ -4,6 +4,10 @@
 //! because the engine reaches its inbox through its own API client: a device's
 //! scripted HTTP answers `/mailbox/messages` from the same hub its handle reads,
 //! so an engine's post and a test's out-of-band poll see one inbox.
+//!
+//! It serves the wire shape, not the JWT guard the real routes carry: that the
+//! engine presents a bearer on every mailbox call is asserted where the token
+//! lives (`api/client.rs`) and against the live API (the contract suite).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,19 +21,20 @@ use crate::seams::{
     HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, SeamError, SeamResult,
 };
 
-/// The API's mailbox route prefix, as the engine's API client spells it.
 const MESSAGES_PATH: &str = "/mailbox/messages";
 
 /// A fixed `receivedAt`: the fake serves the wire shape, not a clock.
 const RECEIVED_AT: &str = "1970-01-01T00:00:00.000Z";
 
+/// Inboxes are keyed by the recipient's lowercase-hex address — the spelling
+/// the API routes on — so the seam handle and the HTTP route reach one queue.
 #[derive(Default)]
 struct HubInner {
     next_id: u64,
-    queues: HashMap<Vec<u8>, Vec<MailboxItem>>,
+    queues: HashMap<String, Vec<MailboxItem>>,
     /// `(recipient, idempotency key)` → the id the first post assigned, so a
     /// replay answers with the original id the way the API does.
-    seen_idempotency_keys: HashMap<(Vec<u8>, String), String>,
+    seen_idempotency_keys: HashMap<(String, String), String>,
 }
 
 /// The shared mailbox "server": routes posts between recipients so N
@@ -44,16 +49,16 @@ impl InMemoryMailboxHub {
     pub fn mailbox_for(&self, recipient_public_key: &[u8]) -> InMemoryMailbox {
         InMemoryMailbox {
             hub: self.clone(),
-            recipient_public_key: recipient_public_key.to_vec(),
+            address: hex_lower(recipient_public_key),
             ack_failing: Arc::new(Mutex::new(false)),
         }
     }
 
     /// Route one sealed payload and answer the id the recipient will ack by.
     /// A replay of a `(recipient, idempotency key)` pair answers the original.
-    fn post_item(&self, recipient_public_key: &[u8], sealed_payload: &[u8], key: &str) -> String {
+    fn post_item(&self, address: &str, sealed_payload: &[u8], key: &str) -> String {
         let mut inner = self.inner.lock().expect("lock");
-        let dedupe_key = (recipient_public_key.to_vec(), key.to_owned());
+        let dedupe_key = (address.to_owned(), key.to_owned());
         if let Some(id) = inner.seen_idempotency_keys.get(&dedupe_key) {
             return id.clone();
         }
@@ -64,7 +69,7 @@ impl InMemoryMailboxHub {
             .insert(dedupe_key, item_id.clone());
         inner
             .queues
-            .entry(recipient_public_key.to_vec())
+            .entry(address.to_owned())
             .or_default()
             .push(MailboxItem {
                 item_id: item_id.clone(),
@@ -79,7 +84,7 @@ impl InMemoryMailboxHub {
 #[derive(Clone)]
 pub struct InMemoryMailbox {
     hub: InMemoryMailboxHub,
-    recipient_public_key: Vec<u8>,
+    address: String,
     /// When set, every `ack` fails — models a transient ack outage so a test can
     /// prove a redelivered accept takes the idempotent ack-only path. Shared
     /// across clones so a toggle on one handle affects the borrowed handle.
@@ -92,37 +97,55 @@ impl InMemoryMailbox {
         *self.ack_failing.lock().expect("lock") = failing;
     }
 
+    /// This inbox as a standing [`ScriptedHttp`](super::ScriptedHttp) route.
+    pub fn http_route(
+        &self,
+    ) -> impl Fn(&HttpRequest) -> Option<SeamResult<HttpResponse>> + Send + Sync + use<> {
+        let inbox = self.clone();
+        move |request| inbox.serve(request)
+    }
+
     /// Answer one API mailbox request against this handle's inbox, or `None`
     /// when the URL names no mailbox route.
     ///
     /// The wire shape is the API's (`apps/api/src/mailbox/dto/mailbox.dto.ts`):
     /// hex recipient, base64 blob, `{ messages: [...] }`, ack by path segment.
-    pub(crate) fn serve(&self, request: &HttpRequest) -> Option<SeamResult<HttpResponse>> {
-        let tail = request.url.split_once(MESSAGES_PATH)?.1;
+    fn serve(&self, request: &HttpRequest) -> Option<SeamResult<HttpResponse>> {
+        let tail = request
+            .url
+            .split_once(MESSAGES_PATH)?
+            .1
+            .trim_start_matches('/');
         Some(match (request.method, tail) {
-            (HttpMethod::Post, "") => self.serve_post(request.body.as_deref()),
-            (HttpMethod::Get, "") => self.serve_poll(),
-            (HttpMethod::Delete, id) => self.serve_ack(id.trim_start_matches('/')),
-            _ => json(404, br#"{"message":"no such mailbox route"}"#.to_vec()),
+            (HttpMethod::Post, "") => Ok(self.serve_post(request.body.as_deref())),
+            (HttpMethod::Get, "") => Ok(self.serve_poll()),
+            (HttpMethod::Delete, id) if !id.is_empty() => self.serve_ack(id),
+            _ => Ok(json(
+                404,
+                br#"{"message":"no such mailbox route"}"#.to_vec(),
+            )),
         })
     }
 
-    fn serve_post(&self, body: Option<&[u8]>) -> SeamResult<HttpResponse> {
-        let Some(wire) = body.and_then(|body| serde_json::from_slice::<Value>(body).ok()) else {
-            return json(400, br#"{"message":"malformed post body"}"#.to_vec());
-        };
-        let (Some(recipient), Some(blob), Some(idempotency_key)) = (
-            wire["recipientPublicKey"].as_str().and_then(decode_hex),
-            wire["blob"].as_str().and_then(|b| BASE64.decode(b).ok()),
-            wire["idempotencyKey"].as_str(),
-        ) else {
-            return json(400, br#"{"message":"malformed post body"}"#.to_vec());
-        };
-        let id = self.hub.post_item(&recipient, &blob, idempotency_key);
-        json(201, format!(r#"{{"id":"{id}"}}"#).into_bytes())
+    fn serve_post(&self, body: Option<&[u8]>) -> HttpResponse {
+        let posted = body
+            .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+            .and_then(|wire| {
+                let address = wire["recipientPublicKey"].as_str()?;
+                if !is_lowercase_hex(address) {
+                    return None;
+                }
+                let blob = BASE64.decode(wire["blob"].as_str()?).ok()?;
+                let key = wire["idempotencyKey"].as_str()?.to_owned();
+                Some(self.hub.post_item(address, &blob, &key))
+            });
+        match posted {
+            Some(id) => json(201, format!(r#"{{"id":"{id}"}}"#).into_bytes()),
+            None => json(400, br#"{"message":"malformed post body"}"#.to_vec()),
+        }
     }
 
-    fn serve_poll(&self) -> SeamResult<HttpResponse> {
+    fn serve_poll(&self) -> HttpResponse {
         let messages: Vec<Value> = self
             .items()
             .into_iter()
@@ -141,10 +164,8 @@ impl InMemoryMailbox {
     }
 
     fn serve_ack(&self, item_id: &str) -> SeamResult<HttpResponse> {
-        match self.remove(item_id) {
-            Ok(()) => json(200, br#"{"success":true}"#.to_vec()),
-            Err(error) => Err(error),
-        }
+        self.remove(item_id)?;
+        Ok(json(200, br#"{"success":true}"#.to_vec()))
     }
 
     fn items(&self) -> Vec<MailboxItem> {
@@ -153,7 +174,7 @@ impl InMemoryMailbox {
             .lock()
             .expect("lock")
             .queues
-            .get(&self.recipient_public_key)
+            .get(&self.address)
             .cloned()
             .unwrap_or_default()
     }
@@ -168,7 +189,7 @@ impl InMemoryMailbox {
             .lock()
             .expect("lock")
             .queues
-            .get_mut(&self.recipient_public_key)
+            .get_mut(&self.address)
         {
             queue.retain(|item| item.item_id != item_id);
         }
@@ -183,8 +204,11 @@ impl Mailbox for InMemoryMailbox {
         sealed_payload: &[u8],
         idempotency_key: &str,
     ) -> SeamResult<()> {
-        self.hub
-            .post_item(recipient_public_key, sealed_payload, idempotency_key);
+        self.hub.post_item(
+            &hex_lower(recipient_public_key),
+            sealed_payload,
+            idempotency_key,
+        );
         Ok(())
     }
 
@@ -197,24 +221,20 @@ impl Mailbox for InMemoryMailbox {
     }
 }
 
-fn json(status: u16, body: Vec<u8>) -> SeamResult<HttpResponse> {
-    Ok(HttpResponse {
+fn json(status: u16, body: Vec<u8>) -> HttpResponse {
+    HttpResponse {
         status,
         headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
         body,
-    })
+    }
 }
 
-fn decode_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
-        return None;
-    }
-    let bytes: Option<Vec<u8>> = (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect();
-    // The engine addresses in lowercase hex; anything else is not what it sent.
-    bytes.filter(|bytes| hex_lower(bytes) == hex)
+fn is_lowercase_hex(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() % 2 == 0
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b <= b'f')
 }
 
 #[cfg(test)]
