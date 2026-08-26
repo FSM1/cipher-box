@@ -384,20 +384,16 @@ impl Snapshot {
 /// "one strict comparator everywhere — NFC-normalized + case-folded, identical
 /// at create and merge on all platforms, names stored as-entered").
 ///
-/// Canonical composition runs **before** the fold: a host hands over whatever
-/// bytes the caller typed, so `café` composed and decomposed must key the same
-/// or one folder would sit beside the other instead of being it.
+/// Canonical composition runs before the fold, so `café` composed and
+/// decomposed key the same, and **again after** it, because the case map is not
+/// closed under canonical equivalence: `J` + U+030C folds to a decomposed `ǰ`
+/// whose precomposed twin U+01F0 folds to itself, and the two would key apart
+/// while rendering identically. Compatibility equivalence is deliberately not
+/// folded — `ﬁle` and `file` are names a user can tell apart. The stored name
+/// is never mutated.
 ///
-/// And **again after** it, because the case map is not closed under canonical
-/// equivalence: `J` + U+030C folds to a decomposed `ǰ` whose precomposed twin
-/// U+01F0 folds to itself, and the two would key apart while rendering
-/// identically. Compatibility equivalence is deliberately not folded — `ﬁle`
-/// and `file` are names a user can tell apart. The stored name is never
-/// mutated.
-///
-/// Zeroizing because the key is a near-verbatim copy of the name — identity,
-/// for any name already NFC and lowercase — and it is built per sibling on
-/// every lookup. Sized exactly, because a growth realloc would free an
+/// Zeroizing because the key is a near-verbatim copy of the name, built per
+/// sibling on every lookup. Sized exactly: a growth realloc would free an
 /// intermediate holding the name that zeroizing the result cannot reach
 /// ([`suffix_name`] pre-sizes for the same reason).
 pub fn collation_key(name: &str) -> Zeroizing<String> {

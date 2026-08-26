@@ -1,36 +1,26 @@
 //! The sealing rule for per-owner durable bookkeeping in the staging store.
 //!
-//! **The rule: a per-owner staging surface seals its value**, as an
-//! [`OwnerLocalKind`] blob under the session's `enc-subkey`, and a new surface
-//! takes a new kind rather than a cleartext encoding. The store is a host's
-//! unencrypted IndexedDB or on-disk directory, and a surface here outlives the
-//! operation that wrote it — so what an entry *associates* (this node with this
-//! content CID, this node with the `ipnsName`s its deleted subtree published
-//! under) stays readable long after the state it describes is gone. The
-//! conservative default costs one HPKE seal per entry write.
+//! **A per-owner staging surface seals its value**, as an [`OwnerLocalKind`]
+//! blob under the session's `enc-subkey`; a new surface takes a new kind rather
+//! than a cleartext encoding. The store is a host's unencrypted IndexedDB or
+//! on-disk directory, and an entry outlives the operation that wrote it, so
+//! what it *associates* — this node with this content CID, this node with the
+//! `ipnsName`s its deleted subtree published under — stays readable long after
+//! the state it describes is gone. Against an attacker who can *write* the
+//! store it also buys forgery resistance: an entry that will not open is
+//! refused rather than spent.
 //!
-//! What the rule does **not** reach, and what therefore stays legible to anyone
-//! reading the store:
+//! Two shapes stay clear, and must:
 //!
-//! - **Every key, in full.** A key is what
-//!   [`orphan_staging_keys`](crate::sync::orphan_staging_keys) enumerates and
-//!   what a scoped removal addresses, so it cannot be sealed. It carries the
-//!   owner tag verbatim — the `enc-subkey` public half, which core keeps off
-//!   the sealed blob on purpose — plus the entry's own identity: a **globally
-//!   resolvable content CID** for the retire ledger, a node id for the
-//!   doomed-name journal. So "this owner owes a retirement on this CID" and
-//!   "this node has a delete pending" both survive the seal; what it removes is
-//!   the rest of each association, and the figures.
-//! - **A bare counter of this device's own queue positions** — the op-id
-//!   high-water marks ([`owner_scoped_key`](crate::sync::owner_scoped_key)) and
-//!   the per-op attempt counts. Their values are `OpId`s and a retry count:
-//!   they associate no two identifiers and name nothing outside this store.
-//!
-//! The tier is not a confidentiality boundary of its own — an attacker who
-//! reads these entries reads the staging store — it is the same
-//! defence-in-depth every other owner-local store already takes. What it does
-//! buy against an attacker who can *write* the store is forgery resistance:
-//! an entry that will not open is refused rather than spent.
+//! - **Every key.** [`orphan_staging_keys`](crate::sync::orphan_staging_keys)
+//!   enumerates keys and a scoped removal addresses them, so a key cannot be
+//!   sealed. It leaks that this owner owes a retirement on this CID, or that
+//!   this node has a delete pending; the seal removes the rest of each
+//!   association, and the figures.
+//! - **The op-id high-water marks**
+//!   ([`owner_scoped_key`](crate::sync::owner_scoped_key)) and the per-op
+//!   attempt counts. Their values associate no two identifiers and name
+//!   nothing outside this store.
 
 use core::cell::RefCell;
 
