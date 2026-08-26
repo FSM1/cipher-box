@@ -8,6 +8,9 @@ use crate::seams::{Http, HttpRequest, HttpResponse, SeamError, SeamResult};
 /// A reply computed from the request it answers.
 type DerivedReply = Box<dyn FnOnce(&HttpRequest) -> SeamResult<HttpResponse> + Send>;
 
+/// A standing route: answers the requests it recognizes, declines the rest.
+type Route = Arc<dyn Fn(&HttpRequest) -> Option<SeamResult<HttpResponse>> + Send + Sync>;
+
 /// A queued reply: either fixed bytes or a reply derived from the request.
 enum Reply {
     Fixed(SeamResult<HttpResponse>),
@@ -24,12 +27,28 @@ struct Inner {
 /// every request is recorded for assertion. An unscripted request is a
 /// seam error — a test that hits the network unexpectedly should fail
 /// loudly.
+///
+/// A standing route is the one exception: it answers ahead of the queue and
+/// spends no scripted entry, so a scenario's call budget stays about the API
+/// calls the test is actually reasoning over. The world installs one for the
+/// device's inbox, which the engine reaches through its own API client.
 #[derive(Clone, Default)]
 pub struct ScriptedHttp {
     inner: Arc<Mutex<Inner>>,
+    route: Option<Route>,
 }
 
 impl ScriptedHttp {
+    /// Scripted HTTP that first offers every request to `route`.
+    pub fn with_route(
+        route: impl Fn(&HttpRequest) -> Option<SeamResult<HttpResponse>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            route: Some(Arc::new(route)),
+            ..Default::default()
+        }
+    }
+
     /// Queues a successful response.
     pub fn enqueue_response(&self, response: HttpResponse) {
         self.enqueue(Reply::Fixed(Ok(response)));
@@ -62,6 +81,12 @@ impl ScriptedHttp {
 
 impl Http for ScriptedHttp {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
+        if let Some(route) = &self.route
+            && let Some(response) = route(&request)
+        {
+            self.inner.lock().expect("lock").requests.push(request);
+            return response;
+        }
         let mut inner = self.inner.lock().expect("lock");
         let reply = inner.responses.pop_front();
         inner.requests.push(request);

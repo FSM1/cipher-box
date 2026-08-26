@@ -139,24 +139,3 @@ export interface HttpSeam {
   send(request: HttpRequestData): Promise<HttpResponseData>;
   sendCapped(request: HttpRequestData, maxBytes: number): Promise<CappedHttpResult>;
 }
-
-/** One pending mailbox item; `sealedPayload` is opaque (the engine unseals it). */
-export interface MailboxItemData {
-  itemId: string;
-  sealedPayload: Uint8Array;
-}
-
-/**
- * Sealed-blob discovery transport (share pointers, invite claims). An
- * integrity-untrusted byte mover: nothing on it is load-bearing for safety, and
- * it does no crypto or codec — the engine seals, unseals, and authenticates.
- */
-export interface MailboxSeam {
-  post(
-    recipientPublicKey: Uint8Array,
-    sealedPayload: Uint8Array,
-    idempotencyKey: string
-  ): Promise<void>;
-  poll(): Promise<MailboxItemData[]>;
-  ack(itemId: string): Promise<void>;
-}

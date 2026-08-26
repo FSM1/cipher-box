@@ -4538,7 +4538,7 @@ where {
                 &mut SharedEntropy(&self.entropy),
                 &net,
                 &net,
-                &self.seams.mailbox,
+                api.as_ref(),
                 &grantee,
                 &GrantRecipient {
                     identity_pk: contact.identity_pk(),
@@ -4696,6 +4696,7 @@ where {
     /// fragment that reaches no inbox spends no durable slot.
     async fn claim_invite_link(&self, fragment: &str) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let fragment = InviteFragment::decode(fragment).map_err(EngineError::from_invite)?;
         let invitee = EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes())
             .map_err(EngineError::from_invite)?;
@@ -4716,7 +4717,7 @@ where {
         let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim idempotency key")
             .map_err(EngineError::from_entropy)?;
         post_invite_claim(
-            &self.seams.mailbox,
+            api.as_ref(),
             &owner,
             &invitee,
             &ephemeral,
@@ -4758,7 +4759,7 @@ where {
         }
         // Ahead of the render and both resolves, so the steady state — an inbox
         // with nothing on it — spends neither.
-        let items = poll_verified(&self.seams.mailbox, session.enc_subkey(), ENVELOPE_V)
+        let items = poll_verified(api.as_ref(), session.enc_subkey(), ENVELOPE_V)
             .await
             .map_err(EngineError::from_seam)?;
         if items.is_empty() {
@@ -4843,7 +4844,7 @@ where {
                     | InviteError::UnusableClaimantKey
                     | InviteError::GrantWasCut,
                 ) => {
-                    if let Err(e) = self.seams.mailbox.ack(&item.item_id).await {
+                    if let Err(e) = api.ack(&item.item_id).await {
                         failure.get_or_insert(EngineError::from_seam(e));
                     }
                     continue;
@@ -4891,7 +4892,7 @@ where {
                 permission: row.commitment_entry.permission,
             };
             if let Err(e) = post_sealed(
-                &self.seams.mailbox,
+                api.as_ref(),
                 &claimant.enc_subkey(),
                 &claimant.identity_pk(),
                 &ephemeral,
@@ -4917,7 +4918,7 @@ where {
                 }
             }
 
-            if let Err(e) = self.seams.mailbox.ack(&item.item_id).await {
+            if let Err(e) = api.ack(&item.item_id).await {
                 failure.get_or_insert(EngineError::from_seam(e));
             }
         }
@@ -5034,11 +5035,12 @@ where {
         sealed_share_pointer: &[u8],
     ) -> Result<AcceptOutcome, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         // The version the sender sealed under is the envelope version its scope
         // root was minted at, which is the one this build authors; a payload from
         // any other is an item that does not open, and is dropped.
         let item = locate_verified(
-            &self.seams.mailbox,
+            api.as_ref(),
             session.enc_subkey(),
             ENVELOPE_V,
             sealed_share_pointer,
@@ -5081,7 +5083,7 @@ where {
         let blobs = published_grant_blobs(&candidate.grant_section);
         accept_share(
             &self.seams.floor_store,
-            &self.seams.mailbox,
+            api.as_ref(),
             &store,
             &item,
             &contact,

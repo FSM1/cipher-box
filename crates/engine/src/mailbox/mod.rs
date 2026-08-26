@@ -25,19 +25,16 @@ use cipherbox_core::payload::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::seams::{Mailbox, MailboxItem, SeamError, SeamResult};
+use crate::seams::{
+    Mailbox, MailboxItem, SeamError, SeamResult, is_unreserved_1_128, item_id_is_legal,
+};
 
 /// The transport's sealed-payload bound (API `PostMessageDto`).
 const MAX_SEALED_BYTES: usize = 8192;
 
-/// The transport's idempotency-key alphabet and bound: RFC 3986 unreserved,
-/// 1-128 (API `PostMessageDto`).
+/// The transport's idempotency-key alphabet and bound (API `PostMessageDto`).
 pub(crate) fn idempotency_key_is_legal(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 128
-        && key
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
+    is_unreserved_1_128(key)
 }
 
 /// An opened, sender-authenticated mailbox item: the transport id needed to
@@ -119,12 +116,18 @@ pub async fn poll_verified<M: Mailbox>(
 /// Open and sender-verify one polled item, or drop it.
 ///
 /// A failed open/verify is a fail-closed drop, never an error that stalls the
-/// poll: one hostile blob must not deny delivery of the honest ones.
+/// poll: one hostile blob must not deny delivery of the honest ones. An id the
+/// transport contract does not admit is dropped for the same reason and one
+/// more: the engine could never ack it, so acting on it would earn a
+/// redelivery on every later pass.
 fn verified(
     my_enc_secret: &X25519Secret,
     v: u64,
     item: MailboxItem,
 ) -> Option<VerifiedMailboxItem> {
+    if !item_id_is_legal(&item.item_id) {
+        return None;
+    }
     let opened = open_mailbox_payload(my_enc_secret, v, &item.sealed_payload).ok()?;
     Some(VerifiedMailboxItem {
         item_id: item.item_id,
@@ -226,6 +229,56 @@ mod tests {
 
         let items = block_on(poll_verified(&recip_box, &recip, V)).unwrap();
         assert!(items.is_empty(), "no forged item survives to a resolve");
+    }
+
+    /// A hostile transport can choose the id it hands back. An id the engine
+    /// could never ack is dropped at ingest, so no flow acts on an item that
+    /// would then be redelivered forever.
+    #[test]
+    fn an_item_the_engine_could_never_ack_is_dropped() {
+        /// Hands back one honestly-sealed item under a caller-chosen id.
+        struct IdChoosingMailbox(String, Vec<u8>);
+
+        impl Mailbox for IdChoosingMailbox {
+            async fn post(&self, _: &[u8], _: &[u8], _: &str) -> SeamResult<()> {
+                Ok(())
+            }
+            async fn poll(&self) -> SeamResult<Vec<MailboxItem>> {
+                Ok(vec![MailboxItem {
+                    item_id: self.0.clone(),
+                    sealed_payload: self.1.clone(),
+                }])
+            }
+            async fn ack(&self, _: &str) -> SeamResult<()> {
+                Ok(())
+            }
+        }
+
+        let recip = recipient();
+        let sealed = seal_mailbox_payload(&recip.public(), &[0x56; 32], V, &sender(), b"pointer");
+
+        for illegal in ["..", ".", "m1/../account", "m 1", ""] {
+            let mailbox = IdChoosingMailbox(illegal.to_owned(), sealed.clone());
+            assert!(
+                block_on(poll_verified(&mailbox, &recip, V))
+                    .unwrap()
+                    .is_empty(),
+                "{illegal:?} must not survive to a flow that would ack it"
+            );
+            assert!(
+                block_on(locate_verified(&mailbox, &recip, V, &sealed))
+                    .unwrap()
+                    .is_none(),
+                "{illegal:?} must not be locatable either"
+            );
+        }
+
+        let mailbox = IdChoosingMailbox("0b7f5a2e-1c3d".to_owned(), sealed);
+        assert_eq!(
+            block_on(poll_verified(&mailbox, &recip, V)).unwrap().len(),
+            1,
+            "a legal id still delivers"
+        );
     }
 
     #[test]

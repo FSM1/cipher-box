@@ -3,7 +3,7 @@
 //!
 //! Normative design: blueprint/engine.md
 //!
-//! The architecture surface: the eight host seam traits and their whole-set
+//! The architecture surface: the seven host seam traits and their whole-set
 //! constructor bundle ([`seams`]), injected entropy ([`entropy`]), the
 //! environment-scoped sync timing profile ([`profile`]) and storage policy
 //! ([`storage_policy`]), the hand-written API client and token lifecycle

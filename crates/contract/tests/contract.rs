@@ -14,8 +14,8 @@
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, bytes_to_hex, gateway_url, hex_to_bytes,
-    hex_to_scalar, prod_api_url, random_identity_signer, test_login_secret,
+    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_bytes, hex_to_scalar,
+    prod_api_url, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::seal::{
@@ -43,7 +43,6 @@ use cipherbox_engine::rotation::{
 };
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, Mailbox,
-    MailboxItem as SealedMailboxItem, SeamError, SeamResult,
 };
 use cipherbox_engine::testkit::SeededEntropy;
 
@@ -1103,53 +1102,6 @@ async fn mailbox_post_is_bounded_by_recipient_existence_and_blob_size() {
 
 // --- grant delivery over the live mailbox (blueprint/engine.md) -------------
 
-/// The `Mailbox` seam over the engine's real API client: byte address → the
-/// API's hex `recipientPublicKey`.
-struct ApiMailbox {
-    client: Client,
-}
-
-impl Mailbox for ApiMailbox {
-    async fn post(
-        &self,
-        recipient_public_key: &[u8],
-        sealed_payload: &[u8],
-        idempotency_key: &str,
-    ) -> SeamResult<()> {
-        self.client
-            .mailbox_post(
-                &bytes_to_hex(recipient_public_key),
-                sealed_payload,
-                idempotency_key,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| SeamError::new(format!("mailbox post: {error}")))
-    }
-
-    async fn poll(&self) -> SeamResult<Vec<SealedMailboxItem>> {
-        let items = self
-            .client
-            .mailbox_poll()
-            .await
-            .map_err(|error| SeamError::new(format!("mailbox poll: {error}")))?;
-        Ok(items
-            .into_iter()
-            .map(|item| SealedMailboxItem {
-                item_id: item.id,
-                sealed_payload: item.blob,
-            })
-            .collect())
-    }
-
-    async fn ack(&self, item_id: &str) -> SeamResult<()> {
-        self.client
-            .mailbox_ack(item_id)
-            .await
-            .map_err(|error| SeamError::new(format!("mailbox ack: {error}")))
-    }
-}
-
 /// The grant's whole net arm, kept local: this leg asserts the *delivery* the
 /// grant path emits, not IPNS. The convergence gate measures the granted node
 /// and finds it already at the scope epoch, so it advances nothing.
@@ -1284,15 +1236,12 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
 
     let mut entropy = SeededEntropy::new(954);
     let net = LocalNet;
-    let mailbox = ApiMailbox {
-        client: owner_client,
-    };
 
     create_read_grant(
         &mut entropy,
         &net,
         &net,
-        &mailbox,
+        &owner_client,
         &GranteeScopePlan {
             v: V,
             scope_id: [0x5c; 16],
@@ -1346,10 +1295,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     // The pointer landed in the recipient's real inbox, opens under their
     // encryption subkey, and carries the owner's signature — so the address the
     // grant path chose is the one the API routes on.
-    let recipient_mailbox = ApiMailbox {
-        client: recipient_client,
-    };
-    let items = poll_verified(&recipient_mailbox, &recipient_enc, V)
+    let items = poll_verified(&recipient_client, &recipient_enc, V)
         .await
         .expect("recipient polls its inbox");
     assert_eq!(items.len(), 1, "exactly one delivered share pointer");
@@ -1365,7 +1311,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         owner_identity.verifying_key().to_sec1()
     );
 
-    recipient_mailbox
+    recipient_client
         .ack(&items[0].item_id)
         .await
         .expect("ack the delivered pointer");

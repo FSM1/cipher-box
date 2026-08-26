@@ -30,9 +30,9 @@ use zeroize::Zeroizing;
 
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
-    JsFloorStoreSeam, JsHttpSeam, JsMailboxSeam, JsRecordTransportSeam, JsSchedulerSeam,
-    JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter, RecordTransportAdapter,
-    SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
+    JsFloorStoreSeam, JsHttpSeam, JsRecordTransportSeam, JsSchedulerSeam, JsSnapshotCacheSeam,
+    JsStagingStoreSeam, RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter,
+    StagingStoreAdapter,
 };
 use crate::{Command, CommandOutcome, Event, NodeId, ReceivedShareRow, SharingView, SnapshotView};
 
@@ -44,7 +44,6 @@ impl SeamTypes for WebSeamTypes {
     type FloorStore = FloorStoreAdapter;
     type RecordTransport = RecordTransportAdapter;
     type Http = HttpAdapter;
-    type Mailbox = MailboxAdapter;
     type Scheduler = SchedulerAdapter;
     type StagingStore = StagingStoreAdapter;
     type SnapshotCache = SnapshotCacheAdapter;
@@ -110,10 +109,10 @@ fn web_storage_policy(headroom_bytes: Option<f64>) -> StoragePolicy {
 impl EngineHandle {
     /// Builds the engine over the browser seams. `seams` is a plain object with
     /// one property per engine seam (`floorStore`, `recordTransport`, `http`,
-    /// `mailbox`, `scheduler`, `stagingStore`, `snapshotCache`,
-    /// `credentialStore`); a missing seam fails closed. `profile` selects the
-    /// sync timing policy (`"ci"` for the compressed e2e cadences, production
-    /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
+    /// `scheduler`, `stagingStore`, `snapshotCache`, `credentialStore`); a
+    /// missing seam fails closed. `profile` selects the sync timing policy
+    /// (`"ci"` for the compressed e2e cadences, production otherwise).
+    /// `apiBaseUrl` is required and non-blank. The content gateway
     /// is configured from `acceleratorBaseUrl` and `publicGateways` — the
     /// accelerator's credential is the read-scoped pseudonym login mints, so
     /// there is no host-supplied bearer to pass.
@@ -139,9 +138,6 @@ impl EngineHandle {
             },
             http: HttpAdapter {
                 js: take_seam::<JsHttpSeam>(&seams, "http")?,
-            },
-            mailbox: MailboxAdapter {
-                js: take_seam::<JsMailboxSeam>(&seams, "mailbox")?,
             },
             scheduler: SchedulerAdapter {
                 js: take_seam::<JsSchedulerSeam>(&seams, "scheduler")?,

@@ -15,7 +15,6 @@
 //! only value this module returns to the webview is [`VaultStatus`].
 
 mod config;
-mod mailbox;
 mod seams;
 
 use std::collections::VecDeque;

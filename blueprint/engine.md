@@ -58,7 +58,8 @@ Functional decomposition, not final file layout:
 - **grants** — ledger, commitment, pseudonyms, invites, share lists, contact
   import.
 - **pointer** — scope pointers and the vault pointer chain.
-- **mailbox** — sealed-pointer traffic over the mailbox seam.
+- **mailbox** — sealed-pointer traffic, over the `Mailbox` the API client
+  implements.
 - **net** — resolve/publish pipeline, CAS, fan-out, liveness jobs.
 - **content** — chunk framing, staging, the pin-provider layer.
 - **api** — the hand-written API client and token lifecycle.
@@ -75,7 +76,6 @@ by the decomposition (FSM1/cipher-box-next#28 D3) and the rotation design's mand
 | **FloorStore**      | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal |
 | **RecordTransport** | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`     |
 | **Http**            | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`     |
-| **Mailbox**         | Post/poll/ack of sealed blobs to/from a recipient pubkey                                                  | API mailbox via the engine's own API client  | Same          |
 | **Scheduler**       | Timers, background task execution, wall clock                                                             | Worker timers                                | Tokio         |
 | **StagingStore**    | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal |
 | **SnapshotCache**   | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store   |
@@ -86,7 +86,11 @@ Notes:
 - The transport endpoint set is CipherBox someguy plus at least one independent
   public `/routing/v1` endpoint; nothing breaks if CipherBox infra vanishes
   (FSM1/cipher-box-next#23 D1). A desktop embedded rust-libp2p kad backend is designed-for behind
-  `RecordTransport` (FSM1/cipher-box-next#23 D2). The `Mailbox` trait keeps a decentralized inbox
+  `RecordTransport` (FSM1/cipher-box-next#23 D2).
+- **`Mailbox` is not a host seam.** Every API mailbox route is JWT-guarded and
+  the access bearer never leaves the engine, so the engine implements the trait
+  itself over its own API client — one token store, one refresh path, both
+  platforms. The trait survives because it keeps a decentralized inbox
   swappable behind the same abstraction (FSM1/cipher-box-next#25 D2).
 - Entropy and timestamps are engine inputs to core's pure functions: the clock
   comes from `Scheduler`, entropy from per-target `getrandom` wiring (core.md).

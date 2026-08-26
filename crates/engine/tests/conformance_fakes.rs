@@ -2,11 +2,13 @@
 //! kits are proven by the fakes passing them, and the fakes are proven honest
 //! by the kits.
 
+use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::seams::EndpointId;
 use cipherbox_engine::testkit::conformance::staging_store::FAILED_PUT_KEY;
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailboxHub, InMemoryReceivedShareStore,
-    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingBackings, VirtualScheduler,
+    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingBackings, ScriptedHttp,
+    VirtualScheduler,
 };
 use cipherbox_engine::testkit::{block_on, conformance};
 
@@ -67,6 +69,21 @@ fn in_memory_mailbox_passes_the_mailbox_kit() {
     let hub = InMemoryMailboxHub::default();
     let mailbox = hub.mailbox_for(b"self-pk");
     block_on(conformance::mailbox::check(&mailbox, b"self-pk"));
+}
+
+/// The `Mailbox` implementation v2.0 actually ships is the engine's own API
+/// client, so the kit runs against it too — over the fake API's mailbox routes,
+/// which is the only place the wire shape and the trait contract meet.
+#[test]
+fn the_api_client_passes_the_mailbox_kit() {
+    let address = [0x02u8; 33];
+    let hub = InMemoryMailboxHub::default();
+    let client = ApiClient::new(
+        ScriptedHttp::with_route(hub.mailbox_for(&address).http_route()),
+        InMemoryCredentialStore::default(),
+        "http://api.test",
+    );
+    block_on(conformance::mailbox::check(&client, &address));
 }
 
 #[test]
