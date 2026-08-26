@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
@@ -63,20 +63,21 @@ export class GatewayTokenService {
 
   /**
    * Mint this session's pseudonym, then sweep the family's previous one and the
-   * account's expired rows. Insert precedes sweep so a failure between them
-   * cannot leave the session with no accelerator credential at all.
+   * account's expired rows. Runs on the caller's transaction so the pseudonym
+   * and the refresh row that defines its validity commit together.
    */
-  async mintForFamily(userId: string, familyId: string): Promise<string> {
+  async mintForFamily(userId: string, familyId: string, manager: EntityManager): Promise<string> {
     const rawToken = this.entropy.randomBytes(32).toString('hex');
     const tokenHash = sha256Hex(rawToken);
     const now = this.clock.now();
-    await this.gatewayTokenRepository.insert({
+    const repository = manager.getRepository(GatewayToken);
+    await repository.insert({
       userId,
       familyId,
       tokenHash,
       expiresAt: new Date(now.getTime() + this.ttlSeconds * 1000),
     });
-    await this.gatewayTokenRepository
+    await repository
       .createQueryBuilder()
       .delete()
       .where('user_id = :userId', { userId })

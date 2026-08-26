@@ -168,7 +168,9 @@ describe('ops HTTP surface (real Postgres)', () => {
         expiresAt: new Date(Date.now() + 60_000),
         usedAt: null,
       });
-      const token = await ctx.app.get(GatewayTokenService).mintForFamily(account.userId, familyId);
+      const token = await ctx.app
+        .get(GatewayTokenService)
+        .mintForFamily(account.userId, familyId, db.dataSource.manager);
 
       await request(http())
         .get('/auth/gateway/verify')

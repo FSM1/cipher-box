@@ -2,6 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Repository } from 'typeorm';
+import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, FakeEntropy, fakeConfig } from '../../testing/fakes';
 import { RefreshToken } from '../entities/refresh-token.entity';
@@ -46,7 +47,8 @@ describe('TokenService refresh rotation', () => {
       new FakeEntropy(),
       asGatewayTokenService(gatewayTokens),
       fakeConfig({}).service,
-      repo as unknown as Repository<RefreshToken>
+      repo as unknown as Repository<RefreshToken>,
+      new FakeDataSource(repo as never) as never
     );
   });
 
@@ -163,7 +165,8 @@ describe('TokenService scoped tokens', () => {
       new FakeEntropy(),
       asGatewayTokenService(new RecordingGatewayTokens()),
       fakeConfig(config).service,
-      repo as unknown as Repository<RefreshToken>
+      repo as unknown as Repository<RefreshToken>,
+      new FakeDataSource(repo as never) as never
     );
     return { service, repo };
   }

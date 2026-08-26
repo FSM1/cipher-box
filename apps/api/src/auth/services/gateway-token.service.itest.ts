@@ -79,7 +79,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
 
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const [row] = await gatewayTokens.find({ where: { userId } });
@@ -106,8 +106,8 @@ describe('GatewayTokenService (real Postgres)', () => {
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
 
-    const first = await service.mintForFamily(userId, familyId);
-    const second = await service.mintForFamily(userId, familyId);
+    const first = await service.mintForFamily(userId, familyId, db.dataSource.manager);
+    const second = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(second).not.toBe(first);
     expect(await gatewayTokens.count({ where: { userId } })).toBe(1);
@@ -121,8 +121,8 @@ describe('GatewayTokenService (real Postgres)', () => {
     const { userId, familyId } = await startSession(clock);
     const other = await startSession(clock, userId);
 
-    const otherToken = await service.mintForFamily(userId, other.familyId);
-    await service.mintForFamily(userId, familyId);
+    const otherToken = await service.mintForFamily(userId, other.familyId, db.dataSource.manager);
+    await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     expect(await service.verify(otherToken)).toBe(true);
   });
@@ -131,11 +131,11 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const abandoned = await startSession(clock);
-    await service.mintForFamily(abandoned.userId, abandoned.familyId);
+    await service.mintForFamily(abandoned.userId, abandoned.familyId, db.dataSource.manager);
 
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 + 1);
     const relogin = await startSession(clock, abandoned.userId);
-    await service.mintForFamily(relogin.userId, relogin.familyId);
+    await service.mintForFamily(relogin.userId, relogin.familyId, db.dataSource.manager);
 
     expect(await gatewayTokens.count({ where: { userId: abandoned.userId } })).toBe(1);
   });
@@ -144,7 +144,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     // What logout and reuse detection both do: hard-delete the family.
     await refreshTokens.delete({ familyId });
@@ -158,7 +158,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await refreshTokens.update({ familyId }, { usedAt: clock.now() });
 
@@ -169,7 +169,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await users.delete({ id: userId });
 
@@ -181,7 +181,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
     expect(await service.verify(token)).toBe(true);
 
     await refreshTokens.delete({ familyId });
@@ -196,7 +196,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     clock.advanceMs(ACCESS_TTL_SECONDS * 1000 - 1);
     expect(await service.verify(token)).toBe(true);
@@ -211,9 +211,17 @@ describe('GatewayTokenService (real Postgres)', () => {
     const live = await startSession(clock);
     const revoked = await startSession(clock);
 
-    const liveToken = await service.mintForFamily(live.userId, live.familyId);
+    const liveToken = await service.mintForFamily(
+      live.userId,
+      live.familyId,
+      db.dataSource.manager
+    );
     expect(await service.verify(liveToken)).toBe(true);
-    const revokedToken = await service.mintForFamily(revoked.userId, revoked.familyId);
+    const revokedToken = await service.mintForFamily(
+      revoked.userId,
+      revoked.familyId,
+      db.dataSource.manager
+    );
     await refreshTokens.delete({ familyId: revoked.familyId });
     expect(await service.verify(revokedToken)).toBe(false);
 
@@ -238,7 +246,7 @@ describe('GatewayTokenService (real Postgres)', () => {
     const clock = new FakeClock();
     const service = buildService(clock);
     const { userId, familyId } = await startSession(clock);
-    const token = await service.mintForFamily(userId, familyId);
+    const token = await service.mintForFamily(userId, familyId, db.dataSource.manager);
 
     await refreshTokens.delete({ familyId });
     expect(await service.verify(token)).toBe(false);

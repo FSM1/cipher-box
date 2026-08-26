@@ -1,6 +1,7 @@
+import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RuntimeModule } from '../common/runtime.module';
 import { fakeConfig } from '../testing/fakes';
@@ -50,6 +51,14 @@ describe('buildJwtOptions', () => {
   });
 });
 
+/** Stands in for the root `TypeOrmModule.forRoot()` that `AppModule` supplies. */
+@Global()
+@Module({
+  providers: [{ provide: getDataSourceToken(), useValue: {} }],
+  exports: [getDataSourceToken()],
+})
+class StubDataSourceModule {}
+
 /**
  * Nest resolves constructor parameters from `design:paramtypes`, where an
  * interface-typed parameter emits no injectable token and refuses to resolve.
@@ -68,6 +77,7 @@ describe('AuthModule dependency graph', () => {
       imports: [
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         RuntimeModule,
+        StubDataSourceModule,
         AuthModule,
       ],
     });

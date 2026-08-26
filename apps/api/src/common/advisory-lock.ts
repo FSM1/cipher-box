@@ -86,6 +86,17 @@ export function accountLockKey(accountId: string): bigint {
 }
 
 /**
+ * Namespaced per-account key for the session-credential transaction. Login and
+ * rotation both sweep the account's expired refresh and accelerator rows, so two
+ * concurrent sessions of one account would otherwise delete overlapping row sets
+ * in opposite scan orders and deadlock. Distinct from `accountLockKey` so a
+ * refresh never queues behind that account's upload quota gate.
+ */
+export function sessionCredentialLockKey(accountId: string): bigint {
+  return advisoryLockKey(`session-credential:${accountId}`);
+}
+
+/**
  * Namespaced per-CID key for the SESSION lock that guards a durability window:
  * the upload path holds it across commit → pin, and retire (and the account
  * hard-delete cascade's post-commit unpin) holds it across commit → unpin.
