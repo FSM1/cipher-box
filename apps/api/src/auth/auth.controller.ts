@@ -43,7 +43,6 @@ const REFRESH_COOKIE = 'refreshToken';
 
 @ApiTags('Auth')
 @Controller('auth')
-@UseInterceptors(AuthMetricsInterceptor)
 export class AuthController {
   private readonly cookieSecure: boolean;
 
@@ -58,6 +57,7 @@ export class AuthController {
   }
 
   @Post('challenge')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({
@@ -70,6 +70,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({
@@ -91,6 +92,7 @@ export class AuthController {
   }
 
   @Post('siwe/challenge')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Issue a single-use SIWE nonce' })
@@ -101,6 +103,7 @@ export class AuthController {
   }
 
   @Post('siwe/login')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({
@@ -131,6 +134,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.refresh)
   @ApiOperation({
@@ -170,6 +174,7 @@ export class AuthController {
   }
 
   @Post('test-login')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({

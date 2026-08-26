@@ -69,7 +69,11 @@ app-staging.cipherbox.cc {
 		respond 204
 	}
 
-	handle {
+	# Reads present the pseudonym, writes never do (blueprint/api.md, Egress), so
+	# the gate takes only the read methods: a read token cannot become a write
+	# upstream, whatever the accelerator would have accepted.
+	@read method GET HEAD
+	handle @read {
 		# The verify leg never learns the path, so never account+CID per read; the
 		# deletes drop client-supplied copies too. X-Forwarded-For stays — the API
 		# rate-limits this surface per client.
@@ -98,6 +102,11 @@ app-staging.cipherbox.cc {
 			header_up -X-Forwarded-For
 		}
 	}
+
+	handle {
+		header Allow "{args[1]}"
+		respond 405
+	}
 }
 
 gateway-staging.cipherbox.cc {
@@ -106,8 +115,9 @@ gateway-staging.cipherbox.cc {
 
 routing-staging.cipherbox.cc {
 	# Signed IPNS records are self-authenticating, so publishing needs no token.
-	# The snippet's gate is an unmatched `handle`, which Caddy orders after every
-	# matched one, so this wins the PUT wherever the import sits.
+	# The snippet's gate takes only GET and HEAD and its refusal is an unmatched
+	# `handle`, which Caddy orders last, so this wins the PUT wherever the import
+	# sits.
 	@publish {
 		method PUT
 		path /routing/v1/ipns/*

@@ -24,6 +24,8 @@ const VERIFY_PATH = '/auth/gateway/verify';
 const PATH_NAMING_HEADERS = ['X-Forwarded-Uri', 'X-Forwarded-Method', 'X-Forwarded-Host'];
 /** The one leg the blueprint leaves open: a signed IPNS record authenticates itself. */
 const PUBLISH_LEG = { method: 'PUT', path: '/routing/v1/ipns/*' };
+/** Reads present the pseudonym, writes never do — so the gate admits nothing else. */
+const READ_METHODS = ['GET', 'HEAD'];
 
 const failures = [];
 const check = (ok, message) => {
@@ -65,9 +67,32 @@ const nodes = [...walk(config)];
 
 const isVerify = (h) =>
   h?.handler === 'reverse_proxy' && String(h.rewrite?.uri ?? '').startsWith(VERIFY_PATH);
-/** A handler list holding the verify subrequest; whatever else it proxies, that verify admits. */
-const isGate = (n) => Array.isArray(n.handle) && n.handle.some(isVerify);
+/** Where the verify subrequest sits in a handler list, or -1 when it holds none. */
+const verifyAt = (n) => (Array.isArray(n?.handle) ? n.handle.findIndex(isVerify) : -1);
+const isGate = (n) => verifyAt(n) >= 0;
+/**
+ * Caddy runs a handler list in order and `reverse_proxy` terminates, so a verify
+ * that sits after the proxy it is meant to gate admits the read before running.
+ */
+const admits = (gate, chain) => {
+  const at = gate.handle.findIndex((h) => chain.includes(h));
+  return at > verifyAt(gate);
+};
 const dials = (h) => (h.upstreams ?? []).map((u) => u.dial);
+
+// Matcher sets in one `match` are OR-ed, as are the values inside a `method` or
+// `path` array, so a route narrows a request only when EVERY set narrows it: a
+// second set, or a second value, is another way in.
+const narrowedBy = (holds) => (route) =>
+  Array.isArray(route.match) && route.match.length > 0 && route.match.every(holds);
+const readOnly = (m) =>
+  (m.method ?? []).length > 0 && m.method.every((v) => READ_METHODS.includes(v));
+const publishOnly = (m) =>
+  (m.method ?? []).length === 1 &&
+  m.method[0] === PUBLISH_LEG.method &&
+  (m.path ?? []).length === 1 &&
+  m.path[0] === PUBLISH_LEG.path;
+
 const hostOf = (ancestors) =>
   ancestors.flatMap((a) => (a.match ?? []).flatMap((m) => m.host ?? []))[0] ?? 'an unnamed vhost';
 
@@ -146,13 +171,17 @@ for (const { node, ancestors } of nodes) {
     );
   }
 
-  if (ancestors.some(isGate)) continue;
-  const matchers = ancestors.flatMap((a) => a.match ?? []);
+  const chain = [...ancestors, node];
+  if (ancestors.some((a) => isGate(a) && admits(a, chain))) {
+    check(
+      ancestors.some(narrowedBy(readOnly)),
+      `${vhost}: gated proxy to ${target} is not held to ${READ_METHODS.join('/')}`
+    );
+    continue;
+  }
+
   check(
-    matchers.some(
-      (m) =>
-        (m.method ?? []).includes(PUBLISH_LEG.method) && (m.path ?? []).includes(PUBLISH_LEG.path)
-    ),
+    ancestors.some(narrowedBy(publishOnly)),
     `${vhost}: proxy to ${target} reaches an accelerator ungated, and is not the ${PUBLISH_LEG.method} ${PUBLISH_LEG.path} publish leg`
   );
 }

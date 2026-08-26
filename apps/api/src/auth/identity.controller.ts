@@ -24,7 +24,6 @@ import { IdentityTokenService } from './services/identity-token.service';
  */
 @ApiTags('Identity')
 @Controller('auth')
-@UseInterceptors(AuthMetricsInterceptor)
 export class IdentityController {
   constructor(
     private readonly exchange: IdentityExchangeService,
@@ -40,6 +39,7 @@ export class IdentityController {
   }
 
   @Post('identity/google')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Exchange a Google ID token for a CipherBox identity token' })
@@ -49,6 +49,7 @@ export class IdentityController {
   }
 
   @Post('identity/email/send-code')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Send a CipherBox-issued verification code to an email address' })
@@ -59,6 +60,7 @@ export class IdentityController {
   }
 
   @Post('identity/email/verify-code')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Exchange a verification code for a CipherBox identity token' })
@@ -70,6 +72,7 @@ export class IdentityController {
   }
 
   @Post('identity/wallet')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({

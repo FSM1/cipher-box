@@ -135,6 +135,17 @@ describe('ops HTTP surface (real Postgres)', () => {
       );
     });
 
+    it('leaves a guard-protected route out of the auth series entirely', async () => {
+      const account = await seedAccount(db, ctx.app.get(JwtService));
+      await request(http())
+        .post('/auth/logout')
+        .set('Authorization', `Bearer ${account.token}`)
+        .expect(200);
+      // The guard runs before any interceptor, so counting here would report the
+      // successes and none of the refusals — a surface that never fails.
+      expect(await scrape()).not.toMatch(/auth_attempts_total\{route="\/auth\/logout"/);
+    });
+
     it('counts a real 429 against the route that shed it', async () => {
       await request(http()).post('/auth/challenge').send({}).expect(429);
       expect(await scrape()).toMatch(

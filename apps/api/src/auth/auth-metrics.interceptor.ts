@@ -14,6 +14,10 @@ import { routeLabelFor } from '../ops/route-label';
  * Attempt/outcome counts for the auth surface. A refused credential and a
  * broken dependency are the same 4xx-vs-5xx split the panels alert on, so they
  * are separate outcomes rather than one `failure`.
+ *
+ * Applied per route, never to a whole controller: an interceptor runs after the
+ * guards, so on a `JwtAuthGuard`-protected route it would see the successes and
+ * none of the refusals — a series that reads as a flawless surface.
  */
 @Injectable()
 export class AuthMetricsInterceptor implements NestInterceptor {

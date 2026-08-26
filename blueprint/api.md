@@ -186,7 +186,9 @@ decay) inverted into structure.
   no-auth fallback; reads survive CipherBox infra loss.
 - **The front covers both read legs.** One `forward_auth` front sits in front of
   Kubo's gateway leg and someguy's `/routing/v1` GET/resolve leg, gating both on
-  the same pseudonym — reads present it, writes never do. The `/routing/v1`
+  the same pseudonym — reads present it, writes never do, and the gate admits
+  only `GET` and `HEAD` so a read credential cannot turn into a write against an
+  accelerator that would have taken one. The `/routing/v1`
   **PUT** publish leg stays open: an IPNS record carries its own signature, so
   the front has nothing to add there beyond IP-keyed rate limiting. The
   republisher's re-PUTs route internally and never traverse the front.

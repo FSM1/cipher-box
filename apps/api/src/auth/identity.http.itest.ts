@@ -176,6 +176,13 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       }
     });
 
+    it('is not an auth attempt: a key refresh presents no credential', async () => {
+      await request(http()).get('/auth/.well-known/jwks.json').expect(200);
+
+      const scrape = await ctx.app.get(MetricsService).metricsText();
+      expect(scrape).not.toMatch(/auth_attempts_total\{route="[^"]*jwks/);
+    });
+
     it('verifies a minted token through the key set, and refuses one signed by anything else', async () => {
       const jwks = await request(http()).get('/auth/.well-known/jwks.json').expect(200);
       // Through the set rather than a hand-picked key: Web3Auth selects by
