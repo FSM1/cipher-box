@@ -184,15 +184,37 @@ decay) inverted into structure.
   put full API authority on the system's highest-frequency credential
   presentation (roughly one per leaf block). Any public trustless gateway is the
   no-auth fallback; reads survive CipherBox infra loss.
-- **What the `forward_auth` front owes the pseudonym.** Three requirements, all
+- **The front covers both read legs.** One `forward_auth` front sits in front of
+  Kubo's gateway leg and someguy's `/routing/v1` GET/resolve leg, gating both on
+  the same pseudonym — reads present it, writes never do, and the gate admits
+  only `GET` and `HEAD` so a read credential cannot turn into a write against an
+  accelerator that would have taken one. The `/routing/v1`
+  **PUT** publish leg stays open: an IPNS record carries its own signature, so
+  the front has nothing to add there beyond IP-keyed rate limiting. The
+  republisher's re-PUTs route internally and never traverse the front.
+- **What the `forward_auth` front owes the pseudonym.** Five requirements, all
   load-bearing: deny on **any** non-204, not only 401, so a verify-side fault
   fails closed; never log the `Authorization` header, since the raw pseudonym in
-  a proxy access log is a gateway credential at rest; and **strip** it before
-  proxying upstream, so it does not reach Kubo's logs either. Not logging client
-  IPs belongs here too — the pseudonym removes the account from the gateway
-  tier, but an IP recorded beside a read re-links it. The unlinkability claim is
-  scoped to a gateway-tier observer: the API necessarily resolves pseudonym to
-  account at verify time.
+  a proxy access log is a gateway credential at rest; **strip** it before
+  proxying upstream, so it does not reach Kubo's or someguy's logs either; and
+  name **nothing about what is being read** on the verify subrequest — the API's
+  view of a read is a bare "is this session alive", and a forwarded request path
+  would make it account + CID, or account + IPNS name, on every read. Not
+  logging client IPs belongs here too: the pseudonym removes the account from
+  the gateway tier, but an IP recorded beside a read re-links it — and that
+  applies to the accelerators' own logs, which ship offsite, so the client
+  address is stripped alongside the pseudonym on every leg into Kubo or someguy.
+  The one place the front forwards it is the verify subrequest, so that
+  surface's rate limit bounds a member rather than the front.
+- **What the verify leg costs.** The API is told, per read, that this session is
+  alive and which address asked — no CID and no name. It already sees that
+  address on every other route the same member calls, so the pairing is not new;
+  what is new is the **cadence**, roughly one presentation per leaf block, which
+  is read timing, session duration, and approximate volume per account. The
+  in-process cache does not blunt it: the request still arrives. This is the
+  price of the unlinkability claim, not a hole in it — the claim is scoped to a
+  gateway-tier observer, and the API necessarily resolves pseudonym to account
+  at verify time.
   Media streaming uses ranged block/CAR fetches through the existing
   service-worker decryption layer.
 
@@ -294,7 +316,8 @@ their consumer; revocation-adjacent state is hard-deleted, never soft-flagged.
 ## Hosted infra outside the API process
 
 - **someguy** — self-hosted `/routing/v1` delegated routing accelerator
-  (resolve + publish target; public endpoints are fallback).
+  (resolve + publish target; public endpoints are fallback). Its resolve leg
+  sits behind the member front; its publish leg is open.
 - **Kubo** — pin store and the token-authed trustless gateway.
 
 Nothing breaks if either vanishes: resolution falls back to public endpoints,

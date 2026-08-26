@@ -7,6 +7,7 @@ import { AuthMethod } from '../../auth/entities/auth-method.entity';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
+import { MetricsService } from '../../ops/metrics.service';
 import { advisoryLockKey, pinDurabilityLockKey } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../../mailbox/services/mailbox.service';
@@ -233,6 +234,7 @@ describe('AccountService cascade (real Postgres)', () => {
       db.dataSource as never,
       new IdentityService(),
       new FakeClock(),
+      new MetricsService(),
       fakeConfig({ MAILBOX_PENDING_CAP: '100', DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
     );
   }

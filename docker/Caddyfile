@@ -1,9 +1,15 @@
 # CipherBox Staging - Caddy Reverse Proxy & Web App
 # Cloudflare Origin CA certificates for Full (Strict) SSL mode
 # Cloudflare handles browser-facing TLS; Caddy handles CF-to-origin TLS
-
 {
 	auto_https off
+
+	# Caddy's error log records client IP beside the requested URI, which re-links
+	# an account to its reads — the accelerator front must stay silent there too.
+	log accelerator_errors {
+		output discard
+		include http.log.error.accelerator
+	}
 }
 
 api-staging.cipherbox.cc {
@@ -33,6 +39,102 @@ app-staging.cipherbox.cc {
 		try_files {path} /index.html
 		file_server
 	}
+}
+
+# Read-accelerator front. Args: {args[0]} upstream, {args[1]} CORS methods.
+# Obligations per blueprint/api.md (Egress).
+(accelerator_front) {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+
+	# The raw pseudonym in an access log is a gateway credential at rest, and a
+	# client IP recorded beside a read re-links the account.
+	log accelerator {
+		output discard
+	}
+
+	header {
+		Access-Control-Allow-Origin "{$ACCELERATOR_ALLOWED_ORIGIN:https://app-staging.cipherbox.cc}"
+		Access-Control-Expose-Headers "Content-Length, Content-Range, Content-Type"
+		Vary Origin
+	}
+
+	# A preflight carries no Authorization, so gating it would 401 every browser read.
+	@preflight method OPTIONS
+	handle @preflight {
+		header {
+			Access-Control-Allow-Methods "{args[1]}"
+			Access-Control-Allow-Headers "Authorization, Range, Accept"
+			Access-Control-Max-Age "86400"
+		}
+		respond 204
+	}
+
+	# Reads present the pseudonym, writes never do (blueprint/api.md, Egress), so
+	# the gate takes only the read methods: a read token cannot become a write
+	# upstream, whatever the accelerator would have accepted.
+	@read method GET HEAD
+	handle @read {
+		# The verify leg never learns the path, so never account+CID per read; the
+		# deletes drop client-supplied copies too. X-Forwarded-For stays — the API
+		# rate-limits this surface per client.
+		reverse_proxy api:3000 {
+			method GET
+			rewrite /auth/gateway/verify?
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Uri
+			header_up -X-Forwarded-Method
+
+			# An empty handle_response continues to the content proxy below.
+			@alive status 204
+			handle_response @alive {
+			}
+
+			# Deny on any non-204, so a verify-side fault fails closed.
+			handle_response {
+				respond 403
+			}
+		}
+
+		# An accelerator's stdout ships offsite, and an IP logged beside a CID
+		# re-links the account as surely as the pseudonym would.
+		reverse_proxy {args[0]} {
+			header_up -Authorization
+			header_up -X-Forwarded-For
+		}
+	}
+
+	handle {
+		header Allow "{args[1]}"
+		respond 405
+	}
+}
+
+gateway-staging.cipherbox.cc {
+	import accelerator_front ipfs:8080 "GET, HEAD, OPTIONS"
+}
+
+routing-staging.cipherbox.cc {
+	# Signed IPNS records are self-authenticating, so publishing needs no token.
+	# The snippet's gate takes only GET and HEAD and its refusal is an unmatched
+	# `handle`, which Caddy orders last, so this wins the PUT wherever the import
+	# sits.
+	@publish {
+		method PUT
+		path /routing/v1/ipns/*
+	}
+	handle @publish {
+		# An IPNS record is a couple of KB; the cap is all this ungated leg can
+		# bound on its own. Per-address rate limiting belongs at the edge.
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy someguy:8190 {
+			header_up -Authorization
+			header_up -X-Forwarded-For
+		}
+	}
+
+	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS"
 }
 
 :80 {

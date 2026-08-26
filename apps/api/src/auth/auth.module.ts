@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { OpsModule } from '../ops/ops.module';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
 import { GatewayToken } from './entities/gateway-token.entity';
@@ -50,9 +52,11 @@ export function buildJwtOptions(configService: ConfigService) {
       inject: [ConfigService],
       useFactory: buildJwtOptions,
     }),
+    OpsModule,
   ],
   controllers: [AuthController, GatewayController, IdentityController],
   providers: [
+    AuthMetricsInterceptor,
     AuthService,
     TestAuthService,
     TokenService,

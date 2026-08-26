@@ -10,6 +10,8 @@ import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
+import { MetricsService } from '../ops/metrics.service';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
 import { AuthMethod } from './entities/auth-method.entity';
 import { IdentitySubject } from './entities/identity-subject.entity';
@@ -73,6 +75,8 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       entities: [User, AuthMethod, RefreshToken, GatewayToken, IdentitySubject],
       controllers: [AuthController, IdentityController],
       providers: [
+        MetricsService,
+        AuthMetricsInterceptor,
         AuthService,
         TestAuthService,
         TokenService,
@@ -170,6 +174,13 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       for (const secret of ['d', 'p', 'q', 'dp', 'dq', 'qi']) {
         expect(jwk).not.toHaveProperty(secret);
       }
+    });
+
+    it('is not an auth attempt: a key refresh presents no credential', async () => {
+      await request(http()).get('/auth/.well-known/jwks.json').expect(200);
+
+      const scrape = await ctx.app.get(MetricsService).metricsText();
+      expect(scrape).not.toMatch(/auth_attempts_total\{route="[^"]*jwks/);
     });
 
     it('verifies a minted token through the key set, and refuses one signed by anything else', async () => {

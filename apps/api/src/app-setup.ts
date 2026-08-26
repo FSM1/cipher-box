@@ -1,7 +1,8 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
-import type { NextFunction, Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
+import { positiveIntConfig } from './common/config-int';
 import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
@@ -19,6 +20,16 @@ function maxUploadBytes(): number {
   return raw !== undefined && Number.isInteger(value) && value > 0
     ? value
     : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+/**
+ * Reverse-proxy hops in front of this process; 0 disables the header entirely.
+ * A hop COUNT, never `true` — Express counts back from the right of
+ * `X-Forwarded-For`, so a client-written entry lands left of the count and is
+ * skipped. See `TRUST_PROXY_HOPS` in .env.example for how to size it.
+ */
+function trustProxyHops(): number {
+  return positiveIntConfig(process.env.TRUST_PROXY_HOPS, 0);
 }
 
 /**
@@ -79,6 +90,7 @@ function rawUploadBody(maxBytes: number) {
  * the supertest apps in tests — what is asserted is what ships.
  */
 export function configureApp(app: INestApplication): INestApplication {
+  (app.getHttpAdapter().getInstance() as Express).set('trust proxy', trustProxyHops());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

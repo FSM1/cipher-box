@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { isDisabled } from '../common/env-flag';
 import { SchedulerModule } from '../common/scheduler.module';
 import { WorkerScheduler } from '../common/worker-scheduler';
+import { OpsModule } from '../ops/ops.module';
 import { IdentityService } from '../auth/services/identity.service';
 import { MailboxController } from './mailbox.controller';
 import { MailboxMessage } from './entities/mailbox-message.entity';
@@ -28,6 +29,7 @@ import { MailboxSweepTask } from './tasks/mailbox-sweep.task';
 @Module({
   imports: [
     TypeOrmModule.forFeature([MailboxMessage, User]),
+    OpsModule,
     SchedulerModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

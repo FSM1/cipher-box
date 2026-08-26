@@ -106,6 +106,14 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+      # The Caddyfile is shipped to the VPS by scp and never compiled in CI, so
+      # a config that no longer parses — or one that quietly stops enforcing the
+      # accelerator front's egress obligations — reaches staging unnoticed.
+      # Folded into Lint rather than given its own job: a new required context
+      # deadlocks every open PR that predates it.
+      - name: Check the accelerator front's egress obligations
+        run: pnpm lint:accelerator-front
+
       # The updater refuses any release its configured key did not sign, so a
       # pubkey that drifts from the CI signing secret ships an app that can
       # never update again. This is checked here rather than in Desktop Build

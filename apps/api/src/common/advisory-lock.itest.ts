@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { IdentityService } from '../auth/services/identity.service';
+import { MetricsService } from '../ops/metrics.service';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../mailbox/services/mailbox.service';
 import { FakeRepository } from '../testing/fake-repo';
@@ -90,6 +91,7 @@ describe('Advisory-lock lock_timeout DoS guard (real Postgres)', () => {
       db.dataSource,
       new IdentityService(),
       new FakeClock(),
+      new MetricsService(),
       fakeConfig({
         MAILBOX_PENDING_CAP: '1000',
         DB_ADVISORY_LOCK_TIMEOUT_MS: String(lockTimeoutMs),

@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
+import { MetricsService } from '../../ops/metrics.service';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
@@ -72,6 +73,7 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
       db.dataSource,
       new IdentityService(),
       clock,
+      new MetricsService(),
       // Disable the advisory-lock wait bound so a slow CI waiter can't 503 before
       // the cap check; the timeout has its own dedicated regression test.
       fakeConfig({ MAILBOX_PENDING_CAP: String(cap), DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
@@ -168,6 +170,7 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
       db.dataSource,
       new IdentityService(),
       clock,
+      new MetricsService(),
       fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '200' }).service
     );
 

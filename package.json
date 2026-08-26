@@ -15,6 +15,7 @@
     "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
     "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
     "lint:tracker-refs": "node scripts/check-tracker-refs.mjs",
+    "lint:accelerator-front": "node scripts/check-accelerator-front.mjs",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r --if-present run test",
     "prepare": "husky"

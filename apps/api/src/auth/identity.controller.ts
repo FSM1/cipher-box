@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Header, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Post, UseInterceptors } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { THROTTLE_SURFACES } from '../ops/throttling';
+import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { SiweLoginRequestDto } from './dto/auth.dto';
 import {
   EmailCodeRequestDto,
@@ -38,6 +39,7 @@ export class IdentityController {
   }
 
   @Post('identity/google')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Exchange a Google ID token for a CipherBox identity token' })
@@ -47,6 +49,7 @@ export class IdentityController {
   }
 
   @Post('identity/email/send-code')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Send a CipherBox-issued verification code to an email address' })
@@ -57,6 +60,7 @@ export class IdentityController {
   }
 
   @Post('identity/email/verify-code')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({ summary: 'Exchange a verification code for a CipherBox identity token' })
@@ -68,6 +72,7 @@ export class IdentityController {
   }
 
   @Post('identity/wallet')
+  @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({

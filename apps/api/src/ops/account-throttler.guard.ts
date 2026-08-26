@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ExecutionContext, Inject, Injectable } from '@nestjs/common';
+import { ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { MetricsService } from './metrics.service';
+import { routeLabelFor } from './route-label';
 
 /**
  * Global throttler keyed by the authenticated account when the bearer carries
@@ -26,12 +28,28 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  */
 @Injectable()
 export class AccountThrottlerGuard extends ThrottlerGuard {
+  // Not a ctor param: re-declaring ThrottlerGuard's own parameters would pin
+  // this guard to them.
+  @Inject(MetricsService) private readonly metricsService: MetricsService;
+
   protected async getTracker(req: Record<string, unknown>): Promise<string> {
     const subject = verifiedSubjectFromBearer(req.headers as Record<string, unknown> | undefined);
     if (subject) {
       return `acct:${subject}`;
     }
     return super.getTracker(req);
+  }
+
+  /**
+   * A guard runs before every interceptor, so a 429 never reaches
+   * `MetricsInterceptor` and has no `http_requests_total` sample.
+   */
+  protected async throwThrottlingException(
+    context: ExecutionContext,
+    detail: ThrottlerLimitDetail
+  ): Promise<void> {
+    this.metricsService.observeThrottleRejection(routeLabelFor(context));
+    return super.throwThrottlingException(context, detail);
   }
 }
 
