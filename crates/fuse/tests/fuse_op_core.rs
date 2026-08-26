@@ -20,8 +20,8 @@ use cipherbox_engine::{
     GatewayConfig, LoginSecret, NodeId, NodeKind, Staleness, StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
-    Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
-    NameError, OperationCore, OverBudgetCause, ROOT_INO, SpillArea, VfsError,
+    Access, CacheBudget, DirEntry, HandleId, HostAdapter, HostCapabilities, Invalidation,
+    MAX_NAME_BYTES, NameError, OperationCore, OverBudgetCause, ROOT_INO, SpillArea, VfsError,
 };
 
 /// A spill area in a throwaway directory the mount outlives, so the directory
@@ -170,6 +170,13 @@ fn seed_child(
         .id
 }
 
+/// A mount whose kernel-cache ceilings are narrow enough to drive eviction
+/// without standing up a tree the size of a real one.
+fn mount_tracking(adapter: RecordingAdapter, cache: CacheBudget) -> Core {
+    let started = started_engine_over_queue(&[]);
+    OperationCore::new(started.engine, adapter, cache, spill_area())
+}
+
 /// A mount over `engine` whose invalidations nothing inspects.
 fn mount_over(engine: Engine<FakeSeamTypes>) -> Core {
     OperationCore::new(
@@ -229,11 +236,19 @@ fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
 }
 
 fn names(core: &mut Core, ino: u64) -> Vec<String> {
-    block_on(core.readdir(ino))
-        .expect("readdir")
+    listing(core, ino)
         .into_iter()
         .map(|entry| entry.name)
         .collect()
+}
+
+/// One whole listing, the way a `readdir(3)` walk takes it: open the directory,
+/// page it in one go, release it.
+fn listing(core: &mut Core, ino: u64) -> Vec<DirEntry> {
+    let walk = block_on(core.opendir(ino)).expect("opendir");
+    let entries = block_on(core.readdir(walk, 0)).expect("readdir").to_vec();
+    core.releasedir(walk);
+    entries
 }
 
 // --- the read surface ---
@@ -257,7 +272,7 @@ fn created_nodes_are_immediately_visible_and_lookup_agrees_with_readdir() {
     assert_eq!(found.ino, folder.ino);
     assert_eq!(found.kind, NodeKind::Folder);
 
-    let listed = block_on(core.readdir(ROOT_INO)).unwrap();
+    let listed = listing(&mut core, ROOT_INO);
     for entry in &listed {
         let looked_up = block_on(core.lookup(ROOT_INO, &entry.name)).unwrap();
         assert_eq!(looked_up.ino, entry.ino, "{} renumbered", entry.name);
@@ -277,8 +292,8 @@ fn a_missing_name_is_not_found_and_a_file_is_not_a_directory() {
     );
     let (file, _handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Read)).unwrap();
     assert_eq!(
-        block_on(core.readdir(file.ino)),
-        Err(VfsError::NotADirectory)
+        block_on(core.opendir(file.ino)).err(),
+        Some(VfsError::NotADirectory)
     );
     assert_eq!(
         block_on(core.lookup(file.ino, "child")),
@@ -313,7 +328,12 @@ fn the_read_surface_never_yields() {
     block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
 
     assert!(matches!(
-        poll_once(core.readdir(ROOT_INO)),
+        poll_once(core.opendir(ROOT_INO)),
+        Poll::Ready(Ok(_))
+    ));
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    assert!(matches!(
+        poll_once(core.readdir(walk, 0)),
         Poll::Ready(Ok(_))
     ));
     assert!(matches!(
@@ -331,8 +351,9 @@ fn the_read_surface_never_yields() {
 fn a_cold_mount_reads_without_yielding() {
     // Nothing is cached and nothing has resolved: last-known-good still answers.
     let (mut core, _adapter) = mount();
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
     assert!(matches!(
-        poll_once(core.readdir(ROOT_INO)),
+        poll_once(core.readdir(walk, 0)),
         Poll::Ready(Ok(_))
     ));
 }
@@ -694,14 +715,14 @@ fn stale_after() -> core::time::Duration {
 fn a_read_path_operation_past_the_staleness_threshold_hints_a_refresh_for_its_folder() {
     let (mut core, root, clock, _events) = mount_clocked(RecordingAdapter::push_capable(), &[]);
 
-    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    listing(&mut core, ROOT_INO);
     assert_eq!(
         core.last_refresh_hint(),
         Some(root),
         "a folder no pass has refreshed is stale"
     );
 
-    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    listing(&mut core, ROOT_INO);
     assert_eq!(
         core.last_refresh_hint(),
         None,
@@ -709,7 +730,7 @@ fn a_read_path_operation_past_the_staleness_threshold_hints_a_refresh_for_its_fo
     );
 
     clock.advance(stale_after());
-    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    listing(&mut core, ROOT_INO);
     assert_eq!(
         core.last_refresh_hint(),
         Some(root),
@@ -751,10 +772,11 @@ fn a_stale_hit_answers_from_the_render_without_yielding() {
         RecordingAdapter::push_capable(),
         &[("notes.txt", NodeKind::File)],
     );
-    block_on(core.readdir(ROOT_INO)).expect("readdir");
+    listing(&mut core, ROOT_INO);
 
     clock.advance(stale_after());
-    assert!(poll_once(core.readdir(ROOT_INO)).is_ready());
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    assert!(poll_once(core.readdir(walk, 0)).is_ready());
     assert_eq!(core.last_refresh_hint(), Some(root));
 
     clock.advance(stale_after());
@@ -789,7 +811,7 @@ fn fuse_traffic_puts_a_folder_in_the_focus_set() {
         "a lookup puts the folder it searched in view"
     );
 
-    block_on(core.readdir(sub.ino)).expect("readdir");
+    listing(&mut core, sub.ino);
     assert_eq!(
         core.engine_mut().focus_folder(),
         Some(sub.node),
@@ -804,7 +826,7 @@ fn fuse_traffic_puts_a_folder_in_the_focus_set() {
 fn a_snapshot_the_mount_did_not_author_invalidates_the_listing_the_kernel_holds() {
     let adapter = RecordingAdapter::push_capable();
     let (mut core, root, _clock, mut events) = mount_clocked(adapter.clone(), &[]);
-    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    listing(&mut core, ROOT_INO);
     adapter.drain();
     drain_events(&mut events);
 
@@ -837,7 +859,7 @@ fn a_snapshot_that_moved_nothing_the_kernel_holds_invalidates_nothing() {
         &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
     );
     let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
-    block_on(core.readdir(sub.ino)).expect("the kernel takes the listing");
+    listing(&mut core, sub.ino);
     adapter.drain();
     drain_events(&mut events);
 
@@ -858,7 +880,7 @@ fn a_snapshot_that_moved_nothing_the_kernel_holds_invalidates_nothing() {
 fn a_second_change_with_no_kernel_callback_in_between_is_still_pushed() {
     let adapter = RecordingAdapter::push_capable();
     let (mut core, root, _clock, mut events) = mount_clocked(adapter.clone(), &[]);
-    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    listing(&mut core, ROOT_INO);
     adapter.drain();
     drain_events(&mut events);
 
@@ -890,7 +912,7 @@ fn a_name_rebound_to_a_different_node_invalidates_its_entry() {
     let (mut core, root, _clock, mut events) =
         mount_clocked(adapter.clone(), &[("notes.txt", NodeKind::File)]);
     let original = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
-    block_on(core.readdir(ROOT_INO)).expect("the kernel takes the listing");
+    listing(&mut core, ROOT_INO);
     adapter.drain();
     drain_events(&mut events);
 
@@ -924,11 +946,7 @@ fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
     let found = block_on(core.lookup(ROOT_INO, "REPORT.TXT")).expect("the respelling resolves");
     assert_eq!(found.node, created.0.node);
     assert_eq!(
-        block_on(core.readdir(ROOT_INO))
-            .expect("listing")
-            .into_iter()
-            .map(|entry| entry.name)
-            .collect::<Vec<_>>(),
+        names(&mut core, ROOT_INO),
         vec!["Report.txt".to_owned()],
         "the stored name is never mutated by how it was looked up"
     );
@@ -1034,9 +1052,7 @@ fn hidden_junk_stays_removable_under_a_spelling_no_listing_shows() {
     let mut core = mount_over(engine);
 
     assert!(
-        block_on(core.readdir(ROOT_INO))
-            .expect("listing")
-            .is_empty(),
+        listing(&mut core, ROOT_INO).is_empty(),
         "junk is hidden however it is spelled"
     );
     block_on(core.lookup(ROOT_INO, ".DS_Store")).expect("the canonical spelling resolves");
@@ -1098,6 +1114,252 @@ fn a_noattrcache_mount_keeps_its_entry_cache_and_loses_only_the_attribute_one() 
         with_attrs.cache_ttls().entry,
         "noattrcache suppresses attributes, not name lookups"
     );
+}
+
+// --- directory walks ---
+
+/// A walk is paginated by the kernel, which resumes at the cursor its last page
+/// ended on. The listing under that cursor has to stop moving for the walk, or
+/// a mutation between two pages shifts positions and the kernel skips or
+/// duplicates a name that never moved.
+#[test]
+fn a_walk_paged_across_a_mutation_neither_skips_nor_duplicates_an_entry() {
+    let (mut core, _adapter) = mount();
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        block_on(core.create(ROOT_INO, name, Access::Write)).expect("create");
+    }
+    let whole = names(&mut core, ROOT_INO);
+    assert_eq!(whole.len(), 4);
+
+    let page = 2;
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    let first: Vec<String> = block_on(core.readdir(walk, 0))
+        .expect("the first page")
+        .iter()
+        .take(page)
+        .map(|entry| entry.name.clone())
+        .collect();
+
+    // Between the two pages, an entry the walk already emitted is removed,
+    // pulling every position after the cursor down by one.
+    block_on(core.unlink(ROOT_INO, &whole[0])).expect("unlink");
+
+    let rest: Vec<String> = block_on(core.readdir(walk, page))
+        .expect("the second page")
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+
+    let walked: Vec<String> = first.into_iter().chain(rest).collect();
+    assert_eq!(
+        walked, whole,
+        "the walk saw the listing it was pinned to, every name exactly once"
+    );
+}
+
+/// The listing belongs to one open directory, so the kernel sending exactly one
+/// `releasedir` per `opendir` is what frees it — held past that it is a
+/// directory's worth of filenames kept for nothing.
+#[test]
+fn a_released_walk_holds_no_listing() {
+    let (mut core, _adapter) = mount_seeded_pair();
+
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    block_on(core.readdir(walk, 0)).expect("a walk starts");
+    assert_eq!(core.open_directories(), 1);
+
+    core.releasedir(walk);
+    assert_eq!(core.open_directories(), 0);
+    assert_eq!(
+        block_on(core.readdir(walk, 0)).err(),
+        Some(VfsError::BadHandle),
+        "a released handle addresses nothing"
+    );
+}
+
+/// Two walks over the *same* directory are two walks: sharing one listing would
+/// hand the second walk's cursor to the first, and the first `releasedir` would
+/// free the other's.
+#[test]
+fn two_walks_over_one_directory_page_independently() {
+    let (mut core, _adapter) = mount();
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        block_on(core.create(ROOT_INO, name, Access::Write)).expect("create");
+    }
+    let whole = names(&mut core, ROOT_INO);
+
+    let first = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    let second = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    assert_ne!(first, second);
+    assert_eq!(core.open_directories(), 2);
+
+    block_on(core.readdir(first, 0)).expect("the first walk starts");
+    block_on(core.readdir(second, 0)).expect("the second walk starts");
+    block_on(core.unlink(ROOT_INO, &whole[0])).expect("unlink");
+    core.releasedir(second);
+
+    let rest: Vec<String> = block_on(core.readdir(first, 2))
+        .expect("the first walk continues")
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    assert_eq!(
+        rest,
+        whole[2..],
+        "the other walk's release freed nothing here"
+    );
+}
+
+/// The mount holds nothing for the kernel past the mount itself. The walk is
+/// left unreleased: a released one is already gone before `unmount`, so the
+/// assertion would hold against an `unmount` that frees nothing.
+#[test]
+fn unmounting_holds_no_listing() {
+    let (mut core, _adapter) = mount_seeded_pair();
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    block_on(core.readdir(walk, 0)).expect("readdir");
+    assert_eq!(core.open_directories(), 1);
+
+    core.unmount();
+
+    assert_eq!(core.open_directories(), 0);
+}
+
+/// The shadow maps are the only thing a repaint measures a change against, so
+/// an entry the ceiling drops is kernel state nothing would ever correct again.
+/// Eviction has to push that correction on the way out — and on the backend
+/// whose client ignores reply lifetimes, uninvalidated cached data never
+/// revalidates at all (blueprint/desktop.md "Freshness").
+#[test]
+fn a_listing_the_ceiling_evicts_is_invalidated_on_the_way_out() {
+    let adapter = RecordingAdapter::push_capable();
+    let mut core = mount_tracking(adapter.clone(), CacheBudget::CI.tracking(64, 1));
+
+    for name in ["first", "second"] {
+        block_on(core.mkdir(ROOT_INO, name)).expect("mkdir");
+    }
+    let first = block_on(core.lookup(ROOT_INO, "first")).expect("lookup");
+    let second = block_on(core.lookup(ROOT_INO, "second")).expect("lookup");
+    block_on(core.create(first.ino, "child", Access::Write)).expect("create");
+    listing(&mut core, first.ino);
+    adapter.drain();
+
+    // One slot, so listing the second directory drops the first.
+    listing(&mut core, second.ino);
+
+    assert!(
+        adapter.drain().contains(&Invalidation::Entry {
+            parent: first.ino,
+            name: "child".to_owned(),
+        }),
+        "an evicted listing takes the kernel's name bindings with it"
+    );
+}
+
+/// A node the ceiling drops is one no later repaint can measure, so the kernel
+/// is corrected for its bytes and attributes at the moment it goes.
+#[test]
+fn a_node_the_ceiling_evicts_is_invalidated_on_the_way_out() {
+    let adapter = RecordingAdapter::push_capable();
+    let mut core = mount_tracking(adapter.clone(), CacheBudget::CI.tracking(1, 64));
+
+    let (first, _handle) =
+        block_on(core.create(ROOT_INO, "first.txt", Access::Write)).expect("create");
+    adapter.drain();
+
+    block_on(core.create(ROOT_INO, "second.txt", Access::Write)).expect("create");
+
+    let seen = adapter.drain();
+    assert!(
+        seen.contains(&Invalidation::Data { ino: first.ino })
+            && seen.contains(&Invalidation::Attributes { ino: first.ino }),
+        "the kernel holds bytes and attributes for it, and both stop being corrected: {seen:?}"
+    );
+}
+
+// --- what the kernel gives back ---
+
+/// FORGET is the kernel saying it no longer addresses an inode. Nothing it has
+/// stopped addressing needs correcting, and the shadow maps grow with exactly
+/// what it asked about.
+#[test]
+fn a_forgotten_inode_stops_being_addressable() {
+    let (mut core, _adapter) = mount_seeded_pair();
+    let notes = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    assert!(block_on(core.getattr(notes.ino)).is_ok());
+
+    core.forget(notes.ino, 1);
+
+    assert_eq!(
+        block_on(core.getattr(notes.ino)),
+        Err(VfsError::NotFound),
+        "the binding the kernel gave back is gone"
+    );
+}
+
+/// The kernel counts a reference per entry reply it took and gives them back in
+/// one or several FORGETs; dropping the binding before the last of them would
+/// answer `ENOENT` for a node the kernel is still using.
+#[test]
+fn an_inode_the_kernel_still_references_survives_a_partial_forget() {
+    let (mut core, _adapter) = mount_seeded_pair();
+    let first = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup");
+    let second = block_on(core.lookup(ROOT_INO, "notes.txt")).expect("lookup again");
+    assert_eq!(first.ino, second.ino);
+
+    core.forget(first.ino, 1);
+
+    assert!(
+        block_on(core.getattr(first.ino)).is_ok(),
+        "one reference is still outstanding"
+    );
+}
+
+/// A repaint corrects the kernel's cache, and a forgotten inode has no cache
+/// left to correct — so the mount must stop tracking it, and go on tracking
+/// what the kernel still holds.
+#[test]
+fn a_forgotten_node_is_dropped_from_what_a_repaint_measures() {
+    let adapter = RecordingAdapter::push_capable();
+    let (mut core, _root, _clock, mut events) = mount_clocked(
+        adapter.clone(),
+        &[("kept", NodeKind::Folder), ("dropped", NodeKind::Folder)],
+    );
+    let kept = block_on(core.lookup(ROOT_INO, "kept")).expect("lookup");
+    let dropped = block_on(core.lookup(ROOT_INO, "dropped")).expect("lookup");
+    listing(&mut core, kept.ino);
+    listing(&mut core, dropped.ino);
+    adapter.drain();
+    drain_events(&mut events);
+
+    core.forget(dropped.ino, 1);
+    seed_child(core.engine_mut(), kept.node, "new-in-kept", NodeKind::File);
+    seed_child(
+        core.engine_mut(),
+        dropped.node,
+        "new-in-dropped",
+        NodeKind::File,
+    );
+    absorb_pending(&mut core, &mut events);
+
+    assert_eq!(
+        adapter.drain(),
+        vec![Invalidation::Entry {
+            parent: kept.ino,
+            name: "new-in-kept".to_owned(),
+        }],
+        "the listing the kernel still holds, and nothing for the one it gave back"
+    );
+}
+
+/// A mount over a root holding one file and one folder.
+fn mount_seeded_pair() -> (Core, RecordingAdapter) {
+    let adapter = RecordingAdapter::push_capable();
+    let core = mount_seeded(
+        adapter.clone(),
+        &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
+    );
+    (core, adapter)
 }
 
 #[test]
@@ -1798,7 +2060,8 @@ fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
     );
     // The kernel was acked at journal time, so the compensation channel is the
     // only place this appears: the read path stays whole.
-    assert!(block_on(core.readdir(ROOT_INO)).is_ok());
+    let walk = block_on(core.opendir(ROOT_INO)).expect("the read path stays whole");
+    assert!(block_on(core.readdir(walk, 0)).is_ok());
     assert!(
         block_on(core.status())
             .expect("the status reads again")

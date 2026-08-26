@@ -80,8 +80,8 @@ impl<'a> Response<'a> {
         ino: INodeNo,
         generation: Generation,
         attr: &Attr,
-        attr_ttl: Duration,
         entry_ttl: Duration,
+        attr_ttl: Duration,
     ) -> Self {
         let d = abi::fuse_entry_out {
             nodeid: ino.into(),
@@ -189,7 +189,8 @@ impl<'a> Response<'a> {
 
     // TODO: Can flags be more strongly typed?
     pub(crate) fn new_create(
-        ttl: &Duration,
+        entry_ttl: &Duration,
+        attr_ttl: &Duration,
         attr: &Attr,
         generation: Generation,
         fh: FileHandle,
@@ -203,10 +204,10 @@ impl<'a> Response<'a> {
             abi::fuse_entry_out {
                 nodeid: attr.attr.ino,
                 generation: generation.into(),
-                entry_valid: ttl.as_secs(),
-                attr_valid: ttl.as_secs(),
-                entry_valid_nsec: ttl.subsec_nanos(),
-                attr_valid_nsec: ttl.subsec_nanos(),
+                entry_valid: entry_ttl.as_secs(),
+                attr_valid: attr_ttl.as_secs(),
+                entry_valid_nsec: entry_ttl.subsec_nanos(),
+                attr_valid_nsec: attr_ttl.subsec_nanos(),
                 attr: attr.attr,
             },
             abi::fuse_open_out {
@@ -613,6 +614,106 @@ mod test {
         );
     }
 
+    /// The attributes a `FileAttr` carries, with values no field shares, so a
+    /// lifetime landing in the wrong one is visible in the encoding.
+    fn distinguishable_attr() -> crate::FileAttr {
+        let time = UNIX_EPOCH + Duration::new(0x1234, 0x5678);
+        crate::FileAttr {
+            ino: 0x11,
+            size: 0x22,
+            blocks: 0x33,
+            atime: time,
+            mtime: time,
+            ctime: time,
+            crtime: time,
+            kind: FileType::RegularFile,
+            perm: 0o644,
+            nlink: 0x55,
+            uid: 0x66,
+            gid: 0x77,
+            rdev: 0x88,
+            flags: 0x99,
+            blksize: 0xbb,
+        }
+    }
+
+    /// The two lifetimes an encoded reply carries, read back from the wire
+    /// offsets the kernel reads them from. `fuse_entry_out` leads both
+    /// `fuse_entry_out` and `fuse_create_out` replies, so one reader serves
+    /// both.
+    fn entry_lifetimes(encoded: &[u8]) -> (Duration, Duration) {
+        let field = |offset: usize| std::mem::size_of::<abi::fuse_out_header>() + offset;
+        let secs = |offset: usize| {
+            u64::from_ne_bytes(encoded[field(offset)..field(offset) + 8].try_into().unwrap())
+        };
+        let nsecs = |offset: usize| {
+            u32::from_ne_bytes(encoded[field(offset)..field(offset) + 4].try_into().unwrap())
+        };
+        (
+            Duration::new(
+                secs(std::mem::offset_of!(abi::fuse_entry_out, entry_valid)),
+                nsecs(std::mem::offset_of!(abi::fuse_entry_out, entry_valid_nsec)),
+            ),
+            Duration::new(
+                secs(std::mem::offset_of!(abi::fuse_entry_out, attr_valid)),
+                nsecs(std::mem::offset_of!(abi::fuse_entry_out, attr_valid_nsec)),
+            ),
+        )
+    }
+
+    /// `fuse_entry_out` times the name binding and the attributes in separate
+    /// fields: the kernel caches the name for `entry_valid` and the attributes
+    /// for `attr_valid`. Asserting the encodings merely *differ* would pass
+    /// against a reply that lands each lifetime in the other's field, so pin
+    /// the fields themselves.
+    #[test]
+    fn an_entry_reply_times_the_name_binding_apart_from_the_attributes() {
+        let attr: Attr = distinguishable_attr().into();
+        let zero = Duration::ZERO;
+        let live = Duration::new(0x8765, 0x4321);
+        let other = Duration::new(0x1357, 0x2468);
+        let encoded = |entry_ttl, attr_ttl| {
+            entry_lifetimes(
+                &Response::new_entry(INodeNo(0x11), Generation(0xaa), &attr, entry_ttl, attr_ttl)
+                    .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec),
+            )
+        };
+
+        assert_eq!(encoded(live, zero), (live, zero));
+        assert_eq!(encoded(zero, live), (zero, live));
+        assert_eq!(encoded(live, other), (live, other));
+        assert_eq!(encoded(zero, zero), (zero, zero));
+    }
+
+    /// `create` answers with an entry too, on the same two lifetimes and the
+    /// same field-order obligation.
+    #[test]
+    fn a_create_reply_times_the_name_binding_apart_from_the_attributes() {
+        let attr: Attr = distinguishable_attr().into();
+        let zero = Duration::ZERO;
+        let live = Duration::new(0x8765, 0x4321);
+        let other = Duration::new(0x1357, 0x2468);
+        let encoded = |entry_ttl: Duration, attr_ttl: Duration| {
+            entry_lifetimes(
+                &Response::new_create(
+                    &entry_ttl,
+                    &attr_ttl,
+                    &attr,
+                    Generation(0xaa),
+                    FileHandle(0xbb),
+                    0xcc,
+                    0,
+                )
+                .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec),
+            )
+        };
+
+        assert_eq!(encoded(live, zero), (live, zero));
+        assert_eq!(encoded(zero, live), (zero, live));
+        assert_eq!(encoded(live, other), (live, other));
+        assert_eq!(encoded(zero, zero), (zero, zero));
+    }
+
     #[test]
     fn reply_attr() {
         let mut expected = if cfg!(target_os = "macos") {
@@ -791,6 +892,7 @@ mod test {
             blksize: 0xdd,
         };
         let r = Response::new_create(
+            &ttl,
             &ttl,
             &attr.into(),
             Generation(0xaa),

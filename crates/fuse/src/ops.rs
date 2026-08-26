@@ -115,6 +115,105 @@ enum Retain {
     Scan,
 }
 
+/// A bounded map that evicts its least-recently-written entry — the ceiling
+/// every kernel-cache shadow map is kept under.
+///
+/// What these maps hold is sized from outside this device: a peer sharing a
+/// scope decides how many nodes and how long a name, and Finder or Spotlight
+/// walks a mount unprompted.
+///
+/// Writing is the access: every entry is rewritten by the operation that hands
+/// the kernel the state it records, so recency of write is recency of use.
+///
+/// Eviction is reported rather than silent, and the caller must correct the
+/// kernel for what it drops. These maps are the only thing a repaint measures
+/// a change against, so an entry dropped quietly is kernel state nothing would
+/// ever correct again — and uninvalidated cached data never revalidates on a
+/// client that ignores reply lifetimes (blueprint/desktop.md "Freshness").
+struct Shadow<V> {
+    limit: usize,
+    entries: HashMap<NodeId, (u64, V)>,
+    recency: BTreeMap<u64, NodeId>,
+    next_tick: u64,
+}
+
+impl<V> Shadow<V> {
+    /// A map holding at most `limit` entries — at least one, so a ceiling the
+    /// map could never hold anything under is not representable.
+    fn new(limit: usize) -> Self {
+        Self {
+            limit: limit.max(1),
+            entries: HashMap::new(),
+            recency: BTreeMap::new(),
+            next_tick: 0,
+        }
+    }
+
+    /// Take `node`'s slot, reporting everything that displaced.
+    fn insert(&mut self, node: NodeId, value: V) -> Displaced<V> {
+        let tick = self.next_tick;
+        self.next_tick += 1;
+        let replaced = self
+            .entries
+            .insert(node, (tick, value))
+            .map(|(used, held)| {
+                self.recency.remove(&used);
+                held
+            });
+        self.recency.insert(tick, node);
+        let mut evicted = None;
+        // One insert adds at most one entry, so at most one is ever displaced.
+        if self.entries.len() > self.limit
+            && let Some((_, node)) = self.recency.pop_first()
+            && let Some((_, held)) = self.entries.remove(&node)
+        {
+            evicted = Some((node, held));
+        }
+        Displaced { replaced, evicted }
+    }
+
+    fn remove(&mut self, node: NodeId) {
+        if let Some((used, _)) = self.entries.remove(&node) {
+            self.recency.remove(&used);
+        }
+    }
+
+    /// Every entry, in no particular order and without renewing any of them —
+    /// a repaint is the mount reading its own bookkeeping, not a kernel access.
+    fn iter(&self) -> impl Iterator<Item = (NodeId, &V)> {
+        self.entries.iter().map(|(node, (_, value))| (*node, value))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+}
+
+/// What an [`insert`](Shadow::insert) displaced: the value the same node held,
+/// and the entry the ceiling evicted to make room for this one.
+struct Displaced<V> {
+    replaced: Option<V>,
+    evicted: Option<(NodeId, V)>,
+}
+
+/// A directory walk's token, minted per `opendir` and handed to the kernel as
+/// its directory file handle. Distinct from [`HandleId`] because the two name
+/// different things and the kernel keeps their number spaces apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DirHandleId(pub u64);
+
+/// One open directory: the node it walks, and the listing it pages through once
+/// the walk has started.
+struct Walk {
+    dir: NodeId,
+    listing: Vec<DirEntry>,
+}
+
 /// The operation core for one mount session: the engine it projects, the host
 /// adapter it pushes invalidation to, and the session's inode and handle maps.
 pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
@@ -135,9 +234,16 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     /// actually asked about are here, and a repaint drops each one it
     /// invalidates — the map tracks what the kernel is believed to hold, not
     /// the tree.
-    served: HashMap<NodeId, Served>,
+    served: Shadow<Served>,
     /// Per directory, the entries this mount last listed, on the same terms.
-    listed: HashMap<NodeId, BTreeMap<String, NodeId>>,
+    listed: Shadow<BTreeMap<String, NodeId>>,
+    /// Per open directory, the walk it is paging through — see
+    /// [`readdir`](Self::readdir). An entry lives from `opendir` to
+    /// `releasedir`, so the kernel's own open-directory count bounds it.
+    walks: HashMap<DirHandleId, Walk>,
+    /// The next [`DirHandleId`]: monotonic and never reused, so a released
+    /// handle can never address a later walk.
+    next_walk: u64,
     /// The node the last read-path operation found past the staleness
     /// threshold, if any.
     refresh_hint: Option<NodeId>,
@@ -157,8 +263,10 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             spill,
             pending: HashMap::new(),
             streamed: HashMap::new(),
-            served: HashMap::new(),
-            listed: HashMap::new(),
+            served: Shadow::new(cache.shadowed_nodes()),
+            listed: Shadow::new(cache.shadowed_directories()),
+            walks: HashMap::new(),
+            next_walk: 0,
             refresh_hint: None,
         }
     }
@@ -167,6 +275,12 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// was mounted with.
     pub fn cached_plaintext_bytes(&self) -> usize {
         self.cache.retained_bytes()
+    }
+
+    /// How many directories the kernel has open on this mount — back to zero
+    /// once it has released each one.
+    pub fn open_directories(&self) -> usize {
+        self.walks.len()
     }
 
     /// The engine this mount projects. A session runs exactly one brain, so a
@@ -213,19 +327,18 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let view = self.render().await?;
 
         let mut moved = Vec::new();
-        for (node, served) in &self.served {
-            let Some(meta) = view.attrs(*node) else {
+        for (node, served) in self.served.iter() {
+            let Some(meta) = view.attrs(node) else {
                 continue;
             };
-            let fresh = Served::of(&meta, self.pending_len(*node).or(meta.size));
+            let fresh = Served::of(&meta, self.pending_len(node).or(meta.size));
             if fresh != *served {
-                moved.push((*node, fresh));
+                moved.push((node, fresh));
             }
         }
         for (node, fresh) in moved {
             let content_moved = self
-                .served
-                .insert(node, fresh.clone())
+                .track_served(node, fresh.clone())
                 .is_some_and(|last| last.content_version != fresh.content_version);
             let ino = self.inodes.ino_for(node);
             if content_moved {
@@ -236,14 +349,14 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
 
         let mut relisted = Vec::new();
-        for (dir, listed) in &self.listed {
-            let fresh = listing_of(&emittable_children(&view, *dir));
+        for (dir, listed) in self.listed.iter() {
+            let fresh = listing_of(&emittable_children(&view, dir));
             if fresh != *listed {
-                relisted.push((*dir, rebound_names(listed, &fresh), fresh));
+                relisted.push((dir, rebound_names(listed, &fresh), fresh));
             }
         }
         for (dir, names, fresh) in relisted {
-            self.listed.insert(dir, fresh);
+            self.track_listed(dir, fresh);
             let parent = self.inodes.ino_for(dir);
             for name in names {
                 self.entry_changed(parent, &name);
@@ -274,7 +387,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let meta = self
             .resolve(&view, parent_node, name)
             .ok_or(VfsError::NotFound)?;
-        Ok(self.attributes(&meta))
+        Ok(self.entry_attributes(&meta))
     }
 
     /// Find `name` under `parent` as the host presents names — the one rule
@@ -309,17 +422,50 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(self.attributes(&meta))
     }
 
-    /// List a directory's children in the engine's deterministic order,
-    /// hiding platform junk and names no kernel could carry — both classes
-    /// arrive from other clients, which validate nothing. `.` and `..` are the
-    /// adapter's to synthesize, along with any offset cookies.
-    pub async fn readdir(&mut self, ino: u64) -> Result<Vec<DirEntry>, VfsError> {
+    /// Open a directory for walking, minting the handle the kernel carries on
+    /// every [`readdir`](Self::readdir) and gives back at
+    /// [`releasedir`](Self::releasedir).
+    pub async fn opendir(&mut self, ino: u64) -> Result<DirHandleId, VfsError> {
         let view = self.render().await?;
-        let node = self.directory(&view, ino)?;
-        self.ttl_check(Some(node));
-        let children = emittable_children(&view, node);
-        self.listed.insert(node, listing_of(&children));
-        let entries = children
+        let dir = self.directory(&view, ino)?;
+        let walk = DirHandleId(self.next_walk);
+        self.next_walk += 1;
+        self.walks.insert(
+            walk,
+            Walk {
+                dir,
+                listing: Vec::new(),
+            },
+        );
+        Ok(walk)
+    }
+
+    /// One page of a directory walk: the children from `cursor` onward, in the
+    /// engine's deterministic order, with platform junk and names no kernel
+    /// could carry hidden — both classes arrive from other clients, which
+    /// validate nothing. `.` and `..` are the adapter's to synthesize, along
+    /// with the offset cookies it hands the kernel.
+    ///
+    /// A walk renders its directory once, at `cursor` zero, and answers every
+    /// continuation from that listing. The cursor the kernel resumes at only
+    /// means anything against the listing that produced it: a re-render between
+    /// two pages would shift positions under it, and the walk would skip or
+    /// duplicate an entry that never moved. `cursor` zero is also `rewinddir`,
+    /// which is why it renders again rather than replaying.
+    pub async fn readdir(
+        &mut self,
+        walk: DirHandleId,
+        cursor: usize,
+    ) -> Result<&[DirEntry], VfsError> {
+        let dir = self.walks.get(&walk).ok_or(VfsError::BadHandle)?.dir;
+        self.ttl_check(Some(dir));
+        if cursor > 0 {
+            return Ok(self.walks[&walk].listing.get(cursor..).unwrap_or_default());
+        }
+        let view = self.render().await?;
+        let children = emittable_children(&view, dir);
+        self.track_listed(dir, listing_of(&children));
+        let listing: Vec<DirEntry> = children
             .into_iter()
             .map(|child| DirEntry {
                 ino: self.inodes.ino_for(child.id),
@@ -327,7 +473,28 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
                 kind: child.kind,
             })
             .collect();
-        Ok(entries)
+        let held = self.walks.get_mut(&walk).ok_or(VfsError::BadHandle)?;
+        held.listing = listing;
+        Ok(&held.listing)
+    }
+
+    /// Close a directory the kernel has finished walking, dropping the listing
+    /// it was paging through.
+    pub fn releasedir(&mut self, walk: DirHandleId) {
+        self.walks.remove(&walk);
+    }
+
+    /// Give back `count` of the kernel's references to `ino`, dropping
+    /// everything this mount held on that inode's behalf once the last one is
+    /// gone — the FUSE FORGET contract. Nothing the kernel no longer addresses
+    /// needs correcting, and the shadow maps grow with what it asked about.
+    pub fn forget(&mut self, ino: u64, count: u64) {
+        let Some(node) = self.inodes.forget(ino, count) else {
+            return;
+        };
+        self.served.remove(node);
+        self.listed.remove(node);
+        self.streamed.remove(&node);
     }
 
     /// Create an empty file and open a handle on it.
@@ -615,6 +782,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.streamed.clear();
         self.served.clear();
         self.listed.clear();
+        self.walks.clear();
         self.refresh_hint = None;
     }
 
@@ -914,6 +1082,34 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
+    /// Record what this mount just served for `node`, reporting what it served
+    /// before, and correct the kernel for whatever the ceiling evicted.
+    ///
+    /// The correction has to go out at eviction: an evicted node is one no
+    /// later repaint can measure a change against, so this is the last moment
+    /// anything knows the kernel holds state for it at all.
+    fn track_served(&mut self, node: NodeId, served: Served) -> Option<Served> {
+        let displaced = self.served.insert(node, served);
+        if let Some((evicted, _)) = displaced.evicted {
+            let ino = self.inodes.ino_for(evicted);
+            self.content_changed(ino);
+        }
+        displaced.replaced
+    }
+
+    /// The listing counterpart of [`track_served`](Self::track_served). An
+    /// evicted directory is dropped one spelling at a time, because one
+    /// spelling is all an entry invalidation matches.
+    fn track_listed(&mut self, dir: NodeId, listing: BTreeMap<String, NodeId>) {
+        let Some((evicted, names)) = self.listed.insert(dir, listing).evicted else {
+            return;
+        };
+        let parent = self.inodes.ino_for(evicted);
+        for name in names.keys() {
+            self.entry_changed(parent, name);
+        }
+    }
+
     /// Report a node whose bytes and attributes both moved. Data first: a
     /// kernel that learned the new size first would serve the pages it still
     /// holds as the new version.
@@ -956,9 +1152,17 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(node)
     }
 
+    /// [`attributes`](Self::attributes) for a reply that hands the kernel an
+    /// entry, taking the reference such a reply owes. The kernel gives it back
+    /// in [`forget`](Self::forget).
+    fn entry_attributes(&mut self, meta: &NodeAttrs) -> Attributes {
+        self.inodes.looked_up(meta.id);
+        self.attributes(meta)
+    }
+
     fn attributes(&mut self, meta: &NodeAttrs) -> Attributes {
         let size = self.pending_len(meta.id).or(meta.size);
-        self.served.insert(meta.id, Served::of(meta, size));
+        self.track_served(meta.id, Served::of(meta, size));
         Attributes {
             ino: self.inodes.ino_for(meta.id),
             node: meta.id,
@@ -993,7 +1197,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .ok_or_else(|| VfsError::Internal {
                 message: "a staged create is missing from the rendered view".to_owned(),
             })?;
-        let attrs = self.attributes(&meta);
+        let attrs = self.entry_attributes(&meta);
         self.entry_changed(parent, name);
         Ok(attrs)
     }
@@ -1150,4 +1354,119 @@ fn removable(view: &EngineView, victim: &NodeAttrs, expected: NodeKind) -> Resul
         return Err(VfsError::NotEmpty);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(byte: u8) -> NodeId {
+        NodeId([byte; 16])
+    }
+
+    fn evicted<V>(displaced: Displaced<V>) -> Option<NodeId> {
+        displaced.evicted.map(|(node, _)| node)
+    }
+
+    fn held<V: Copy>(shadow: &Shadow<V>, node: NodeId) -> Option<V> {
+        shadow
+            .iter()
+            .find(|(slot, _)| *slot == node)
+            .map(|(_, value)| *value)
+    }
+
+    /// The ceiling is the whole point: what these maps hold is decided by a
+    /// peer's tree and by whatever walks the mount, not by this device.
+    #[test]
+    fn a_shadow_map_never_grows_past_its_ceiling() {
+        let mut shadow = Shadow::new(3);
+        for byte in 0..32u8 {
+            shadow.insert(node(byte), byte);
+        }
+        assert_eq!(shadow.iter().count(), 3);
+    }
+
+    /// These maps are the only thing a repaint measures a change against, so an
+    /// entry dropped quietly is kernel state nothing would correct again — the
+    /// caller has to be told what went, and told exactly once.
+    #[test]
+    fn every_eviction_is_reported_to_the_caller() {
+        let mut shadow = Shadow::new(2);
+        assert_eq!(evicted(shadow.insert(node(1), "first")), None);
+        assert_eq!(evicted(shadow.insert(node(2), "second")), None);
+        assert_eq!(
+            evicted(shadow.insert(node(1), "first again")),
+            None,
+            "a rewrite displaces nothing but itself"
+        );
+
+        assert_eq!(evicted(shadow.insert(node(3), "third")), Some(node(2)));
+        assert_eq!(evicted(shadow.insert(node(4), "fourth")), Some(node(1)));
+    }
+
+    /// A ceiling nothing could ever be held under would evict every entry as it
+    /// landed, and push a correction for state the kernel just received.
+    #[test]
+    fn a_map_always_holds_at_least_one_entry() {
+        let mut shadow = Shadow::new(0);
+        assert_eq!(evicted(shadow.insert(node(1), "first")), None);
+        assert_eq!(held(&shadow, node(1)), Some("first"));
+    }
+
+    /// Rewriting an entry is the mount re-serving that state to the kernel, so
+    /// it renews the entry against the ceiling — a working set the kernel keeps
+    /// asking about must outlive one pass over a tree it never revisits.
+    #[test]
+    fn the_least_recently_written_entry_is_the_one_evicted() {
+        let mut shadow = Shadow::new(2);
+        shadow.insert(node(1), "first");
+        shadow.insert(node(2), "second");
+        shadow.insert(node(1), "first again");
+        shadow.insert(node(3), "third");
+
+        assert_eq!(held(&shadow, node(2)), None, "untouched since it landed");
+        assert_eq!(held(&shadow, node(1)), Some("first again"));
+        assert_eq!(held(&shadow, node(3)), Some("third"));
+    }
+
+    /// A repaint walks every entry to diff it; counting that as a kernel access
+    /// would make the ceiling evict by nothing but first-insertion order.
+    #[test]
+    fn walking_the_map_renews_nothing() {
+        let mut shadow = Shadow::new(2);
+        shadow.insert(node(1), "first");
+        shadow.insert(node(2), "second");
+
+        assert_eq!(shadow.iter().count(), 2);
+
+        shadow.insert(node(3), "third");
+        assert_eq!(held(&shadow, node(1)), None, "the walk renewed nothing");
+    }
+
+    #[test]
+    fn replacing_an_entry_keeps_the_map_at_one_slot_for_it() {
+        let mut shadow = Shadow::new(2);
+        assert_eq!(shadow.insert(node(1), "first").replaced, None);
+        assert_eq!(shadow.insert(node(1), "again").replaced, Some("first"));
+
+        assert_eq!(shadow.iter().count(), 1);
+        assert_eq!(held(&shadow, node(1)), Some("again"));
+    }
+
+    #[test]
+    fn a_removed_entry_frees_its_slot() {
+        let mut shadow = Shadow::new(2);
+        shadow.insert(node(1), "first");
+        shadow.remove(node(1));
+
+        assert!(shadow.is_empty());
+
+        shadow.insert(node(2), "second");
+        shadow.insert(node(3), "third");
+        assert_eq!(
+            held(&shadow, node(2)),
+            Some("second"),
+            "the slot really freed"
+        );
+    }
 }

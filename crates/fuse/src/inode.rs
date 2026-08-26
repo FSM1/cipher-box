@@ -20,7 +20,10 @@ pub const ROOT_INO: u64 = 1;
 /// remount renumbers from scratch.
 #[derive(Debug)]
 pub struct InodeTable {
-    by_ino: HashMap<u64, NodeId>,
+    /// Per inode, its node and how many references the kernel is holding — one
+    /// per entry reply it took, given back in FORGET. A binding dropped while
+    /// the kernel still holds one would answer `ENOENT` for a node that exists.
+    by_ino: HashMap<u64, (NodeId, u64)>,
     by_node: HashMap<NodeId, u64>,
     root: Option<NodeId>,
     next: u64,
@@ -55,26 +58,48 @@ impl InodeTable {
         if let Some(stale) = self.by_node.insert(root, ROOT_INO) {
             self.by_ino.remove(&stale);
         }
-        self.by_ino.insert(ROOT_INO, root);
+        self.by_ino.insert(ROOT_INO, (root, 0));
         previous.is_some()
     }
 
-    /// Drop a binding the kernel has forgotten. Safe because numbers are never
-    /// reused: a later [`ino_for`](Self::ino_for) mints a fresh one rather
-    /// than resurrecting this. The root is never forgotten — the mount would
-    /// lose its anchor.
-    pub fn forget(&mut self, ino: u64) {
+    /// Take one kernel reference on `node`, minting its inode number on first
+    /// sight — what every reply that hands the kernel an entry owes, and the
+    /// count [`forget`](Self::forget) draws down.
+    pub fn looked_up(&mut self, node: NodeId) -> u64 {
+        let ino = self.ino_for(node);
+        if let Some((_, held)) = self.by_ino.get_mut(&ino) {
+            *held += 1;
+        }
+        ino
+    }
+
+    /// Give back `count` of the kernel's references to `ino`, reporting the
+    /// node whose binding that dropped — nothing while references remain, and
+    /// nothing for an inode the kernel never took one on.
+    ///
+    /// Dropping is safe because numbers are never reused: a later
+    /// [`ino_for`](Self::ino_for) mints a fresh one rather than resurrecting
+    /// this. The root is never forgotten — the mount would lose its anchor.
+    pub fn forget(&mut self, ino: u64, count: u64) -> Option<NodeId> {
         if ino == ROOT_INO {
-            return;
+            return None;
         }
-        if let Some(node) = self.by_ino.remove(&ino) {
-            self.by_node.remove(&node);
+        let (_, held) = self.by_ino.get_mut(&ino)?;
+        if *held == 0 {
+            return None;
         }
+        *held = held.saturating_sub(count);
+        if *held > 0 {
+            return None;
+        }
+        let (node, _) = self.by_ino.remove(&ino)?;
+        self.by_node.remove(&node);
+        Some(node)
     }
 
     /// The node bound to `ino`, if the session has seen it.
     pub fn node(&self, ino: u64) -> Option<NodeId> {
-        self.by_ino.get(&ino).copied()
+        self.by_ino.get(&ino).map(|(node, _)| *node)
     }
 
     /// The inode number for `node`, allocating one on first sight.
@@ -84,7 +109,7 @@ impl InodeTable {
         }
         let ino = self.next;
         self.next += 1;
-        self.by_ino.insert(ino, node);
+        self.by_ino.insert(ino, (node, 0));
         self.by_node.insert(node, ino);
         ino
     }
@@ -159,19 +184,60 @@ mod tests {
     fn a_forgotten_inode_is_dropped_and_never_resurrected() {
         let mut table = InodeTable::new();
         table.bind_root(node(0));
-        let ino = table.ino_for(node(7));
+        let ino = table.looked_up(node(7));
 
-        table.forget(ino);
+        assert_eq!(table.forget(ino, 1), Some(node(7)));
 
         assert_eq!(table.node(ino), None);
         assert_ne!(table.ino_for(node(7)), ino, "numbers are never reused");
+    }
+
+    /// The kernel counts every entry reply it took and gives them back in one
+    /// or several FORGETs; a binding dropped before the last of them would
+    /// answer `ENOENT` for a node the kernel is still addressing.
+    #[test]
+    fn a_binding_survives_until_the_last_reference_is_given_back() {
+        let mut table = InodeTable::new();
+        table.bind_root(node(0));
+        let ino = table.looked_up(node(7));
+        assert_eq!(table.looked_up(node(7)), ino, "one binding, two references");
+
+        assert_eq!(table.forget(ino, 1), None, "one reference is still held");
+        assert_eq!(table.node(ino), Some(node(7)));
+
+        assert_eq!(table.forget(ino, 1), Some(node(7)));
+        assert_eq!(table.node(ino), None);
+    }
+
+    /// A FORGET carrying more than the mount believes it handed out is the
+    /// kernel's count, not a reason to leave the binding pinned forever.
+    #[test]
+    fn an_oversized_forget_drops_the_binding_rather_than_wrapping() {
+        let mut table = InodeTable::new();
+        table.bind_root(node(0));
+        let ino = table.looked_up(node(7));
+
+        assert_eq!(table.forget(ino, u64::MAX), Some(node(7)));
+        assert_eq!(table.node(ino), None);
+    }
+
+    /// A listing mints inode numbers without the kernel taking a reference on
+    /// any of them, so a FORGET can name one it never looked up.
+    #[test]
+    fn an_inode_the_kernel_never_referenced_is_not_dropped_by_a_forget() {
+        let mut table = InodeTable::new();
+        table.bind_root(node(0));
+        let ino = table.ino_for(node(7));
+
+        assert_eq!(table.forget(ino, 1), None);
+        assert_eq!(table.node(ino), Some(node(7)));
     }
 
     #[test]
     fn the_root_is_never_forgotten() {
         let mut table = InodeTable::new();
         table.bind_root(node(0));
-        table.forget(ROOT_INO);
+        assert_eq!(table.forget(ROOT_INO, u64::MAX), None);
         assert_eq!(table.node(ROOT_INO), Some(node(0)));
     }
 

@@ -180,14 +180,17 @@ impl Reply for ReplyEntry {
 }
 
 impl ReplyEntry {
-    /// Reply to a request with the given entry
-    pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64) {
+    /// Reply to a request with the given entry.
+    ///
+    /// `fuse_entry_out` times the name binding and the attributes in separate
+    /// fields, so a caller keeping one cache without the other can say so.
+    pub fn entry(self, entry_ttl: &Duration, attr_ttl: &Duration, attr: &FileAttr, generation: u64) {
         self.reply.send_ll(&ll::Response::new_entry(
             ll::INodeNo(attr.ino),
             ll::Generation(generation),
             &attr.into(),
-            *ttl,
-            *ttl,
+            *entry_ttl,
+            *attr_ttl,
         ));
     }
 
@@ -395,12 +398,22 @@ impl Reply for ReplyCreate {
 }
 
 impl ReplyCreate {
-    /// Reply to a request with the given entry
-    pub fn created(self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
+    /// Reply to a request with the given entry, timing the name binding and the
+    /// attributes separately the way [`ReplyEntry::entry`] does.
+    pub fn created(
+        self,
+        entry_ttl: &Duration,
+        attr_ttl: &Duration,
+        attr: &FileAttr,
+        generation: u64,
+        fh: u64,
+        flags: u32,
+    ) {
         #[cfg(feature = "abi-7-40")]
         assert_eq!(flags & FOPEN_PASSTHROUGH, 0);
         self.reply.send_ll(&ll::Response::new_create(
-            ttl,
+            entry_ttl,
+            attr_ttl,
             &attr.into(),
             ll::Generation(generation),
             ll::FileHandle(fh),
@@ -856,7 +869,7 @@ mod test {
             flags: 0x99,
             blksize: 0xbb,
         };
-        reply.entry(&ttl, &attr, 0xaa);
+        reply.entry(&ttl, &ttl, &attr, 0xaa);
     }
 
     #[test]
@@ -1032,7 +1045,7 @@ mod test {
             flags: 0x99,
             blksize: 0xdd,
         };
-        reply.created(&ttl, &attr, 0xaa, 0xbb, 0xcc);
+        reply.created(&ttl, &ttl, &attr, 0xaa, 0xbb, 0xcc);
     }
 
     #[test]

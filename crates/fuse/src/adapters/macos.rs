@@ -48,7 +48,6 @@ fn profile() -> MountProfile {
             attribute_cache: false,
             case_insensitive_lookup: false,
         },
-        resumable_readdir: false,
     }
 }
 
@@ -108,10 +107,5 @@ mod tests {
                 .options
                 .contains(&MountOption::CUSTOM(NFC_NAMES.to_owned()))
         );
-    }
-
-    #[test]
-    fn a_directory_walk_is_single_pass() {
-        assert!(!profile().resumable_readdir);
     }
 }

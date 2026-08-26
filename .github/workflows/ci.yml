@@ -626,12 +626,12 @@ jobs:
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
 
-      # The vendored fuser's socket-read patch travels with the regression test
-      # blueprint/desktop.md commits to, and this is where that test fires. The
+      # The vendored fuser's patches travel with the regression tests
+      # blueprint/desktop.md commits to, and this is where those tests fire. The
       # general cargo jobs exclude the crate, so this is its only gate. The one
       # upstream test that mounts a real filesystem is skipped: this job is
       # kernel-free by design.
-      - name: Vendored fuser socket-read patch
+      - name: Vendored fuser patches
         run: cargo test -p fuser -- --skip mnt::test::mount_unmount
 
   # The WASM parity gate. Runs the core KAT + property suite in three shapes —
