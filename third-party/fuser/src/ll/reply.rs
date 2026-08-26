@@ -80,8 +80,8 @@ impl<'a> Response<'a> {
         ino: INodeNo,
         generation: Generation,
         attr: &Attr,
-        attr_ttl: Duration,
         entry_ttl: Duration,
+        attr_ttl: Duration,
     ) -> Self {
         let d = abi::fuse_entry_out {
             nodeid: ino.into(),
@@ -637,57 +637,81 @@ mod test {
         }
     }
 
+    /// The two lifetimes an encoded reply carries, read back from the wire
+    /// offsets the kernel reads them from. `fuse_entry_out` leads both
+    /// `fuse_entry_out` and `fuse_create_out` replies, so one reader serves
+    /// both.
+    fn entry_lifetimes(encoded: &[u8]) -> (Duration, Duration) {
+        let field = |offset: usize| std::mem::size_of::<abi::fuse_out_header>() + offset;
+        let secs = |offset: usize| {
+            u64::from_ne_bytes(encoded[field(offset)..field(offset) + 8].try_into().unwrap())
+        };
+        let nsecs = |offset: usize| {
+            u32::from_ne_bytes(encoded[field(offset)..field(offset) + 4].try_into().unwrap())
+        };
+        (
+            Duration::new(
+                secs(std::mem::offset_of!(abi::fuse_entry_out, entry_valid)),
+                nsecs(std::mem::offset_of!(abi::fuse_entry_out, entry_valid_nsec)),
+            ),
+            Duration::new(
+                secs(std::mem::offset_of!(abi::fuse_entry_out, attr_valid)),
+                nsecs(std::mem::offset_of!(abi::fuse_entry_out, attr_valid_nsec)),
+            ),
+        )
+    }
+
     /// `fuse_entry_out` times the name binding and the attributes in separate
-    /// fields, so collapsing the pair onto one value would zero both.
+    /// fields: the kernel caches the name for `entry_valid` and the attributes
+    /// for `attr_valid`. Asserting the encodings merely *differ* would pass
+    /// against a reply that lands each lifetime in the other's field, so pin
+    /// the fields themselves.
     #[test]
     fn an_entry_reply_times_the_name_binding_apart_from_the_attributes() {
         let attr: Attr = distinguishable_attr().into();
         let zero = Duration::ZERO;
         let live = Duration::new(0x8765, 0x4321);
+        let other = Duration::new(0x1357, 0x2468);
         let encoded = |entry_ttl, attr_ttl| {
-            Response::new_entry(INodeNo(0x11), Generation(0xaa), &attr, entry_ttl, attr_ttl)
-                .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec)
+            entry_lifetimes(
+                &Response::new_entry(INodeNo(0x11), Generation(0xaa), &attr, entry_ttl, attr_ttl)
+                    .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec),
+            )
         };
 
-        assert_ne!(
-            encoded(live, zero),
-            encoded(zero, live),
-            "the two lifetimes are not one field"
-        );
-        assert_ne!(
-            encoded(live, zero),
-            encoded(live, live),
-            "the attribute lifetime reaches the wire"
-        );
-        assert_ne!(
-            encoded(live, zero),
-            encoded(zero, zero),
-            "the entry lifetime reaches the wire"
-        );
+        assert_eq!(encoded(live, zero), (live, zero));
+        assert_eq!(encoded(zero, live), (zero, live));
+        assert_eq!(encoded(live, other), (live, other));
+        assert_eq!(encoded(zero, zero), (zero, zero));
     }
 
-    /// `create` answers with an entry too, on the same two lifetimes.
+    /// `create` answers with an entry too, on the same two lifetimes and the
+    /// same field-order obligation.
     #[test]
     fn a_create_reply_times_the_name_binding_apart_from_the_attributes() {
         let attr: Attr = distinguishable_attr().into();
         let zero = Duration::ZERO;
         let live = Duration::new(0x8765, 0x4321);
+        let other = Duration::new(0x1357, 0x2468);
         let encoded = |entry_ttl: Duration, attr_ttl: Duration| {
-            Response::new_create(
-                &entry_ttl,
-                &attr_ttl,
-                &attr,
-                Generation(0xaa),
-                FileHandle(0xbb),
-                0xcc,
-                0,
+            entry_lifetimes(
+                &Response::new_create(
+                    &entry_ttl,
+                    &attr_ttl,
+                    &attr,
+                    Generation(0xaa),
+                    FileHandle(0xbb),
+                    0xcc,
+                    0,
+                )
+                .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec),
             )
-            .with_iovec(RequestId(0xdeadbeef), ioslice_to_vec)
         };
 
-        assert_ne!(encoded(live, zero), encoded(zero, live));
-        assert_ne!(encoded(live, zero), encoded(live, live));
-        assert_ne!(encoded(live, zero), encoded(zero, zero));
+        assert_eq!(encoded(live, zero), (live, zero));
+        assert_eq!(encoded(zero, live), (zero, live));
+        assert_eq!(encoded(live, other), (live, other));
+        assert_eq!(encoded(zero, zero), (zero, zero));
     }
 
     #[test]

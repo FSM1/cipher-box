@@ -1210,11 +1210,15 @@ fn two_walks_over_one_directory_page_independently() {
     );
 }
 
-/// The mount holds nothing for the kernel past the mount itself.
+/// The mount holds nothing for the kernel past the mount itself. The walk is
+/// left unreleased: a released one is already gone before `unmount`, so the
+/// assertion would hold against an `unmount` that frees nothing.
 #[test]
 fn unmounting_holds_no_listing() {
     let (mut core, _adapter) = mount_seeded_pair();
-    listing(&mut core, ROOT_INO);
+    let walk = block_on(core.opendir(ROOT_INO)).expect("opendir");
+    block_on(core.readdir(walk, 0)).expect("readdir");
+    assert_eq!(core.open_directories(), 1);
 
     core.unmount();
 
