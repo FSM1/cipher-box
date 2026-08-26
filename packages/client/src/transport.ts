@@ -39,6 +39,12 @@ export interface EngineTransport {
    */
   start(secret: ArrayBuffer, accountId: string): Promise<void>;
   /**
+   * The account the engine behind this transport holds, where the transport
+   * tracks one (`EngineClient`) — the name of the durable stores a forget
+   * erases. A transport that tracks no session omits it.
+   */
+  signedInAccount?(): string | null;
+  /**
    * Sends one command and resolves with what it produced. Any buffer the
    * descriptor owns is moved rather than copied ([`commandTransfer`]), so a
    * credential inside one exists in a single realm at a time.

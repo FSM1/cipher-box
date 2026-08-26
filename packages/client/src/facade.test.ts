@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { EngineFacade } from './facade.js';
 import {
@@ -48,10 +48,20 @@ class FakeTransport implements EngineTransport {
   aborts: WriteHandle[] = [];
   listeners: EngineEventListener[] = [];
   closed = false;
+  /** The account the engine holds; `null` once no session backs it. */
+  account: string | null = TEST_ACCOUNT_ID;
+  /** Every container gone by the time the worker was torn down. */
+  goneAtClose: string[] = [];
+
+  constructor(private readonly origin: { gone: string[] } = { gone: [] }) {}
 
   start(secret: ArrayBuffer): Promise<void> {
     this.started.push(secret);
     return Promise.resolve();
+  }
+
+  signedInAccount(): string | null {
+    return this.account;
   }
 
   /** What the next `command` resolves with; the engine answers `done` by default. */
@@ -131,8 +141,45 @@ class FakeTransport implements EngineTransport {
 
   close(): void {
     this.closed = true;
+    this.goneAtClose = [...this.origin.gone];
   }
 }
+
+/**
+ * A stub origin holding `containers`, dropping each name a sweep takes. The
+ * names that survive are what the AC reads.
+ */
+function stubOrigin(containers: string[]): { containers: string[]; gone: string[] } {
+  const origin = { containers, gone: [] as string[] };
+  const take = (name: string): void => {
+    origin.containers = origin.containers.filter((entry) => entry !== name);
+    origin.gone.push(name);
+  };
+  vi.stubGlobal('indexedDB', {
+    deleteDatabase: (name: string) => {
+      const request: { onsuccess?: () => void } = {};
+      queueMicrotask(() => {
+        take(name);
+        request.onsuccess?.();
+      });
+      return request as unknown as IDBOpenDBRequest;
+    },
+  });
+  vi.stubGlobal('navigator', {
+    storage: {
+      getDirectory: () =>
+        Promise.resolve({
+          removeEntry: (name: string) => {
+            take(name);
+            return Promise.resolve();
+          },
+        }),
+    },
+  });
+  return origin;
+}
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('EngineFacade', () => {
   it('forwards the login secret to the transport on start', async () => {
@@ -161,6 +208,76 @@ describe('EngineFacade', () => {
     await new EngineFacade(transport).forgetDevice();
     expect(transport.commands.map((entry) => entry.kind)).toEqual(['forgetDevice']);
     expect(transport.closed).toBe(false);
+  });
+
+  it('leaves no container named for the account a forget erased', async () => {
+    const other = 'acct02';
+    const origin = stubOrigin([
+      `cipherbox-${TEST_ACCOUNT_ID}-floors`,
+      `cipherbox-${TEST_ACCOUNT_ID}-staging`,
+      `cipherbox-${TEST_ACCOUNT_ID}-staging-staged`,
+      `cipherbox-${TEST_ACCOUNT_ID}-snapshot-cache`,
+      `cipherbox-${other}-floors`,
+      `cipherbox-${other}-staging`,
+    ]);
+    const facade = new EngineFacade(new FakeTransport(origin));
+
+    await facade.forgetDevice();
+    await facade.logout();
+
+    expect(origin.containers.filter((name) => name.includes(TEST_ACCOUNT_ID))).toEqual([]);
+    // Another account on the same profile keeps everything it named.
+    expect(origin.containers.sort()).toEqual(
+      [`cipherbox-${other}-floors`, `cipherbox-${other}-staging`].sort()
+    );
+  });
+
+  it('erases the containers a host with its own prefix named', async () => {
+    const origin = stubOrigin([
+      `engine-7-${TEST_ACCOUNT_ID}-floors`,
+      `engine-7-${TEST_ACCOUNT_ID}-staging`,
+      `engine-7-${TEST_ACCOUNT_ID}-staging-staged`,
+      `engine-7-${TEST_ACCOUNT_ID}-snapshot-cache`,
+    ]);
+    const facade = new EngineFacade(new FakeTransport(origin), { dbPrefix: 'engine-7' });
+
+    await facade.forgetDevice();
+    await facade.logout();
+
+    expect(origin.containers).toEqual([]);
+  });
+
+  it('erases the containers only once the worker is torn down', async () => {
+    const transport = new FakeTransport(stubOrigin([`cipherbox-${TEST_ACCOUNT_ID}-floors`]));
+    const facade = new EngineFacade(transport);
+
+    await facade.forgetDevice();
+    await facade.logout();
+
+    // An IndexedDB delete blocks while the engine holds a connection.
+    expect(transport.goneAtClose).toEqual([]);
+    expect(transport.closed).toBe(true);
+  });
+
+  it('erases the account the engine held when the forget landed, not after teardown', async () => {
+    const origin = stubOrigin([`cipherbox-${TEST_ACCOUNT_ID}-floors`]);
+    const transport = new FakeTransport(origin);
+    const facade = new EngineFacade(transport);
+
+    await facade.forgetDevice();
+    // Teardown clears the session; the name the sweep needs is already latched.
+    transport.account = null;
+    await facade.logout();
+
+    expect(origin.containers).toEqual([]);
+  });
+
+  it('leaves the containers of a plain logout alone', async () => {
+    const origin = stubOrigin([`cipherbox-${TEST_ACCOUNT_ID}-floors`]);
+
+    await new EngineFacade(new FakeTransport(origin)).logout();
+
+    expect(origin.gone).toEqual([]);
   });
 
   /** Unlike a logout, an erase that did not land must not report success. */

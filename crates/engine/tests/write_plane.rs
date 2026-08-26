@@ -7064,7 +7064,7 @@ fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: 
     block_on(publish_settings(
         &device.record_store,
         &api,
-        &device.floor_store,
+        &device.floors(&SECRET),
         &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
@@ -7759,7 +7759,7 @@ fn a_withheld_settings_record_refuses_the_write_instead_of_widening_it() {
     // device adopted one before, so its absence now is suppression.
     block_on(
         alice
-            .floor_store
+            .floors(&SECRET)
             .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 3),
     )
     .expect("the floor raises");
@@ -7909,7 +7909,7 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
     // record is being withheld, not absent.
     block_on(
         alice
-            .floor_store
+            .floors(&SECRET)
             .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 3),
     )
     .expect("the floor raises");
@@ -8480,7 +8480,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
     let refused_save = block_on(publish_settings(
         &alice.record_store,
         &api,
-        &alice.floor_store,
+        &alice.floors(&SECRET),
         &alice.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,

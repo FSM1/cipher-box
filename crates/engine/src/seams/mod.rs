@@ -28,7 +28,9 @@ mod snapshot_cache;
 mod staging_store;
 
 pub use credential_store::CredentialStore;
-pub use floor_store::{FloorNamespace, FloorRaise, FloorStore};
+pub use floor_store::{
+    FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, OwnerScopedFloorStore,
+};
 pub use http::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,
     bearer_header, check_bearer,
@@ -121,8 +123,11 @@ pub trait SeamTypes {
 /// struct field — a compile error, not a silent behavior gap. There are no
 /// optional seams and no defaults.
 pub struct SeamSet<T: SeamTypes> {
-    /// Durable monotonic-max floors; fail-closed regression rejection.
-    pub floor_store: T::FloorStore,
+    /// Durable monotonic-max floors; fail-closed regression rejection. Wrapped
+    /// so every key is namespaced by the identity the engine starts under —
+    /// two accounts on one device share a store but never a floor
+    /// ([`OwnerScopedFloorStore`]).
+    pub floor_store: OwnerScopedFloorStore<T::FloorStore>,
     /// GET/PUT of opaque signed record bytes against the endpoint set.
     pub record_transport: T::RecordTransport,
     /// HTTP for the API client, trustless gateway, and BYO providers.

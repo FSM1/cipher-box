@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
+use crate::seams::{FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, SeamError, SeamResult};
 
 #[derive(Default)]
 struct Inner {
@@ -16,9 +16,15 @@ struct Inner {
 }
 
 impl Inner {
+    /// Matched on the key with the owner tag stripped: the engine reaches this
+    /// store through
+    /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), and an
+    /// injector names the floor, not the identity holding it. Exact past that,
+    /// so a fault injected for one name cannot fire for another that ends in it.
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
+        let floor = key.get(OWNER_TAG_LEN..)?;
         self.failing
-            .contains(key)
+            .contains(floor)
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
     }
 }

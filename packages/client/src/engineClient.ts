@@ -16,6 +16,7 @@
  *   it, an accepted op survives the handoff.
  */
 
+import type { AccountStoreNaming } from './accountStores.js';
 import {
   BROADCAST_CHANNEL_NAME,
   newClientId,
@@ -64,7 +65,12 @@ export interface LoginSecret {
   accountId: string;
 }
 
-export interface EngineClientConfig {
+/**
+ * Carries {@link AccountStoreNaming} because the forget sweep runs in this
+ * realm, after the worker is gone: spell the containers the same way the host
+ * config the worker was spawned with does, or the erase misses them.
+ */
+export interface EngineClientConfig extends AccountStoreNaming {
   /** `navigator.locks` (or a test double). */
   locks: LockManagerLike;
   /** Builds the broadcast channel; each tab keeps one for its lifetime. */
@@ -196,7 +202,7 @@ export class EngineClient implements EngineTransport {
       config.onError
     );
 
-    this.facade = new EngineFacade(this);
+    this.facade = new EngineFacade(this, config);
   }
 
   currentRole(): EngineClientRole {

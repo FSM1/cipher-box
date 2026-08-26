@@ -94,7 +94,9 @@ pub use rotation::{
     prune_expired_grants, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
     rotate_scope, run_sweep_job,
 };
-pub use seams::{OwedRetire, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes};
+pub use seams::{
+    OwedRetire, OwnerScopedFloorStore, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes,
+};
 pub use settings::{
     DefaultsReason, Placement, PlacementDecision, PlacementRefusal, PlacementSource,
     SessionPlacement, SettingsLoad, SettingsPublishError, SettingsRefusal, VaultSettings,

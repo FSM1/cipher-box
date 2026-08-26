@@ -14,6 +14,8 @@ export function createEngineClient(secretSource: SecretSource): EngineClient {
   const host = engineHostConfig(import.meta.env, { wasmModuleUrl, wasmBinaryUrl });
   return new EngineClient({
     locks: navigator.locks,
+    // The same spelling the worker opens the stores under, from the same config.
+    dbPrefix: host.dbPrefix,
     spawnWorker: () => spawnEngineWorker(host),
     secretSource,
     onError: (error) => console.error('[engine]', error.message),

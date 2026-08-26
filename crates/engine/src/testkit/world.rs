@@ -1,7 +1,9 @@
 //! The fake world — shared network state plus per-device seam sets, the
 //! seed of the simulation harness (blueprint/testing.md).
 
-use crate::seams::{EndpointId, SeamSet, SeamTypes};
+use cipherbox_core::kdf;
+
+use crate::seams::{EndpointId, OwnerScopedFloorStore, SeamSet, SeamTypes};
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
     InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore,
@@ -101,11 +103,20 @@ pub struct FakeDevice {
 }
 
 impl FakeDevice {
+    /// This device's floors as the engine keys them for the session `secret`
+    /// starts: [`OwnerScopedFloorStore`] namespaces every key by identity, so a
+    /// raw read of the shared store finds none of the engine's own floors.
+    pub fn floors(&self, secret: &[u8]) -> OwnerScopedFloorStore<InMemoryFloorStore> {
+        let floors = OwnerScopedFloorStore::new(self.floor_store.clone());
+        floors.bind(&kdf::enc_subkey(secret));
+        floors
+    }
+
     /// The complete seam set for this device, ready for
     /// [`crate::facade::Engine::new`].
     pub fn seam_set(&self) -> SeamSet<FakeSeamTypes> {
         SeamSet {
-            floor_store: self.floor_store.clone(),
+            floor_store: OwnerScopedFloorStore::new(self.floor_store.clone()),
             record_transport: self.record_store.clone(),
             http: self.http.clone(),
             scheduler: self.scheduler.clone(),

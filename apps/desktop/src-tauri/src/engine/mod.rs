@@ -207,6 +207,9 @@ enum Request {
     /// durable stores survive both, but the credential survives only the quit
     /// (blueprint/desktop.md, "Lifecycle").
     ForgetCredentials,
+    /// The same, plus the last-account id — the one datum of this account the
+    /// keyring holds outside the account directory a forget removes.
+    ForgetCredentialsAndAccount,
 }
 
 /// The live session: the channel into its engine thread, the thread itself, and
@@ -248,17 +251,23 @@ impl EngineHost {
     /// session as [`stop`](Self::stop) does. The durable stores survive by
     /// design; an explicit "forget this device" is what sweeps them.
     ///
-    /// The token is deleted here and not revoked at the API: revocation is the
-    /// facade's `Command::Logout`, which the engine does not implement yet.
+    /// The token is deleted here rather than revoked at the API: this shell ends
+    /// a session by closing the channel to the engine thread, so nothing on this
+    /// path reaches the facade.
     ///
     /// Idempotent — the login flow calls it on paths where no session is live.
     pub fn log_out(&self) {
+        self.end_session(Request::ForgetCredentials);
+    }
+
+    /// Hands the engine thread its last request and ends the session.
+    fn end_session(&self, last: Request) {
         if let Ok(live) = self.live.lock()
             && let Some(live) = live.as_ref()
         {
             // Not awaited: the join in `stop` is what proves the thread reached
             // it, and a closed channel means it never will.
-            let _ = live.requests.send(Request::ForgetCredentials);
+            let _ = live.requests.send(last);
         }
         self.stop();
     }
@@ -277,7 +286,7 @@ impl EngineHost {
             .map_err(|_| POISONED)?
             .as_ref()
             .map(|live| live.account_dir.clone());
-        self.log_out();
+        self.end_session(Request::ForgetCredentialsAndAccount);
         let Some(account_dir) = account_dir else {
             return Err(NO_SESSION.to_owned());
         };
@@ -591,6 +600,10 @@ async fn serve(
             Woke::Request(Some(Request::ForgetCredentials)) => {
                 let _ = credentials.clear_refresh_token().await;
             }
+            Woke::Request(Some(Request::ForgetCredentialsAndAccount)) => {
+                let _ = credentials.clear_refresh_token().await;
+                let _ = credentials.clear_last_account_id().await;
+            }
             Woke::Event(Some(event)) => {
                 if absorb_burst(&mut projection, &mut warnings, &mut events, event).await {
                     repaint(&shell, &mut projection, &warnings, &mut parked).await;
@@ -885,6 +898,41 @@ mod tests {
                 host.log_out();
                 assert!(acked.exists(), "a logout keeps what the next mount drains");
             }
+        }
+    }
+
+    /// The keyring holds one datum outside the account directory a forget
+    /// removes — the last-account id — so only a forget asks the engine thread
+    /// to drop it. A logout must not: it is what names the account directory on
+    /// the next launch.
+    #[test]
+    fn only_a_forget_asks_the_engine_thread_to_drop_the_last_account_id() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        for forget in [false, true] {
+            let (requests, mut inbox) = mpsc::unbounded_channel();
+            let host = EngineHost {
+                live: Mutex::new(Some(Live {
+                    requests,
+                    thread: std::thread::spawn(|| {}),
+                    account_dir: dir.path().join("account"),
+                })),
+            };
+
+            if forget {
+                host.forget_device().expect("a live session is forgettable");
+            } else {
+                host.log_out();
+            }
+
+            let asked = inbox.try_recv().expect("the last request was sent");
+            assert!(
+                match asked {
+                    Request::ForgetCredentialsAndAccount => forget,
+                    Request::ForgetCredentials => !forget,
+                    _ => false,
+                },
+                "a forget drops the account id and a logout keeps it"
+            );
         }
     }
 

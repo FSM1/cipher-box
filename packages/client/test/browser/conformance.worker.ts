@@ -30,7 +30,8 @@ import {
   toHex,
 } from '../../src/seams/index.js';
 import { deleteDatabase, openDatabase } from '../../src/seams/idb.js';
-import { makeBrowserSeams, reclaimOtherAccountStores } from '../../src/worker/browserSeams.js';
+import { eraseAccountStores, reclaimOtherAccountStores } from '../../src/accountStores.js';
+import { makeBrowserSeams } from '../../src/worker/browserSeams.js';
 import type { HarnessWorkerScope } from './workerScope.js';
 
 interface SeamOutcome {
@@ -364,6 +365,101 @@ async function runStoreReclaimBehavioral(): Promise<void> {
   }
 }
 
+/**
+ * Forgetting this device, over real IndexedDB and OPFS. Emptying the stores is
+ * not enough — a container still named `<prefix>-<accountPublicKey>-…` is a
+ * durable fingerprint binding the profile to an account. A fake cannot show the
+ * ordering this depends on: an IndexedDB delete *blocks* while any connection is
+ * open, so the erase lands only once the engine holding them is gone.
+ */
+async function runAccountEraseBehavioral(): Promise<void> {
+  const config = {
+    recordEndpoints: [`${scope.location.origin}/routing`],
+    // Fresh per run: a previous run's residue would answer for the erase.
+    dbPrefix: `erase-${Date.now()}`,
+  };
+  // The account a forget erases, its stores closed exactly as a torn-down
+  // engine leaves them.
+  const forgotten = 'forgottenaccount';
+  // The same account while its engine still stands, holding its stores open.
+  const held = 'heldaccount';
+  // Another account on the profile: the erase is one account's, never the
+  // profile's.
+  const kept = 'keptaccount';
+  const suffixes = ['floors', 'staging', 'snapshot-cache'];
+  const named = (account: string, suffix: string): string =>
+    `${config.dbPrefix}-${account}-${suffix}`;
+  const stagedDir = (account: string): string => `${named(account, 'staging')}-staged`;
+
+  const root = await navigator.storage.getDirectory();
+  for (const suffix of suffixes) {
+    const db = await openDatabase(named(forgotten, suffix), 1, (opened) => {
+      opened.createObjectStore(suffix === 'staging' ? 'ops' : 'records', {
+        autoIncrement: suffix === 'staging',
+      });
+    });
+    db.close();
+  }
+  const debris = await root.getDirectoryHandle(stagedDir(forgotten), { create: true });
+  const staged = await debris.getFileHandle('c3d4', { create: true });
+  const handle = await staged.createSyncAccessHandle();
+  handle.write(new Uint8Array(2048).fill(7), { at: 0 });
+  handle.flush();
+  handle.close();
+
+  // Seeded through the real seams, so what survives is what production writes.
+  const keptSeams = makeBrowserSeams(config, kept);
+  await keptSeams.floorStore.raiseEpochFloor(new Uint8Array(16), 5);
+  await keptSeams.stagingStore.enqueueOp(new Uint8Array([1, 2]));
+  await keptSeams.stagingStore.putStagedBytes(new Uint8Array([0xcd]), new Uint8Array(32).fill(2));
+  await keptSeams.snapshotCache.put(new Uint8Array(8).fill(1), new Uint8Array([9]));
+
+  const heldSeams = makeBrowserSeams(config, held);
+  await heldSeams.floorStore.raiseEpochFloor(new Uint8Array(16), 7);
+  await heldSeams.snapshotCache.put(new Uint8Array(8).fill(3), new Uint8Array([4]));
+  const blocked = await eraseAccountStores(held, config);
+  for (const suffix of ['floors', 'snapshot-cache']) {
+    if (blocked.includes(named(held, suffix))) {
+      throw new Error(`accountErase: ${suffix} reported gone while its engine held it open`);
+    }
+  }
+
+  const erased = (await eraseAccountStores(forgotten, config)).sort();
+  const expected = [...suffixes.map((suffix) => named(forgotten, suffix)), stagedDir(forgotten)]
+    .slice()
+    .sort();
+  if (erased.join('|') !== expected.join('|')) {
+    throw new Error(`accountErase: erased ${erased.join(',')}, expected ${expected.join(',')}`);
+  }
+
+  // The AC, read off the origin itself: no container name carries the account.
+  const remaining = (await indexedDB.databases()).map((database) => database.name ?? '');
+  for await (const name of root.keys()) remaining.push(name);
+  const fingerprints = remaining.filter((name) => name.includes(forgotten));
+  if (fingerprints.length > 0) {
+    throw new Error(`accountErase: ${fingerprints.join(',')} still names the forgotten account`);
+  }
+  for (const suffix of suffixes) {
+    if (!remaining.includes(named(kept, suffix))) {
+      throw new Error(`accountErase: another account lost its ${suffix} store`);
+    }
+  }
+  if (!remaining.includes(stagedDir(kept))) {
+    throw new Error('accountErase: another account lost its staged bytes');
+  }
+
+  // Present is not enough: the spared account's stores are still serving.
+  if ((await keptSeams.floorStore.epochFloor(new Uint8Array(16))) !== 5) {
+    throw new Error('accountErase: the spared floor store lost its record');
+  }
+  if ((await keptSeams.stagingStore.queuedOps()).length !== 1) {
+    throw new Error('accountErase: the spared staging queue lost its op');
+  }
+  if ((await keptSeams.snapshotCache.get(new Uint8Array(8).fill(1))) === null) {
+    throw new Error('accountErase: the spared snapshot cache lost its entry');
+  }
+}
+
 async function run(seam: string): Promise<void> {
   await init({ module_or_path: wasmUrl });
 
@@ -416,6 +512,10 @@ async function run(seam: string): Promise<void> {
     }
     case 'storeReclaim': {
       await runStoreReclaimBehavioral();
+      return;
+    }
+    case 'accountErase': {
+      await runAccountEraseBehavioral();
       return;
     }
     case 'http': {

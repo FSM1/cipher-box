@@ -12,7 +12,8 @@
  * never import it into the UI realm.
  */
 
-import { makeBrowserSeams, reclaimOtherAccountStores, type BrowserSeams } from './browserSeams.js';
+import { reclaimOtherAccountStores } from '../accountStores.js';
+import { makeBrowserSeams, type BrowserSeams } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';

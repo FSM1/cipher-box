@@ -17,7 +17,7 @@ use cipherbox_desktop_seams::{
 use cipherbox_engine::StagingRetireLedger;
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
-    StagingStore,
+    SeamResult, StagingStore,
 };
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
 use cipherbox_engine::testkit::{block_on, conformance};
@@ -666,32 +666,89 @@ async fn tokio_scheduler_passes_the_scheduler_kit() {
 
 // ---------------------------------------------------------------------------
 // Last-account id — the one datum beyond the refresh token that the desktop
-// CredentialStore holds (blueprint/desktop.md). Exercised on the file double.
+// CredentialStore holds (blueprint/desktop.md). Not on the engine's
+// `CredentialStore` trait, so it has a kit of its own here rather than in
+// `testkit::conformance`.
 // ---------------------------------------------------------------------------
 
+/// One entry point, like the engine's kits: a case reached through a second
+/// function is a case an implementation can omit. `open` must hand back a store
+/// over the same backing on every call, so the reopen leg means something.
+async fn check_last_account_id<S, F>(mut open: F)
+where
+    S: LastAccountId,
+    F: AsyncFnMut() -> S,
+{
+    let store = open().await;
+    assert_eq!(
+        store.load_last_account_id().await.unwrap(),
+        None,
+        "a store that was never written holds no account id"
+    );
+
+    store.store_last_account_id(b"account-7").await.unwrap();
+    assert_eq!(
+        store.load_last_account_id().await.unwrap(),
+        Some(b"account-7".to_vec())
+    );
+    assert_eq!(
+        open().await.load_last_account_id().await.unwrap(),
+        Some(b"account-7".to_vec()),
+        "the stored id survives a reopen — it names the account directory next launch"
+    );
+
+    // Independent of the refresh token: the two are separate entries.
+    store.store_refresh_token(b"tok").await.unwrap();
+    assert_eq!(
+        store.load_last_account_id().await.unwrap(),
+        Some(b"account-7".to_vec())
+    );
+
+    // The forget-this-device leg. Durable, and idempotent: the shell drops it
+    // on a path with no surface left to report a refusal to, so a second clear
+    // must not turn into one.
+    store.clear_last_account_id().await.unwrap();
+    store.clear_last_account_id().await.unwrap();
+    assert_eq!(store.load_last_account_id().await.unwrap(), None);
+    assert_eq!(
+        open().await.load_last_account_id().await.unwrap(),
+        None,
+        "the clear survives reopening the store"
+    );
+    assert_eq!(
+        open().await.load_refresh_token().await.unwrap(),
+        Some(b"tok".to_vec()),
+        "and takes only its own entry with it"
+    );
+}
+
+/// The inherent surface both desktop credential stores carry by hand — the
+/// engine's `CredentialStore` trait has only the refresh-token trio.
+trait LastAccountId: CredentialStore {
+    async fn store_last_account_id(&self, account_id: &[u8]) -> SeamResult<()>;
+    async fn load_last_account_id(&self) -> SeamResult<Option<Vec<u8>>>;
+    async fn clear_last_account_id(&self) -> SeamResult<()>;
+}
+
+impl LastAccountId for FileCredentialStore {
+    async fn store_last_account_id(&self, account_id: &[u8]) -> SeamResult<()> {
+        FileCredentialStore::store_last_account_id(self, account_id).await
+    }
+    async fn load_last_account_id(&self) -> SeamResult<Option<Vec<u8>>> {
+        FileCredentialStore::load_last_account_id(self).await
+    }
+    async fn clear_last_account_id(&self) -> SeamResult<()> {
+        FileCredentialStore::clear_last_account_id(self).await
+    }
+}
+
 #[test]
-fn credential_store_persists_last_account_id() {
+fn file_credential_store_passes_the_last_account_id_kit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("credentials");
-    block_on(async {
-        let store = FileCredentialStore::open(&path).unwrap();
-        assert_eq!(store.load_last_account_id().await.unwrap(), None);
-        store.store_last_account_id(b"account-7").await.unwrap();
-        assert_eq!(
-            store.load_last_account_id().await.unwrap(),
-            Some(b"account-7".to_vec())
-        );
-
-        // Independent of the refresh token.
-        store.store_refresh_token(b"tok").await.unwrap();
-        assert_eq!(
-            store.load_last_account_id().await.unwrap(),
-            Some(b"account-7".to_vec())
-        );
-
-        store.clear_last_account_id().await.unwrap();
-        assert_eq!(store.load_last_account_id().await.unwrap(), None);
-    });
+    block_on(check_last_account_id(async || {
+        FileCredentialStore::open(&path).unwrap()
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -724,9 +781,22 @@ fn real_keyring_credential_store_passes_the_credential_store_kit() {
     }));
 }
 
+impl LastAccountId for cipherbox_desktop_seams::KeyringCredentialStore {
+    async fn store_last_account_id(&self, account_id: &[u8]) -> SeamResult<()> {
+        cipherbox_desktop_seams::KeyringCredentialStore::store_last_account_id(self, account_id)
+            .await
+    }
+    async fn load_last_account_id(&self) -> SeamResult<Option<Vec<u8>>> {
+        cipherbox_desktop_seams::KeyringCredentialStore::load_last_account_id(self).await
+    }
+    async fn clear_last_account_id(&self) -> SeamResult<()> {
+        cipherbox_desktop_seams::KeyringCredentialStore::clear_last_account_id(self).await
+    }
+}
+
 #[test]
 #[ignore = "needs the platform keyring backend; CI runs it with --ignored"]
-fn real_keyring_credential_store_persists_last_account_id() {
+fn real_keyring_credential_store_passes_the_last_account_id_kit() {
     use cipherbox_desktop_seams::KeyringCredentialStore;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -739,16 +809,16 @@ fn real_keyring_credential_store_persists_last_account_id() {
         std::process::id()
     );
 
+    block_on(check_last_account_id(async || {
+        KeyringCredentialStore::new(service.clone()).expect("keyring worker started")
+    }));
+    // The kit leaves the account id cleared; the refresh token it wrote is this
+    // run's own service name and goes with it.
     block_on(async {
-        let store = KeyringCredentialStore::new(service).expect("keyring worker started");
-        assert_eq!(store.load_last_account_id().await.unwrap(), None);
-        store.store_last_account_id(b"acct-xyz").await.unwrap();
-        assert_eq!(
-            store.load_last_account_id().await.unwrap(),
-            Some(b"acct-xyz".to_vec())
-        );
-        // Clean up the keyring entry.
-        store.clear_last_account_id().await.unwrap();
-        assert_eq!(store.load_last_account_id().await.unwrap(), None);
+        KeyringCredentialStore::new(service.clone())
+            .expect("keyring worker started")
+            .clear_refresh_token()
+            .await
+            .unwrap();
     });
 }

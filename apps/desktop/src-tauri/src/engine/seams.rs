@@ -9,7 +9,7 @@ use cipherbox_desktop_seams::{
     ReqwestRecordTransport, TokioScheduler,
 };
 use cipherbox_engine::seams::SeamResult;
-use cipherbox_engine::{Entropy, EntropyError, SeamSet, SeamTypes};
+use cipherbox_engine::{Entropy, EntropyError, OwnerScopedFloorStore, SeamSet, SeamTypes};
 
 use super::config::EngineConfig;
 
@@ -43,7 +43,7 @@ pub fn seam_set(
     keyring_service: &str,
 ) -> SeamResult<SeamSet<DesktopSeamTypes>> {
     Ok(SeamSet::<DesktopSeamTypes> {
-        floor_store: FileFloorStore::open(account_dir.join("floors"))?,
+        floor_store: OwnerScopedFloorStore::new(FileFloorStore::open(account_dir.join("floors"))?),
         record_transport: ReqwestRecordTransport::new(config.record_endpoints.clone())?,
         http: ReqwestHttp::new()?,
         scheduler: TokioScheduler::new(),
