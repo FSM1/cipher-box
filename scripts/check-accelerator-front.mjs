@@ -30,13 +30,74 @@ const CADDY_BUILD = resolve(repoRoot, 'docker/caddy');
 const DEPLOY_WORKFLOW = '.github/workflows/deploy-staging.yml';
 const ACCELERATORS = ['ipfs:8080', 'someguy:8190'];
 const VERIFY_PATH = '/auth/gateway/verify';
-const PATH_NAMING_HEADERS = ['X-Forwarded-Uri', 'X-Forwarded-Method', 'X-Forwarded-Host'];
+/** Anything that would tell the verify leg WHAT is being read, not merely who asks. */
+const PATH_NAMING_HEADERS = [
+  'X-Forwarded-Uri',
+  'X-Forwarded-Method',
+  'X-Forwarded-Host',
+  'Range',
+  'Accept',
+  'Referer',
+  'CF-Ray',
+];
+/** Cloudflare names the caller in headers of its own; CF-Ray joins its logs to a CID. */
+const CALLER_NAMING_HEADERS = [
+  'Authorization',
+  'X-Forwarded-For',
+  'CF-Connecting-IP',
+  'CF-Connecting-IPv6',
+  'CF-Pseudo-IPv4',
+  'CF-EW-Via',
+  'CF-Worker',
+  'CF-IPCountry',
+  'CF-Visitor',
+  'CF-Ray',
+  'CDN-Loop',
+  'True-Client-IP',
+  'X-Real-IP',
+  'Forwarded',
+];
 /** The one leg the blueprint leaves open: a signed IPNS record authenticates itself. */
 const PUBLISH_LEG = { method: 'PUT', path: '/routing/v1/ipns/*' };
 /** Reads present the pseudonym, writes never do — so the gate admits nothing else. */
 const READ_METHODS = ['GET', 'HEAD'];
-/** Resolves through `trusted_proxies`, so the bucket is a caller, not an edge POP. */
-const RATE_LIMIT_KEY = '{http.vars.client_ip}';
+const CLIENT_IP = '{http.vars.client_ip}';
+/** The /64 the caller was delegated, not its chosen /128 (docker/Caddyfile). */
+const RATE_LIMIT_KEY = '{publish_bucket}';
+/**
+ * Cloudflare appends to X-Forwarded-For, so every entry left of the caller's own
+ * is caller-written; CF-Connecting-IP it writes and overwrites itself.
+ */
+const CLIENT_IP_HEADER = 'CF-Connecting-IP';
+/** A zone this loose bounds nothing; the leg carries no token to fall back on. */
+const MAX_PUBLISH_EVENTS = 600;
+/** The limiter's own namespace — it logs refusals whether or not `log_key` is on. */
+const RATE_LIMIT_LOG = 'http.handlers.rate_limit';
+/** cloudflare.com/ips — a hand-mirrored snapshot, so the set is pinned, not counted. */
+const CLOUDFLARE_RANGES = [
+  '173.245.48.0/20',
+  '103.21.244.0/22',
+  '103.22.200.0/22',
+  '103.31.4.0/22',
+  '141.101.64.0/18',
+  '108.162.192.0/18',
+  '190.93.240.0/20',
+  '188.114.96.0/20',
+  '197.234.240.0/22',
+  '198.41.128.0/17',
+  '162.158.0.0/15',
+  '104.16.0.0/13',
+  '104.24.0.0/14',
+  '172.64.0.0/13',
+  '131.0.72.0/22',
+  '2400:cb00::/32',
+  '2606:4700::/32',
+  '2803:f800::/32',
+  '2405:b500::/32',
+  '2405:8100::/32',
+  '2a06:98c0::/29',
+  '2c0f:f248::/32',
+];
 
 const failures = [];
 const check = (ok, message) => {
@@ -52,39 +113,42 @@ function* walk(node, ancestors = []) {
 }
 
 const caddyDir = resolve(process.argv[2] ?? 'docker');
-const built = spawnSync(
-  'docker',
-  ['build', '--quiet', '--file', `${CADDY_BUILD}/Dockerfile`, CADDY_BUILD],
-  { encoding: 'utf8' }
-);
-if (built.status !== 0) {
-  console.error(`${CADDY_BUILD}/Dockerfile does not build:\n${built.stderr ?? built.error}`);
-  process.exitCode = 1;
-  process.exit();
+
+/** Docker, or a readable failure — never a truncated one on a verbose build log. */
+function docker(args, whatFailed) {
+  const run = spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  if (run.status !== 0) {
+    console.error(`${whatFailed}:\n${run.stderr ?? run.error}`);
+    process.exit(1);
+  }
+  return run.stdout.trim();
 }
 
-const adapted = spawnSync(
-  'docker',
-  [
-    'run',
-    '--rm',
-    '-v',
-    `${caddyDir}:/etc/caddy:ro`,
-    built.stdout.trim(),
-    'caddy',
-    'adapt',
-    '--config',
-    '/etc/caddy/Caddyfile',
-  ],
-  { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
-);
-if (adapted.status !== 0) {
-  console.error(`${caddyDir}/Caddyfile does not adapt:\n${adapted.stderr ?? adapted.error}`);
-  process.exitCode = 1;
-  process.exit();
-}
+// CI builds this image once with a layer cache and passes it in; a bare run
+// builds it, so the config is always adapted under the binary that ships.
+const image =
+  process.env.CADDY_IMAGE ??
+  docker(
+    ['build', '--quiet', '--tag', 'cipherbox-caddy:lint', CADDY_BUILD],
+    `${CADDY_BUILD}/Dockerfile does not build`
+  );
 
-const config = JSON.parse(adapted.stdout);
+const config = JSON.parse(
+  docker(
+    [
+      'run',
+      '--rm',
+      '-v',
+      `${caddyDir}:/etc/caddy:ro`,
+      image,
+      'caddy',
+      'adapt',
+      '--config',
+      '/etc/caddy/Caddyfile',
+    ],
+    `${caddyDir}/Caddyfile does not adapt`
+  )
+);
 const nodes = [...walk(config)];
 
 const isVerify = (h) =>
@@ -185,6 +249,16 @@ for (const { node, ancestors } of gates) {
   }
 }
 
+// The limiter logs a line per refusal under a namespace of its own, outside any
+// vhost's access log, so a silent vhost does not cover it.
+const rateLimitSinks = Object.values(config.logging?.logs ?? {}).filter((log) =>
+  (log.include ?? []).includes(RATE_LIMIT_LOG)
+);
+check(
+  rateLimitSinks.length > 0 && rateLimitSinks.every((log) => log.writer?.output === 'discard'),
+  `${RATE_LIMIT_LOG} is not discarded, so a refusal reaches a sink that ships offsite`
+);
+
 // Every proxy to an accelerator is gated, bar the one open publish leg — and none
 // of them carry anything that re-identifies the reader into an upstream's logs,
 // which ship offsite: the pseudonym names the session, the client address the
@@ -196,7 +270,7 @@ for (const { node, ancestors } of nodes) {
 
   const vhost = hostOf(ancestors);
   const deleted = node.headers?.request?.delete ?? [];
-  for (const header of ['Authorization', 'X-Forwarded-For']) {
+  for (const header of CALLER_NAMING_HEADERS) {
     check(
       deleted.includes(header),
       `${vhost}: proxy to ${target} does not strip ${header} before the upstream`
@@ -217,16 +291,35 @@ for (const { node, ancestors } of nodes) {
     `${vhost}: proxy to ${target} reaches an accelerator ungated, and is not the ${PUBLISH_LEG.method} ${PUBLISH_LEG.path} publish leg`
   );
 
-  // The publish leg presents no token by design, so a bounded rate is the only
-  // thing standing between one address and someguy.
-  const zones = [...precursors(chain)]
-    .filter((h) => h.handler === 'rate_limit')
-    .flatMap((h) => Object.values(h.rate_limits ?? {}));
+  const ahead = [...precursors(chain)];
+  const limiters = ahead.filter((h) => h.handler === 'rate_limit');
+  const zones = limiters.flatMap((h) => Object.values(h.rate_limits ?? {}));
   check(zones.length > 0, `${vhost}: the open publish leg runs unrated into ${target}`);
   check(
     zones.every((z) => z.key === RATE_LIMIT_KEY),
-    `${vhost}: a publish-leg rate zone does not key on ${RATE_LIMIT_KEY}, so it buckets every caller behind a proxy together`
+    `${vhost}: a publish-leg rate zone does not key on ${RATE_LIMIT_KEY}, so a caller picks its own bucket`
   );
+  check(
+    zones.every((z) => z.max_events <= MAX_PUBLISH_EVENTS && z.window > 0),
+    `${vhost}: a publish-leg rate zone admits more than ${MAX_PUBLISH_EVENTS} events a window, which bounds nothing`
+  );
+  check(
+    !limiters.some((h) => h.log_key),
+    `${vhost}: the publish rate limiter logs its key, putting a member address in a sink that ships offsite`
+  );
+
+  // The key is only a /64 if something truncates it; a `map` that resolved to a
+  // constant would satisfy the key check above while sharing one bucket.
+  const [derives] = ahead.filter(
+    (h) => h.handler === 'map' && h.destinations?.[0] === RATE_LIMIT_KEY
+  );
+  check(derives !== undefined, `${vhost}: nothing derives ${RATE_LIMIT_KEY} ahead of the limiter`);
+  if (derives !== undefined) {
+    check(
+      derives.source === CLIENT_IP && derives.defaults?.[0] === CLIENT_IP,
+      `${vhost}: the publish bucket is not derived from ${CLIENT_IP}, falling back to it`
+    );
+  }
 }
 
 // Trusting the proxy in front and the API's hop count are one setting in two
@@ -236,54 +329,59 @@ for (const { node, ancestors } of nodes) {
 // count is short, a caller-written entry when it overshoots.
 const servers = Object.entries(config.apps?.http?.servers ?? {});
 check(servers.length > 0, 'no http server in the adapted config');
+const sameSet = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 for (const [name, server] of servers) {
+  const trusted = server.trusted_proxies ?? {};
   check(
-    server.trusted_proxies?.source === 'static' &&
-      (server.trusted_proxies?.ranges ?? []).length > 0,
-    `server ${name}: no static trusted_proxies, so an IP-keyed limit buckets a whole edge POP`
+    trusted.source === 'static' && sameSet(trusted.ranges ?? [], CLOUDFLARE_RANGES),
+    `server ${name}: trusted_proxies is not exactly the Cloudflare set — a broader one makes an outsider a trusted proxy`
   );
-  // Unset, `{client_ip}` is the leftmost X-Forwarded-For entry — the one the
-  // caller writes — and a limit keyed on it hands out buckets on request.
   check(
     server.trusted_proxies_strict === 1,
     `server ${name}: trusted_proxies_strict is off, so {client_ip} is the caller-written X-Forwarded-For entry`
   );
+  check(
+    sameSet(server.client_ip_headers ?? [], [CLIENT_IP_HEADER]),
+    `server ${name}: {client_ip} does not come from ${CLIENT_IP_HEADER}, so a caller behind the same proxy can prepend its own`
+  );
 }
 
-const arriving = [
-  ...new Set(servers.map(([, s]) => ((s.trusted_proxies?.ranges ?? []).length > 0 ? 2 : 1))),
-];
-check(arriving.length <= 1, 'servers disagree on whether the proxy in front is trusted');
-const declared = /^\s*TRUST_PROXY_HOPS=(\d+)\s*$/m.exec(
-  readFileSync(resolve(repoRoot, DEPLOY_WORKFLOW), 'utf8')
+// Trusting the proxy in front and the API's hop count are one setting in two
+// files: an untrusted peer's X-Forwarded-For is replaced by a single entry of
+// Caddy's, a trusted one's is kept with Caddy's beside it.
+const trustedInFront = servers.every(([, s]) => (s.trusted_proxies?.ranges ?? []).length > 0);
+const arriving = trustedInFront ? 2 : 1;
+const declared = readFileSync(resolve(repoRoot, DEPLOY_WORKFLOW), 'utf8').match(
+  /^\s*TRUST_PROXY_HOPS=(\d+)\s*$/gm
 );
-check(declared !== null, `${DEPLOY_WORKFLOW}: the staging env declares no TRUST_PROXY_HOPS`);
-if (declared !== null && arriving.length === 1) {
+check(
+  declared?.length === 1,
+  `${DEPLOY_WORKFLOW}: expected exactly one TRUST_PROXY_HOPS, found ${declared?.length ?? 0}`
+);
+if (declared?.length === 1) {
+  const hops = Number(/(\d+)/.exec(declared[0])[1]);
   check(
-    Number(declared[1]) === arriving[0],
-    `${DEPLOY_WORKFLOW}: TRUST_PROXY_HOPS is ${declared[1]}, but this Caddyfile forwards ${arriving[0]} X-Forwarded-For entries`
+    hops === arriving,
+    `${DEPLOY_WORKFLOW}: TRUST_PROXY_HOPS is ${hops}, but this Caddyfile forwards ${arriving} X-Forwarded-For entries`
   );
 }
 
 // A gateway varies on more than the origin, so setting the field drops the
 // upstream's own members and lets a cache serve one variant for another.
+const appendsVary = new Set();
 for (const { node, ancestors } of nodes) {
   if (node.handler !== 'headers') continue;
-  const vhost = hostOf([...ancestors, node]);
+  const vhost = hostOf(ancestors);
   if (!frontVhosts.has(vhost)) continue;
   check(
     !Object.keys(node.response?.set ?? {}).some((field) => field.toLowerCase() === 'vary'),
     `${vhost}: Vary is set rather than appended, dropping the upstream's own members`
   );
+  if ((node.response?.add?.Vary ?? []).includes('Origin')) appendsVary.add(vhost);
 }
 for (const vhost of frontVhosts) {
   check(
-    nodes.some(
-      ({ node, ancestors }) =>
-        node.handler === 'headers' &&
-        hostOf([...ancestors, node]) === vhost &&
-        (node.response?.add?.Vary ?? []).includes('Origin')
-    ),
+    appendsVary.has(vhost),
     `${vhost}: does not append Vary: Origin beside the per-origin CORS headers`
   );
 }

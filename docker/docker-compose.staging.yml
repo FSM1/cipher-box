@@ -103,8 +103,7 @@ services:
           cpus: '1.0'
 
   caddy:
-    # Built from docker/caddy/Dockerfile: the front's publish-leg rate limiter is
-    # a module stock Caddy does not carry.
+    # Built from docker/caddy/Dockerfile, not stock.
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-caddy:${TAG:-latest}
     restart: unless-stopped
     ports:

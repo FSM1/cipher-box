@@ -127,13 +127,11 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
   it('resolves the member behind Cloudflare and Caddy at two hops', async () => {
     const app = await boot('2');
     expect(await exhaust(app, `${CLIENT}, ${EDGE}`)).toBe(429);
-    // Counting from the peer, a prepended entry stays left of the member: the
-    // two rightmost are both proxy-written, so the bucket cannot be escaped.
     expect((await challenge(app, `${SPOOF}, ${CLIENT}, ${EDGE}`)).status).toBe(429);
     expect((await challenge(app, `${OTHER_CLIENT}, ${EDGE}`)).status).toBe(400);
   });
 
-  /** What the count was before Caddy trusted Cloudflare, and why it moved. */
+  /** One hop short of that chain: every member behind an edge shares its bucket. */
   it('collapses a whole Cloudflare edge into one bucket at one hop', async () => {
     const app = await boot('1');
     expect(await exhaust(app, `${CLIENT}, ${EDGE}`)).toBe(429);
