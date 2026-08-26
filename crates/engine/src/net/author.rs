@@ -25,8 +25,8 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
     ReadBody, Version, decode_grant_section, encode_envelope_within, encode_grant_section,
-    grant_section_bytes, has_grant_section, is_grant_section_over_bound, seal_read_body,
-    set_grant_section, verify_grant_set_bound,
+    envelope_over_bound, grant_section_bytes, has_grant_section, is_grant_section_over_bound,
+    seal_read_body, set_grant_section, verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
@@ -66,14 +66,17 @@ pub enum AuthorError {
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
-    /// The encoded head block exceeds the ceiling every block read enforces
-    /// ([`MAX_RESOLVED_RECORD_BYTES`]). Publishing it would sign a pointer to a
-    /// block this build's own reader always refuses, leaving the node
-    /// permanently unopenable.
+    /// The encoded head met one of the codec's frozen envelope byte bounds —
+    /// the block ceiling every read enforces, or one of the fields inside it.
+    /// Publishing it would sign a pointer to a block this build's own reader
+    /// always refuses, leaving the node permanently unopenable.
     HeadTooLarge {
-        /// The encoded block's size.
+        /// The bounded field's wire name, or `envelope` for the record's total.
+        /// Which one refused is what tells an operator where the bytes went.
+        field: &'static str,
+        /// The refused size.
         size: usize,
-        /// The enforced ceiling.
+        /// The ceiling it met.
         limit: usize,
     },
     /// The authored grant section is past the codec's frozen total bound
@@ -133,8 +136,8 @@ impl AuthorError {
 impl core::fmt::Display for AuthorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "record authoring refused [{}]", self.check())?;
-        if let Self::HeadTooLarge { size, limit } = self {
-            write!(f, ": {size} > {limit}")?;
+        if let Self::HeadTooLarge { field, size, limit } = self {
+            write!(f, ": {field} {size} > {limit}")?;
         }
         Ok(())
     }
@@ -149,6 +152,20 @@ fn grant_section_encode_error(error: CodecError) -> AuthorError {
         AuthorError::GrantSectionTooLarge
     } else {
         AuthorError::Seal(error)
+    }
+}
+
+/// The same split for the envelope's own byte bounds: folding them into the
+/// generic encode error would charge a blocked publish as an encoder fault and
+/// dead-letter it under the wrong reason.
+fn envelope_encode_error(error: CodecError) -> AuthorError {
+    match envelope_over_bound(&error) {
+        Some(bound) => AuthorError::HeadTooLarge {
+            field: bound.field,
+            size: bound.size,
+            limit: bound.limit,
+        },
+        None => AuthorError::Seal(error),
     }
 }
 
@@ -287,17 +304,13 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
     Ok(envelope)
 }
 
-/// Encode the authored envelope within the ceiling every block read enforces
-/// ([`encode_envelope_within`] owns what a cut may take).
+/// Encode the authored envelope within the ceiling every block read enforces —
+/// which the codec refuses at under its own `envelope` bound, so any block that
+/// comes back already fits it ([`encode_envelope_within`] owns what a cut may
+/// take, and refuses only what no cut can shrink).
 fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     let (block, cut) = encode_envelope_within(&mut envelope, MAX_RESOLVED_RECORD_BYTES)
-        .map_err(AuthorError::Seal)?;
-    if block.len() > MAX_RESOLVED_RECORD_BYTES {
-        return Err(AuthorError::HeadTooLarge {
-            size: block.len(),
-            limit: MAX_RESOLVED_RECORD_BYTES,
-        });
-    }
+        .map_err(envelope_encode_error)?;
     let cid = root_block_cid(&block);
     Ok(AuthoredHead {
         envelope,
@@ -731,7 +744,14 @@ mod tests {
             (AuthorError::CommitmentNameMismatch, true),
             (AuthorError::CommitmentSignatureInvalid, true),
             (AuthorError::SectionSignatureInvalid, true),
-            (AuthorError::HeadTooLarge { size: 1, limit: 0 }, false),
+            (
+                AuthorError::HeadTooLarge {
+                    field: "envelope",
+                    size: 1,
+                    limit: 0,
+                },
+                false,
+            ),
             (AuthorError::GrantSectionTooLarge, false),
         ];
         let mut names = std::collections::BTreeSet::new();
@@ -792,9 +812,17 @@ mod tests {
         // build's own reader always rejects — an unopenable node.
         assert!(
             matches!(
-                author_child_envelope(authoring(&folder_past_the_read_cap(), PreservedFields::new()))
-                    .unwrap_err(),
-                AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+                author_child_envelope(authoring(
+                    &folder_past_the_read_cap(),
+                    PreservedFields::new()
+                ))
+                .unwrap_err(),
+                // The sealed read-body is what overflowed, and the refusal says
+                // so rather than reporting only that the head was too big.
+                AuthorError::HeadTooLarge {
+                    field: "readSealed",
+                    ..
+                }
             ),
             "an over-cap head must fail closed on the produce side"
         );
@@ -863,7 +891,10 @@ mod tests {
             .collect();
         assert!(matches!(
             author_child_envelope(authoring(&folder_past_the_read_cap(), carried)).unwrap_err(),
-            AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+            AuthorError::HeadTooLarge {
+                field: "readSealed",
+                ..
+            }
         ));
     }
 

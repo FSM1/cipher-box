@@ -29,24 +29,24 @@ use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX,
     GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry, MAX_BLOCK_BYTES,
-    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_WRITE_BODY_BYTES, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind,
-    Permission, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
-    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput, UNCUTTABLE_KEYS,
-    WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad, decode_ascent_link,
-    decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
-    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_section, encode_grant_set_commitment,
-    encode_override_seed_payload, encode_read_body, encode_recipient_binding, encode_write_body,
-    open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
-    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
-    open_settings_record, seal_content_key, seal_op_record, seal_owner_history_link,
-    seal_owner_local, seal_settings_record, structure_sig_preimage, verify_grant_set,
-    verify_recipient_binding, verify_structure,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
+    MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX,
+    OWNER_LOCAL_V, OwnerLocalKind, Permission, READ_SEALED_ENVELOPE_HEADROOM_BYTES,
+    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    StructureSigInput, UNCUTTABLE_KEYS, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body,
+    build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
+    encode_recipient_binding, encode_write_body, open_ascent_link, open_content_key,
+    open_grant_blob, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
+    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
+    seal_owner_history_link, seal_owner_local, seal_settings_record, structure_sig_preimage,
+    verify_grant_set, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -861,6 +861,9 @@ struct SealManifest {
     critical_key_prefix: String,
     critical_carried_max_bytes: usize,
     uncuttable_keys: Vec<String>,
+    envelope_max_bytes: usize,
+    read_sealed_max_bytes: usize,
+    read_sealed_envelope_headroom_bytes: usize,
     seal: FileCount,
     open_reject: RejectSection,
     read_body_accept: FileCount,
@@ -3448,6 +3451,20 @@ fn the_critical_carried_budget_is_frozen_in_the_manifest() {
     // Frozen beside the prefix: honouring the marker alone would cut these and
     // publish a record every reader rejects.
     assert_eq!(m.seal.uncuttable_keys, UNCUTTABLE_KEYS);
+}
+
+/// The envelope's two byte bounds, frozen for the reason the section's and the
+/// write-body's are: a cross-language implementation must refuse at the same
+/// byte, and the vectors that would prove either are two megabytes long.
+#[test]
+fn the_envelope_size_bounds_are_frozen_in_the_manifest() {
+    let m = manifest();
+    assert_eq!(m.seal.envelope_max_bytes, MAX_BLOCK_BYTES);
+    assert_eq!(m.seal.read_sealed_max_bytes, MAX_READ_SEALED_BYTES);
+    assert_eq!(
+        m.seal.read_sealed_envelope_headroom_bytes,
+        READ_SEALED_ENVELOPE_HEADROOM_BYTES
+    );
 }
 
 #[test]

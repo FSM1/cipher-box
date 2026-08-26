@@ -3855,7 +3855,11 @@ mod tests {
                 Halt::Unclassified,
             ),
             (
-                AuthorError::HeadTooLarge { size: 2, limit: 1 },
+                AuthorError::HeadTooLarge {
+                    field: "envelope",
+                    size: 2,
+                    limit: 1,
+                },
                 Halt::HeadOversized,
             ),
             (AuthorError::GrantSectionTooLarge, Halt::HeadOversized),
