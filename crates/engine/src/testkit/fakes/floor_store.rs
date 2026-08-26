@@ -16,9 +16,14 @@ struct Inner {
 }
 
 impl Inner {
+    /// Matched on the key's tail: the engine reaches this store through
+    /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), which
+    /// prefixes the owner tag, and an injector names the floor, not the
+    /// identity holding it.
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
         self.failing
-            .contains(key)
+            .iter()
+            .any(|failing| key.ends_with(failing))
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
     }
 }

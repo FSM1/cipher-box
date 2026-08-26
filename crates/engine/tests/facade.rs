@@ -40,13 +40,6 @@ fn secret() -> LoginSecret {
     LoginSecret::new(SECRET.to_vec())
 }
 
-/// Commands whose pipeline slice has not landed. The grant, share and rotation
-/// arms are wired and refuse with their own typed verdicts, so only the session
-/// slice is left on the catch-all.
-fn unimplemented_commands() -> Vec<(Command, &'static str)> {
-    vec![(Command::Logout, "logout")]
-}
-
 /// The wired grant, share and rotation arms, each named with the rule that
 /// refuses them on an unprovisioned session — a typed verdict of their own, not
 /// the catch-all. Asserting them here is what keeps the catch-all's remaining
@@ -228,23 +221,23 @@ fn an_empty_secret_is_rejected() {
     assert_eq!(block_on(engine.start(secret())), Ok(()));
 }
 
+/// The session slice was the last on the typed-unimplemented catch-all: logout
+/// ends the session, and every later command refuses as unstarted.
 #[test]
-fn unimplemented_commands_return_their_typed_error() {
+fn logout_ends_the_session_rather_than_reporting_itself_unimplemented() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
 
-    for (command, expected_name) in unimplemented_commands() {
-        let result = block_on(engine.command(command));
-        assert_eq!(
-            result,
-            Err(EngineError::Unimplemented {
-                command: expected_name
-            }),
-            "`{expected_name}` must reject as typed-unimplemented until its slice lands"
-        );
-    }
+    assert_eq!(
+        block_on(engine.command(Command::Logout)),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        block_on(engine.command(Command::ManualRefresh)),
+        Err(EngineError::NotStarted)
+    );
 }
 
 /// Every grant, share and rotation arm is wired: each refuses with the rule its

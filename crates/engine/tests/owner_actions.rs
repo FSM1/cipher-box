@@ -582,7 +582,7 @@ fn a_manual_rotation_cuts_the_read_plane_and_raises_the_durable_floor() {
         "over the record the account was reading"
     );
     assert_eq!(
-        block_on(floor::read_epoch_floor(&alice.floor_store, &SCOPE)).expect("floor read"),
+        block_on(floor::read_epoch_floor(&alice.floors(&SECRET), &SCOPE)).expect("floor read"),
         Some(EPOCH + 1),
         "and the durable revocation boundary followed it"
     );
@@ -607,7 +607,7 @@ fn a_second_manual_rotation_cuts_again_rather_than_refusing_a_current_scope() {
         );
         assert_eq!(published_read_epoch(&world, &blocks, ROOT), expected_epoch);
         assert_eq!(
-            block_on(floor::read_epoch_floor(&alice.floor_store, &SCOPE)).expect("floor read"),
+            block_on(floor::read_epoch_floor(&alice.floors(&SECRET), &SCOPE)).expect("floor read"),
             Some(expected_epoch),
         );
     }
@@ -769,7 +769,7 @@ fn the_sharing_read_reports_the_contact_book_and_the_scopes_committed_grants() {
     );
     assert_eq!(
         block_on(floor::write_epoch_floor(
-            &fx.owner_device.floor_store,
+            &fx.owner_device.floors(&SECRET),
             &fx.folder.0
         ))
         .expect("floor read"),

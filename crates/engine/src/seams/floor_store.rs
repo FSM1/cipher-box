@@ -1,6 +1,12 @@
 //! `FloorStore` — durable monotonic-max floors (blueprint/engine.md).
 
-use super::SeamResult;
+use core::cell::Cell;
+use std::rc::Rc;
+
+use cipherbox_core::suite::x25519::X25519Secret;
+
+use super::{SeamError, SeamResult};
+use crate::sync::owner_tag;
 
 /// Durable monotonic-max per-scope epoch floors and per-name sequence
 /// floors; regression rejects fail-closed.
@@ -111,5 +117,166 @@ impl FloorRaise {
             key: key.into(),
             value,
         }
+    }
+}
+
+/// One identity's view of a device-wide [`FloorStore`]: every key is prefixed
+/// with that identity's [`owner_tag`], the way `sync::owner_scoped_key`
+/// namespaces the staging stores.
+///
+/// A vault's own root scope id is the anchored all-zero id16 for **every**
+/// account, so unprefixed epoch floors are shared by two identities on one
+/// device: one account's raised write-epoch floor then refuses the other's
+/// honest rotations, and a monotonic ratchet has no way back down.
+///
+/// The tag is bound once, from the session the engine derives at
+/// [`start`](crate::facade::Engine::start). Every read and every raise before
+/// that refuses — a key read out of the wrong namespace answers "no floor",
+/// which is fail-open on the gate's epoch stage.
+#[derive(Clone)]
+pub struct OwnerScopedFloorStore<F> {
+    inner: F,
+    /// Shared across clones so the handles the spawned loops hold see the bind,
+    /// whichever side of it they were cloned on.
+    tag: Rc<Cell<Option<[u8; 32]>>>,
+}
+
+impl<F> OwnerScopedFloorStore<F> {
+    /// An unbound view over `inner` — [`bind`](Self::bind) before any floor.
+    pub fn new(inner: F) -> Self {
+        Self {
+            inner,
+            tag: Rc::new(Cell::new(None)),
+        }
+    }
+
+    /// Binds this view to the identity `enc_secret` belongs to.
+    pub(crate) fn bind(&self, enc_secret: &X25519Secret) {
+        self.tag.set(Some(owner_tag(enc_secret)));
+    }
+
+    /// `key` under the bound identity, or a refusal when none is bound.
+    fn scoped(&self, key: &[u8]) -> SeamResult<Vec<u8>> {
+        let Some(tag) = self.tag.get() else {
+            return Err(SeamError::new("floor_store: no identity is bound"));
+        };
+        let mut scoped = Vec::with_capacity(tag.len() + key.len());
+        scoped.extend_from_slice(&tag);
+        scoped.extend_from_slice(key);
+        Ok(scoped)
+    }
+}
+
+impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
+    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.epoch_floor(&self.scoped(scope_id)?).await
+    }
+
+    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        self.inner
+            .raise_epoch_floor(&self.scoped(scope_id)?, epoch)
+            .await
+    }
+
+    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.sequence_floor(&self.scoped(ipns_name)?).await
+    }
+
+    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        self.inner
+            .raise_sequence_floor(&self.scoped(ipns_name)?, sequence)
+            .await
+    }
+
+    /// Scopes each key and hands the batch on whole, so the backing's own
+    /// atomicity (or roll-forward) still covers the raises as one commit.
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
+        let scoped = raises
+            .iter()
+            .map(|raise| {
+                Ok(FloorRaise {
+                    namespace: raise.namespace,
+                    key: self.scoped(&raise.key)?,
+                    value: raise.value,
+                })
+            })
+            .collect::<SeamResult<Vec<_>>>()?;
+        self.inner.commit_floors(&scoped).await
+    }
+
+    /// Device-scoped, like the [`Command::ForgetDevice`] it serves: the seams
+    /// never interpret their contents, so no per-identity filter could make the
+    /// erase complete.
+    ///
+    /// [`Command::ForgetDevice`]: crate::facade::Command::ForgetDevice
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.clear().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::InMemoryFloorStore;
+
+    use cipherbox_core::kdf;
+
+    /// The vault's own root scope id — the same anchored value for every
+    /// account, which is why the two views below collide without the tag.
+    const ROOT_SCOPE: [u8; 16] = [0u8; 16];
+    const NAME: &[u8] = b"k51-scope-root-name";
+
+    fn view(
+        shared: &InMemoryFloorStore,
+        secret: &[u8],
+    ) -> OwnerScopedFloorStore<InMemoryFloorStore> {
+        let view = OwnerScopedFloorStore::new(shared.clone());
+        view.bind(&kdf::enc_subkey(secret));
+        view
+    }
+
+    #[test]
+    fn two_identities_on_one_store_share_no_floor() {
+        let shared = InMemoryFloorStore::default();
+        let alice = view(&shared, &[7u8; 32]);
+        let bob = view(&shared, &[9u8; 32]);
+
+        block_on(alice.raise_epoch_floor(&ROOT_SCOPE, 9)).expect("the floor raises");
+        block_on(alice.raise_sequence_floor(NAME, 4)).expect("the floor raises");
+        block_on(alice.commit_floors(&[FloorRaise::epoch(ROOT_SCOPE.as_slice(), 11)]))
+            .expect("the batch commits");
+
+        assert_eq!(
+            block_on(bob.epoch_floor(&ROOT_SCOPE)).expect("floor read"),
+            None,
+            "a second identity provisioning here must not inherit the first's floor"
+        );
+        assert_eq!(
+            block_on(bob.sequence_floor(NAME)).expect("floor read"),
+            None
+        );
+        block_on(bob.raise_epoch_floor(&ROOT_SCOPE, 1)).expect("the floor raises");
+        assert_eq!(
+            block_on(alice.epoch_floor(&ROOT_SCOPE)).expect("floor read"),
+            Some(11),
+            "and the first identity's ratchet is untouched by the second's"
+        );
+    }
+
+    /// Fail-closed, not fail-open: an unscoped read would answer "no floor",
+    /// which the gate's epoch stage reads as nothing to enforce.
+    #[test]
+    fn an_unbound_view_refuses_every_floor() {
+        let unbound = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+
+        assert!(block_on(unbound.epoch_floor(&ROOT_SCOPE)).is_err());
+        assert!(block_on(unbound.raise_epoch_floor(&ROOT_SCOPE, 1)).is_err());
+        assert!(block_on(unbound.sequence_floor(NAME)).is_err());
+        assert!(block_on(unbound.raise_sequence_floor(NAME, 1)).is_err());
+        assert!(block_on(unbound.commit_floors(&[FloorRaise::sequence(NAME, 1)])).is_err());
+        // The erase is device-scoped, and a device that never started is
+        // exactly the one that needs forgetting.
+        assert!(block_on(unbound.clear()).is_ok());
     }
 }

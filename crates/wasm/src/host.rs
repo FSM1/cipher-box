@@ -20,8 +20,9 @@ use std::rc::Rc;
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
-    ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, SeamSet, SeamTypes,
-    StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
+    ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, OwnerScopedFloorStore,
+    SeamSet, SeamTypes, StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile,
+    WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -130,9 +131,9 @@ impl EngineHandle {
         let api_base_url = ApiBaseUrl::parse(api_base_url.as_deref().unwrap_or_default())?;
 
         let seam_set = SeamSet::<WebSeamTypes> {
-            floor_store: FloorStoreAdapter {
+            floor_store: OwnerScopedFloorStore::new(FloorStoreAdapter {
                 js: take_seam::<JsFloorStoreSeam>(&seams, "floorStore")?,
-            },
+            }),
             record_transport: RecordTransportAdapter {
                 js: take_seam::<JsRecordTransportSeam>(&seams, "recordTransport")?,
             },

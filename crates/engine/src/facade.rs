@@ -84,8 +84,9 @@ use crate::rotation::{
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, RecordTransport, Scheduler,
-    SeamError, SeamResult, SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
+    RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, SnapshotCache,
+    StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -1768,7 +1769,7 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     <T as SeamTypes>::RecordTransport,
     <T as SeamTypes>::Http,
     <T as SeamTypes>::CredentialStore,
-    <T as SeamTypes>::FloorStore,
+    OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
     <T as SeamTypes>::Scheduler,
     Box<dyn Entropy>,
 >;
@@ -2857,6 +2858,8 @@ impl<T: SeamTypes> Engine<T> {
         }
         // Pure derivation from the injected secret — no clock, no RNG.
         let session = SessionIdentity::derive(&secret)?;
+        // Before the first floor read: an unbound view refuses every one.
+        self.seams.floor_store.bind(session.enc_subkey());
 
         // The one shared client for login, publish, and renewal. Login is
         // fail-closed: a rejected login returns before the session is committed
@@ -3108,36 +3111,38 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// The gate every entry point shares: a forget latches the instance
-    /// terminal, and an engine that never started has nothing to serve.
+    /// terminal, and an engine that never started — or whose session a logout
+    /// ended — has nothing to serve.
     fn live_session(&self) -> Result<(), EngineError> {
-        match (self.forgotten, self.started) {
+        match (self.forgotten, self.started && self.session.is_some()) {
             (true, _) => Err(EngineError::Forgotten),
             (_, false) => Err(EngineError::NotStarted),
             _ => Ok(()),
         }
     }
 
-    /// [`Command::ForgetDevice`]: stop the session, then erase every durable
-    /// seam.
+    /// [`Command::Logout`]: end the session and revoke the credential it
+    /// authenticated with. The durable seams survive by design
+    /// (blueprint/web-client.md "Logout") — [`forget_device`](Self::forget_device)
+    /// is this and their erase.
     ///
-    /// The sweep is last, and `shut_down` drops the session-alive latch before
-    /// it: a floor raise or cache put from a pass still in flight would
-    /// otherwise land behind the erase and re-seed the device with state it just
-    /// disowned. Those passes hold [`LiveSeam`] handles, which is what makes the
-    /// latch bind them ([`Scheduler::spawn`] cannot cancel or join).
+    /// The revoke is best-effort and outside any verdict: it is the one leg that
+    /// needs the network, and an offline logout must still end the local
+    /// session. On web the refresh credential is an HTTP-only cookie no seam can
+    /// reach, so a server-side revoke is the only thing that ends it, and it
+    /// runs *before* `shut_down` seals the bearer the endpoint authenticates
+    /// with — an unauthenticated revoke leaves the cookie live.
     ///
-    /// Every seam is swept even after one refuses, and the first refusal is what
-    /// the caller sees.
-    async fn forget_device(&mut self) -> Result<(), EngineError> {
-        self.forgotten = true;
+    /// `session = None` is what [`live_session`](Self::live_session) reads: the
+    /// instance serves nothing afterwards, and the alive latch `shut_down` drops
+    /// is never re-armed, so a logged-out engine is replaced rather than reused.
+    ///
+    /// Returns the persisted credential's drop, which is a verdict rather than
+    /// best-effort: a refresh token the store still holds outlives the session
+    /// it belongs to. `ApiClient::logout` drops it too, but only on the path
+    /// where the server answered.
+    async fn log_out(&mut self) -> SeamResult<()> {
         let api = self.api.take();
-
-        // Best-effort, before the seams and outside the verdict: this is the
-        // one leg that needs the network, and the erase must land offline. On
-        // web the refresh credential is an HTTP-only cookie no seam can reach,
-        // so a server-side revoke is the only thing that ends it. It runs
-        // *before* `shut_down`, which seals the bearer the endpoint
-        // authenticates with — an unauthenticated revoke leaves the cookie live.
         if let Some(api) = &api {
             let _ = api.logout().await;
         }
@@ -3146,14 +3151,31 @@ impl<T: SeamTypes> Engine<T> {
         // Dropped here, at the terminal owner: `shut_down` seals what the loops
         // share, and these are the engine's own copies (security rule 7). The
         // render goes with them — it is plaintext metadata about the vault this
-        // device is disowning.
+        // session is leaving.
         drop(api);
         self.session = None;
         let root = self.snapshot.borrow().root;
         *self.snapshot.borrow_mut() = Snapshot::new(root);
 
+        self.seams.credential_store.clear_refresh_token().await
+    }
+
+    /// [`Command::ForgetDevice`]: a [`log_out`](Self::log_out), then the erase
+    /// of every durable seam that a logout deliberately leaves standing.
+    ///
+    /// The sweep is last, and `log_out` drops the session-alive latch before it:
+    /// a floor raise or cache put from a pass still in flight would otherwise
+    /// land behind the erase and re-seed the device with state it just
+    /// disowned. Those passes hold [`LiveSeam`] handles, which is what makes the
+    /// latch bind them ([`Scheduler::spawn`] cannot cancel or join).
+    ///
+    /// Every seam is swept even after one refuses, and the first refusal is what
+    /// the caller sees.
+    async fn forget_device(&mut self) -> Result<(), EngineError> {
+        self.forgotten = true;
+
         [
-            self.seams.credential_store.clear_refresh_token().await,
+            self.log_out().await,
             self.seams.staging_store.clear().await,
             self.seams.snapshot_cache.clear().await,
             self.seams.floor_store.clear().await,
@@ -3298,7 +3320,7 @@ impl<T: SeamTypes> Engine<T> {
         session: &'a SessionIdentity,
         owner_identity: &'a EcdsaVerifier,
         scope_id: [u8; 16],
-    ) -> RootAdopter<'a, T::Http, T::FloorStore> {
+    ) -> RootAdopter<'a, T::Http, OwnerScopedFloorStore<T::FloorStore>> {
         RootAdopter::new(
             &self.gateway,
             &self.seams.http,
@@ -4064,6 +4086,11 @@ where {
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
+            Command::Logout => self
+                .log_out()
+                .await
+                .map(|()| CommandOutcome::Done)
+                .map_err(EngineError::from_seam),
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
             }),
@@ -7754,21 +7781,32 @@ mod tests {
         assert_eq!(block_on(engine.view()).unwrap().statfs().nodes, 3);
     }
 
-    /// The catch-all's remaining coverage, asserted rather than inferred: every
-    /// grant, share and rotation arm is wired, so a command that still reports
-    /// `Unimplemented` names a slice that genuinely has not landed.
+    /// Two accounts on one browser profile or one desktop share a floor store,
+    /// and the vault root scope id is the anchored all-zero id16 for both — so
+    /// the engine keys its floors by identity, or the second account provisions
+    /// against a ratchet it cannot lower (blueprint/engine.md "Floor law").
     #[test]
-    fn logout_is_the_only_command_left_unimplemented() {
-        let (mut engine, _events) = started();
+    fn a_second_identity_on_one_device_inherits_no_floor_from_the_first() {
+        const ROOT_SCOPE: [u8; 16] = [0u8; 16];
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        block_on(engine.seams.floor_store.raise_epoch_floor(&ROOT_SCOPE, 9)).unwrap();
+
         assert_eq!(
-            block_on(engine.command(Command::Logout)),
-            Err(EngineError::Unimplemented { command: "logout" }),
+            block_on(device.floors(&[9u8; 32]).epoch_floor(&ROOT_SCOPE)).unwrap(),
+            None,
+            "the second identity mints against no floor of the first's"
+        );
+        assert_eq!(
+            block_on(device.floors(&[7u8; 32]).epoch_floor(&ROOT_SCOPE)).unwrap(),
+            Some(9),
+            "and start bound the store to the identity that raised it"
         );
     }
 
-    /// "Forget this device": the erase a logout deliberately does not do
-    /// (blueprint/web-client.md "Logout").
-    mod forget_device {
+    /// Ending a session: the logout every forget composes, and the erase only a
+    /// forget does (blueprint/web-client.md "Logout").
+    mod session_end {
         use super::*;
 
         use crate::seams::AUTHORIZATION;
@@ -7800,6 +7838,62 @@ mod tests {
             let (mut engine, device, events) = loaded();
             block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
             (engine, device, events)
+        }
+
+        /// Forget is logout plus the erase, structurally rather than by
+        /// documentation: the same teardown runs for both, and only forget
+        /// follows it with the seam sweep.
+        #[test]
+        fn logout_ends_the_session_and_leaves_every_durable_seam() {
+            let (mut engine, device, _events) = started_and_loaded();
+            // Staged after the start: cold start collects what the seeded queue
+            // no longer references, and a logout must spare what is still live.
+            block_on(device.staging_store.put_staged_bytes(b"live", b"staged")).unwrap();
+
+            assert_eq!(
+                block_on(engine.command(Command::Logout)),
+                Ok(CommandOutcome::Done)
+            );
+
+            block_on(async {
+                assert_eq!(
+                    device.floor_store.epoch_floor(b"scope").await.unwrap(),
+                    Some(4),
+                    "floors survive a logout by design — they are this device's replay bar"
+                );
+                assert_eq!(
+                    device.floor_store.sequence_floor(b"name").await.unwrap(),
+                    Some(9)
+                );
+                assert_eq!(
+                    device.staging_store.staged_bytes(b"live").await.unwrap(),
+                    Some(b"staged".to_vec())
+                );
+                assert!(device.snapshot_cache.get(b"key").await.unwrap().is_some());
+                assert_eq!(
+                    device.credential_store.load_refresh_token().await.unwrap(),
+                    None,
+                    "the credential the session authenticated with does not outlive it"
+                );
+            });
+        }
+
+        /// The session is over, not merely idle: an engine a logout ended has
+        /// nothing left to authenticate a command with.
+        #[test]
+        fn a_logged_out_engine_serves_nothing_and_cannot_be_restarted() {
+            let (mut engine, _device, _events) = started_and_loaded();
+            block_on(engine.command(Command::Logout)).unwrap();
+
+            assert_eq!(
+                block_on(engine.command(Command::ManualRefresh)),
+                Err(EngineError::NotStarted)
+            );
+            assert_eq!(
+                block_on(engine.start(LoginSecret::new(vec![7u8; 32]))),
+                Err(EngineError::AlreadyStarted),
+                "the alive latch is never re-armed, so a host builds a new engine"
+            );
         }
 
         #[test]
@@ -9512,7 +9606,12 @@ mod tests {
             tick(&world, &device, &mut tasks);
             assert!(engine.scope_read_seeds.borrow().contains_key(&SCOPE));
 
-            block_on(device.floor_store.raise_epoch_floor(&SCOPE, EPOCH + 1)).unwrap();
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_epoch_floor(&SCOPE, EPOCH + 1),
+            )
+            .unwrap();
             tick(&world, &device, &mut tasks);
 
             assert!(
@@ -9609,7 +9708,11 @@ mod tests {
             tick(&world, &device, &mut tasks);
 
             assert_eq!(
-                block_on(floor::write_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                block_on(floor::write_epoch_floor(
+                    &device.floors(&CAP_SECRET),
+                    &SCOPE
+                ))
+                .unwrap(),
                 Some(EPOCH + 1),
                 "the polled consult advanced the write-epoch floor on sight",
             );
@@ -9640,7 +9743,7 @@ mod tests {
             let consult = |anchor| {
                 block_on(consult_pointers(
                     &device.record_store,
-                    &device.floor_store,
+                    &device.floors(&CAP_SECRET),
                     &engine.sweep_keys,
                     &events,
                     &RefCell::new(BTreeMap::new()),
@@ -9757,7 +9860,7 @@ mod tests {
             assert!(engine.scope_write_seeds.borrow().contains_key(&SCOPE));
 
             block_on(floor::advance_write_epoch_on_sight(
-                &device.floor_store,
+                &device.floors(&CAP_SECRET),
                 &SCOPE,
                 EPOCH + 1,
             ))
@@ -10357,7 +10460,7 @@ mod tests {
                 // The child's sequence floor advanced...
                 assert_eq!(
                     block_on(floor::sequence_floor(
-                        &device.floor_store,
+                        &device.floors(&CAP_SECRET),
                         child_name().as_str().as_bytes(),
                     ))
                     .unwrap(),
@@ -10366,7 +10469,7 @@ mod tests {
                 // ...but the scope read-epoch floor did not move: it advances
                 // only from gate-adopted roots.
                 assert_eq!(
-                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    block_on(floor::read_epoch_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
                     Some(EPOCH),
                     "a child unseal must not raise the scope read-epoch floor"
                 );
@@ -10390,7 +10493,7 @@ mod tests {
                 poll_tasks_once(&mut tasks); // the resolve tick runs one pass
                 assert_eq!(
                     block_on(floor::sequence_floor(
-                        &device.floor_store,
+                        &device.floors(&CAP_SECRET),
                         root_name.as_str().as_bytes(),
                     ))
                     .unwrap(),
@@ -10522,7 +10625,7 @@ mod tests {
                 );
                 assert_eq!(
                     block_on(floor::sequence_floor(
-                        &device.floor_store,
+                        &device.floors(&CAP_SECRET),
                         child_name().as_str().as_bytes(),
                     ))
                     .unwrap(),
@@ -10530,7 +10633,7 @@ mod tests {
                     "the at-floor re-open advanced no sequence floor"
                 );
                 assert_eq!(
-                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    block_on(floor::read_epoch_floor(&device.floors(&CAP_SECRET), &SCOPE)).unwrap(),
                     Some(EPOCH),
                     "the at-floor re-open advanced no epoch floor"
                 );
