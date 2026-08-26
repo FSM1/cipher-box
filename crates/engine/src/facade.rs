@@ -2959,10 +2959,10 @@ impl<T: SeamTypes> Engine<T> {
         reconcile_staging(
             &self.seams.staging_store,
             &self.live_blocks,
-            PreservedBounds::new(
-                self.storage_policy.preserved_budget_bytes(),
-                self.profile.preserved_dead_letter_ttl,
+            PreservedBounds::at(
                 self.seams.scheduler.now(),
+                &self.storage_policy,
+                &self.profile,
             ),
         )
         .await;
@@ -3802,7 +3802,7 @@ where {
                             gateway: &gateway,
                             placement: &decision,
                             profile: &profile,
-                            preserved_budget_bytes: storage_policy.preserved_budget_bytes(),
+                            storage_policy: &storage_policy,
                             live_blocks: &live_blocks,
                             content_profile: &content_profile,
                             entropy: &entropy,
@@ -3832,11 +3832,7 @@ where {
                         reconcile_staging(
                             &staging,
                             &live_blocks,
-                            PreservedBounds::new(
-                                storage_policy.preserved_budget_bytes(),
-                                profile.preserved_dead_letter_ttl,
-                                scheduler.now(),
-                            ),
+                            PreservedBounds::at(scheduler.now(), &storage_policy, &profile),
                         )
                         .await;
                     }

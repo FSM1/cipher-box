@@ -13,11 +13,11 @@ struct Inner {
     fail_queued_ops: bool,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
-    staged_write_budget: Option<(Vec<u8>, u64)>,
-    destructive_write_budget: Option<(Vec<u8>, u64)>,
-    partial_write_budget: Option<(Vec<u8>, u64)>,
-    staged_removal_budget: Option<(Vec<u8>, u64)>,
-    dropped_removal_budget: Option<(Vec<u8>, u64)>,
+    staged_write_budget: Option<Arm>,
+    destructive_write_budget: Option<Arm>,
+    partial_write_budget: Option<Arm>,
+    staged_removal_budget: Option<Arm>,
+    dropped_removal_budget: Option<Arm>,
     key_listings: u64,
 }
 
@@ -71,7 +71,14 @@ impl InMemoryStagingStore {
     /// Lets `budget` writes at `staging_key` through, fails the next one, then
     /// disarms — a caller dropped at an exact step whose retry still proceeds.
     pub fn interrupt_staged_write_after(&self, staging_key: &[u8], budget: u64) {
-        self.inner.lock().expect("lock").staged_write_budget = Some((staging_key.to_vec(), budget));
+        self.inner.lock().expect("lock").staged_write_budget =
+            Some(Arm::exact(staging_key, budget));
+    }
+
+    /// The same, over every key under `prefix` — for a family whose member the
+    /// test cannot name in advance, like the per-version upload marks.
+    pub fn interrupt_staged_write_family_after(&self, prefix: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").staged_write_budget = Some(Arm::family(prefix, budget));
     }
 
     /// Fails the next write at `staging_key` past `budget` **after** dropping
@@ -79,7 +86,7 @@ impl InMemoryStagingStore {
     /// replacement is not failure-atomic.
     pub fn destroy_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").destructive_write_budget =
-            Some((staging_key.to_vec(), budget));
+            Some(Arm::exact(staging_key, budget));
     }
 
     /// Fails the next write at `staging_key` past `budget`, landing half of the
@@ -88,14 +95,14 @@ impl InMemoryStagingStore {
     /// a create.
     pub fn strand_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").partial_write_budget =
-            Some((staging_key.to_vec(), budget));
+            Some(Arm::exact(staging_key, budget));
     }
 
     /// The removal counterpart of [`Self::interrupt_staged_write_after`]: the
     /// other side of every crash window between a durable write and a release.
     pub fn interrupt_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_removal_budget =
-            Some((staging_key.to_vec(), budget));
+            Some(Arm::exact(staging_key, budget));
     }
 
     /// How many whole-key-space enumerations this store has served. A desktop
@@ -111,25 +118,57 @@ impl InMemoryStagingStore {
     /// durability barrier leaves behind after a crash.
     pub fn drop_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").dropped_removal_budget =
-            Some((staging_key.to_vec(), budget));
+            Some(Arm::exact(staging_key, budget));
+    }
+}
+
+/// One armed one-shot failure: which key it answers for, and how many calls it
+/// lets through first. Matching is **exact** unless the arming site asked for a
+/// family, so widening one injector cannot silently fire another's arm on a key
+/// that merely shares a prefix.
+struct Arm {
+    key: Vec<u8>,
+    budget: u64,
+    family: bool,
+}
+
+impl Arm {
+    fn exact(key: &[u8], budget: u64) -> Self {
+        Self {
+            key: key.to_vec(),
+            budget,
+            family: false,
+        }
+    }
+
+    fn family(prefix: &[u8], budget: u64) -> Self {
+        Self {
+            key: prefix.to_vec(),
+            budget,
+            family: true,
+        }
+    }
+
+    fn answers_for(&self, staging_key: &[u8]) -> bool {
+        match self.family {
+            true => staging_key.starts_with(&self.key),
+            false => staging_key == self.key,
+        }
     }
 }
 
 /// Charge one call at `staging_key` against a one-shot injected failure.
 /// `true` when this is the call that must fail, which also disarms it. Each
 /// injector holds one armed key, so arming a second replaces the first.
-/// `key` matches by **prefix**, so a test can arm a whole key family — the
-/// per-version upload marks — before it knows which member the engine will
-/// write.
-fn interrupts(budget: &mut Option<(Vec<u8>, u64)>, staging_key: &[u8]) -> bool {
+fn interrupts(budget: &mut Option<Arm>, staging_key: &[u8]) -> bool {
     match budget {
-        Some((key, _)) if !staging_key.starts_with(key) => false,
-        Some((_, 0)) => {
+        Some(arm) if !arm.answers_for(staging_key) => false,
+        Some(Arm { budget: 0, .. }) => {
             *budget = None;
             true
         }
-        Some((_, remaining)) => {
-            *remaining -= 1;
+        Some(arm) => {
+            arm.budget -= 1;
             false
         }
         None => false,

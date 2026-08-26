@@ -71,6 +71,7 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
+use crate::storage_policy::StoragePolicy;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -79,9 +80,10 @@ use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::staging::{
-    LiveBlocks, Preservation, PreservedBounds, collect_orphans, preserve_dead_letter,
+    LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter, reconcile_staging_over,
     release_version_blocks, version_leaf_cids,
 };
+use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
 use crate::sync::tick::ResolveMode;
 
@@ -304,29 +306,6 @@ impl From<PublishHalt> for Halt {
 /// root, or a leaf is gone, and no retry brings any of them back.
 const CONTENT_LOST: Halt = Halt::Permanent(DeadLetterReason::ContentUnrecoverable);
 
-/// The staging-key prefix one version's upload progress is marked under.
-///
-/// Without a mark, a leaf missing before the first present one is
-/// indistinguishable from one a previous pass uploaded — so an evicted or
-/// deleted prefix would publish a version whose manifest names blocks nothing
-/// holds. **One key per version**, so a second content op cannot erase the
-/// first's progress, and a dead letter's verdict is still decidable against the
-/// version's own mark long after another op has taken the queue head.
-///
-/// Kept short for [`RETIRE_LEDGER_PREFIX`]'s reason: the desktop store spells a
-/// staging key as a hex filename, at twice its byte length.
-///
-/// [`RETIRE_LEDGER_PREFIX`]: crate::net::RETIRE_LEDGER_PREFIX
-pub const UPLOAD_MARK_PREFIX: &[u8] = b"cbx/um/";
-
-/// The key one version's upload mark lives at. The root CID is the key, so it is
-/// not written into the value.
-pub fn upload_mark_key(root_cid: &[u8]) -> Vec<u8> {
-    let mut key = UPLOAD_MARK_PREFIX.to_vec();
-    key.extend_from_slice(root_cid);
-    key
-}
-
 /// How many non-confirming publish attempts one op gets before it dead-letters.
 ///
 /// Bounds a pathology, not a network outage — only [`Halt::Attempt`] and
@@ -424,11 +403,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
     /// Bounds what the preserved dead-letter set may hold, so abandoned versions
-    /// cannot eat the device's staging budget
-    /// ([`StoragePolicy::preserved_budget_bytes`]).
-    pub(crate) preserved_budget_bytes: u64,
-    /// Staging keys open write handles hold, which the pass's orphan sweep must
-    /// not collect.
+    /// cannot eat the device's staging budget.
+    pub(crate) storage_policy: &'a StoragePolicy,
+    /// Staging keys open write handles hold, which the pass's sweep must not
+    /// collect.
     pub(crate) live_blocks: &'a RefCell<LiveBlocks>,
     /// The framing profile a version's pinned size is derived under — the same
     /// one the upload framed it at.
@@ -642,9 +620,10 @@ where
         // on the order of ten thousand keys, and each of these was listing the
         // whole set for itself. Taken after the queue loop, so a debt the pass
         // just journaled is in it.
+        // A store that will not enumerate leaves both the ledger and the sweep
+        // for the next pass: "no debt" and "no residue" are claims this one
+        // cannot make.
         let Ok(staged) = self.staging.staged_keys().await else {
-            // A ledger the store would not read leaves the last figure
-            // standing: "no debt" is a claim this pass cannot make.
             return report;
         };
         if let Some(owed) = drain_owed_retires(
@@ -660,24 +639,14 @@ where
         {
             self.pending_reclaim.set(owed);
         }
-        collect_orphans(
+        reconcile_staging_over(
             self.staging,
             self.live_blocks,
             &staged,
-            self.preserved_bounds(),
+            PreservedBounds::at(self.scheduler.now(), self.storage_policy, self.profile),
         )
         .await;
         report
-    }
-
-    /// What the preserved dead-letter set is held to this pass, with the age
-    /// bound resolved at the scheduler seam rather than inside the sweep.
-    fn preserved_bounds(&self) -> PreservedBounds {
-        PreservedBounds::new(
-            self.preserved_budget_bytes,
-            self.profile.preserved_dead_letter_ttl,
-            self.scheduler.now(),
-        )
     }
 
     async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
@@ -2350,12 +2319,11 @@ where
         // mark this pass keeps: past it, a missing block is loss, and the
         // version can never be assembled.
         let leaves = content.leaf_cids().len();
+        let mark_key = upload_mark_key(&staged.root_cid);
         let Resume {
             uploaded,
             mirror_gap,
-        } = self
-            .upload_mark(placement, &staged.root_cid, leaves)
-            .await?;
+        } = self.upload_mark(placement, &mark_key, leaves).await?;
         if mirror_gap {
             reached.mirror_missed();
         }
@@ -2385,7 +2353,7 @@ where
                     // over the leaves past it — those are released, so an
                     // uncovered one reads as loss.
                     if index + 1 > uploaded {
-                        self.mark_uploaded(&reached, &staged.root_cid, index + 1, leaves)
+                        self.mark_uploaded(&reached, &mark_key, index + 1, leaves)
                             .await?;
                     }
                     self.staging
@@ -2457,21 +2425,21 @@ where
     }
 
     /// What a previous pass durably confirmed of this version's `leaves`
-    /// ([`decode_upload_mark`]).
+    /// ([`resume_from`]).
     async fn upload_mark(
         &self,
         placement: &Placement,
-        root_cid: &[u8],
+        mark_key: &[u8],
         leaves: usize,
     ) -> Result<Resume, Halt> {
         let here = placement.destinations();
         Ok(self
             .staging
-            .staged_bytes(&upload_mark_key(root_cid))
+            .staged_bytes(mark_key)
             .await
             .map_err(seam)?
             .map_or(Resume::default(), |stored| {
-                decode_upload_mark(&stored, &here, leaves)
+                resume_from(&stored, &here, leaves)
             }))
     }
 
@@ -2486,13 +2454,13 @@ where
     async fn mark_uploaded(
         &self,
         reached: &Destinations,
-        root_cid: &[u8],
+        mark_key: &[u8],
         count: usize,
         leaves: usize,
     ) -> Result<(), Halt> {
         let mark = encode_upload_mark(reached, count, leaves).ok_or(Halt::Unclassified)?;
         self.staging
-            .put_staged_bytes(&upload_mark_key(root_cid), &mark)
+            .put_staged_bytes(mark_key, &mark)
             .await
             .map_err(seam)
     }
@@ -3156,73 +3124,6 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     }
 }
 
-/// The upload mark's wire form: the destinations the progress was made towards,
-/// then a big-endian `u32` leaf count. `None` where the count is not one this
-/// version could have reached — AGENTS.md rule 8's release-active mirror of
-/// [`marked_leaves`]'s bound, so a mark the reader discards as corrupt can never
-/// be written.
-fn encode_upload_mark(destinations: &Destinations, count: usize, leaves: usize) -> Option<Vec<u8>> {
-    let claim = u32::try_from(count).ok().filter(|_| count <= leaves)?;
-    let mut mark = destinations.encode().to_vec();
-    mark.extend_from_slice(&claim.to_be_bytes());
-    Some(mark)
-}
-
-/// Leaves of a `leaves`-leaf version the stored mark claims left staging for a
-/// destination; `0` for a torn mark, or bytes this build did not write.
-///
-/// Says nothing about *which* destination: whether this pass can still reach it
-/// is a resume question ([`decode_upload_mark`]), where a preserved dead letter
-/// is asking whether the bytes were ever handed off at all.
-pub(crate) fn marked_leaves(stored: &[u8], leaves: usize) -> usize {
-    let Some((named, count)) = stored.split_at_checked(Destinations::LEN) else {
-        return 0;
-    };
-    let Ok(count) = <[u8; 4]>::try_from(count) else {
-        return 0;
-    };
-    let count = u32::from_be_bytes(count) as usize;
-    match Destinations::decode(named).is_some() && count <= leaves {
-        true => count,
-        false => 0,
-    }
-}
-
-/// What a stored upload mark says about resuming this version at `here`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Resume {
-    /// Leaves already released from staging that the leg which can fail this op
-    /// holds, so their absence is progress rather than loss.
-    uploaded: usize,
-    /// Leaves a dual write's mirror will never hold, because they were released
-    /// to a provider these destinations do not name.
-    mirror_gap: bool,
-}
-
-/// Read the stored mark against the destinations this pass must reach.
-///
-/// A mark whose destinations do not include the leg that can fail this op covers
-/// nothing: those leaves were released to somewhere else, and no absence is
-/// excused by bytes this leg never received. A mirror the mark leaves short is
-/// reported, not fatal — a dual write's external leg never fails the op.
-fn decode_upload_mark(stored: &[u8], here: &Destinations, leaves: usize) -> Resume {
-    let count = marked_leaves(stored, leaves);
-    let Some(earlier) = stored
-        .get(..Destinations::LEN)
-        .and_then(Destinations::decode)
-        .filter(|_| count > 0)
-    else {
-        return Resume::default();
-    };
-    if !here.required_legs_hold(&earlier) {
-        return Resume::default();
-    }
-    Resume {
-        uploaded: count,
-        mirror_gap: !here.mirror_leg_holds(&earlier),
-    }
-}
-
 /// The op-id high-water stored at `key`; `None` when nothing has been marked on
 /// this device or the stored bytes are not a mark this build wrote.
 async fn op_mark<St: StagingStore>(staging: &St, key: &[u8]) -> SeamResult<Option<u64>> {
@@ -3479,126 +3380,12 @@ mod tests {
         }
     }
 
-    const ROOT: &[u8] = b"root-cid";
-
     fn byo(endpoint: &str) -> crate::content::ByoIpfsConfig {
         crate::content::ByoIpfsConfig {
             endpoint: endpoint.to_owned(),
             kind: crate::content::ByoKind::Kubo,
             access_token: None,
         }
-    }
-
-    /// AGENTS.md rule 8 for the upload mark: one bound, both directions. The
-    /// encode guard returns `None` in every build rather than asserting, and the
-    /// reader reaches the same verdict on bytes planted past it.
-    #[test]
-    fn a_mark_claiming_more_leaves_than_the_version_has_is_refused_on_both_sides() {
-        let here = Placement::Hosted.destinations();
-        let planted = |count: u32| {
-            let mut mark = here.encode().to_vec();
-            mark.extend_from_slice(&count.to_be_bytes());
-            mark
-        };
-        for count in [4usize, 5, usize::try_from(u32::MAX).expect("64-bit")] {
-            assert!(
-                encode_upload_mark(&here, count, 3).is_none(),
-                "{count}: the writer refuses what the reader discards",
-            );
-            assert_eq!(
-                decode_upload_mark(&planted(u32::try_from(count).unwrap_or(u32::MAX)), &here, 3),
-                Resume::default(),
-                "{count}: a corrupt mark covers no leaf at all",
-            );
-        }
-        // The in-range case still round-trips, so the bound is the only change.
-        assert_eq!(
-            decode_upload_mark(
-                &encode_upload_mark(&here, 2, 3).expect("in range"),
-                &here,
-                3
-            ),
-            Resume {
-                uploaded: 2,
-                mirror_gap: false
-            },
-        );
-    }
-
-    /// One key per version, so a second content op's progress lands beside the
-    /// first's rather than over it — and a mark read for one root can never be
-    /// the mark another root wrote.
-    #[test]
-    fn each_version_marks_its_progress_under_its_own_key() {
-        assert_ne!(upload_mark_key(ROOT), upload_mark_key(b"another-root"));
-        assert!(upload_mark_key(ROOT).starts_with(UPLOAD_MARK_PREFIX));
-    }
-
-    /// A leaf released from staging is excused only where the leg that can fail
-    /// this op already holds it. Turning the mirror on or off leaves the hosted
-    /// store holding everything it held, so the version resumes; moving the leg
-    /// that must hold the bytes leaves the mark covering nothing, and the hole
-    /// guard reports the loss it is.
-    #[test]
-    fn a_resumed_mark_covers_only_what_the_op_failing_leg_already_holds() {
-        let one = Placement::Dual(byo("https://one.example"));
-        let two = Placement::Dual(byo("https://two.example"));
-        let external = Placement::External(byo("https://one.example"));
-        let full = Resume {
-            uploaded: 2,
-            mirror_gap: false,
-        };
-        let gapped = Resume {
-            uploaded: 2,
-            mirror_gap: true,
-        };
-
-        let resume = |here: &Placement, earlier: &Placement| {
-            let mark = encode_upload_mark(&earlier.destinations(), 2, 3).expect("in range");
-            decode_upload_mark(&mark, &here.destinations(), 3)
-        };
-
-        assert_eq!(resume(&Placement::Hosted, &one), full);
-        assert_eq!(resume(&one, &one), full);
-        assert_eq!(resume(&external, &one), full);
-        assert_eq!(
-            resume(&one, &Placement::Hosted),
-            gapped,
-            "the hosted store holds them; only the new mirror does not"
-        );
-        assert_eq!(resume(&one, &two), gapped);
-        assert_eq!(
-            resume(&external, &two),
-            Resume::default(),
-            "external-only publishes from the provider that never took them"
-        );
-        assert_eq!(resume(&external, &Placement::Hosted), Resume::default());
-        assert_eq!(resume(&Placement::Hosted, &external), Resume::default());
-    }
-
-    /// A mark claiming nothing releases nothing, so a placement change over it
-    /// is not a gap to report.
-    #[test]
-    fn an_empty_mark_gaps_no_mirror() {
-        let mark = encode_upload_mark(&Placement::Hosted.destinations(), 0, 3).expect("in range");
-        assert_eq!(
-            decode_upload_mark(
-                &mark,
-                &Placement::Dual(byo("https://one.example")).destinations(),
-                3
-            ),
-            Resume::default(),
-        );
-    }
-
-    /// The mark's destination prefix is read fail-closed: bytes no encode could
-    /// have produced excuse no absent leaf.
-    #[test]
-    fn a_mark_opening_on_unencodable_destinations_covers_nothing() {
-        let here = Placement::Hosted.destinations();
-        let mut mark = encode_upload_mark(&here, 2, 3).expect("in range");
-        mark[0] = 3;
-        assert_eq!(decode_upload_mark(&mark, &here, 3), Resume::default());
     }
 
     /// A transport failure carries no verdict about these bytes, so it must not

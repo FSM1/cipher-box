@@ -160,7 +160,7 @@ pub fn consult_scopes_due(
 /// comparison every timing bar in this module is stated over. Saturating, so a
 /// clock that stepped backwards reads as no time passed rather than as an
 /// enormous gap.
-fn elapsed_at_least(now: UnixMillis, since: UnixMillis, interval: Duration) -> bool {
+pub(crate) fn elapsed_at_least(now: UnixMillis, since: UnixMillis, interval: Duration) -> bool {
     now.0.saturating_sub(since.0) >= crate::sync::duration_millis(interval)
 }
 

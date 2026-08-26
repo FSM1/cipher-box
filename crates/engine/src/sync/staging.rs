@@ -27,14 +27,15 @@ use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::RETIRE_LEDGER_PREFIX;
+use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
-use crate::sync::drain::{
-    DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, marked_leaves,
-    upload_mark_key,
-};
+use crate::storage_policy::StoragePolicy;
+use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
 use crate::sync::op::Op;
 use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
+use crate::sync::tick::elapsed_at_least;
+use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
@@ -96,9 +97,6 @@ pub(crate) const PRESERVED_DEAD_LETTERS_KEY: &[u8] = b"cipherbox/preserved-dead-
 /// build wrote it, so bytes that merely happen to be well-shaped must not parse.
 const PRESERVED_FORMAT_V2: u8 = 2;
 
-/// One entry's stamp, as [`PRESERVED_DEAD_LETTERS_KEY`] length-prefixes it.
-const PRESERVED_STAMP_LEN: usize = size_of::<u64>();
-
 /// One preserved dead letter: the op record, and when the engine parked it.
 ///
 /// The stamp is durable for the same reason the record is — a reboot must not
@@ -109,33 +107,30 @@ pub(crate) struct PreservedDeadLetter {
     record: Vec<u8>,
 }
 
-/// What the preserved dead-letter set is held to on one reconcile pass.
-///
-/// The age bound arrives already resolved against the scheduler seam, so the
-/// sweep reads no clock of its own.
+/// What the preserved dead-letter set is held to on one reconcile pass: the
+/// device's byte budget, the age bound, and the clock reading both are stated
+/// against, taken once at the scheduler seam so a pass is a pure function of one
+/// timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PreservedBounds {
     budget_bytes: u64,
-    /// Entries stamped before this are expired.
-    expire_before: UnixMillis,
+    ttl: Duration,
+    now: UnixMillis,
 }
 
 impl PreservedBounds {
-    pub(crate) fn new(budget_bytes: u64, ttl: Duration, now: UnixMillis) -> Self {
+    /// The bounds this device holds its preserved set to at `now`. One
+    /// constructor, so a fourth caller cannot derive them differently.
+    pub(crate) fn at(now: UnixMillis, policy: &StoragePolicy, profile: &SyncTimingProfile) -> Self {
         Self {
-            budget_bytes,
-            expire_before: UnixMillis(
-                now.0
-                    .saturating_sub(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX)),
-            ),
+            budget_bytes: policy.preserved_budget_bytes(),
+            ttl: profile.preserved_dead_letter_ttl,
+            now,
         }
     }
 
-    /// Whether an entry has outlived the age bound. A stamp ahead of `now` — a
-    /// clock that moved backwards — is not expiry, and waits for the device's
-    /// own clock to catch up.
     fn expired(&self, entry: &PreservedDeadLetter) -> bool {
-        entry.preserved_at.0 < self.expire_before.0
+        elapsed_at_least(self.now, entry.preserved_at, self.ttl)
     }
 }
 
@@ -168,6 +163,10 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
         .map(|m| m.leaf_cid_vecs())
         .unwrap_or_default()
 }
+
+/// One pass's view of which staging keys the store still holds, borrowed from
+/// the listing that pass took.
+type StagedKeys<'a> = HashSet<&'a [u8]>;
 
 /// How many dead letters may be preserved at once, however small each one is.
 ///
@@ -203,15 +202,14 @@ impl Preservation {
 ///
 /// Preserves only a version that still **opens** ([`open_version`]) and whose
 /// leaves are all still reachable ([`has_a_hole`]). A root the store cannot
-/// produce, or a leaf that neither staging holds nor the version's upload mark
-/// covers, names blocks nothing can ever map. That is
-/// [`Preservation::ContentGone`], reported as
+/// produce, or a leaf proven never to have reached a destination, names blocks
+/// nothing can ever map. That is [`Preservation::ContentGone`], reported as
 /// [`DeadLetterReason::ContentUnrecoverable`](crate::sync::rebase::DeadLetterReason::ContentUnrecoverable);
 /// no record is held, so orphan GC reclaims any blocks left behind.
 ///
-/// Bounding the set is [`reconcile_preserved_dead_letters`]'s job, not this
-/// path's: a ceiling only the writer enforces is no ceiling on a set that was
-/// already over it when the store opened.
+/// The byte and age bounds are [`reconcile_preserved_dead_letters`]'s, not this
+/// path's. Only the count is held here, and only to keep one pass of dead
+/// letters from rewriting a list that grows with every entry it appends.
 ///
 /// Fails closed twice over: on a preserved record this build cannot read, since
 /// overwriting it would drop the dead letters it already holds, and on a root it
@@ -243,30 +241,45 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
         preserved_at: now,
         record: record.to_vec(),
     });
+    // Oldest-first, the order the byte and age bounds evict in. Their blocks go
+    // unreferenced by this write, so the same tick's sweep reclaims them.
+    let over = kept.len().saturating_sub(MAX_PRESERVED_DEAD_LETTERS);
+    kept.drain(..over);
     write_preserved_dead_letters(store, &kept).await?;
     Ok(Preservation::Kept)
 }
 
-/// Whether this version has a leaf no read path can reach: absent from staging,
-/// and past what its upload mark says left for a destination.
+/// Whether this version has a leaf no read path can reach.
 ///
-/// One point read, not a scan, and it is the drain's own resume rule
-/// ([`marked_leaves`]): leaves are released in file order and the mark is raised
-/// before each removal, so the leaves still staged are a suffix and the first one
-/// past the mark decides for all of them.
+/// Two point reads, not a scan, both resting on the drain's release order: a
+/// leaf is released only once the mark covers it, so the leaves still staged are
+/// a suffix and the first one past the mark decides for all of them.
+///
+/// **Both reads must agree before this destroys anything.** The verdict drops
+/// the version's only content-key carrier, so it is made on positive evidence
+/// only: the mark says how many leaves were handed off, the first leaf past it
+/// is absent, and the version's last leaf is absent too. A mark that is missing
+/// or unreadable ([`marked_leaves`]) is not evidence that nothing was uploaded,
+/// and a later leaf still staged means the store lost bytes rather than
+/// releasing them — both preserve.
 async fn has_a_hole<S: StagingStore>(
     store: &S,
     root_cid: &[u8],
     manifest: &RootManifest,
 ) -> SeamResult<bool> {
-    let uploaded = store
-        .staged_bytes(&upload_mark_key(root_cid))
-        .await?
-        .map_or(0, |mark| marked_leaves(&mark, manifest.leaf_cids.len()));
-    let Some(first_unmarked) = manifest.leaf_cids.get(uploaded) else {
+    let Some(mark) = store.staged_bytes(&upload_mark_key(root_cid)).await? else {
         return Ok(false);
     };
-    Ok(store.staged_bytes(first_unmarked).await?.is_none())
+    let Some(uploaded) = marked_leaves(&mark, manifest.leaf_cids.len()) else {
+        return Ok(false);
+    };
+    let (Some(first_unmarked), Some(last)) =
+        (manifest.leaf_cids.get(uploaded), manifest.leaf_cids.last())
+    else {
+        return Ok(false);
+    };
+    Ok(store.staged_bytes(first_unmarked).await?.is_none()
+        && store.staged_bytes(last).await?.is_none())
 }
 
 /// The version at `root_cid` when its root still opens: the decoded manifest and
@@ -282,7 +295,7 @@ async fn has_a_hole<S: StagingStore>(
 /// referenced root it cannot expand. A seam error propagates for the same
 /// reason.
 ///
-/// Says nothing about the leaves — that is [`has_a_hole`]'s question.
+/// The leaves are [`has_a_hole`]'s question.
 async fn open_version<S: StagingStore>(
     store: &S,
     root_cid: &[u8],
@@ -307,7 +320,7 @@ async fn open_version<S: StagingStore>(
 /// Per-leaf plaintext is arithmetic off the manifest rather than a read per leaf:
 /// [`decode_root`] holds the leaf count to `ceil(size / chunk_size)` at a nonzero
 /// `chunk_size`, so every leaf but the last is exactly one chunk.
-fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &HashSet<Vec<u8>>) -> u64 {
+fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &StagedKeys) -> u64 {
     let last = manifest.leaf_cids.len().saturating_sub(1);
     manifest
         .leaf_cids
@@ -327,25 +340,9 @@ fn version_bytes(manifest: &RootManifest, root_block_len: usize, staged: &HashSe
         .fold(root_block_len as u64, u64::saturating_add)
 }
 
-/// The staged bytes one preserved record's version occupies. Zero for a record
-/// naming no content, or a root the store lost.
-async fn preserved_version_bytes<S: StagingStore>(
-    store: &S,
-    record: &[u8],
-    staged: &HashSet<Vec<u8>>,
-) -> u64 {
-    let Ok(Some(root)) = record_content_root_cid(record) else {
-        return 0;
-    };
-    let Ok(Some((manifest, root_len))) = open_version(store, &root).await else {
-        return 0;
-    };
-    version_bytes(&manifest, root_len, staged)
-}
-
-/// Trim `kept` to the age, count and byte bounds, and hand back the root of
-/// every version dropped so the caller can release its blocks once the shortened
-/// list is durable. The list is append-ordered, so its head is the oldest entry.
+/// Split `sized` into the entries that stay and the roots of the versions that
+/// go, against the age, count and byte bounds. The list is append-ordered, so
+/// its head is the oldest entry.
 ///
 /// Age goes first and exempts nothing: a parked version past the bound is
 /// reclaimed whether or not the set is otherwise within its ceilings. The count
@@ -353,38 +350,35 @@ async fn preserved_version_bytes<S: StagingStore>(
 /// stands, even alone over the byte ceiling — it is the one the user is about to
 /// be told about, and a single version is already bounded by the admission cap
 /// that let it stage at all.
-async fn trim_preserved<S: StagingStore>(
-    store: &S,
-    kept: &mut Vec<PreservedDeadLetter>,
+fn trim_preserved(
+    sized: Vec<(PreservedDeadLetter, Vec<u8>, u64)>,
     bounds: PreservedBounds,
-    staged: &HashSet<Vec<u8>>,
-) -> Vec<Vec<u8>> {
-    let mut dropped: Vec<PreservedDeadLetter> = Vec::new();
-    let mut sizes = Vec::with_capacity(kept.len());
-    let mut live = Vec::with_capacity(kept.len());
-    for entry in kept.drain(..) {
-        if bounds.expired(&entry) {
-            dropped.push(entry);
-            continue;
+) -> (Vec<PreservedDeadLetter>, Vec<Vec<u8>>) {
+    let mut released = Vec::new();
+    let mut live = Vec::with_capacity(sized.len());
+    for (entry, root, bytes) in sized {
+        match bounds.expired(&entry) {
+            true => released.push(root),
+            false => live.push((entry, root, bytes)),
         }
-        sizes.push(preserved_version_bytes(store, &entry.record, staged).await);
-        live.push(entry);
     }
-    let mut total = sizes.iter().copied().fold(0u64, u64::saturating_add);
+    let mut total = live
+        .iter()
+        .map(|(_, _, bytes)| *bytes)
+        .fold(0, u64::saturating_add);
     let mut evicted = 0usize;
     // Both clauses in one unit — how many entries would survive.
     while live.len() - evicted > 1
         && (live.len() - evicted > MAX_PRESERVED_DEAD_LETTERS || total > bounds.budget_bytes)
     {
-        total = total.saturating_sub(sizes[evicted]);
+        total = total.saturating_sub(live[evicted].2);
         evicted += 1;
     }
-    dropped.extend(live.drain(..evicted));
-    *kept = live;
-    dropped
-        .into_iter()
-        .filter_map(|entry| record_content_root_cid(&entry.record).ok().flatten())
-        .collect()
+    released.extend(live.drain(..evicted).map(|(_, root, _)| root));
+    (
+        live.into_iter().map(|(entry, _, _)| entry).collect(),
+        released,
+    )
 }
 
 /// The dead letters the store holds. `None` when the record is present but not
@@ -401,7 +395,7 @@ async fn read_preserved_dead_letters<S: StagingStore>(
     };
     let mut kept = Vec::new();
     while !rest.is_empty() {
-        let Some((stamp, tail)) = rest.split_first_chunk::<PRESERVED_STAMP_LEN>() else {
+        let Some((stamp, tail)) = rest.split_first_chunk::<{ size_of::<u64>() }>() else {
             return Ok(None);
         };
         let Some((len, tail)) = tail.split_first_chunk::<4>() else {
@@ -497,8 +491,9 @@ impl LiveBlocks {
     }
 }
 
-/// [`collect_orphans`] over a listing of this store's own, for a caller with no
-/// pass to share one with.
+/// One reconcile pass over staged bytes: remove the blocks nothing references,
+/// then hold the preserved dead-letter set to its bounds. Runs at cold start and
+/// once per drain tick, over a listing of this store's own.
 pub(crate) async fn reconcile_staging<S: StagingStore>(
     store: &S,
     live: &core::cell::RefCell<LiveBlocks>,
@@ -507,20 +502,17 @@ pub(crate) async fn reconcile_staging<S: StagingStore>(
     let Ok(staged) = store.staged_keys().await else {
         return;
     };
-    collect_orphans(store, live, &staged, bounds).await;
+    reconcile_staging_over(store, live, &staged, bounds).await;
 }
 
-/// One reconcile pass over staged bytes: expand every staged root into its leaf
-/// set and remove the blocks nothing references, then hold the preserved
-/// dead-letter set to its bounds. Runs at cold start and once per drain tick.
-///
-/// `staged` is the tick's single enumeration of the store's keys, owned by the
-/// caller that drives the pass. A key staged since it was taken is simply not a
-/// candidate this pass, and one removed since is removed again idempotently.
+/// The same pass over a key enumeration the caller already holds, so a tick that
+/// reconciles several consumers pays for one listing. A key staged since it was
+/// taken is simply not a candidate this pass, and one removed since is removed
+/// again idempotently.
 ///
 /// Best-effort throughout — a store that cannot expand or remove leaves its
 /// residue for the next pass.
-pub(crate) async fn collect_orphans<S: StagingStore>(
+pub(crate) async fn reconcile_staging_over<S: StagingStore>(
     store: &S,
     live: &core::cell::RefCell<LiveBlocks>,
     staged: &[Vec<u8>],
@@ -567,22 +559,28 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
     let Ok(Some(kept)) = read_preserved_dead_letters(store).await else {
         return;
     };
+    if kept.is_empty() {
+        return;
+    }
+    let staged: StagedKeys = staged.iter().map(Vec::as_slice).collect();
     let before = kept.len();
-    let mut live = Vec::with_capacity(before);
+    let mut sized = Vec::with_capacity(before);
     for entry in kept {
         let Ok(Some(root)) = record_content_root_cid(&entry.record) else {
             continue;
         };
         match open_version(store, &root).await {
-            Ok(Some(_)) => live.push(entry),
+            Ok(Some((manifest, root_len))) => {
+                let bytes = version_bytes(&manifest, root_len, &staged);
+                sized.push((entry, root, bytes));
+            }
             Ok(None) => {}
-            // A store that cannot answer decides nothing: keep the entry and let
-            // the next pass judge it.
-            Err(_) => live.push(entry),
+            // A store that cannot answer decides nothing: keep the entry, unsized,
+            // and let the next pass judge it.
+            Err(_) => sized.push((entry, root, 0)),
         }
     }
-    let staged: HashSet<Vec<u8>> = staged.iter().cloned().collect();
-    let released = trim_preserved(store, &mut live, bounds, &staged).await;
+    let (live, released) = trim_preserved(sized, bounds);
     if live.len() == before {
         return;
     }
@@ -625,18 +623,18 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     live: &[Vec<u8>],
 ) -> SeamResult<Vec<Vec<u8>>> {
     // The drain's own queue bookkeeping is not upload residue.
-    let mut referenced = HashSet::from([
+    let mut referenced: HashSet<Vec<u8>> = HashSet::from([
         OP_ATTEMPTS_KEY.to_vec(),
         PRESERVED_DEAD_LETTERS_KEY.to_vec(),
     ]);
     referenced.extend(live.iter().cloned());
-    let candidates: Vec<Vec<u8>> = staged
+    let candidates: Vec<&[u8]> = staged
         .iter()
+        .map(Vec::as_slice)
         .filter(|key| !referenced.contains(*key) && !is_bookkeeping(key))
-        .cloned()
         .collect();
     if candidates.is_empty() {
-        return Ok(candidates);
+        return Ok(Vec::new());
     }
     let Some(preserved) = read_preserved_dead_letters(store).await? else {
         return Ok(Vec::new());
@@ -671,7 +669,8 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     }
     Ok(candidates
         .into_iter()
-        .filter(|key| !referenced.contains(key))
+        .filter(|key| !referenced.contains(*key))
+        .map(<[u8]>::to_vec)
         .collect())
 }
 
@@ -711,7 +710,8 @@ mod tests {
     fn bounds(budget_bytes: u64) -> PreservedBounds {
         PreservedBounds {
             budget_bytes,
-            expire_before: UnixMillis(0),
+            ttl: Duration::from_secs(u32::MAX as u64),
+            now: NOW,
         }
     }
 
@@ -760,11 +760,6 @@ mod tests {
             .unwrap();
     }
 
-    /// The store's staged keys, the way a reconcile pass lists them.
-    async fn staged_key_set<S: StagingStore>(store: &S) -> HashSet<Vec<u8>> {
-        store.staged_keys().await.unwrap().into_iter().collect()
-    }
-
     /// [`orphan_staging_keys`] over a listing taken now, as the pass that drives
     /// it owns one.
     async fn sweep<S: StagingStore>(store: &S, live: &[Vec<u8>]) -> SeamResult<Vec<Vec<u8>>> {
@@ -792,8 +787,13 @@ mod tests {
     /// Mark `count` of this version's leaves as having reached a destination, the
     /// way the drain's upload loop does as each one confirms.
     async fn mark_uploaded<S: StagingStore>(store: &S, root_cid: &[u8], count: u32) {
-        let mut mark = Placement::Hosted.destinations().encode().to_vec();
-        mark.extend_from_slice(&count.to_be_bytes());
+        let leaves = count as usize;
+        let mark = crate::sync::upload_mark::encode_upload_mark(
+            &Placement::Hosted.destinations(),
+            leaves,
+            leaves,
+        )
+        .expect("in range");
         store
             .put_staged_bytes(&upload_mark_key(root_cid), &mark)
             .await
@@ -1198,26 +1198,45 @@ mod tests {
     }
 
     /// A leaf absent from staging is progress or loss depending on one fact: did
-    /// it ever reach a destination. The version's own upload mark is what answers
-    /// that, and answers it long after another content op has taken the queue
-    /// head — the verdict a single head-keyed slot could not reach.
+    /// it ever reach a destination. The version's own upload mark answers that,
+    /// and answers it long after another content op has taken the queue head —
+    /// the verdict a single head-keyed slot could not reach.
+    ///
+    /// The verdict drops the only carrier of the version's content key, so it
+    /// takes positive evidence from both point reads: an unmarked leaf missing
+    /// *and* the version's last leaf missing with it. A leaf surviving past the
+    /// gap is a damaged store, not an orderly release, and preserves.
     #[test]
     fn a_dead_letters_verdict_reads_the_versions_own_upload_mark() {
+        // Marked leaves, whether the tail survives, and the verdict that follows
+        // from removing leaf zero.
+        let cases = [
+            (Some(0u32), false, Preservation::ContentGone),
+            (Some(0), true, Preservation::Kept),
+            (Some(1), false, Preservation::Kept),
+            (None, false, Preservation::Kept),
+        ];
         block_on(async {
-            for (marked, expected) in [(1u32, Preservation::Kept), (0, Preservation::ContentGone)] {
+            for (marked, keep_tail, expected) in cases {
                 let store = InMemoryStagingStore::default();
                 let (blocks, root_block, staged) =
                     framed(b"forty bytes of content ------------------");
                 put_blocks(&store, &blocks, &root_block, &staged).await;
                 let root_cid = staged.root_cid.clone();
                 let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-                mark_uploaded(&store, &root_cid, marked).await;
+                if let Some(marked) = marked {
+                    mark_uploaded(&store, &root_cid, marked).await;
+                }
                 store.remove_staged_bytes(&blocks[0].cid).await.unwrap();
+                if !keep_tail {
+                    let last = blocks.last().expect("a multi-leaf version");
+                    store.remove_staged_bytes(&last.cid).await.unwrap();
+                }
 
                 assert_eq!(
                     preserve_dead_letter(&store, &record, NOW).await.unwrap(),
                     expected,
-                    "marked {marked} of {} leaves",
+                    "marked {marked:?} of {} leaves, tail kept: {keep_tail}",
                     blocks.len()
                 );
             }
@@ -1311,8 +1330,6 @@ mod tests {
                 preserve_dead_letter(&store, &record, NOW).await.unwrap();
                 records.push(record);
             }
-            reconcile(&store, bounds(ROOMY)).await;
-
             let kept = kept_records(&store).await;
             assert_eq!(kept.len(), MAX_PRESERVED_DEAD_LETTERS);
             assert_eq!(
@@ -1320,9 +1337,16 @@ mod tests {
                 records[1..],
                 "the oldest entry is the one evicted, the newest always survives"
             );
+            // The write path drops the entry; nothing references its blocks
+            // afterwards, so the same tick's sweep is what reclaims them.
+            let orphans = sweep(&store, &[]).await.unwrap();
             assert!(
-                store.staged_bytes(&roots[0]).await.unwrap().is_none(),
+                orphans.contains(&roots[0]),
                 "the evicted version's blocks leave the staging budget"
+            );
+            assert!(
+                roots[1..].iter().all(|root| !orphans.contains(root)),
+                "and every surviving entry keeps its own"
             );
         });
     }
@@ -1337,12 +1361,16 @@ mod tests {
                 framed(b"forty bytes of content ------------------");
             put_blocks(&store, &first_blocks, &first_root, &first).await;
             let first_root_cid = first.root_cid.clone();
-            let one_version = preserved_version_bytes(
-                &store,
-                &encode_op_record(seal(1), &content_op(1, first.clone())).unwrap(),
-                &staged_key_set(&store).await,
-            )
-            .await;
+            let staged = store.staged_keys().await.unwrap();
+            let (manifest, root_len) = open_version(&store, &first_root_cid)
+                .await
+                .unwrap()
+                .expect("the version opens");
+            let one_version = version_bytes(
+                &manifest,
+                root_len,
+                &staged.iter().map(Vec::as_slice).collect(),
+            );
             // Room for one version and no more, so the second admission must
             // push the first out.
             let ceiling = one_version + 1;

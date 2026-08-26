@@ -47,7 +47,8 @@ use cipherbox_engine::settings::{
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
-    UPLOAD_MARK_PREFIX, owner_scoped_key, owner_tag, record_content_root_cid, upload_mark_key,
+    UPLOAD_MARK_PREFIX, encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid,
+    upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -2386,7 +2387,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
         // staging store, died the instant after that leaf uploaded.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_PREFIX, interrupted as u64);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, interrupted as u64);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -6965,7 +6966,7 @@ fn a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are() {
         // that leaf uploaded and the two before it were released.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_PREFIX, 2);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -7400,7 +7401,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         // The process dies two leaves in, with those two already released.
         alice
             .staging_store
-            .interrupt_staged_write_after(UPLOAD_MARK_PREFIX, 2);
+            .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -7915,15 +7916,16 @@ fn an_edit_refuses_to_supersede_a_version_published_after_it_was_formed() {
 }
 
 /// The verdict a dead letter carries is a claim about the member's bytes, so it
-/// must be decided against them. A losing edit whose staged version still has
-/// every leaf keeps its own reason; one with a leaf that neither staging holds
-/// nor its upload mark covers has nothing to hand back, and says so.
+/// must be decided against them. Two halts, identical but for what their
+/// version's upload mark covers: leaves the mark says reached a destination are
+/// recoverable and the edit keeps its own reason, where leaves it says were
+/// never handed off are gone, and a notice must not promise them.
 ///
-/// The mark is what tells those two apart, and it is readable here only because
-/// it is keyed to the version rather than to whichever op last held the queue.
+/// The mark is what tells those apart, and it is readable here only because it
+/// is keyed to the version rather than to whichever op last held the queue.
 #[test]
 fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
-    for (marked, expected) in [
+    for (uploaded, expected) in [
         (true, DeadLetterReason::BaseSuperseded),
         (false, DeadLetterReason::ContentUnrecoverable),
     ] {
@@ -7939,16 +7941,19 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
         let (root_cid, leaves) = staged_version(&bob);
         // Leaf zero left staging. Marked, it reached a destination and the
         // version is still assemblable; unmarked, those bytes are simply gone.
-        if marked {
-            let mut mark = Placement::Hosted.destinations().encode().to_vec();
-            mark.extend_from_slice(&1u32.to_be_bytes());
-            block_on(
-                bob.staging_store
-                    .put_staged_bytes(&upload_mark_key(&root_cid), &mark),
-            )
-            .unwrap();
+        let covered = if uploaded { leaves.len() } else { 0 };
+        let mark = encode_upload_mark(&Placement::Hosted.destinations(), covered, leaves.len())
+            .expect("in range");
+        block_on(
+            bob.staging_store
+                .put_staged_bytes(&upload_mark_key(&root_cid), &mark),
+        )
+        .unwrap();
+        // Leaf zero and the tail together: one absent leaf is a damaged store,
+        // and the verdict takes both point reads before it destroys anything.
+        for leaf in [&leaves[0], leaves.last().expect("a multi-leaf version")] {
+            block_on(bob.staging_store.remove_staged_bytes(leaf)).unwrap();
         }
-        block_on(bob.staging_store.remove_staged_bytes(&leaves[0])).unwrap();
 
         write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
             .expect("the first device's write commits");
@@ -7961,7 +7966,7 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
                 op_id,
                 reason: expected
             }],
-            "leaf zero marked: {marked}"
+            "leaves uploaded: {uploaded}"
         );
     }
 }
