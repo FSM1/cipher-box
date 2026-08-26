@@ -10,6 +10,7 @@
  * consumes it), and events arrive as key-free view descriptors.
  */
 
+import { eraseAccountStores } from './accountStores.js';
 import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
@@ -34,6 +35,10 @@ export type ImportedContact = Extract<CommandOutcomeDescriptor, { kind: 'contact
 export type MintedInviteLink = Extract<CommandOutcomeDescriptor, { kind: 'inviteLinkMinted' }>;
 
 export class EngineFacade {
+  // The account a forget erased, latched while the engine still names one, so
+  // the teardown that clears the session cannot take the name with it.
+  private forgotten: string | null = null;
+
   constructor(private readonly transport: EngineTransport) {}
 
   /**
@@ -50,7 +55,8 @@ export class EngineFacade {
   /**
    * Logout: the engine zeroizes its WASM state, then the worker is torn down.
    * Durable seams (floors, op queue, staged bytes, ciphertext cache) survive by
-   * design.
+   * design — unless a {@link forgetDevice} preceded this, whose containers this
+   * teardown is what finally lets go.
    */
   async logout(): Promise<void> {
     // Teardown is unconditional: tearing the worker down frees the WASM memory
@@ -63,6 +69,7 @@ export class EngineFacade {
       // fall through to teardown
     }
     this.transport.close();
+    await this.eraseForgottenStores();
   }
 
   /**
@@ -71,10 +78,24 @@ export class EngineFacade {
    * keeps (blueprint/web-client.md "Logout").
    *
    * Leaves the worker standing, so the {@link logout} that follows is still
-   * what zeroizes it. A refused erase rejects rather than resolving.
+   * what zeroizes it — and what removes the emptied containers. A refused erase
+   * rejects rather than resolving.
    */
   async forgetDevice(): Promise<void> {
     await this.command({ kind: 'forgetDevice' });
+    this.forgotten = this.transport.signedInAccount?.() ?? null;
+  }
+
+  /**
+   * Removes the containers a forgotten account named, so no name on the profile
+   * still carries its public key ({@link eraseAccountStores}). Runs only after
+   * teardown: an IndexedDB delete blocks while the engine holds a connection.
+   */
+  private async eraseForgottenStores(): Promise<void> {
+    const account = this.forgotten;
+    if (account === null) return;
+    this.forgotten = null;
+    await eraseAccountStores(account);
   }
 
   /** Subscribes to the one-way engine event stream; returns an unsubscribe. */

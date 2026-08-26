@@ -64,6 +64,12 @@ test.describe('browser seam conformance', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('forgetting this device leaves no container named for the account', async ({ page }) => {
+    const outcome = await runSeam(page, 'accountErase');
+    expect(outcome.error ?? '', 'account erase behavioral failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('http seam moves bytes and surfaces non-2xx as a response', async ({ page }) => {
     const outcome = await runSeam(page, 'http');
     expect(outcome.error ?? '', 'http behavioral failure').toBe('');

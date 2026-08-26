@@ -6,10 +6,15 @@
  * forever.
  */
 
+import type { AccountStoreNaming } from './accountStores.js';
 import type { EngineWorkerBootstrap } from './worker/engineWorker.js';
 
-/** What a host tab must know to stand the engine worker up. */
-export interface EngineHostConfig {
+/**
+ * What a host tab must know to stand the engine worker up. It names the durable
+ * containers too, so the worker's sweep and the seams it opens agree on their
+ * spelling ({@link AccountStoreNaming}).
+ */
+export interface EngineHostConfig extends AccountStoreNaming {
   /** Base URL of the CipherBox API; the engine's API client appends its routes. */
   apiBaseUrl: string;
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
