@@ -229,6 +229,30 @@ impl Snapshot {
         self.links.retain(|l| l.parent != id && l.child != id);
     }
 
+    /// Removes `id` and every node that only `id` reached — the cascade an
+    /// unlink owes, so a detached subtree does not survive as parentless nodes
+    /// no walk can reach. A node another link still names is kept, and so is
+    /// everything under it.
+    ///
+    /// Call it where the node is already unlinked; a node some parent still
+    /// links is left alone.
+    pub fn remove_unreachable(&mut self, id: NodeId) {
+        let mut pending = vec![id];
+        while let Some(node) = pending.pop() {
+            if node == self.root || !self.links_to(node).is_empty() {
+                continue;
+            }
+            let orphaned: Vec<NodeId> = self
+                .links
+                .iter()
+                .filter(|l| l.parent == node)
+                .map(|l| l.child)
+                .collect();
+            self.remove_node(node);
+            pending.extend(orphaned);
+        }
+    }
+
     /// Every link naming `child` as the child. One entry in a well-formed
     /// snapshot; two on a dual-link crash residue.
     pub fn links_to(&self, child: NodeId) -> Vec<Link> {
@@ -406,6 +430,72 @@ mod tests {
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
+    }
+
+    fn folder(snapshot: &mut Snapshot, parent: NodeId, child: NodeId) {
+        snapshot.upsert_node(NodeMeta::new(child, "n", NodeKind::Folder));
+        snapshot.link(parent, child, 1);
+    }
+
+    #[test]
+    fn remove_unreachable_takes_the_cascade_and_stops_at_a_live_edge() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+        folder(&mut snap, id(2), id(3));
+        folder(&mut snap, id(0), id(4));
+        // A node under the doomed subtree that another live parent also links.
+        snap.link(id(4), id(3), 2);
+
+        snap.unlink(id(0), id(1));
+        snap.remove_unreachable(id(1));
+
+        assert!(!snap.contains(id(1)));
+        assert!(!snap.contains(id(2)));
+        assert!(
+            snap.contains(id(3)),
+            "still linked from the surviving parent"
+        );
+        assert_eq!(snap.parent_of(id(3)), Some(id(4)));
+    }
+
+    #[test]
+    fn remove_unreachable_is_a_no_op_on_a_node_a_parent_still_links() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+
+        snap.remove_unreachable(id(1));
+
+        assert!(snap.contains(id(1)), "the root still links it");
+        assert!(snap.contains(id(2)));
+    }
+
+    /// Child refs are wire data, so a link cycle is reachable; the walk must
+    /// terminate rather than chase it.
+    #[test]
+    fn remove_unreachable_terminates_over_a_detached_cycle() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+        snap.link(id(2), id(1), 3);
+
+        snap.unlink(id(0), id(1));
+        snap.remove_unreachable(id(1));
+
+        assert!(snap.contains(id(1)), "the cycle's own edge still names it");
+        assert!(snap.contains(id(0)));
+    }
+
+    #[test]
+    fn remove_unreachable_never_removes_the_root() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+
+        snap.remove_unreachable(id(0));
+
+        assert!(snap.contains(id(0)));
+        assert!(snap.contains(id(1)));
     }
 
     /// A node's name and its live `ipnsName` are decoded user content; the

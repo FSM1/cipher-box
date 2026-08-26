@@ -118,8 +118,9 @@ use crate::sync::staging::{
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_folders,
-    focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode, run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_files,
+    focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
+    run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2681,13 +2682,6 @@ pub struct Engine<T: SeamTypes> {
     /// not the refresh stamp a completed pass earns
     /// ([`focus_refreshed`](Self::focus_refreshed)).
     focus_hinted: Cell<Option<(NodeId, UnixMillis)>>,
-    /// File nodes a host operation put in view past the staleness threshold,
-    /// awaiting the tick's file leg ([`FolderRefresh::run_files`]). Most recent
-    /// last, capped at [`MAX_FOCUS_FILES`]: a focus window is about what is in
-    /// view now, so a full queue drops its oldest entry rather than refusing the
-    /// file the host just looked at. Shared with the tick loop, which drains it
-    /// each pass.
-    focus_files: Rc<RefCell<Vec<NodeId>>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -2809,7 +2803,6 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
-                focus_files: Rc::new(RefCell::new(Vec::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -3558,7 +3551,6 @@ where {
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
-        let focus_files = self.focus_files.clone();
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
         let consult_keys = self.sweep_keys.clone();
@@ -3741,11 +3733,12 @@ where {
                         // outside it stay queued for the leg that can serve them.
                         let due_files = {
                             let base = base.borrow();
-                            let mut queued = focus_files.borrow_mut();
-                            let (mine, theirs) = queued.iter().partition(|file| {
-                                base.ancestors(**file).last() == Some(&NodeId(root_id))
-                            });
-                            *queued = theirs;
+                            let queued = focus_files(&base, &focus.borrow());
+                            let (mine, theirs): (Vec<NodeId>, Vec<NodeId>) =
+                                queued.into_iter().partition(|file| {
+                                    base.ancestors(*file).last() == Some(&NodeId(root_id))
+                                });
+                            focus.borrow_mut().open_files = theirs;
                             mine
                         };
                         for (nodes, report) in [
@@ -6596,8 +6589,11 @@ where {
     /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
     /// operation with no node in view.
     ///
-    /// A folder becomes the focus window; a file joins the queue the tick's file
-    /// leg drains ([`focus_files`](Self::focus_files)). Only a node this
+    /// A folder becomes the focus window; a file joins
+    /// [`FocusWindow::open_files`], the queue the tick's file leg drains, most
+    /// recent last and capped at [`MAX_FOCUS_FILES`] — a window is about what is
+    /// in view now, so a full queue drops its oldest entry rather than refusing
+    /// the file the host just looked at. Only a node this
     /// device's own gate-passing state calls a file takes the file path, so a
     /// node it has not resolved yet keeps the window behaviour it had before it
     /// was projected.
@@ -6638,11 +6634,11 @@ where {
         if stale {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
-                let mut queued = self.focus_files.borrow_mut();
-                queued.retain(|held| *held != node);
-                queued.push(node);
-                if queued.len() > MAX_FOCUS_FILES {
-                    queued.remove(0);
+                let mut focus = self.focus.borrow_mut();
+                focus.open_files.retain(|held| *held != node);
+                focus.open_files.push(node);
+                if focus.open_files.len() > MAX_FOCUS_FILES {
+                    focus.open_files.remove(0);
                 }
             }
         }

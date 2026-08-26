@@ -3238,6 +3238,84 @@ fn a_delete_whose_unlink_never_published_reclaims_nothing() {
     );
 }
 
+/// A delete can ack its unlink and still lose the confirm — a crash in the
+/// window, or a registry that will not answer. Nothing local survives to
+/// re-derive the doomed set from: the parent no longer names the target, so the
+/// retry finds nothing to remove and the early return is the end of it. The
+/// journal written at unlink-ack is what a later run settles it from.
+#[test]
+fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+
+    // The unlink publishes; every retire behind it is refused.
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the unlink is live"
+    );
+    drop(engine);
+
+    // Second run: the session-lived retry set went with the process, so the
+    // durable journal is the only record of what this delete still owes.
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 43);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the doomed name retires on a later pass rather than being lost"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "and the content the delete detached reclaims"
+        );
+    }
+
+    // Settled means settled: a third pass has nothing left to replay.
+    let settled = retire_targets(&alice).len();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_since(&alice, settled).is_empty(),
+        "the journal entry leaves once its reclamation lands"
+    );
+}
+
 /// Fail-closed on structure: a descendant folder this pass cannot enumerate
 /// hides an unknown subtree, so the delete refuses rather than unlinking above
 /// it and stranding records and pins nothing can ever name again. A file that

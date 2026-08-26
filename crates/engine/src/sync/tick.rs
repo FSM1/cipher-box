@@ -28,6 +28,9 @@ pub struct FocusWindow {
     /// Scope roots of shared scopes currently open (their scope pointers ride
     /// the tick, #38 D4).
     pub open_shared_scopes: Vec<NodeId>,
+    /// File nodes a host operation put in view, most recent last. The tick
+    /// drains what it serves, so this is a queue rather than standing state.
+    pub open_files: Vec<NodeId>,
 }
 
 /// One target a tick refreshes.
@@ -41,6 +44,8 @@ pub enum FocusTarget {
     MailboxPoll,
     /// A folder record (the open folder and each ancestor to root).
     Folder(NodeId),
+    /// A file record a host operation put in view.
+    File(NodeId),
 }
 
 /// What woke a tick.
@@ -71,8 +76,8 @@ pub fn resolve_mode(cause: TickCause) -> ResolveMode {
 }
 
 /// The focus set a tick refreshes, in deterministic order: vault pointer, open
-/// shared-scope pointers, mailbox poll, open folder, ancestors to root.
-/// Everything else is out of the window (on-access refresh only).
+/// shared-scope pointers, mailbox poll, open folder, ancestors to root, then the
+/// files in view. Everything else is out of the window (on-access refresh only).
 pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
     let mut targets = vec![FocusTarget::VaultPointer];
     for scope in &focus.open_shared_scopes {
@@ -84,6 +89,9 @@ pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
         for ancestor in snapshot.ancestors(open) {
             targets.push(FocusTarget::Folder(ancestor));
         }
+    }
+    for file in &focus.open_files {
+        targets.push(FocusTarget::File(*file));
     }
     targets
 }
@@ -97,6 +105,18 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .into_iter()
         .filter_map(|target| match target {
             FocusTarget::Folder(node) if node != snapshot.root => Some(node),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The focus window's file targets, in queue order — the leg that repaints a
+/// file another device republished, which no folder record mirrors.
+pub fn focus_files(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
+    focus_set(snapshot, focus)
+        .into_iter()
+        .filter_map(|target| match target {
+            FocusTarget::File(node) => Some(node),
             _ => None,
         })
         .collect()
@@ -120,7 +140,7 @@ pub fn consult_scopes(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .filter_map(|target| match target {
             FocusTarget::VaultPointer => Some(snapshot.root),
             FocusTarget::ScopePointer(scope) => Some(scope),
-            FocusTarget::MailboxPoll | FocusTarget::Folder(_) => None,
+            FocusTarget::MailboxPoll | FocusTarget::Folder(_) | FocusTarget::File(_) => None,
         });
     for scope in targets {
         if !scopes.contains(&scope) {
@@ -329,6 +349,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: None,
             open_shared_scopes: vec![id(7), id(0), id(7)],
+            open_files: Vec::new(),
         };
         assert_eq!(
             consult_scopes(&snap, &focus),
@@ -369,6 +390,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
+            open_files: vec![id(3), id(4)],
         };
         assert_eq!(
             focus_set(&snap, &focus),
@@ -379,6 +401,8 @@ mod tests {
                 FocusTarget::Folder(id(2)),
                 FocusTarget::Folder(id(1)),
                 FocusTarget::Folder(id(0)),
+                FocusTarget::File(id(3)),
+                FocusTarget::File(id(4)),
             ]
         );
     }
@@ -394,9 +418,33 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
+            open_files: vec![id(3)],
         };
         assert_eq!(focus_folders(&snap, &focus), vec![id(2), id(1)]);
         assert!(focus_folders(&snap, &FocusWindow::default()).is_empty());
+    }
+
+    /// The file leg is selected by the same pure selector as the folder chain,
+    /// in queue order and independent of what folder is open.
+    #[test]
+    fn focus_files_are_the_queue_in_order() {
+        let snap = Snapshot::new(id(0));
+        let focus = FocusWindow {
+            open_folder: None,
+            open_shared_scopes: vec![id(7)],
+            open_files: vec![id(5), id(3), id(9)],
+        };
+        assert_eq!(focus_files(&snap, &focus), vec![id(5), id(3), id(9)]);
+        assert!(focus_files(&snap, &FocusWindow::default()).is_empty());
+        assert!(
+            focus_folders(&snap, &focus).is_empty(),
+            "a file in view is never resolved through the folder leg"
+        );
+        assert_eq!(
+            consult_scopes(&snap, &focus),
+            vec![id(0), id(7)],
+            "and never through the pointer leg"
+        );
     }
 
     #[test]
@@ -409,6 +457,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(2)),
             open_shared_scopes: Vec::new(),
+            open_files: Vec::new(),
         };
         let profile = SyncTimingProfile::PRODUCTION; // stale_after 90 s
         let due = |stamps: &BTreeMap<NodeId, UnixMillis>, now| {
@@ -436,6 +485,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(0)),
             open_shared_scopes: Vec::new(),
+            open_files: Vec::new(),
         };
         assert!(
             focus_folders(&snap, &focus).is_empty(),

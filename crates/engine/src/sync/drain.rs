@@ -73,6 +73,9 @@ use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::cancel::UploadCancels;
+use crate::sync::doomed::{
+    Reclamation, decode_reclamation, doomed_journal_key, encode_reclamation, journalled_keys,
+};
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
@@ -626,6 +629,7 @@ where
         let Ok(staged) = self.staging.staged_keys().await else {
             return report;
         };
+        self.settle_journalled_deletes(scope, &staged).await;
         if let Some(owed) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, &staged),
             &owner_tag(scope.enc_secret),
@@ -1367,6 +1371,11 @@ where
     /// bytes pinned that nothing names, and a pin row left charged is a leak
     /// where unpinning live content is loss (blueprint/engine.md "Retirement").
     ///
+    /// The window between the ack and the confirm is the one local state cannot
+    /// recover from — the parent no longer names the target, so a retry finds
+    /// nothing to remove — so what the unlink earned goes to the doomed-name
+    /// journal first ([`Self::settle_journalled_deletes`] replays it).
+    ///
     /// This is a reclamation and an availability cut, never a re-key. An
     /// unlinked node is in no eager set, so rotation never reaches it: its read
     /// key stays valid, and its content keys ride inline in the sealed bodies a
@@ -1409,8 +1418,56 @@ where
         )
         .await
         .map_err(Halt::from)?;
-        self.reclaim_doomed(scope, target, &doomed).await;
+        let reclamation = self.owed_by_delete(target, &doomed);
+        let journalled = self.journal_doomed(scope, target, &reclamation).await;
+        if self.settle_reclamation(scope, &reclamation).await && journalled {
+            let _ = self
+                .staging
+                .remove_staged_bytes(&doomed_journal_key(&owner_tag(scope.enc_secret), target))
+                .await;
+        }
         Ok(())
+    }
+
+    /// Write what the unlink just earned to the doomed-name journal, reporting
+    /// whether it landed. A store that will not take it leaves this pass's own
+    /// retries as the only ones there are.
+    async fn journal_doomed(
+        &self,
+        scope: &DrainScope<'_>,
+        target: NodeId,
+        reclamation: &Reclamation,
+    ) -> bool {
+        if reclamation.is_empty() {
+            return false;
+        }
+        let Ok(entry) = encode_reclamation(reclamation) else {
+            return false;
+        };
+        self.staging
+            .put_staged_bytes(
+                &doomed_journal_key(&owner_tag(scope.enc_secret), target),
+                &entry,
+            )
+            .await
+            .is_ok()
+    }
+
+    /// Replay every delete this owner journaled and did not settle, off the
+    /// pass's own key listing. An entry only leaves once its reclamation lands,
+    /// so a crashed or refused confirm is settled here rather than lost.
+    async fn settle_journalled_deletes(&self, scope: &DrainScope<'_>, staged: &[Vec<u8>]) {
+        for key in journalled_keys(&owner_tag(scope.enc_secret), staged) {
+            let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
+                continue;
+            };
+            let Some(reclamation) = decode_reclamation(&entry) else {
+                continue;
+            };
+            if self.settle_reclamation(scope, &reclamation).await {
+                let _ = self.staging.remove_staged_bytes(&key).await;
+            }
+        }
     }
 
     /// Every node the delete of `target` detaches, refusing the whole operation
@@ -1502,28 +1559,19 @@ where
         Ok(doomed)
     }
 
-    /// Stop paying for what the unlink detached: owe the target's content debt,
-    /// retire the subtree's registry rows, and drop it from this device's live
-    /// set and base snapshot.
+    /// What the unlink just earned: the subtree's names, and the target's own
+    /// content debt.
     ///
-    /// Runs only once the shortened parent is live, so the debt it journals is
-    /// one the publish already earned — that landing is what makes
+    /// Quoted only once the shortened parent is live, so the debt is one the
+    /// publish already earned — that landing is what makes
     /// [`OwingRecord::Retired`] a fact rather than a claim.
     ///
     /// The debt is still withheld unless the base agrees the target is now
     /// unlinked: [`Self::publish_delete`] read and repainted the parent's own
     /// listing on the way in, so for the target — and only for the target —
     /// that answer is drawn from a record this pass actually resolved.
-    ///
-    /// A refused registry call does not fail the op — the unlink is already live
-    /// and re-running the delete would find nothing to remove — but it is owed
-    /// rather than dropped: the names go to [`OrphanHeads`], which every later
-    /// pass retries, because the local state that could name them again is gone
-    /// by the next statement. The local drops are unconditional; whatever the
-    /// registry answered, this device must stop re-PUTting records no parent
-    /// references.
-    async fn reclaim_doomed(&self, scope: &DrainScope<'_>, target: NodeId, doomed: &[Doomed]) {
-        let owed: Vec<OwedRetire> = doomed
+    fn owed_by_delete(&self, target: NodeId, doomed: &[Doomed]) -> Reclamation {
+        let owed = doomed
             .iter()
             .filter(|node| node.node == target && self.base.borrow().links_to(target).is_empty())
             .flat_map(|node| {
@@ -1536,32 +1584,45 @@ where
                 })
             })
             .collect();
-        if !owed.is_empty()
+        Reclamation {
+            doomed: doomed
+                .iter()
+                .map(|node| (node.node, node.name.as_str().to_owned()))
+                .collect(),
+            owed,
+        }
+    }
+
+    /// Settle one journaled reclamation, reporting whether every leg landed —
+    /// which is what licenses dropping its journal entry. A refused registry
+    /// call does not fail the op: the unlink is already live, and the entry that
+    /// stays behind is the retry.
+    ///
+    /// Idempotent on every leg: the retire ledger holds an entry it already has,
+    /// registry retirement is a server-side no-op on a replay, and the local
+    /// drops are removals.
+    async fn settle_reclamation(&self, scope: &DrainScope<'_>, reclamation: &Reclamation) -> bool {
+        if !reclamation.owed.is_empty()
             && StagingRetireLedger::new(self.staging)
-                .owe(&owner_tag(scope.enc_secret), &owed)
+                .owe(&owner_tag(scope.enc_secret), &reclamation.owed)
                 .await
                 .is_err()
         {
-            // A journal the store would not take leaves the bytes pinned, which
-            // is the lawful side of a failure this pass cannot retry: the unlink
-            // is already live and the op is done.
-            return;
+            // Leaving the bytes pinned is the lawful side of this failure: the
+            // unlink is already live, and an unpin the ledger never recorded is
+            // one nothing can account for.
+            return false;
         }
-        let names: Vec<String> = doomed
-            .iter()
-            .map(|node| node.name.as_str().to_owned())
-            .collect();
-        if retire(self.api, &names).await.is_err() {
-            for name in &names {
-                self.orphan_heads.record(name);
-            }
-        }
+        let retired = retire(self.api, &reclamation.names()).await.is_ok();
+        // Unconditional: whatever the registry answered, this device must stop
+        // re-PUTting records no parent references.
         let mut held = self.held.borrow_mut();
         let mut base = self.base.borrow_mut();
-        for node in doomed {
-            held.remove(&node.node.0);
-            base.remove_node(node.node);
+        for (node, _) in &reclamation.doomed {
+            held.remove(&node.0);
+            base.remove_node(*node);
         }
+        retired
     }
 
     /// The one plan behind rename, relink, and move: relocate a child ref,
