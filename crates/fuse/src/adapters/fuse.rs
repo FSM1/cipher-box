@@ -1252,6 +1252,8 @@ mod tests {
             ino,
             name: name.to_owned(),
             kind: NodeKind::File,
+            size: Some(0),
+            mtime_millis: None,
         }
     }
 

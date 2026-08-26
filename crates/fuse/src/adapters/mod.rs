@@ -9,3 +9,5 @@ pub mod linux;
 pub mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod stale;
+#[cfg(windows)]
+pub mod windows;

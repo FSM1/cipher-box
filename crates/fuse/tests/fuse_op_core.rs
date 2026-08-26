@@ -952,6 +952,47 @@ fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
     );
 }
 
+/// The Windows host adapter's own profile, driven through the core the way
+/// WinFsp drives it: a respelling resolves onto the stored name, every
+/// operation that names an existing node resolves the same way, and the strict
+/// comparator still decides every collision.
+///
+/// The generic tests above prove the rule; this one proves the WinFsp backend
+/// is the mount that ships it, so a profile that stopped declaring it would
+/// fail here rather than at a member's Explorer window.
+#[cfg(windows)]
+#[test]
+fn the_winfsp_profile_presents_names_the_windows_way() {
+    let adapter = RecordingAdapter::declaring(cipherbox_fuse::WINFSP_CAPABILITIES);
+    let mut core = mount_with(adapter);
+    let created = block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.mkdir(ROOT_INO, "Archive")).expect("mkdir");
+
+    let found = block_on(core.lookup(ROOT_INO, "REPORT.TXT")).expect("the respelling resolves");
+    assert_eq!(found.node, created.0.node);
+    assert_eq!(
+        names(&mut core, ROOT_INO),
+        vec!["Archive".to_owned(), "Report.txt".to_owned()],
+        "the stored name is never mutated by how it was looked up"
+    );
+
+    assert_eq!(
+        block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).err(),
+        Some(VfsError::AlreadyExists),
+        "presentation is not collision policy"
+    );
+    assert_eq!(
+        block_on(core.mkdir(ROOT_INO, "ARCHIVE")).err(),
+        Some(VfsError::AlreadyExists)
+    );
+
+    // A mount that resolves a respelling has to remove through one too, or a
+    // name Explorer shows is a name nothing can delete.
+    block_on(core.rmdir(ROOT_INO, "ARCHIVE")).expect("rmdir through the respelling");
+    block_on(core.unlink(ROOT_INO, "REPORT.TXT")).expect("unlink through the respelling");
+    assert!(names(&mut core, ROOT_INO).is_empty());
+}
+
 /// Case-sensitive presentation is the unix convention, and it has to hold for
 /// every operation that names an existing node — a mount whose `lookup` says a
 /// respelling does not exist must not delete through it.

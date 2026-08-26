@@ -45,6 +45,12 @@ pub struct Attributes {
 }
 
 /// One entry in a directory listing.
+///
+/// Carries the attributes an enumeration has to report, not just the name: a
+/// FUSE `readdir` needs the name and kind alone, but a WinFsp one answers with
+/// a whole `FSP_FSCTL_DIR_INFO`, and re-`getattr`-ing every child to fill it
+/// would put a whole directory into the engine's focus window. Both come out of
+/// the one render the listing already made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     /// The session's inode number for the child.
@@ -53,6 +59,12 @@ pub struct DirEntry {
     pub name: String,
     /// File or folder.
     pub kind: NodeKind,
+    /// Plaintext size in bytes, `None` until the content plane projects one —
+    /// the same provisional number [`Attributes::size`] carries, on the same
+    /// terms.
+    pub size: Option<u64>,
+    /// Modification time in Unix millis, once projected.
+    pub mtime_millis: Option<u64>,
 }
 
 /// One writable handle's uncommitted content: the sealed spill its writes
@@ -469,6 +481,12 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .into_iter()
             .map(|child| DirEntry {
                 ino: self.inodes.ino_for(child.id),
+                // A child a handle is still writing is as long as that handle
+                // has made it, exactly as `attributes` reports it — a listing
+                // that disagreed with the `getattr` beside it would show a
+                // stale length for a file this mount is holding open.
+                size: self.pending_len(child.id).or(child.size),
+                mtime_millis: child.mtime,
                 name: child.name,
                 kind: child.kind,
             })

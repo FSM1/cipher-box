@@ -37,6 +37,16 @@ pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
 pub use adapters::linux::mount;
 #[cfg(target_os = "macos")]
 pub use adapters::macos::mount;
+#[cfg(windows)]
+pub use adapters::windows::mount;
+/// What a WinFsp mount declares to the operation core. Exported because the
+/// portable vfs suite drives the core with this profile on the Windows leg;
+/// the FUSE profiles are reachable from their own modules and never leave the
+/// crate.
+#[cfg(windows)]
+pub use adapters::windows::{
+    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, OpenNode, WinFspInvalidator, WinFspMount,
+};
 pub use cache::CacheBudget;
 #[cfg(unix)]
 pub use errno::errno_of;
