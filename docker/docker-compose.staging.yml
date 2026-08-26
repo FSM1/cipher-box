@@ -109,8 +109,8 @@ services:
       - '80:80'
       - '443:443'
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - ./csp.caddy:/etc/caddy/csp.caddy
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./csp.caddy:/etc/caddy/csp.caddy:ro
       - ./certs:/etc/caddy/certs
       - /opt/cipherbox/web:/srv/web:ro
       - caddy_data:/data
