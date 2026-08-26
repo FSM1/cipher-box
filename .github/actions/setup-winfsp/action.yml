@@ -1,0 +1,62 @@
+name: Provision WinFsp
+description: Install the pinned WinFsp release — the Windows filesystem driver the host adapter links, resolves, and mounts.
+
+runs:
+  using: composite
+  steps:
+    # One version across every Windows leg: the leg that compiles the adapter
+    # and the legs that mount it must not sit on different WinFsp releases.
+    # Pinned by digest as well as version — this installer runs elevated on the
+    # runner and ships a kernel driver.
+    - name: Provision WinFsp
+      shell: powershell
+      env:
+        WINFSP_VERSION: '2.1'
+        WINFSP_BUILD: '2.1.25156'
+        WINFSP_SHA256: '073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A'
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $out = Join-Path $env:RUNNER_TEMP "winfsp-$env:WINFSP_BUILD.msi"
+        $url = "https://github.com/winfsp/winfsp/releases/download/v$env:WINFSP_VERSION/winfsp-$env:WINFSP_BUILD.msi"
+        Invoke-WebRequest -Uri $url -OutFile $out
+        $actual = (Get-FileHash $out -Algorithm SHA256).Hash
+        if ($actual -ne $env:WINFSP_SHA256) {
+          throw "WinFsp MSI hash mismatch: expected $env:WINFSP_SHA256, got $actual"
+        }
+        # INSTALLLEVEL=1000 selects the developer feature — the headers and
+        # import library `winfsp-sys` builds its bindings against.
+        $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
+        if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
+
+    # `winfsp-sys` (and `winfsp_init` at runtime) find WinFsp through this key
+    # and nothing else, so a build that never linked the installed driver fails
+    # here rather than at mount time.
+    - name: Verify the WinFsp installation the adapter builds against
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $key = 'HKLM:\SOFTWARE\WOW6432Node\WinFsp'
+        $installDir = (Get-ItemProperty -Path $key -Name InstallDir -ErrorAction Stop).InstallDir
+        if (-not $installDir) { throw "WinFsp InstallDir is not set under $key" }
+        Write-Host "WinFsp InstallDir: $installDir"
+        foreach ($required in 'inc', 'lib', 'bin') {
+          $path = Join-Path $installDir $required
+          if (!(Test-Path $path)) { throw "WinFsp $required directory not found at $path" }
+        }
+        # The delay-loaded DLL is resolved from the install directory at
+        # `winfsp_init`; on PATH as well so a test binary that loads it early
+        # finds it too.
+        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $installDir 'bin') -Encoding utf8
+
+    # `winfsp-sys` generates its bindings with bindgen, which needs libclang.
+    # The runner image ships LLVM but does not export this.
+    - name: Point bindgen at the runner's libclang
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $llvm = 'C:\Program Files\LLVM\bin'
+        if (Test-Path (Join-Path $llvm 'libclang.dll')) {
+          Add-Content -Path $env:GITHUB_ENV -Value "LIBCLANG_PATH=$llvm" -Encoding utf8
+        } else {
+          Write-Host "no libclang at $llvm; leaving bindgen to its own search"
+        }
