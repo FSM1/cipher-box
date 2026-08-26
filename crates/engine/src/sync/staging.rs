@@ -30,6 +30,7 @@ use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::storage_policy::StoragePolicy;
+use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX};
 use crate::sync::op::Op;
 use crate::sync::rebase::DeadLetterReason;
@@ -40,6 +41,7 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
+/// doomed-name journal entry, a
 /// received-shares list, a contact book, or the owner's invite records. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
@@ -47,6 +49,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
     key.starts_with(DRAINED_OP_MARK_PREFIX)
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
         || key.starts_with(RETIRE_LEDGER_PREFIX)
+        || key.starts_with(DOOMED_JOURNAL_PREFIX)
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)
         || key.starts_with(INVITE_RECORDS_PREFIX)
@@ -951,6 +954,7 @@ mod tests {
                 DRAINED_OP_MARK_PREFIX,
                 PUBLISHED_OP_MARK_PREFIX,
                 RETIRE_LEDGER_PREFIX,
+                DOOMED_JOURNAL_PREFIX,
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
                 INVITE_RECORDS_PREFIX,

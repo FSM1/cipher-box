@@ -30,7 +30,9 @@ pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adop
 
 /// Merge one folder's gate-passing children into `snapshot` **in place**,
 /// reporting whether the merge changed anything. Children the folder no longer
-/// names are unlinked, and dropped entirely once no parent links them.
+/// names are unlinked, and dropped with their whole detached subtree once no
+/// parent links them ([`Snapshot::remove_unreachable`]) — this is where a delete
+/// another device published arrives.
 ///
 /// The change report is what keeps a repeated projection of the same body from
 /// repainting the host: the focus-window refresh re-merges a folder every tick.
@@ -68,9 +70,7 @@ pub(crate) fn project_folder(
     changed |= !departed.is_empty();
     for id in departed {
         snapshot.unlink(folder, id);
-        if snapshot.links_to(id).is_empty() {
-            snapshot.remove_node(id);
-        }
+        snapshot.remove_unreachable(id);
     }
 
     for child in children {
@@ -403,6 +403,81 @@ mod tests {
         assert_eq!(meta.size, None);
         assert_eq!(meta.mtime, None);
         assert_eq!(meta.content_version, None);
+    }
+
+    /// A delete another device published arrives as a departed child. The
+    /// subtree under it goes with it, or the snapshot keeps nodes no walk from
+    /// the root can reach.
+    #[test]
+    fn a_departed_folder_takes_its_whole_subtree() {
+        let root = node_id(0);
+        let mut snap = project_fresh(
+            root,
+            &adopted_folder(vec![child(1, "dir", CoreNodeKind::Folder, 1)], 1),
+        );
+        project_folder(
+            &mut snap,
+            node_id(1),
+            &[child(2, "sub", CoreNodeKind::Folder, 1)],
+            1,
+            0,
+        );
+        project_folder(
+            &mut snap,
+            node_id(2),
+            &[child(3, "deep.txt", CoreNodeKind::File, 1)],
+            1,
+            0,
+        );
+
+        assert!(project_root(&mut snap, root, &adopted_folder(vec![], 2)));
+
+        assert!(!snap.contains(node_id(1)));
+        assert!(!snap.contains(node_id(2)), "the descendant folder");
+        assert!(!snap.contains(node_id(3)), "the descendant file");
+        assert!(snap.links().is_empty(), "and every link under them");
+    }
+
+    #[test]
+    fn a_departed_folder_leaves_what_another_parent_still_links() {
+        let root = node_id(0);
+        let mut snap = project_fresh(
+            root,
+            &adopted_folder(
+                vec![
+                    child(1, "dir", CoreNodeKind::Folder, 1),
+                    child(4, "keeper", CoreNodeKind::Folder, 1),
+                ],
+                1,
+            ),
+        );
+        project_folder(
+            &mut snap,
+            node_id(1),
+            &[child(2, "shared.txt", CoreNodeKind::File, 1)],
+            1,
+            0,
+        );
+        project_folder(
+            &mut snap,
+            node_id(4),
+            &[child(2, "shared.txt", CoreNodeKind::File, 2)],
+            1,
+            0,
+        );
+
+        project_root(
+            &mut snap,
+            root,
+            &adopted_folder(vec![child(4, "keeper", CoreNodeKind::Folder, 1)], 2),
+        );
+
+        assert!(!snap.contains(node_id(1)));
+        assert!(
+            snap.contains(node_id(2)),
+            "a node the surviving parent still links is live"
+        );
+        assert_eq!(snap.parent_of(node_id(2)), Some(node_id(4)));
     }
 
     #[test]

@@ -19,6 +19,7 @@
 
 pub mod boot;
 pub(crate) mod cancel;
+pub(crate) mod doomed;
 pub(crate) mod drain;
 pub mod model;
 pub mod op;
@@ -35,6 +36,7 @@ pub mod tick;
 pub(crate) mod upload_mark;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
+pub use doomed::{MAX_JOURNAL_REPLAYS, doomed_journal_key};
 pub use drain::{
     BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
     owner_scoped_key, owner_tag,
@@ -58,7 +60,7 @@ pub use record::{
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
-    FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,
+    FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_files, focus_folders,
     focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
 };
 pub use upload_mark::{UPLOAD_MARK_PREFIX, encode_upload_mark, upload_mark_key};

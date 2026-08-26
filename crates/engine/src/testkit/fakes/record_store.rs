@@ -3,13 +3,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+
 use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 
 /// Records held by one endpoint, keyed by routing key.
 type EndpointRecords = HashMap<String, Vec<u8>>;
 
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
-/// record bytes per configured endpoint.
+/// record bytes per configured endpoint, holding the **highest sequence** at
+/// each routing key as a real endpoint does ([`supersedes`]).
 ///
 /// Shared by design — every engine in a scenario clones the same store, so
 /// N instances see one "network". Direct [`seed_record`] /
@@ -29,10 +32,8 @@ pub struct InMemoryRecordStore {
     /// Endpoints currently returning a transport error (unreachable). Empty by
     /// default, so a store's behavior is unchanged until a test injects a fault.
     failing: Arc<Mutex<HashSet<EndpointId>>>,
-    /// Endpoints that reject a PUT but still serve GET — models an endpoint that
-    /// already holds a strictly-newer record (IPNS higher-sequence-wins) and so
-    /// ignores our stale write while still serving the winner. Lets the harness
-    /// drive a lost CAS race.
+    /// Endpoints that reject a PUT but still serve GET, so the harness can drive
+    /// a lost CAS race from the transport rather than from the record.
     put_failing: Arc<Mutex<HashSet<EndpointId>>>,
     /// Routing keys whose PUT is refused at every endpoint, so one record of a
     /// multi-record plan can fail while the rest of the plan publishes.
@@ -95,8 +96,8 @@ impl InMemoryRecordStore {
         self.failing.lock().expect("lock").remove(endpoint);
     }
 
-    /// Make `endpoint` reject PUTs while still serving GETs — an endpoint that
-    /// already holds a strictly-newer record and ignores our stale write.
+    /// Make `endpoint` reject PUTs while still serving GETs, driving a lost CAS
+    /// race from the transport rather than from the record.
     pub fn fail_put_endpoint(&self, endpoint: &EndpointId) {
         self.put_failing
             .lock()
@@ -228,16 +229,56 @@ impl RecordTransport for InMemoryRecordStore {
             .expect("lock")
             .get_mut(endpoint)
             .map(|records| {
+                if let Some(held) = records.get(routing_key)
+                    && supersedes(routing_key, held, record)
+                {
+                    return;
+                }
                 records.insert(routing_key.to_owned(), record.to_vec());
             })
             .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))
     }
 }
 
+/// Whether the record already held under `routing_key` beats the incoming one on
+/// IPNS higher-sequence-wins, so the endpoint keeps it and the stale PUT is a
+/// silent no-op — a real endpoint acks the write either way.
+///
+/// The routing key is the record's `ipnsName`, so both sequences are read from
+/// the verify chain rather than from unsigned bytes. A pair this fake cannot
+/// verify has no sequence to compare and is written through, so a test may still
+/// stage opaque bytes through the seam.
+fn supersedes(routing_key: &str, held: &[u8], incoming: &[u8]) -> bool {
+    let Ok(name) = IpnsName::parse(routing_key) else {
+        return false;
+    };
+    let sequence = |bytes: &[u8]| {
+        IpnsRecord::unmarshal(bytes)
+            .ok()
+            .and_then(|record| record.verify(&name).ok())
+            .map(|verified| verified.sequence)
+    };
+    sequence(held)
+        .zip(sequence(incoming))
+        .is_some_and(|(held, incoming)| held > incoming)
+}
+
 #[cfg(test)]
 mod tests {
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
     use super::*;
+    use crate::testkit::account::{EOL, TTL_NANOS};
     use crate::testkit::block_on;
+
+    /// A real signed record at `sequence`, under the name its own signer mints.
+    fn signed_value(signer: &Ed25519Signer, sequence: u64, value: &[u8]) -> Vec<u8> {
+        IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, EOL).marshal()
+    }
+
+    fn signed(signer: &Ed25519Signer, sequence: u64) -> Vec<u8> {
+        signed_value(signer, sequence, b"/ipfs/bafyvalue")
+    }
 
     #[test]
     fn unknown_endpoint_is_a_seam_error() {
@@ -260,6 +301,51 @@ mod tests {
         assert_eq!(
             store.record_at(&endpoint, "name"),
             Some(b"published".to_vec())
+        );
+    }
+
+    #[test]
+    fn a_stale_put_is_acked_and_loses_to_the_held_sequence() {
+        let endpoint = EndpointId::new("a");
+        let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        let signer = Ed25519Signer::from_seed([3u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        block_on(store.put_record(&endpoint, name.as_str(), &signed(&signer, 5))).expect("put 5");
+        block_on(store.put_record(&endpoint, name.as_str(), &signed(&signer, 4)))
+            .expect("a stale put is acked, as a real endpoint acks it");
+        assert_eq!(
+            store.record_at(&endpoint, name.as_str()),
+            Some(signed(&signer, 5)),
+            "the endpoint keeps the highest sequence"
+        );
+
+        block_on(store.put_record(&endpoint, name.as_str(), &signed(&signer, 6))).expect("put 6");
+        assert_eq!(
+            store.record_at(&endpoint, name.as_str()),
+            Some(signed(&signer, 6)),
+            "a newer sequence wins"
+        );
+        // Same sequence, so neither supersedes: the later write stands, which is
+        // what lets a re-PUT refresh an EOL at an unchanged sequence.
+        let refreshed = signed_value(&signer, 6, b"/ipfs/bafyrefreshed");
+        block_on(store.put_record(&endpoint, name.as_str(), &refreshed)).expect("put");
+        assert_eq!(store.record_at(&endpoint, name.as_str()), Some(refreshed));
+    }
+
+    #[test]
+    fn seeding_a_stale_record_still_bypasses_the_seam() {
+        let endpoint = EndpointId::new("a");
+        let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        let signer = Ed25519Signer::from_seed([4u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        block_on(store.put_record(&endpoint, name.as_str(), &signed(&signer, 9))).expect("put 9");
+        store.seed_record(&endpoint, name.as_str(), signed(&signer, 2));
+        assert_eq!(
+            store.record_at(&endpoint, name.as_str()),
+            Some(signed(&signer, 2)),
+            "adversarial staging is not a publish and answers to no sequence rule"
         );
     }
 

@@ -46,9 +46,9 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
-    UPLOAD_MARK_PREFIX, encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid,
-    upload_mark_key,
+    DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, PUBLISHED_OP_MARK_PREFIX, ResolveMode,
+    StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark, owner_scoped_key,
+    owner_tag, record_content_root_cid, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -3235,6 +3235,203 @@ fn a_delete_whose_unlink_never_published_reclaims_nothing() {
     assert!(
         retired_since(&alice, mark).is_empty(),
         "nothing is retired or unpinned behind an unlink that never landed"
+    );
+}
+
+/// A delete enumerates a subtree it cannot prove is reached from here alone —
+/// a child ref is wire data, and nothing binds a node to the folder naming it.
+/// A node a surviving parent also names is therefore not this delete's to stop
+/// paying for: its record has to stay held and re-PUT, or the availability cut
+/// lands on live data.
+#[test]
+fn a_delete_leaves_a_node_the_surviving_parent_still_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let deep = child_id(&engine, photos, "deep.bin");
+
+    // Another writer links the same node under the root as well.
+    concurrent_root_add(&world.record_store, &blocks, file_ref(deep.0, "deep.bin"));
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(engine.view()).unwrap().attrs(deep).is_some(),
+        "the second link is in gate-passing state"
+    );
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.view()).unwrap();
+    assert!(view.attrs(photos).is_none(), "the delete's own target goes");
+    assert!(
+        view.attrs(deep).is_some(),
+        "a node the root still names survives the reclamation of the folder it also sat under"
+    );
+}
+
+/// A delete can ack its unlink and still lose the confirm — a crash in the
+/// window, or a registry that will not answer. Nothing local survives to
+/// re-derive the doomed set from: the parent no longer names the target, so the
+/// retry finds nothing to remove and the early return is the end of it. The
+/// journal written at unlink-ack is what a later run settles it from.
+#[test]
+fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+
+    // The unlink publishes; every retire behind it is refused.
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the unlink is live"
+    );
+    drop(engine);
+
+    // Second run: the session-lived retry set went with the process, so the
+    // durable journal is the only record of what this delete still owes.
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 43);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the doomed name retires on a later pass rather than being lost"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "and the content the delete detached reclaims"
+        );
+    }
+
+    // Settled means settled: a third pass has nothing left to replay.
+    let settled = retire_targets(&alice).len();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_since(&alice, settled).is_empty(),
+        "the journal entry leaves once its reclamation lands"
+    );
+}
+
+/// The replay budget bounds the registry batches a pass spends, so it may only
+/// be charged for entries the pass can actually settle. An entry this build
+/// refuses is never removed, and nothing sweeps the journal prefix; charging it
+/// a slot would let a full budget's worth of them sit at the head of the sorted
+/// listing and starve every real delete behind them on every pass thereafter.
+#[test]
+fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+
+    // The unlink publishes and the retire is refused, so the delete's own debt
+    // is left standing in the journal for a later pass to replay.
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // A whole budget of entries this build's decoder refuses, filed under this
+    // owner ahead of the real one: a leading zero id sorts below any the engine
+    // mints.
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let real_key = doomed_journal_key(&owner, doomed);
+    for slot in 0..MAX_JOURNAL_REPLAYS {
+        let mut id = [0u8; 16];
+        id[15] = u8::try_from(slot).expect("the budget fits a byte");
+        let key = doomed_journal_key(&owner, NodeId(id));
+        assert!(
+            key < real_key,
+            "the planted entry sorts ahead of the real one"
+        );
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(&key, b"not a reclamation this build can decode"),
+        )
+        .expect("the staging store takes the planted entry");
+    }
+
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retired_since(&alice, mark).contains(&name.as_str().to_owned()),
+        "the real delete settles past the refused entries rather than queueing behind them"
     );
 }
 
