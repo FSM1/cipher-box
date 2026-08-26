@@ -5342,6 +5342,7 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .expect("the write commits");
+    let version = queued_version(&alice, op_id);
     jam_name(&world.record_store, child_id(&engine, ROOT, "photo.bin"));
 
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
@@ -5368,6 +5369,17 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
         Some(planted),
         "the dead letters the foreign set already holds are left byte for byte"
     );
+    // Nothing kept the record, so nothing can open these again — and the same
+    // unreadable set stands orphan GC down, which would leave them staged for
+    // as long as it is there.
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(!version.is_empty(), "the version had blocks to lose");
+    for block in version {
+        assert!(
+            !staged.contains(&block),
+            "a version whose only key carrier left is released, not leaked"
+        );
+    }
 }
 
 /// Register-first stops a publish only after its head block has uploaded and
@@ -6949,6 +6961,65 @@ fn restore(device: &FakeDevice, backup: &Backup) {
     });
 }
 
+/// The restore guard must not read the engine's own unconfirmed publish as a
+/// forgotten one. An acked PUT whose confirm-by-re-resolve missed leaves the
+/// record standing at the derived name with no sequence floor — the same two
+/// facts a restore leaves — and the retry it is owed re-mints the same sequence.
+/// The charged attempt is what tells them apart: this device remembers trying.
+#[test]
+fn an_unconfirmed_publish_that_did_land_is_retried_rather_than_read_as_a_replay() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let name = write_name(photo);
+
+    // The PUT lands; nothing serves it back, so the publish cannot confirm.
+    world.record_store.fail_get_for(name.as_str());
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the parent never gained the child this pass"
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "an unconfirmed publish is availability, not a verdict"
+    );
+
+    // It propagates. The record now resolves and passes its own gate, with no
+    // floor behind it — the shape the guard refuses on a restore.
+    world.record_store.heal_get_for(name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["photo.bin".to_owned()],
+        "the create completes instead of abandoning itself"
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "and nothing is dead-lettered"
+    );
+}
+
 /// A data directory restored from before its own drain: the queue is back, the
 /// marks and floors that record what already published are not, and the record
 /// plane kept everything. Republishing the create would re-author a node the
@@ -7007,8 +7078,9 @@ fn a_restored_queue_never_republishes_a_create_the_record_plane_already_carries(
     );
     assert_eq!(
         retired_since(&alice, retired_before),
-        Vec::<String>::new(),
-        "the record already on the plane is not this replay's to cut"
+        vec![write_name(photo).as_str().to_owned()],
+        "and the name no published parent references is handed back, so the \
+         republisher stops keeping the resurrection candidate alive"
     );
 }
 

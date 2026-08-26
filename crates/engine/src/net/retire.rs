@@ -440,6 +440,8 @@ where
             Entry::Occupied(held) => held.into_mut(),
             Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
         };
+        // Bounded like every other batch this module reports: the reasons are
+        // there to be acted on, and the figure is what counts the debt.
         let stall = |reason| ReclaimStall {
             node: entry.node,
             target: entry.target.clone(),
@@ -447,7 +449,9 @@ where
         };
         let Some(node) = node else {
             still_owed = still_owed.saturating_add(entry.owed_bytes);
-            stalls.push(stall(ReclaimStallReason::NodeUnreadable));
+            if stalls.len() < REGISTRY_BATCH_MAX {
+                stalls.push(stall(ReclaimStallReason::NodeUnreadable));
+            }
             continue;
         };
         // A target its own node's record still reaches is one whose shortening
@@ -455,12 +459,16 @@ where
         // nothing to the figure and the entry waits for the record that drops
         // it.
         if node.contains(&entry.target) {
-            stalls.push(stall(ReclaimStallReason::TargetStillLive));
+            if stalls.len() < REGISTRY_BATCH_MAX {
+                stalls.push(stall(ReclaimStallReason::TargetStillLive));
+            }
             continue;
         }
         let Some(expansion) = expand_owed(&entry, gateway, http, profile).await else {
             still_owed = still_owed.saturating_add(entry.owed_bytes);
-            stalls.push(stall(ReclaimStallReason::TargetUnexpandable));
+            if stalls.len() < REGISTRY_BATCH_MAX {
+                stalls.push(stall(ReclaimStallReason::TargetUnexpandable));
+            }
             continue;
         };
         let retirable = expansion.minus(node);
@@ -488,7 +496,8 @@ where
 pub struct ReclaimPass {
     /// The pinned bytes still owed after the pass — the vault's pending figure.
     pub still_owed: u64,
-    /// One entry per debt the pass could not settle, in ledger order.
+    /// One entry per debt the pass could not settle, in ledger order, capped at
+    /// one registry batch.
     pub stalls: Vec<ReclaimStall>,
 }
 

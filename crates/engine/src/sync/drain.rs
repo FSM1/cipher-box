@@ -210,6 +210,11 @@ impl Attempts {
         bytes
     }
 
+    /// What `op_id` has been charged so far.
+    fn charged_to(&self, op_id: OpId) -> u32 {
+        self.counts.get(&op_id).copied().unwrap_or(0)
+    }
+
     /// Charge one attempt to `op_id` and return its new count.
     fn charge(&mut self, op_id: OpId) -> u32 {
         self.dirty = true;
@@ -722,7 +727,7 @@ where
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
             let preserved = match op.content_root_cid() {
-                Some(_) => self.preserve_dead_letter(*op_id).await?,
+                Some(_) => self.preserve_dead_letter(*op_id, op).await?,
                 None => Preservation::Kept,
             };
             self.abandon(scope, *op_id, op).await?;
@@ -795,7 +800,7 @@ where
                     Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
+                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
                     return;
                 };
                 let handed_back = if owes_its_name {
@@ -809,19 +814,33 @@ where
                         .push((op_id, op.target, preserved.observed(reason)));
                 }
             }
-            // Both keep their staged version and retire nothing, because a live
-            // record already stands at the name each would hand back: the
-            // conditional-edit loser's own bytes may be registered from a halted
-            // upload of the version now there, and a replayed create's node
-            // record is on the record plane by definition. Unpinning content a
-            // live record names is loss, where leaving rows charged is a leak.
-            Halt::Permanent(
-                reason @ (DeadLetterReason::BaseSuperseded | DeadLetterReason::AlreadyPublished),
-            ) => {
-                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
+            // A conditional-edit loser keeps its staged version and retires
+            // nothing: its own bytes may already be registered from a halted
+            // upload of the version now at the name, and unpinning content a
+            // live record names is loss where leaving rows charged is a leak.
+            Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
+                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
                     return;
                 };
                 if self.dequeue_op(op_id).await.is_ok() {
+                    report
+                        .dead_letters
+                        .push((op_id, op.target, preserved.observed(reason)));
+                }
+            }
+            // A replayed create keeps its staged version for the same reason and
+            // hands back the same name a spent budget does: the record standing
+            // at it is one no published parent references, so its registry row
+            // would otherwise be re-PUT for as long as the account holds it —
+            // which for a restored replay keeps the resurrection candidate alive
+            // at the owner's own expense.
+            Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
+                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
+                    return;
+                };
+                if self.retire_unreferenced_name(scope, op).await.is_ok()
+                    && self.dequeue_op(op_id).await.is_ok()
+                {
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -1293,14 +1312,16 @@ where
         parent: NodeId,
         node: &NewNode,
     ) -> Result<(), Halt> {
+        let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
+        self.ensure_folder(scope, pass, parent).await?;
+        // After the parent loads, so the scope-chain refusal precedes the
+        // probe's own network read.
         if self
-            .create_replays_a_publish(scope, applied.op.target)
+            .create_replays_a_publish(scope, applied.op_id, applied.op.target)
             .await?
         {
             return Err(Halt::Permanent(DeadLetterReason::AlreadyPublished));
         }
-        let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
-        self.ensure_folder(scope, pass, parent).await?;
 
         let mut shortfall = None;
         let (body, content_cids) = match node {
@@ -2988,14 +3009,23 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
-    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<Preservation, Halt> {
+    ///
+    /// A [`Preservation::Refused`] set keeps nothing, and the record leaving the
+    /// queue takes the version's only content key with it — so its blocks are
+    /// released here rather than left to orphan GC, which the same unreadable
+    /// set stands down for as long as it is there.
+    async fn preserve_dead_letter(&self, op_id: OpId, op: &Op) -> Result<Preservation, Halt> {
         let queued = self.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
-        preserve_dead_letter(self.staging, record, self.scheduler.now())
+        let preserved = preserve_dead_letter(self.staging, record, self.scheduler.now())
             .await
-            .map_err(seam)
+            .map_err(seam)?;
+        if preserved == Preservation::Refused {
+            self.release_staged_blocks(op).await;
+        }
+        Ok(preserved)
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
@@ -3039,23 +3069,42 @@ where
     /// drain, where the queue comes back and the marks that record what already
     /// published do not.
     ///
-    /// Two reads, and each answers half of it. The name derives from the node id
-    /// this op minted, so a record that resolves there **and passes the child
-    /// gate** is one this op published: the gate binds the record to this node
-    /// id under this scope root, which nothing jammed at the name satisfies. The
-    /// durable sequence floor is then what separates a create this device has
-    /// forgotten from one still mid-publish — a confirmed publish self-adopts
-    /// through the same gate, which raises that floor before the parent naming
-    /// it publishes, so a crash in that window keeps the floor and re-authors.
+    /// The name derives from the node id this op minted, so a record that
+    /// resolves there **and passes the child gate** is one this op published:
+    /// the gate binds the record to this node id under this scope root, which
+    /// nothing jammed at the name satisfies.
     ///
-    /// Fails toward publishing: nothing resolvable, a gate rejection and a seam
-    /// failure all read the same here, and a create the drain cannot probe is
-    /// one whose own publish would not land either.
+    /// What that alone cannot say is whether this device has *forgotten*
+    /// publishing it, and two durable reads answer that before the network is
+    /// touched. An op with a charged attempt is one this device remembers
+    /// trying: an acked PUT whose confirm-by-re-resolve missed leaves exactly
+    /// this record with exactly no floor, and the retry it is owed re-mints the
+    /// same sequence. A raised sequence floor says the same for a publish that
+    /// confirmed and then lost the parent naming it — the self-adopt raises the
+    /// floor before that parent publishes, so a crash in the window re-authors
+    /// as it always has. A restore rewinds both.
+    ///
+    /// A seam failure holds the op for a later pass rather than answering. Only
+    /// an unresolvable name and a gate rejection read as "not published", and a
+    /// create the drain cannot reach is one whose own publish would not land
+    /// either.
     async fn create_replays_a_publish(
         &self,
         scope: &DrainScope<'_>,
+        op_id: OpId,
         target: NodeId,
     ) -> Result<bool, Halt> {
+        // The durable record, not this pass's copy: what a restore rewinds is
+        // exactly what survives a restart.
+        let attempts = Attempts::decode(
+            self.staging
+                .staged_bytes(OP_ATTEMPTS_KEY)
+                .await
+                .map_err(seam)?,
+        );
+        if attempts.charged_to(op_id) > 0 {
+            return Ok(false);
+        }
         let name = derive_write_name(scope.write_scope_seed, &target.0);
         if floor::sequence_floor(self.floors, name.as_str().as_bytes())
             .await
