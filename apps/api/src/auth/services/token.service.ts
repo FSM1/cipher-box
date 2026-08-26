@@ -15,6 +15,7 @@ import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import { refreshRowState } from '../refresh-liveness';
 import { GatewayTokenService } from './gateway-token.service';
 
 export interface TokenPair {
@@ -143,7 +144,8 @@ export class TokenService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (existing.usedAt !== null) {
+    const state = refreshRowState(existing, now);
+    if (state === 'spent') {
       // Reuse detected: the token was already rotated once. Someone —
       // legitimate client or thief — is replaying. Kill the whole family.
       await this.revokeFamily(existing.familyId);
@@ -153,7 +155,7 @@ export class TokenService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (existing.expiresAt.getTime() <= now.getTime()) {
+    if (state === 'expired') {
       await this.revokeFamily(existing.familyId);
       throw new UnauthorizedException('Refresh token expired');
     }

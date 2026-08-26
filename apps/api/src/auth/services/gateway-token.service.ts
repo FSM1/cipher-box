@@ -9,6 +9,7 @@ import { sha256Hex } from '../../common/hash';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
 import { GatewayToken } from '../entities/gateway-token.entity';
 import { RefreshToken } from '../entities/refresh-token.entity';
+import { liveRefreshRowSql } from '../refresh-liveness';
 import { resolveAccessTtlSeconds } from './access-ttl';
 
 /**
@@ -108,13 +109,11 @@ export class GatewayTokenService {
       .createQueryBuilder('gateway')
       .select('gateway.expiresAt', 'expires_at')
       // A pseudonym is only as alive as the session that minted it: the family
-      // must still hold an unused, unexpired refresh row. Logout, reuse
-      // detection, and the account cascade all delete those rows, so each
-      // revokes gateway reads without a second path to keep in step.
+      // must still hold a live refresh row (see `refreshRowState`).
       .innerJoin(
         RefreshToken,
         'refresh',
-        'refresh.family_id = gateway.family_id AND refresh.user_id = gateway.user_id AND refresh.used_at IS NULL AND refresh.expires_at > :now'
+        `refresh.family_id = gateway.family_id AND refresh.user_id = gateway.user_id AND ${liveRefreshRowSql('refresh')}`
       )
       .where('gateway.token_hash = :tokenHash', { tokenHash })
       .andWhere('gateway.expires_at > :now')
