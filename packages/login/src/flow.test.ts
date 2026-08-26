@@ -407,6 +407,34 @@ describe('ending the session across a host with more than one context', () => {
     }
   });
 
+  it('signs no context back in when the end lands inside a handoff already in flight', async () => {
+    let release!: () => void;
+    let starts = 0;
+    const facade = fakeFacade({
+      start: () => {
+        starts += 1;
+        return starts === 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => (release = resolve));
+      },
+    });
+    const session = fakeSession({ loggedIn: true });
+    const parts = build({ session, facade });
+    await parts.flow.loginWithGoogle('id-token');
+    const held = parts.flow.resume();
+
+    await expect(parts.flow.logout()).rejects.toThrow();
+    release();
+    await held;
+
+    // The gate refused the end's own teardown, so the parked handoff owes it:
+    // it ends the session it was about to re-enter rather than reporting a
+    // sign-in over an account this context has already signed out.
+    expect(loggedIn(parts)).toHaveLength(1);
+    expect(parts.armed.at(-1)).toBeNull();
+    expect(session.calls.logouts).toBe(1);
+  });
+
   it('refuses to hand the engine a session the end left behind', async () => {
     const session = fakeSession({ loggedIn: true });
     const parts = build({ session });

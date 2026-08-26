@@ -6,6 +6,10 @@ import { useAuthState } from '../../stores/auth.store';
 /**
  * Who is signed in, and the way out. Escape is handled on the container, not the
  * trigger, so it still closes once focus moves into the dropdown.
+ *
+ * Its items keep plain link and button semantics: with no roving focus or
+ * arrow-key traversal here, `role="menu"` would promise a keyboard widget this
+ * does not implement — `ContextMenu` is the one that earns the role.
  */
 export function UserMenu() {
   const { email } = useAuthState();
@@ -25,7 +29,6 @@ export function UserMenu() {
         className="user-menu-trigger"
         type="button"
         aria-expanded={isOpen}
-        aria-haspopup="true"
         onClick={() => setIsOpen(!isOpen)}
       >
         {/* Wallet logins carry no email. */}
@@ -34,7 +37,7 @@ export function UserMenu() {
       </button>
 
       {isOpen && (
-        <div className="user-menu-dropdown" role="menu">
+        <div className="user-menu-dropdown">
           {/* The recovery phrase, this device and the vault's own settings all
               live on the settings route (blueprint/web-client.md "Composition"). */}
           <Link className="logout-link" to="/settings" data-testid="user-menu-settings">

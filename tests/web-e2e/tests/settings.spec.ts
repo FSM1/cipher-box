@@ -60,7 +60,7 @@ test('forgetting the device signs every tab out and re-seeds none', async ({ pag
   await settings.open();
   // Reached through the sidebar, so this is also the route's own smoke check.
   await expect(page).toHaveURL(/\/settings$/);
-  await expect(settings.accountId).toBeVisible();
+  await expect(settings.accountId).toHaveText(accountId);
 
   await settings.forgetDevice();
 

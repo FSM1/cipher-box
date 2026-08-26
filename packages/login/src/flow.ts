@@ -92,7 +92,7 @@ let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promis
  * name one because none was built yet. Cleared by the next deliberate login.
  *
  * A provider session can outlive the end that retired it — it arrived after the
- * end reached this context, or its own teardown refused — and `resume()` would
+ * end reached this context, or its own teardown refused — and a handoff would
  * otherwise hand the engine its secret straight back, re-entering the session
  * that just ended and, after a forget, re-seeding what it erased.
  */
@@ -169,6 +169,12 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     secrets?.use(session);
     try {
       await handOffLoginSecret(facade, session);
+      // The end latches while this export is in flight, and its own teardown is
+      // the leg the serialization gate refuses; signing in here would re-enter
+      // the session it retired, so the catch below ends that session instead.
+      if (retired === 'any' || retired === session) {
+        throw new Error('the session ended before this sign-in finished');
+      }
       account.signedIn(method, email);
     } catch (failure) {
       secrets?.use(null);
