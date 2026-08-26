@@ -718,7 +718,7 @@ fn a_read_path_operation_past_the_staleness_threshold_hints_a_refresh_for_its_fo
 }
 
 #[test]
-fn every_read_path_operation_runs_the_ttl_check_against_the_folder_it_has_in_view() {
+fn every_read_path_operation_runs_the_ttl_check_against_the_node_it_has_in_view() {
     let (mut core, root, clock, _events) = mount_clocked(
         RecordingAdapter::push_capable(),
         &[("notes.txt", NodeKind::File)],
@@ -738,8 +738,8 @@ fn every_read_path_operation_runs_the_ttl_check_against_the_folder_it_has_in_vie
     block_on(core.getattr(file.ino)).expect("getattr");
     assert_eq!(
         core.last_refresh_hint(),
-        None,
-        "a file puts no folder in view — its lookup already focused the parent"
+        Some(file.node),
+        "a getattr on a file puts the file itself in view: its size and mtime are in its own record, not the parent's listing"
     );
 }
 
@@ -2523,6 +2523,36 @@ mod published {
             block_on(mount.core.read(after, 0, expected.len() as u32)).expect("the append reads"),
             expected,
             "the append composes over the version the length came from"
+        );
+    }
+
+    /// A second device's version reaches an idle mount without an `open`.
+    ///
+    /// A version publish authors one record — the file's — and a `ChildRef`
+    /// mirrors neither size nor mtime, so the root's own record never moves and
+    /// no amount of folder refreshing repaints the file. `getattr` putting the
+    /// file itself in view is what gives the tick a file leg to run.
+    #[test]
+    fn a_tick_repaints_a_file_another_device_republished_without_an_open() {
+        let published = clip_bytes();
+        let mut mount = mount_published(&published, CacheBudget::CI);
+        let ino = mount.ino;
+        let remote = vec![0xBB; 323];
+        assert_ne!(remote.len(), published.len(), "the head length moves");
+        publish_from_another_device(&mut mount, &remote);
+
+        // Nothing has resolved the file's own record yet, so the base still
+        // holds what the mount came up on — and this call is what asks for it.
+        assert_eq!(
+            block_on(mount.core.getattr(ino)).expect("getattr").size,
+            Some(published.len() as u64)
+        );
+
+        advance_and_pump(&mut mount);
+        assert_eq!(
+            block_on(mount.core.getattr(ino)).expect("getattr").size,
+            Some(remote.len() as u64),
+            "the tick's file leg repainted the base off the other device's record"
         );
     }
 

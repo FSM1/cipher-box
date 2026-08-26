@@ -37,6 +37,9 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose PUT is refused at every endpoint, so one record of a
     /// multi-record plan can fail while the rest of the plan publishes.
     put_failing_keys: Arc<Mutex<HashSet<String>>>,
+    /// Routing keys whose GET is refused at every endpoint, so one node of a
+    /// tree can be unresolvable while the rest of it reads normally.
+    get_failing_keys: Arc<Mutex<HashSet<String>>>,
 }
 
 impl InMemoryRecordStore {
@@ -58,6 +61,7 @@ impl InMemoryRecordStore {
             failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
+            get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -140,6 +144,32 @@ impl InMemoryRecordStore {
             .expect("lock")
             .contains(routing_key)
     }
+
+    /// Refuse every GET under `routing_key` while the rest of the name space
+    /// resolves normally, until [`heal_get_for`](Self::heal_get_for) clears it —
+    /// one node of a tree that no source will serve.
+    pub fn fail_get_for(&self, routing_key: &str) {
+        self.get_failing_keys
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
+    }
+
+    /// Restore `routing_key`'s GET path.
+    pub fn heal_get_for(&self, routing_key: &str) {
+        self.get_failing_keys
+            .lock()
+            .expect("lock")
+            .remove(routing_key);
+    }
+
+    /// Whether `routing_key`'s GET is currently injected to fail everywhere.
+    fn get_failing_key(&self, routing_key: &str) -> bool {
+        self.get_failing_keys
+            .lock()
+            .expect("lock")
+            .contains(routing_key)
+    }
 }
 
 impl RecordTransport for InMemoryRecordStore {
@@ -158,6 +188,9 @@ impl RecordTransport for InMemoryRecordStore {
                 "endpoint unreachable: {}",
                 endpoint.0
             )));
+        }
+        if self.get_failing_key(routing_key) {
+            return Err(SeamError::new(format!("get refused for {routing_key}")));
         }
         let record = self
             .inner
@@ -228,5 +261,20 @@ mod tests {
             store.record_at(&endpoint, "name"),
             Some(b"published".to_vec())
         );
+    }
+
+    #[test]
+    fn a_key_scoped_get_fault_leaves_every_other_key_serving() {
+        let endpoint = EndpointId::new("a");
+        let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        store.seed_record(&endpoint, "hidden", b"r".to_vec());
+        store.seed_record(&endpoint, "served", b"r".to_vec());
+
+        store.fail_get_for("hidden");
+        assert!(block_on(store.get_record(&endpoint, "hidden", 1024)).is_err());
+        assert!(block_on(store.get_record(&endpoint, "served", 1024)).is_ok());
+
+        store.heal_get_for("hidden");
+        assert!(block_on(store.get_record(&endpoint, "hidden", 1024)).is_ok());
     }
 }

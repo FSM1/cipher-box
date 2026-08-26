@@ -25,10 +25,13 @@ use crate::content::{
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
-    CredentialStore, Http, OwedRetire, RetireLedger, SeamError, SeamResult, StagingStore,
+    CredentialStore, Http, OwedRetire, OwingRecord, RetireLedger, SeamError, SeamResult,
+    StagingStore,
 };
 
-/// Head blocks a publish left charged and unreachable, pending retirement.
+/// Registry rows a pass left charged and unreachable, pending retirement: the
+/// head blocks of a failed publish, and the names of a reclaimed subtree whose
+/// retire the registry refused.
 ///
 /// Session-lived and shared by every publisher — the drain clears it at the end
 /// of a pass, the settings publish at the point of failure — so a retire the
@@ -134,10 +137,16 @@ where
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 
-/// One stored entry: the owing node's id, then the owed figure and the manifest
-/// total as big-endian `u64`. The target itself is the key, so it is not written
-/// into the value.
-const ENTRY_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>();
+/// One stored entry: the owing node's id, the owed figure and the manifest total
+/// as big-endian `u64`, then the owing-record class. The target itself is the
+/// key, so it is not written into the value.
+const ENTRY_LEN: usize = NODE_ID_LEN + 2 * size_of::<u64>() + 1;
+
+/// [`OwingRecord::Published`] as the entry stores it.
+const OWING_PUBLISHED: u8 = 0;
+
+/// [`OwingRecord::Retired`] as the entry stores it.
+const OWING_RETIRED: u8 = 1;
 
 /// The engine's location-independent node id, as the entry stores it.
 const NODE_ID_LEN: usize = 16;
@@ -181,13 +190,26 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()> {
         for entry in entries {
             let key = Self::key(owner_tag, &entry.target)?;
-            // A held entry stands, so a replayed prune cannot move what the
-            // vault reports as pending; an unreadable one is repaired rather
-            // than left to sit undrainable forever.
-            if decode_entry(self.0.staged_bytes(&key).await?).is_some() {
-                continue;
+            // A held entry's figures stand, so a replayed prune cannot move what
+            // the vault reports as pending; an unreadable one is repaired rather
+            // than left to sit undrainable forever. The class is the exception:
+            // it only ever advances to `Retired`, because a node whose record a
+            // delete retired never publishes again, and keeping the stored
+            // `Published` would leave that debt unsettleable.
+            match decode_entry(self.0.staged_bytes(&key).await?) {
+                Some(held) if held.owing == entry.owing => continue,
+                Some(held) if entry.owing == OwingRecord::Retired => {
+                    let advanced = OwedRetire {
+                        owing: OwingRecord::Retired,
+                        ..held
+                    };
+                    self.0
+                        .put_staged_bytes(&key, &encode_entry(&advanced))
+                        .await?;
+                }
+                Some(_) => continue,
+                None => self.0.put_staged_bytes(&key, &encode_entry(entry)).await?,
             }
-            self.0.put_staged_bytes(&key, &encode_entry(entry)).await?;
         }
         Ok(())
     }
@@ -230,16 +252,25 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 fn encode_entry(entry: &OwedRetire) -> [u8; ENTRY_LEN] {
     let mut stored = [0u8; ENTRY_LEN];
     let (node, rest) = stored.split_at_mut(NODE_ID_LEN);
-    let (owed, manifest) = rest.split_at_mut(size_of::<u64>());
+    let (owed, rest) = rest.split_at_mut(size_of::<u64>());
+    let (manifest, owing) = rest.split_at_mut(size_of::<u64>());
     node.copy_from_slice(&entry.node);
     owed.copy_from_slice(&entry.owed_bytes.to_be_bytes());
     manifest.copy_from_slice(&entry.manifest_bytes.to_be_bytes());
+    owing[0] = match entry.owing {
+        OwingRecord::Published => OWING_PUBLISHED,
+        OwingRecord::Retired => OWING_RETIRED,
+    };
     stored
 }
 
-/// One entry's node, owed figure and manifest total — or `None` for bytes this
+/// One entry's node, figures and owing-record class — or `None` for bytes this
 /// build did not write, which read as unwritten rather than as figures of their
 /// own. The `target` of what comes back is a placeholder: it lives in the key.
+///
+/// An unknown class byte reads as unwritten too: guessing it `Published` would
+/// strand a hard delete's debt forever, and guessing it `Retired` would let a
+/// live node's content unpin.
 fn decode_entry(stored: Option<Vec<u8>>) -> Option<OwedRetire> {
     let stored = stored?;
     if stored.len() != ENTRY_LEN {
@@ -247,9 +278,15 @@ fn decode_entry(stored: Option<Vec<u8>>) -> Option<OwedRetire> {
     }
     let (node, rest) = stored.split_first_chunk::<NODE_ID_LEN>()?;
     let (owed, rest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
-    let (manifest, _) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (manifest, owing) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let owing = match *owing.first()? {
+        OWING_PUBLISHED => OwingRecord::Published,
+        OWING_RETIRED => OwingRecord::Retired,
+        _ => return None,
+    };
     Some(OwedRetire {
         node: *node,
+        owing,
         target: String::new(),
         owed_bytes: u64::from_be_bytes(*owed),
         manifest_bytes: u64::from_be_bytes(*manifest),
@@ -271,6 +308,12 @@ fn decode_entry(stored: Option<Vec<u8>>) -> Option<OwedRetire> {
 /// It is also what makes a debt safe to journal ahead of the shortened record: a
 /// target the node's record still names has no landed shortening behind it.
 ///
+/// `live` is told the node's [`OwingRecord`] class, because a hard-deleted node
+/// has no record left to read and its debt would otherwise sit unsettleable
+/// against a never-discard ledger. The class is a property of the node across
+/// the whole pass, not of the entry carrying it: one hard delete retires the
+/// record out from under every debt that node already owed.
+///
 /// An entry clears on the registry's own answer. Everything else — offline, an
 /// expired token, a throttle, a root no source will serve — leaves the entry
 /// owed and retries on a later pass; a registry that refused one batch stops the
@@ -285,7 +328,7 @@ pub async fn drain_owed_retires<L, H, C>(
     gateway: &Gateway,
     http: &H,
     profile: &ContentProfile,
-    live: impl AsyncFn([u8; 16]) -> Option<BTreeSet<String>>,
+    live: impl AsyncFn([u8; 16], OwingRecord) -> Option<BTreeSet<String>>,
 ) -> Option<u64>
 where
     L: RetireLedger,
@@ -293,6 +336,11 @@ where
     C: CredentialStore,
 {
     let owed = ledger.owed(owner_tag).await.ok()?;
+    let retired: BTreeSet<[u8; 16]> = owed
+        .iter()
+        .filter(|entry| entry.owing == OwingRecord::Retired)
+        .map(|entry| entry.node)
+        .collect();
     let mut still_owed = 0u64;
     let mut registry_up = true;
     // One record read per owing node, not per entry — a prune drops several
@@ -303,9 +351,14 @@ where
     // counts it once whether or not the retire that names it lands.
     let mut counted: BTreeSet<String> = BTreeSet::new();
     for entry in owed {
+        let owing = if retired.contains(&entry.node) {
+            OwingRecord::Retired
+        } else {
+            OwingRecord::Published
+        };
         let node = match live_of.entry(entry.node) {
             Entry::Occupied(held) => held.into_mut(),
-            Entry::Vacant(slot) => slot.insert(live(entry.node).await),
+            Entry::Vacant(slot) => slot.insert(live(entry.node, owing).await),
         };
         let Some(node) = node else {
             still_owed = still_owed.saturating_add(entry.owed_bytes);
@@ -604,7 +657,7 @@ mod tests {
             &gateway(),
             http,
             &ContentProfile::CI,
-            async |_| live.clone(),
+            async |_, _| live.clone(),
         ))
         .expect("the ledger reads");
         (remaining, block_on(ledger.owed(owner)).expect("owed"))
@@ -948,6 +1001,146 @@ mod tests {
             block_on(StagingRetireLedger::new(&store).owed(OWNER)).expect("owed"),
             vec![entry]
         );
+    }
+
+    /// The class a hard delete journals is the one the pass asks `live` about,
+    /// and it survives the store: without it the delete's debt would sit against
+    /// a never-discard ledger forever.
+    #[test]
+    fn a_hard_deletes_debt_settles_against_an_empty_live_set() {
+        let (version, root_block, leaf_cids) = doomed_version(&[8u8; 100]);
+        let entry =
+            OwedRetire::whole_retired(NODE, version.content_cid.clone(), version.pinned_bytes);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let asked: RefCell<Vec<OwingRecord>> = RefCell::new(Vec::new());
+        let remaining = block_on(drain_owed_retires(
+            &StagingRetireLedger::new(&store),
+            OWNER,
+            &ApiClient::new(
+                http.clone(),
+                InMemoryCredentialStore::default(),
+                "http://api.test",
+            ),
+            &gateway(),
+            &http,
+            &ContentProfile::CI,
+            // What `live_node_cids` answers for a node the delete unlinked: no
+            // live listing reaches it, whatever its lingering record names.
+            async |_, owing| {
+                asked.borrow_mut().push(owing);
+                Some(BTreeSet::new())
+            },
+        ))
+        .expect("the ledger reads");
+
+        assert_eq!(
+            asked.into_inner(),
+            vec![OwingRecord::Retired],
+            "the stored class reaches the live-set read"
+        );
+        let retired = retired_targets(&http);
+        for leaf in leaf_cids {
+            assert!(retired.contains(&leaf), "every leaf retires");
+        }
+        assert_eq!(remaining, 0);
+        assert!(
+            block_on(StagingRetireLedger::new(&store).owed(OWNER))
+                .expect("owed")
+                .is_empty(),
+            "the debt settles instead of standing forever"
+        );
+    }
+
+    /// A prune's debt against a node a later hard delete removed would otherwise
+    /// be stranded: the class belongs to the node, not to the entry carrying it.
+    #[test]
+    fn one_hard_deleted_entry_settles_the_same_nodes_earlier_prune_debt() {
+        let (pruned, pruned_block, _) = owed_version(&[9u8; 100]);
+        let (version, deleted_block, _) = doomed_version(&[10u8; 100]);
+        let deleted =
+            OwedRetire::whole_retired(NODE, version.content_cid.clone(), version.pinned_bytes);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &pruned);
+        owe(&store, OWNER, &deleted);
+
+        let http = blocks_http(
+            vec![
+                (pruned.target.clone(), pruned_block),
+                (deleted.target.clone(), deleted_block),
+            ],
+            Some(1),
+        );
+        let asked: RefCell<Vec<OwingRecord>> = RefCell::new(Vec::new());
+        block_on(drain_owed_retires(
+            &StagingRetireLedger::new(&store),
+            OWNER,
+            &ApiClient::new(
+                http.clone(),
+                InMemoryCredentialStore::default(),
+                "http://api.test",
+            ),
+            &gateway(),
+            &http,
+            &ContentProfile::CI,
+            async |_, owing| {
+                asked.borrow_mut().push(owing);
+                Some(BTreeSet::new())
+            },
+        ))
+        .expect("the ledger reads");
+
+        assert_eq!(
+            asked.into_inner(),
+            vec![OwingRecord::Retired],
+            "one read per node, and the delete decides its class"
+        );
+        assert!(
+            block_on(StagingRetireLedger::new(&store).owed(OWNER))
+                .expect("owed")
+                .is_empty(),
+            "both debts settle"
+        );
+    }
+
+    /// The class routes the read; it never overrides its answer. An entry
+    /// mislabelled over a node that still publishes retires nothing that record
+    /// names, because the live set the read returns is subtracted either way.
+    #[test]
+    fn a_mislabelled_hard_delete_cannot_unpin_what_a_live_record_names() {
+        let (version, root_block, _) = doomed_version(&[11u8; 100]);
+        let entry =
+            OwedRetire::whole_retired(NODE, version.content_cid.clone(), version.pinned_bytes);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let (remaining, owed) = drain_against(
+            &store,
+            OWNER,
+            &http,
+            Some(BTreeSet::from([entry.target.clone()])),
+        );
+
+        assert!(
+            retired_targets(&http).is_empty(),
+            "a target a live record still names retires nothing, whatever the entry claims"
+        );
+        assert_eq!(owed, vec![entry], "and the debt keeps waiting");
+        assert_eq!(remaining, 0, "live content is not pending reclaim");
+    }
+
+    /// A class byte this build cannot read is not guessed: `Published` would
+    /// strand a hard delete's debt and `Retired` would unpin a live node's
+    /// content, so the entry reads as unwritten and is repaired by a re-owe.
+    #[test]
+    fn a_stored_entry_with_an_unknown_owing_class_reads_as_nothing() {
+        let (entry, ..) = owed_version(&[12u8; 40]);
+        let mut stored = encode_entry(&entry).to_vec();
+        *stored.last_mut().expect("the class byte") = 0xFE;
+        assert_eq!(decode_entry(Some(stored)), None);
     }
 
     #[test]

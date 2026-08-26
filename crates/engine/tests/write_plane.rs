@@ -7,6 +7,7 @@
 
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -62,9 +63,9 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
     DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
-    OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordSeal, ResealSeeds,
-    ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_OPEN_STREAMS, NodeId,
+    NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordSeal,
+    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
     reseal_scope_root, stage_op,
 };
 
@@ -3020,8 +3021,7 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
     assert_eq!(children[0].name, "pictures", "device B resolves the rename");
 }
 
-/// A delete drops the parent's ref. The name itself is not retired here —
-/// retire fires on abandonment only, which the failure-valve suite covers.
+/// A delete drops the parent's ref.
 #[test]
 fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
     let world = FakeWorld::new();
@@ -3062,6 +3062,228 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
         .map(|child| child.name)
         .collect();
     assert_eq!(names, ["photos"], "device B resolves the delete");
+}
+
+/// A delete is also the reclamation: the deleted record leaves the republisher
+/// inventory and its pinned bytes leave the account, or a vault pays quota for
+/// content nothing can reach and a revoked grantee holding the old seed keeps
+/// reading it — an unlinked node is in no eager set, so rotation never cuts it.
+#[test]
+fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the deleted record leaves the inventory the republisher walks"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "every block the deleted version pinned is reclaimed"
+        );
+    }
+}
+
+/// A folder delete retires every record it detaches and leaves no parentless
+/// node behind.
+///
+/// It does **not** unpin a descendant's content. A descendant is reached
+/// through a `ChildRef` — wire data — and nothing binds a node to the folder
+/// naming it, so this walk cannot prove the descendant is reachable only from
+/// here. A charged pin row is a leak; unpinning one a live listing still names
+/// is loss (blueprint/engine.md "Retirement").
+#[test]
+fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let deep = child_id(&engine, photos, "deep.bin");
+    let deep_name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &deep_name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the descendant published a version");
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    for name in [write_name(photos), deep_name] {
+        assert!(
+            retired.contains(&name.as_str().to_owned()),
+            "every record in the detached subtree leaves the inventory"
+        );
+    }
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "a descendant's pins are a leak this walk cannot prove safe to unpin"
+        );
+    }
+    let view = block_on(engine.view()).unwrap();
+    assert!(
+        view.attrs(deep).is_none(),
+        "no descendant is left behind as a parentless node"
+    );
+}
+
+/// The one ordering this pass must not produce. Everything reclaimable happens
+/// after the unlink publishes, so a delete whose record never landed unpins
+/// nothing and retires nothing — the parent still names the target, and
+/// unpinning content a live record reaches is loss where a charged row is only
+/// a leak (blueprint/engine.md "Retirement").
+#[test]
+fn a_delete_whose_unlink_never_published_reclaims_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let content: Vec<String> = registration_entries(&alice, &write_name(doomed))
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+    let mark = retire_targets(&alice).len();
+
+    // The unlink rides the parent's record, and that record will not publish.
+    world.record_store.fail_put_for(write_name(ROOT).as_str());
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes.txt"],
+        "the parent still names the target"
+    );
+    assert!(
+        retired_since(&alice, mark).is_empty(),
+        "nothing is retired or unpinned behind an unlink that never landed"
+    );
+}
+
+/// Fail-closed on structure: a descendant folder this pass cannot enumerate
+/// hides an unknown subtree, so the delete refuses rather than unlinking above
+/// it and stranding records and pins nothing can ever name again. A file that
+/// will not open is the other half of the law — it costs only its content debt.
+#[test]
+fn a_delete_refuses_to_unlink_above_a_folder_it_cannot_enumerate() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "inner".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let inner = child_id(&engine, photos, "inner");
+    let mark = retire_targets(&alice).len();
+
+    // A subfolder no source will serve and no cache holds.
+    let hidden = write_name(inner);
+    world.record_store.fail_get_for(hidden.as_str());
+    block_on(alice.snapshot_cache.remove(hidden.as_str().as_bytes())).unwrap();
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos"],
+        "the parent keeps the ref: half a reclamation is not a delete"
+    );
+    assert!(
+        retired_since(&alice, mark).is_empty(),
+        "and nothing in the subtree was retired on the way"
+    );
+
+    // The refusal is a retry, not an abandonment: the delete lands once the
+    // subfolder is readable again.
+    world.record_store.heal_get_for(hidden.as_str());
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "the same queued op publishes once the subtree enumerates"
+    );
 }
 
 /// An intra-scope relink publishes the dest-add before the source-remove, so no
@@ -7546,6 +7768,99 @@ fn open_writer(
         expected
     );
     (device, engine, tasks)
+}
+
+/// A file put in view is refreshed on the tick, off its own record.
+///
+/// A version publish authors one record — the file's — and a `ChildRef` mirrors
+/// neither size nor mtime, so the parent's record does not move and no folder
+/// refresh can repaint the file. Without the file leg an idle device reports a
+/// reconciled tick over an indefinitely stale size.
+#[test]
+fn a_file_in_view_repaints_from_another_devices_version_on_the_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first: Vec<u8> = (0..120u8).collect();
+    let second: Vec<u8> = (0..64u8).collect();
+    let (engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+    write_file(&mut engine_b, WriteTarget::Version { node }, &second)
+        .expect("the second device's write commits");
+    tick(&world, &engine_b, &mut tasks_b);
+
+    // Device A polls without the file in view: nothing it resolves carries the
+    // new length.
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(
+        block_on(engine_a.view()).unwrap().attrs(node).unwrap().size,
+        Some(first.len() as u64)
+    );
+
+    assert!(
+        engine_a.note_focus_access(Some(node)),
+        "a file no pass has refreshed is stale"
+    );
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(
+        block_on(engine_a.view()).unwrap().attrs(node).unwrap().size,
+        Some(second.len() as u64),
+        "the file leg repainted the base off the file's own record"
+    );
+}
+
+/// The on-access file queue is bounded: a host that stats a whole listing costs
+/// the next tick a window's worth of resolves, never one per entry.
+#[test]
+fn the_on_access_file_queue_stops_admitting_past_its_ceiling() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    for i in 0..MAX_FOCUS_FILES + 8 {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: format!("f{i}.bin"),
+            kind: NodeKind::File,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    let files: Vec<NodeId> = block_on(engine.view())
+        .unwrap()
+        .children(ROOT)
+        .into_iter()
+        .map(|child| child.id)
+        .collect();
+    assert_eq!(files.len(), MAX_FOCUS_FILES + 8);
+    for file in &files {
+        engine.note_focus_access(Some(*file));
+    }
+
+    // Each queued file costs the pass one cache-first resolve of its own name.
+    let queued_names: BTreeSet<Vec<u8>> = files
+        .iter()
+        .map(|file| write_name(*file).as_str().as_bytes().to_vec())
+        .collect();
+    let refreshed = |device: &FakeDevice| {
+        device
+            .snapshot_cache
+            .reads()
+            .into_iter()
+            .filter(|key| queued_names.contains(key))
+            .count()
+    };
+    let before = refreshed(&alice);
+    tick(&world, &engine, &mut tasks);
+    let this_pass = refreshed(&alice) - before;
+    assert!(this_pass > 0, "the pass ran the file leg at all");
+    assert!(
+        this_pass <= MAX_FOCUS_FILES,
+        "the queue admits a bounded window, not the whole listing: {this_pass} resolves"
+    );
 }
 
 /// A version another device published between the commit and the drain is not
