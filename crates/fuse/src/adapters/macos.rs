@@ -31,7 +31,7 @@ const NO_ATTR_CACHE: &str = "noattrcache";
 /// (blueprint/desktop.md "Names and attributes").
 const NFC_NAMES: &str = "nfc";
 
-/// Mount at `mountpoint`, which must already exist.
+/// Mount at `mountpoint`, which is prepared first.
 pub fn mount(mountpoint: &Path) -> io::Result<FuseMount> {
     FuseMount::at(mountpoint, profile())
 }

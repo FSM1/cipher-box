@@ -25,6 +25,13 @@ export interface VaultWarning {
   detail: string | null;
 }
 
+/**
+ * Whether the vault is also projected as a filesystem, and where. Exactly one
+ * of the two is set: a mount with no path could not be opened, and a session
+ * with no mount and no reason is the silent failure this line prevents.
+ */
+export type MountStatus = { path: string; refusal: null } | { path: null; refusal: string };
+
 export interface VaultStatus {
   /** Items directly under the vault root. */
   items: number;
@@ -35,11 +42,21 @@ export interface VaultStatus {
   provisioned: boolean;
   /** Conditions the engine raised; a trust warning is not a stale view. */
   warnings: VaultWarning[];
+  mount: MountStatus;
 }
 
 /** Reads the live vault's status; rejects when no session is live. */
 export function readVaultStatus(): Promise<VaultStatus> {
   return invoke<VaultStatus>('vault_status');
+}
+
+/**
+ * Ends the session and sweeps this device's stored vault data — everything a
+ * sign-out keeps. Rejects when no session is live, which is the only state that
+ * names the account whose data would go.
+ */
+export function forgetDevice(): Promise<void> {
+  return invoke('session_forget_device');
 }
 
 /** Calls `changed` whenever the engine emits, until the returned unlisten runs. */

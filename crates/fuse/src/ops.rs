@@ -170,11 +170,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// The engine this mount projects. A session runs exactly one brain, so a
-    /// caller that also writes content drives it through here rather than
-    /// standing up a second engine over the same account.
-    ///
-    /// `#[doc(hidden)]`: a cross-crate test surface until a host adapter needs it.
-    #[doc(hidden)]
+    /// host that also serves reads of its own drives it through here rather
+    /// than standing up a second engine over the same account.
     pub fn engine_mut(&mut self) -> &mut Engine<T> {
         &mut self.engine
     }

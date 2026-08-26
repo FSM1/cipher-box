@@ -17,6 +17,7 @@
 //! it, so the mount caps the kernel's write width rather than the queue.
 
 use std::ffi::OsStr;
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
@@ -39,6 +40,7 @@ use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
 use crate::name::MAX_NAME_BYTES;
 use crate::ops::{Attributes, DirEntry, OperationCore};
+use crate::spill::restrict_dir;
 
 /// Inodes are per mount session and never reused, so there is no generation
 /// axis for the kernel to disambiguate along.
@@ -378,6 +380,22 @@ impl DirStream {
     }
 }
 
+/// One decoded kernel request, waiting for an operation core to answer it.
+///
+/// Opaque, and answered exactly once: a host takes it from
+/// [`FuseMount::next_op`] and hands it back to [`FuseMount::answer`].
+pub struct KernelOp(Option<FuseOp>);
+
+impl Drop for KernelOp {
+    /// A FUSE request nobody answers hangs its caller for the life of the
+    /// mount, so an operation dropped unanswered is refused instead.
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            op.refuse(libc::ENOTCONN);
+        }
+    }
+}
+
 /// A live mount. Dropping it unmounts and ends the session thread; the
 /// operation core it fed is torn down separately, by its own `unmount`.
 pub struct FuseMount {
@@ -386,14 +404,15 @@ pub struct FuseMount {
     invalidator: FuseInvalidator,
     ops: mpsc::UnboundedReceiver<FuseOp>,
     owner: Ownership,
-    resumable_readdir: bool,
+    listing: DirStream,
 }
 
 impl FuseMount {
-    /// Mount at `mountpoint`, which must already exist, under one backend's
-    /// [`MountProfile`] and the shared [`floor_options`].
+    /// Mount at `mountpoint`, preparing it first ([`prepare`]), under one
+    /// backend's [`MountProfile`] and the shared [`floor_options`].
     pub(crate) fn at(mountpoint: &Path, profile: MountProfile) -> io::Result<Self> {
         let options = mount_options(profile.options)?;
+        prepare(mountpoint)?;
         let (sender, ops) = mpsc::unbounded();
         let session = Session::new(FuseSession { ops: sender }, mountpoint, &options)?;
         let invalidator = FuseInvalidator {
@@ -408,7 +427,7 @@ impl FuseMount {
                 uid: nix::unistd::Uid::effective().as_raw(),
                 gid: nix::unistd::Gid::effective().as_raw(),
             },
-            resumable_readdir: profile.resumable_readdir,
+            listing: DirStream::new(profile.resumable_readdir),
         })
     }
 
@@ -417,20 +436,82 @@ impl FuseMount {
         self.invalidator.clone()
     }
 
-    /// Answer kernel operations from `core` until the session ends.
+    /// The next kernel operation, or `None` once the session has ended.
+    ///
+    /// Cancel-safe: an operation is taken off the queue or it is not, so a host
+    /// may wait on this beside its other wake sources.
+    pub async fn next_op(&mut self) -> Option<KernelOp> {
+        core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx))
+            .await
+            .map(|op| KernelOp(Some(op)))
+    }
+
+    /// Answer one operation from `core`.
     ///
     /// Serial by construction — one operation core is one stateful projection —
     /// and the never-block law is what keeps a serial pump responsive: no
     /// operation here awaits IPNS resolution, publish, or API bookkeeping.
-    pub async fn serve<T: SeamTypes>(&mut self, core: &mut OperationCore<T, FuseInvalidator>) {
-        let owner = self.owner;
-        let mut listing = DirStream::new(self.resumable_readdir);
-        loop {
-            let next = core::future::poll_fn(|cx| Pin::new(&mut self.ops).poll_next(cx)).await;
-            let Some(op) = next else { break };
-            answer(core, op, owner, &mut listing).await;
+    pub async fn answer<T: SeamTypes>(
+        &mut self,
+        core: &mut OperationCore<T, FuseInvalidator>,
+        mut op: KernelOp,
+    ) {
+        if let Some(op) = op.0.take() {
+            answer(core, op, self.owner, &mut self.listing).await;
         }
     }
+
+    /// Stop accepting kernel operations, ahead of the unmount
+    /// (blueprint/desktop.md "Lifecycle" — quiesce, unmount, stop the engine).
+    /// Everything queued and everything the session dispatches from here is
+    /// refused rather than left for a pump that has stopped running.
+    pub fn quiesce(&mut self) {
+        self.ops.close();
+        // Each refuses itself on the way out — [`KernelOp`] owns that policy, so
+        // there is one refusal path rather than one per shutdown route.
+        while let Ok(op) = self.ops.try_recv() {
+            drop(KernelOp(Some(op)));
+        }
+    }
+}
+
+/// Make `mountpoint` fit to mount on: a private, empty directory, created if it
+/// is not there.
+///
+/// v1 emptied whatever it found. Deleting a member's files is not a trade for a
+/// tidier mount, so anything already in the way refuses the mount instead — and
+/// a refusal costs the session nothing (blueprint/desktop.md "Lifecycle": mount
+/// failure never fails login).
+fn prepare(mountpoint: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(mountpoint) {
+        Ok(found) => {
+            // Refused before the mount resolves it: a link here would project
+            // the vault somewhere the member never chose.
+            if found.file_type().is_symlink() {
+                return Err(io::Error::other("the mount point is a symbolic link"));
+            }
+            if !found.is_dir() {
+                return Err(io::Error::other("the mount point is not a directory"));
+            }
+            if fs::read_dir(mountpoint)?.next().is_some() {
+                return Err(io::Error::other("the mount point is not empty"));
+            }
+        }
+        // Owner-only from the moment it exists, not narrowed after: a
+        // `create_dir_all` takes the umask first, and the floor the mount
+        // carries has to hold over the directory fronting it the whole time.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            use std::os::unix::fs::DirBuilderExt;
+
+            return fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(mountpoint);
+        }
+        Err(error) => return Err(error),
+    }
+    // One found is brought back to the same floor.
+    restrict_dir(mountpoint)
 }
 
 impl Filesystem for FuseSession {
@@ -1004,12 +1085,82 @@ fn file_attr(attrs: &Attributes, size: u64, owner: Ownership) -> FileAttr {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use cipherbox_engine::NodeId;
 
     use super::*;
 
     fn owner() -> Ownership {
         Ownership { uid: 501, gid: 20 }
+    }
+
+    fn mode(at: &Path) -> u32 {
+        fs::metadata(at)
+            .expect("a prepared directory")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// The mount point is made on demand and made private: a member who has
+    /// never mounted before has none for this to find.
+    #[test]
+    fn a_missing_mount_point_is_created_owner_only() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+
+        prepare(&at).expect("a missing mount point is made");
+        assert!(at.is_dir());
+        assert_eq!(mode(&at), 0o700);
+    }
+
+    /// One left over from a previous session is reused, and its permissions are
+    /// brought back to owner-only rather than trusted.
+    #[test]
+    fn an_empty_mount_point_is_reused_and_re_restricted() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+        fs::create_dir(&at).expect("a leftover mount point");
+        fs::set_permissions(&at, fs::Permissions::from_mode(0o777)).expect("a widened directory");
+
+        prepare(&at).expect("an empty mount point is reused");
+        assert_eq!(mode(&at), 0o700);
+    }
+
+    /// v1 emptied the mount point, and a member who put files there lost them.
+    /// A mount is never worth that, and a refusal costs the session nothing.
+    #[test]
+    fn a_mount_point_with_anything_in_it_is_refused_rather_than_emptied() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+        fs::create_dir(&at).expect("a mount point");
+        let theirs = at.join("their-file.txt");
+        fs::write(&theirs, b"not the mount's to delete").expect("a member's file");
+
+        assert!(prepare(&at).is_err());
+        assert!(theirs.exists(), "nothing under the mount point is deleted");
+    }
+
+    /// A symlink at the mount point projects the vault wherever it points.
+    #[test]
+    fn a_symlinked_mount_point_is_refused() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let elsewhere = home.path().join("elsewhere");
+        fs::create_dir(&elsewhere).expect("a target directory");
+        let at = home.path().join("CipherBox");
+        std::os::unix::fs::symlink(&elsewhere, &at).expect("a symlinked mount point");
+
+        assert!(prepare(&at).is_err());
+    }
+
+    #[test]
+    fn a_mount_point_that_is_a_file_is_refused() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+        fs::write(&at, b"not a directory").expect("a file in the way");
+
+        assert!(prepare(&at).is_err());
     }
 
     fn node(kind: NodeKind, size: Option<u64>) -> Attributes {

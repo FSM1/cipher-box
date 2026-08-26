@@ -29,11 +29,13 @@ mod spill;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use adapters::fuse::{FuseInvalidator, FuseMount};
+pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
+/// Mount the vault under this platform's backend. One name for every platform,
+/// so a host never forks on the target to reach its own adapter.
 #[cfg(target_os = "linux")]
-pub use adapters::linux;
+pub use adapters::linux::mount;
 #[cfg(target_os = "macos")]
-pub use adapters::macos;
+pub use adapters::macos::mount;
 pub use cache::CacheBudget;
 #[cfg(unix)]
 pub use errno::errno_of;

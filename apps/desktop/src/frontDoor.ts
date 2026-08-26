@@ -7,7 +7,7 @@
  */
 
 import type { IdentityMethod } from '@cipherbox/login';
-import type { Staleness, VaultStatus, VaultWarning, VaultWarningKind } from './vault';
+import type { MountStatus, Staleness, VaultStatus, VaultWarning, VaultWarningKind } from './vault';
 
 /** The transition this host asked for, which `LoginProgress` does not name. */
 export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
@@ -207,7 +207,7 @@ function vault(model: ShellModel): HTMLElement {
     return panel;
   }
 
-  const { items, staleness, deadLetters, provisioned, warnings } = model.vault;
+  const { items, staleness, deadLetters, provisioned, warnings, mount } = model.vault;
   panel.append(
     text('p', `${items} ${items === 1 ? 'item' : 'items'} in your vault`, {
       'data-vault': 'items',
@@ -216,6 +216,7 @@ function vault(model: ShellModel): HTMLElement {
   panel.append(
     text('p', STALENESS_LABELS[staleness], { class: 'muted', 'data-vault': 'staleness' })
   );
+  panel.append(mountLine(mount));
   if (!provisioned) {
     panel.append(
       text('p', UNPROVISIONED, { class: 'error', role: 'alert', 'data-vault': 'unprovisioned' })
@@ -234,6 +235,23 @@ function vault(model: ShellModel): HTMLElement {
     );
   }
   return panel;
+}
+
+/**
+ * Where the vault is on this machine, or why it is nowhere.
+ *
+ * A refusal is an error rather than a muted note: a member who thinks the mount
+ * is there works in a folder nothing is watching.
+ */
+function mountLine(mount: MountStatus): HTMLElement {
+  if (mount.path !== null) {
+    return text('p', `Mounted at ${mount.path}`, { class: 'muted', 'data-vault': 'mount' });
+  }
+  return text('p', mount.refusal, {
+    class: 'error',
+    role: 'alert',
+    'data-vault': 'mount-refused',
+  });
 }
 
 /**
