@@ -82,6 +82,19 @@ let inFlight = false;
 let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promise<void> } | null =
   null;
 
+/**
+ * Runs `leg` and reports its refusal instead of throwing it, so a caller can
+ * finish the legs that do not depend on it.
+ */
+async function refusalOf(leg: () => Promise<void> | undefined): Promise<unknown> {
+  try {
+    await leg();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>(
   host: LoginHost<C>
 ): LoginFlow<C> {
@@ -149,6 +162,8 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
    * session the session logout ends — and tears down even when its erase
    * refused. Every leg runs: a refused engine zeroize must not strand the Core
    * Kit session, and a failed Core Kit logout must not leave the host signed in.
+   * The erase refusal is what a half reports: it is the leg the caller asked
+   * for, and a teardown that also refused must not stand in front of it.
    */
   const endSession = (mode: 'keep' | 'erase') => {
     const endHalf = async (
@@ -157,11 +172,10 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
         logout(): Promise<void>;
       } | null
     ): Promise<void> => {
-      try {
-        if (mode === 'erase') await half?.forgetDevice?.();
-      } finally {
-        await half?.logout();
-      }
+      const erase = mode === 'erase' ? await refusalOf(() => half?.forgetDevice?.()) : undefined;
+      const teardown = await refusalOf(() => half?.logout());
+      const refusal = erase ?? teardown;
+      if (refusal !== undefined) throw refusal;
     };
     return exclusively(async () => {
       const outcomes = await Promise.allSettled([endHalf(facade), endHalf(session)]);
@@ -169,6 +183,8 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       restore = null;
       account.signedOut();
       afterLogout?.();
+      // The halves run concurrently, so which one refuses *first* is a race;
+      // the engine half is reported by position instead, deterministically.
       const failed = outcomes.find((outcome) => outcome.status === 'rejected');
       if (failed) throw failed.reason as Error;
     });

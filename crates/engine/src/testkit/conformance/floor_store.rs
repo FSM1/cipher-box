@@ -145,8 +145,10 @@ where
     // Two raises on one key inside a single batch: the last-wins maximum, in
     // either order — what makes the ordered fallback and an atomic backing
     // observationally equivalent.
+    let mut batch_keys = Vec::new();
     for pair in [[3u64, 12], [12, 3]] {
         let key = format!("batch-same-key-{}-{}", pair[0], pair[1]).into_bytes();
+        batch_keys.push(key.clone());
         reopened
             .commit_floors(&[
                 FloorRaise::epoch(key.clone(), pair[0]),
@@ -163,18 +165,30 @@ where
 
     // Clear ("forget this device") drops both namespaces, durably — the one
     // exit from the ratchet, so a floor left standing is a floor the device can
-    // no longer explain. The reopened handle is what the assertions read: an
+    // no longer explain. A freshly opened handle reads them back: an
     // in-memory-only clear passes on the live one.
     reopened.clear().await.unwrap();
-    assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), None);
     let after_clear = open().await;
-    assert_eq!(after_clear.epoch_floor(scope_a).await.unwrap(), None);
-    assert_eq!(after_clear.epoch_floor(scope_b).await.unwrap(), None);
-    assert_eq!(
-        after_clear.sequence_floor(scope_a).await.unwrap(),
-        None,
-        "clear must be durable across both namespaces"
-    );
+    for key in [scope_a, scope_b]
+        .into_iter()
+        .chain(batch_keys.iter().map(Vec::as_slice))
+    {
+        assert_eq!(
+            reopened.epoch_floor(key).await.unwrap(),
+            None,
+            "every key must be gone on the handle that cleared"
+        );
+        assert_eq!(
+            after_clear.epoch_floor(key).await.unwrap(),
+            None,
+            "clear must be durable for every key it swept"
+        );
+        assert_eq!(
+            after_clear.sequence_floor(key).await.unwrap(),
+            None,
+            "clear must be durable across both namespaces"
+        );
+    }
 
     // A cleared store still ratchets: the erase resets the floors, not the law.
     // A store that latched "cleared" and then took anything passes the raise

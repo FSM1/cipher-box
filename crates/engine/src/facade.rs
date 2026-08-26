@@ -84,8 +84,8 @@ use crate::rotation::{
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, Mailbox, OpId, RecordTransport, Scheduler, SeamError,
-    SeamResult, SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, RecordTransport, Scheduler,
+    SeamError, SeamResult, SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -3016,30 +3016,37 @@ impl<T: SeamTypes> Engine<T> {
     /// [`Command::ForgetDevice`]: stop the session, then erase every durable
     /// seam.
     ///
-    /// The sweep is last, and the instance is latched terminal before it: a
-    /// floor raise or cache put from a pass still in flight would otherwise land
-    /// behind the erase and re-seed the device with state it just disowned.
+    /// The sweep is last, and `shut_down` drops the session-alive latch before
+    /// it: a floor raise or cache put from a pass still in flight would
+    /// otherwise land behind the erase and re-seed the device with state it just
+    /// disowned. Those passes hold [`LiveSeam`] handles, which is what makes the
+    /// latch bind them ([`Scheduler::spawn`] cannot cancel or join).
+    ///
     /// Every seam is swept even after one refuses, and the first refusal is what
     /// the caller sees.
     async fn forget_device(&mut self) -> Result<(), EngineError> {
-        self.shut_down();
         self.forgotten = true;
-        // Dropped here, at the terminal owner: `shut_down` seals what the loops
-        // share, and these are the engine's own copies (security rule 7). The
-        // render goes with them — it is plaintext metadata about the vault this
-        // device is disowning.
         let api = self.api.take();
-        self.session = None;
-        let root = self.snapshot.borrow().root;
-        *self.snapshot.borrow_mut() = Snapshot::new(root);
 
         // Best-effort, before the seams and outside the verdict: this is the
         // one leg that needs the network, and the erase must land offline. On
         // web the refresh credential is an HTTP-only cookie no seam can reach,
-        // so a server-side revoke is the only thing that ends it.
-        if let Some(api) = api {
+        // so a server-side revoke is the only thing that ends it. It runs
+        // *before* `shut_down`, which seals the bearer the endpoint
+        // authenticates with — an unauthenticated revoke leaves the cookie live.
+        if let Some(api) = &api {
             let _ = api.logout().await;
         }
+
+        self.shut_down();
+        // Dropped here, at the terminal owner: `shut_down` seals what the loops
+        // share, and these are the engine's own copies (security rule 7). The
+        // render goes with them — it is plaintext metadata about the vault this
+        // device is disowning.
+        drop(api);
+        self.session = None;
+        let root = self.snapshot.borrow().root;
+        *self.snapshot.borrow_mut() = Snapshot::new(root);
 
         [
             self.seams.credential_store.clear_refresh_token().await,
@@ -3278,7 +3285,7 @@ where {
         }));
         let held = self.sweep_keys.clone();
         let transport = self.seams.record_transport.clone();
-        let floors = self.seams.floor_store.clone();
+        let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let scheduler = self.seams.scheduler.clone();
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
@@ -3359,7 +3366,7 @@ where {
     {
         let scheduler = self.seams.scheduler.clone();
         let transport = self.seams.record_transport.clone();
-        let floors = self.seams.floor_store.clone();
+        let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let profile = self.profile;
         let held = self.held_records.clone();
         let settings_record = self.settings_record.clone();
@@ -3413,7 +3420,7 @@ where {
         let session = self.session.as_ref()?;
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let scheduler = self.seams.scheduler.clone();
-        let staging = self.seams.staging_store.clone();
+        let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
         let entropy = self.entropy.clone();
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
@@ -3426,8 +3433,8 @@ where {
         let cancels = self.cancels.clone();
         let live_blocks = self.live_blocks.clone();
         let transport = self.seams.record_transport.clone();
-        let snapshot_cache = self.seams.snapshot_cache.clone();
-        let floors = self.seams.floor_store.clone();
+        let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
+        let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
         let placement = self.placement.clone();
@@ -7565,6 +7572,8 @@ mod tests {
     mod forget_device {
         use super::*;
 
+        use crate::seams::AUTHORIZATION;
+
         /// An engine with something durable in every seam the erase covers, and
         /// the device handles to read them back through. Unstarted, so a test
         /// that needs a session says so.
@@ -7622,9 +7631,10 @@ mod tests {
             });
         }
 
-        /// A forget latches the instance terminal, so no pass it still has in
-        /// flight — and no later caller — can re-seed the stores it emptied.
-        /// A fresh engine is the only way back.
+        /// A forget latches the instance terminal, so no later caller can
+        /// re-seed the stores it emptied; a fresh engine is the only way back.
+        /// The passes it still has in flight are bound by the same latch
+        /// through [`LiveSeam`].
         #[test]
         fn a_forgotten_engine_serves_nothing_and_cannot_be_restarted() {
             let (mut engine, _device, _events) = started_and_loaded();
@@ -7689,6 +7699,48 @@ mod tests {
                 assert!(device.staging_store.queued_ops().await.unwrap().is_empty());
                 assert_eq!(device.snapshot_cache.get(b"key").await.unwrap(), None);
             });
+        }
+
+        /// The revoke is the only leg that needs the network, and on web the
+        /// refresh credential is an HTTP-only cookie no seam can reach — so an
+        /// unauthenticated `/auth/logout` the API rejects would leave the
+        /// device's server session live after it reported itself forgotten.
+        #[test]
+        fn the_revoke_presents_the_session_bearer_the_erase_then_seals() {
+            let (mut engine, _events, device) =
+                engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+            device.http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+            ));
+            device.http.enqueue_response(json_response(
+                200,
+                json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            ));
+            serve_provisioning(&device);
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+            let session_bearer = engine.session_bearer.clone();
+
+            block_on(engine.command(Command::ForgetDevice)).unwrap();
+
+            let revoke = device
+                .http
+                .requests()
+                .into_iter()
+                .rfind(|request| request.url.ends_with("/auth/logout"))
+                .expect("the erase revokes the server session");
+            assert!(
+                revoke
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case(AUTHORIZATION)
+                        && value == "Bearer jwt-1"),
+                "{revoke:?}"
+            );
+            assert!(
+                !session_bearer.is_held(),
+                "the bearer the revoke presented is sealed behind it"
+            );
         }
 
         /// A refusing seam must not spare the rest, and must still reach the

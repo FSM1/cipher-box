@@ -67,7 +67,8 @@ pub trait FloorStore {
     /// the one exit from the monotonic ratchet. Floors survive logout by
     /// design; a cleared store re-seeds from the record plane on the next cold
     /// start, so a partial clear would leave the device pinned above records it
-    /// can no longer explain.
+    /// can no longer explain — every leg runs even when one refuses, and the
+    /// first refusal is what the caller sees.
     async fn clear(&self) -> SeamResult<()>;
 }
 

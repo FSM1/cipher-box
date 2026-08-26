@@ -55,6 +55,11 @@ export interface StagingStoreSeam {
   /**
    * Drops every queued op and every staged byte ("forget this device"). The id
    * progression is not reset — ids stay strictly increasing and unreused.
+   *
+   * The queue goes before the staged bytes: interrupted the other way round,
+   * the store is left holding ops that name bytes already gone, while this
+   * order can only orphan bytes that orphan GC reclaims. Both legs run even
+   * when one refuses, and the first refusal is what the caller sees.
    */
   clear(): Promise<void>;
 }

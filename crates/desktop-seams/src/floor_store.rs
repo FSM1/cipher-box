@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
 use crate::fs_util::{
-    atomic_write, empty_dir, ensure_dir, list_file_names, read_file_opt, remove_file_durable,
-    seam_err, to_hex, unique_component,
+    atomic_write, empty_dir, ensure_dir, keep_first, list_file_names, read_file_opt,
+    remove_file_durable, seam_err, to_hex, unique_component,
 };
 
 /// Durable monotonic-max floor store backed by one small file per key
@@ -196,14 +196,14 @@ impl FloorStore for FileFloorStore {
             .write_lock
             .lock()
             .map_err(|_| SeamError::new("floor_store clear: floor write lock poisoned"))?;
-        for (dir, op) in [
+        [
             (&self.intent_dir, "floor_store clear intents"),
             (&self.epoch_dir, "floor_store clear epoch"),
             (&self.seq_dir, "floor_store clear seq"),
-        ] {
-            empty_dir(dir).map_err(|err| seam_err(op, &err))?;
-        }
-        Ok(())
+        ]
+        .into_iter()
+        .map(|(dir, op)| empty_dir(dir).map_err(|err| seam_err(op, &err)))
+        .fold(Ok(()), keep_first)
     }
 }
 

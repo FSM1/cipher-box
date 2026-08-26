@@ -19,6 +19,7 @@
 mod credential_store;
 mod floor_store;
 mod http;
+mod live;
 mod mailbox;
 mod record_transport;
 mod retire_ledger;
@@ -35,6 +36,8 @@ pub use http::{
 // The header name is an engine-internal spelling: a host implements the
 // transport, it never builds a bearer.
 pub(crate) use http::AUTHORIZATION;
+// An engine-internal adapter over three of the seams, not a host contract.
+pub(crate) use live::LiveSeam;
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
 pub use retire_ledger::{OwedRetire, RetireLedger};

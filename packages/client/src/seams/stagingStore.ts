@@ -54,6 +54,19 @@ async function namesIn(dir: FileSystemDirectoryHandle): Promise<string[]> {
   return names;
 }
 
+/**
+ * Runs `leg` and reports its refusal instead of throwing it, so a caller can
+ * finish the legs that do not depend on it.
+ */
+async function refusalOf(leg: () => Promise<void>): Promise<unknown> {
+  try {
+    await leg();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 /** Removes `name` from `dir`, treating an already-absent entry as success. */
 async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Promise<void> {
   try {
@@ -225,22 +238,28 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   /**
-   * Drops the queue and every staged record, in-flight temps included — a temp
-   * holds the bytes a killed write was staging, so an erase that stepped over
-   * it would leave that record behind. The queue goes first: the reverse order
-   * would strand ops naming bytes that are already gone.
-   *
-   * IndexedDB resets a key generator only when its store is deleted, so
-   * clearing leaves op ids strictly increasing and unreused.
+   * Sweeps in-flight temps too, which enumeration hides: a temp holds the bytes
+   * a killed write was staging, so an erase that stepped over it would leave
+   * that record behind. IndexedDB resets a key generator only when its store is
+   * deleted, so clearing leaves op ids strictly increasing and unreused.
    */
   async clear(): Promise<void> {
-    const db = await this.open();
-    const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
-    tx.objectStore(STAGING_OPS_STORE).clear();
-    await transactionDone(tx);
-
-    const dir = await this.stagedDir();
-    await Promise.all((await namesIn(dir)).map((name) => removeIfPresent(dir, name)));
+    const queue = await refusalOf(async () => {
+      const db = await this.open();
+      const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
+      tx.objectStore(STAGING_OPS_STORE).clear();
+      await transactionDone(tx);
+    });
+    const staged = await refusalOf(async () => {
+      const dir = await this.stagedDir();
+      const removals = await Promise.allSettled(
+        (await namesIn(dir)).map((name) => removeIfPresent(dir, name))
+      );
+      const refused = removals.find((removal) => removal.status === 'rejected');
+      if (refused) throw refused.reason as Error;
+    });
+    if (queue) throw queue;
+    if (staged) throw staged;
   }
 
   async stagedBytesTotal(): Promise<number> {

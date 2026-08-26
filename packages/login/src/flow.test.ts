@@ -304,6 +304,27 @@ describe('forgetting this device', () => {
     expect(parts.account.signOuts()).toBe(1);
   });
 
+  /**
+   * The erase is the leg the caller asked for, so a teardown that also refused
+   * must not stand in front of it — reporting "transport closed" would read as
+   * an unrelated hiccup on a device whose seams are still full.
+   */
+  it('reports the refused erase, not the teardown that refused behind it', async () => {
+    const facade = fakeFacade({
+      forgetDevice: () => Promise.reject(new Error('seam gone')),
+      logout: () => Promise.reject(new Error('transport closed')),
+    });
+    const parts = build({ facade });
+    await parts.flow.loginWithGoogle('google.id.token');
+
+    await expect(parts.flow.forgetDevice()).rejects.toThrow('seam gone');
+
+    expect(parts.facade.calls.logouts).toBe(1);
+    expect(parts.session.calls.forgets).toBe(1);
+    expect(parts.session.calls.logouts).toBe(1);
+    expect(parts.account.signOuts()).toBe(1);
+  });
+
   /** Fail-closed: a plain logout must never pass for an erase. */
   it('refuses on a host whose facade cannot erase', async () => {
     const facade = fakeFacade();
