@@ -1,4 +1,5 @@
 import { EngineHeldElsewhereError } from '@cipherbox/client';
+import { resetLoginFlowLatches } from '@cipherbox/login';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../stores/auth.store';
@@ -32,7 +33,10 @@ function mount(
 }
 
 describe('useAuth recovery phrase', () => {
-  beforeEach(() => authStore.signedOut());
+  beforeEach(() => {
+    resetLoginFlowLatches();
+    authStore.signedOut();
+  });
 
   it('prompts for the phrase rather than reporting a failure', async () => {
     const engine = fakeEngineClient();
@@ -129,7 +133,10 @@ describe('useAuth recovery phrase', () => {
 });
 
 describe('useAuth', () => {
-  beforeEach(() => authStore.signedOut());
+  beforeEach(() => {
+    resetLoginFlowLatches();
+    authStore.signedOut();
+  });
 
   it('exchanges the google credential, then hands the engine the login secret', async () => {
     const engine = fakeEngineClient();
@@ -268,15 +275,11 @@ describe('useAuth', () => {
     expect(authStore.getState()).toMatchObject({ email: null });
   });
 
-  it('re-opens the resume window when the engine is replaced under a live session', async () => {
-    let hold = false;
-    let release!: () => void;
-    const engine = fakeEngineClient({
-      start: () => (hold ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve()),
-    });
+  it('does not let a Core Kit logout failure carry the session into the new engine', async () => {
+    const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({ loggedIn: true });
-    // A Core Kit logout that fails leaves the session live under the engine the
-    // failed logout replaced.
+    // The provider teardown fails, so the session it was meant to end is still
+    // live under the engine the logout replaced.
     const session = {
       ...coreKit.session,
       logout: () => Promise.reject(new Error('core kit gone')),
@@ -285,24 +288,17 @@ describe('useAuth', () => {
       wrapper: authWrapper(engine.client, session),
     });
     await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+    expect(engine.calls.started).toHaveLength(1);
 
-    hold = true;
     await act(async () => {
       await result.current.logout().catch(() => undefined);
     });
 
-    // Read before the handoff is let go, so a failure here cannot strand the
-    // login flow's in-flight latch over the rest of the suite.
-    await waitFor(() => expect(engine.calls.started).toHaveLength(2));
-    const signedOutDuringHandoff = result.current.isSignedOut;
-    await act(async () => {
-      release();
-      await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
-    });
-
-    // The replacement owes that session a handoff of its own, so the tab had not
-    // decided yet; a guard reading it as signed out redirects over a live login.
-    expect(signedOutDuringHandoff).toBe(false);
+    // The member asked to be signed out. A resume that handed the surviving
+    // session to the replacement engine would put them straight back in — and
+    // after a forget, re-seed on this device what the erase had just wiped.
+    await waitFor(() => expect(result.current.isSignedOut).toBe(true));
+    expect(engine.calls.started).toHaveLength(1);
   });
 
   it('leaves the tab signed out and disarmed when the engine refuses the secret', async () => {
@@ -384,7 +380,10 @@ describe('useAuth', () => {
 });
 
 describe('useAuth against an engine another account holds', () => {
-  beforeEach(() => authStore.signedOut());
+  beforeEach(() => {
+    resetLoginFlowLatches();
+    authStore.signedOut();
+  });
 
   it('renders the refusal as a signed-in-elsewhere state naming the holder', async () => {
     const engine = fakeEngineClient({

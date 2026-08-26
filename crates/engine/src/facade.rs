@@ -385,10 +385,14 @@ pub struct ScopeSharing {
     /// The grants the scope root's ledger commits, ordered as it commits them.
     /// Empty for a node that is not a scope root: nothing is granted there.
     pub grants: Vec<SharingGrant>,
-    /// Whether a further share of the scope — a grant or an invite link — would
-    /// be accepted: a share mints a fresh scope at the node, which `share_scope`
-    /// refuses where one already stands.
-    pub can_mint_share: bool,
+    /// The refusal a contact grant at this scope would report, or `None` where
+    /// none of the grounds this read consults stands in its way — `share_scope`
+    /// refuses on others it does not reach here, so this narrows what a host
+    /// offers rather than promising acceptance. Carries the same `ShareChecks`
+    /// name the command itself would return.
+    pub grant_refusal: Option<&'static str>,
+    /// The refusal an invite-link mint at this scope would report, or `None`.
+    pub invite_link_refusal: Option<&'static str>,
     /// This owner's invite links there, absent where those records would not
     /// open — never an empty standing a host would draw as "no link here".
     pub invite_links: Option<SharingInviteLinks>,
@@ -1866,6 +1870,7 @@ enum ScopeShare<'a> {
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
 /// command: a grant and an invite link are different actions to a user, so they
 /// do not report each other's.
+#[derive(Clone, Copy)]
 struct ShareChecks {
     /// The vault root is refused as a target.
     vault_root: &'static str,
@@ -1876,20 +1881,76 @@ struct ShareChecks {
     envelope_version: &'static str,
 }
 
+/// The [`ShareChecks`] ground on which a further share of a scope is refused, or
+/// that one would be accepted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShareStanding {
+    Accepted,
+    VaultRoot,
+    AlreadyAScope,
+    EnvelopeVersion,
+}
+
+impl ShareChecks {
+    /// The names a contact grant reports.
+    const GRANT: Self = Self {
+        vault_root: "grant-target-is-the-vault-root",
+        already_a_scope: "grant-target-already-names-a-scope",
+        envelope_version: "grant-parent-envelope-version-unsupported",
+    };
+    /// The names an invite-link mint reports.
+    const INVITE_LINK: Self = Self {
+        vault_root: "invite-target-is-the-vault-root",
+        already_a_scope: "invite-target-already-names-a-scope",
+        envelope_version: "invite-parent-envelope-version-unsupported",
+    };
+
+    /// The name this command reports for `standing`, or `None` where nothing
+    /// refuses.
+    fn refusal(self, standing: ShareStanding) -> Option<&'static str> {
+        match standing {
+            ShareStanding::Accepted => None,
+            ShareStanding::VaultRoot => Some(self.vault_root),
+            ShareStanding::AlreadyAScope => Some(self.already_a_scope),
+            ShareStanding::EnvelopeVersion => Some(self.envelope_version),
+        }
+    }
+}
+
 impl ScopeShare<'_> {
     fn checks(&self) -> ShareChecks {
         match self {
-            ScopeShare::Contact(_) => ShareChecks {
-                vault_root: "grant-target-is-the-vault-root",
-                already_a_scope: "grant-target-already-names-a-scope",
-                envelope_version: "grant-parent-envelope-version-unsupported",
-            },
-            ScopeShare::InviteLink { .. } => ShareChecks {
-                vault_root: "invite-target-is-the-vault-root",
-                already_a_scope: "invite-target-already-names-a-scope",
-                envelope_version: "invite-parent-envelope-version-unsupported",
-            },
+            ScopeShare::Contact(_) => ShareChecks::GRANT,
+            ScopeShare::InviteLink { .. } => ShareChecks::INVITE_LINK,
         }
+    }
+}
+
+/// The grounds a parent scope root's resolved record refuses a further share of
+/// `node` on. `share_scope` and the `sharing` read take both from here, so
+/// neither reports one the other would not; the vault-root ground is settled
+/// before any resolve, in `share_scope`'s guard and `owner_scope_standing`.
+///
+/// A second share of the same folder would mint another scope at epoch 1,
+/// replacing the seed every existing grantee holds — a silent revocation dressed
+/// as a share; adding a recipient to a scope that already exists is a row on its
+/// committed set, not a fresh mint. And a mint authors the fresh scope root at
+/// the parent record's envelope version while opening it under the one this
+/// build authors, so a divergence would mint a grant nothing can open.
+fn record_share_standing(
+    node: NodeId,
+    envelope_version: u64,
+    direct_child_scopes: &[ChildScopeRef],
+) -> ShareStanding {
+    if envelope_version != ENVELOPE_V {
+        ShareStanding::EnvelopeVersion
+    } else if direct_child_scopes
+        .iter()
+        .any(|child| child.scope_id == node.0)
+    {
+        ShareStanding::AlreadyAScope
+    } else {
+        ShareStanding::Accepted
     }
 }
 
@@ -4033,13 +4094,36 @@ where {
         check: &'static str,
         unindexed: UnindexedScope,
     ) -> Result<OwnerScope, EngineError> {
+        self.owner_scope_standing(node, api, keys, check, unindexed)
+            .await?
+            .0
+            .ok_or(EngineError::UnsupportedTarget { check })
+    }
+
+    /// [`owner_scope`](Self::owner_scope) together with the standing a further
+    /// share of `node` would carry, so a caller that reports both reads the
+    /// parent once.
+    ///
+    /// The scope is `None` for a node the index does not name under
+    /// [`UnindexedScope::Refuse`] — a miss whose refusal shape is the caller's.
+    async fn owner_scope_standing(
+        &self,
+        node: NodeId,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        check: &'static str,
+        unindexed: UnindexedScope,
+    ) -> Result<(Option<OwnerScope>, ShareStanding), EngineError> {
         let root = self.snapshot.borrow().root;
         if node == root {
-            return Ok(OwnerScope {
-                scope: self.vault_root_scope()?,
-                parent_node_seed: None,
-                vouched: true,
-            });
+            return Ok((
+                Some(OwnerScope {
+                    scope: self.vault_root_scope()?,
+                    parent_node_seed: None,
+                    vouched: true,
+                }),
+                ShareStanding::VaultRoot,
+            ));
         }
         if !self.snapshot.borrow().contains(node) {
             return Err(EngineError::UnsupportedTarget { check });
@@ -4055,6 +4139,7 @@ where {
             .resolve_vault_root(&parent)
             .await
             .map_err(EngineError::from_resolve_failure)?;
+        let standing = record_share_standing(node, current.v, &current.direct_child_scope_index);
         let indexed = current
             .direct_child_scope_index
             .iter()
@@ -4063,9 +4148,7 @@ where {
         let vouched = indexed.is_some();
         let scope = match (indexed, unindexed) {
             (Some(child), _) => child,
-            (None, UnindexedScope::Refuse) => {
-                return Err(EngineError::UnsupportedTarget { check });
-            }
+            (None, UnindexedScope::Refuse) => return Ok((None, standing)),
             (None, UnindexedScope::Derive) => ChildScopeRef::new(
                 node.0,
                 derive_write_name(&current.write_scope_seed, &node.0)
@@ -4074,13 +4157,16 @@ where {
                     .to_vec(),
             ),
         };
-        Ok(OwnerScope {
-            parent_node_seed: Some(Zeroizing::new(
-                *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
-            )),
-            scope,
-            vouched,
-        })
+        Ok((
+            Some(OwnerScope {
+                parent_node_seed: Some(Zeroizing::new(
+                    *kdf::node_seed(&current.override_seed, &node.0).as_bytes(),
+                )),
+                scope,
+                vouched,
+            }),
+            standing,
+        ))
     }
 
     /// The owner rotation arm over this session's seams.
@@ -4459,27 +4545,12 @@ where {
             .await
             .map_err(EngineError::from_resolve_failure)?;
 
-        // The minted scope root and any share pointer naming it are authored at
-        // the parent record's envelope version and opened under the one this
-        // build authors, so a divergence would mint a grant nothing can open.
-        if current.v != ENVELOPE_V {
-            return Err(EngineError::UnsupportedTarget {
-                check: checks.envelope_version,
-            });
-        }
-
-        // A second share of the same folder would mint another scope at epoch 1,
-        // replacing the seed every existing grantee of it holds — a silent
-        // revocation dressed as a share. Adding a recipient to a scope that
-        // already exists is a row on its committed set, not a fresh mint.
-        if current
-            .direct_child_scope_index
-            .iter()
-            .any(|child| child.scope_id == node.0)
-        {
-            return Err(EngineError::UnsupportedTarget {
-                check: checks.already_a_scope,
-            });
+        if let Some(check) = checks.refusal(record_share_standing(
+            node,
+            current.v,
+            &current.direct_child_scope_index,
+        )) {
+            return Err(EngineError::UnsupportedTarget { check });
         }
 
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
@@ -5922,13 +5993,15 @@ where {
 
     /// Everything one resolve of `scope_root` settles for [`Self::sharing`]: the
     /// grant ledger its record commits projected key-free, this owner's invite
-    /// links there, and whether a further share would be accepted.
+    /// links there, and the refusal a further share of it would report.
     ///
     /// The authority for what is a scope root is the vault root's owner-signed
-    /// direct-child-scope index, which [`owner_scope`](Self::owner_scope) owns —
-    /// so a node it does not name has an empty grant list and a mint on offer. A
-    /// read reports, it does not repair, so an index miss refuses rather than
-    /// reaching for a derived name ([`UnindexedScope`]).
+    /// direct-child-scope index, which
+    /// [`owner_scope_standing`](Self::owner_scope_standing) owns — so a node it
+    /// does not name has an empty grant list, and only the parent record's own
+    /// grounds stand in a mint's way.
+    /// A read reports, it does not repair, so an index miss refuses rather
+    /// than reaching for a derived name ([`UnindexedScope`]).
     /// A resolve that failed answers `None`, so a host cannot paint "shared with
     /// nobody" over a subtree it simply could not read, nor offer a mint the
     /// engine would refuse.
@@ -5945,8 +6018,8 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
-        let target = match self
-            .owner_scope(
+        let (target, standing) = self
+            .owner_scope_standing(
                 scope_root,
                 api,
                 keys(),
@@ -5954,18 +6027,16 @@ where {
                 UnindexedScope::Refuse,
             )
             .await
-        {
-            Ok(target) => target,
-            Err(EngineError::UnsupportedTarget {
-                check: NOT_A_SCOPE_ROOT,
-            }) => {
-                return Some(ScopeSharing {
-                    grants: Vec::new(),
-                    can_mint_share: true,
-                    invite_links: Some(SharingInviteLinks::default()),
-                });
-            }
-            Err(_) => return None,
+            .ok()?;
+        let grant_refusal = ShareChecks::GRANT.refusal(standing);
+        let invite_link_refusal = ShareChecks::INVITE_LINK.refusal(standing);
+        let Some(target) = target else {
+            return Some(ScopeSharing {
+                grants: Vec::new(),
+                grant_refusal,
+                invite_link_refusal,
+                invite_links: Some(SharingInviteLinks::default()),
+            });
         };
         let current = self
             .owner_rotation_net(api, keys(), target.ancestry(), PointerConsultArm::Refused)
@@ -6034,9 +6105,8 @@ where {
                     })
                 }),
             ),
-            // A share mints a fresh scope at the node, so one that already is a
-            // scope root refuses it.
-            can_mint_share: false,
+            grant_refusal,
+            invite_link_refusal,
             invite_links,
         })
     }
@@ -6606,6 +6676,38 @@ mod tests {
     use crate::settings::settings_name;
     use crate::testkit::fakes::InMemoryRecordStore;
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+
+    /// One rule set decides both the refusal `share_scope` returns and the
+    /// standing the `sharing` read reports, and a grant and a link name every
+    /// ground apart — including the envelope-version one, which only a parent
+    /// record this build cannot author reaches.
+    #[test]
+    fn a_share_standing_names_each_ground_apart_for_a_grant_and_a_link() {
+        let node = NodeId([7; 16]);
+        let indexed = [ChildScopeRef::new(node.0, b"name".to_vec())];
+
+        for (standing, grant, link) in [
+            (record_share_standing(node, ENVELOPE_V, &[]), None, None),
+            (
+                record_share_standing(node, ENVELOPE_V, &indexed),
+                Some("grant-target-already-names-a-scope"),
+                Some("invite-target-already-names-a-scope"),
+            ),
+            (
+                record_share_standing(node, ENVELOPE_V + 1, &indexed),
+                Some("grant-parent-envelope-version-unsupported"),
+                Some("invite-parent-envelope-version-unsupported"),
+            ),
+            (
+                ShareStanding::VaultRoot,
+                Some("grant-target-is-the-vault-root"),
+                Some("invite-target-is-the-vault-root"),
+            ),
+        ] {
+            assert_eq!(ShareChecks::GRANT.refusal(standing), grant);
+            assert_eq!(ShareChecks::INVITE_LINK.refusal(standing), link);
+        }
+    }
 
     /// A destination the render cannot walk to the root is refused, and one it
     /// does not hold at all is the same "gone" verdict every other read gives —

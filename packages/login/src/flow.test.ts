@@ -32,20 +32,40 @@ function build(
   const account = fakeAccount();
   const progress = fakeProgress();
   const armed: (LoginSecretExporter | null)[] = [];
+  // Every step the end drives, in the order it drove them, so a test asserts
+  // sequencing rather than only that each leg ran.
+  const steps: string[] = [];
   let rebuilds = 0;
   const flow: LoginFlow<WebCollected> = createLoginFlow<WebCollected>({
     exchange: exchange.exchange,
     collector: passThroughCollector(options.offered),
     session: session.session,
     facade: facade.facade,
-    secrets: { use: (exporter) => armed.push(exporter) },
+    secrets: {
+      use: (exporter) => {
+        armed.push(exporter);
+        steps.push(exporter === null ? 'disarmed' : 'armed');
+      },
+    },
     account: account.account,
     progress: progress.progress,
     afterLogout: () => {
       rebuilds += 1;
+      steps.push('rebuilt');
     },
+    endsSessionElsewhere: () => steps.push('announced'),
   });
-  return { flow, exchange, session, facade, account, progress, armed, rebuilds: () => rebuilds };
+  return {
+    flow,
+    exchange,
+    session,
+    facade,
+    account,
+    progress,
+    armed,
+    steps,
+    rebuilds: () => rebuilds,
+  };
 }
 
 const loggedIn = (parts: Parts) => parts.account.calls.signedIn;
@@ -336,5 +356,104 @@ describe('forgetting this device', () => {
 
     expect(parts.facade.calls.logouts).toBe(0);
     expect(parts.account.signOuts()).toBe(0);
+  });
+});
+
+describe('ending the session across a host with more than one context', () => {
+  it('announces the end before either half tears down', async () => {
+    const parts = build();
+    const legs = parts.steps;
+    parts.facade.onCall((step) => legs.push(step));
+    legs.length = 0;
+
+    await parts.flow.logout();
+
+    // The other contexts drop their claim while this one still holds its engine,
+    // so nothing of theirs is racing the lock its teardown releases.
+    expect(legs.indexOf('announced')).toBeLessThan(legs.indexOf('facade.logout'));
+    expect(legs.indexOf('announced')).toBeLessThan(legs.indexOf('rebuilt'));
+  });
+
+  it('takes the re-export capability away even when a sign-in is already in flight', async () => {
+    let release!: () => void;
+    let starts = 0;
+    const facade = fakeFacade({
+      start: () => {
+        starts += 1;
+        // The first start is the login that clears the latch; the second is the
+        // restore this test parks, so the end below lands mid-flight.
+        return starts === 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => (release = resolve));
+      },
+    });
+    const parts = build({ session: fakeSession({ loggedIn: true }), facade });
+    await parts.flow.loginWithGoogle('id-token');
+    const held = parts.flow.resume();
+
+    try {
+      // The serialization gate refuses an end that collided with a restore.
+      await expect(parts.flow.logout()).rejects.toThrow();
+
+      expect(parts.armed.at(-1)).toBeNull();
+      expect(parts.account.signOuts()).toBe(1);
+      expect(parts.steps).toContain('announced');
+      // The host still owes itself a fresh facade, or it cannot sign in again.
+      expect(parts.rebuilds()).toBe(1);
+    } finally {
+      // Releases the module-scoped gate whatever the assertions did.
+      release();
+      await held;
+    }
+  });
+
+  it('signs no context back in when the end lands inside a handoff already in flight', async () => {
+    let release!: () => void;
+    let starts = 0;
+    const facade = fakeFacade({
+      start: () => {
+        starts += 1;
+        return starts === 1
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => (release = resolve));
+      },
+    });
+    const session = fakeSession({ loggedIn: true });
+    const parts = build({ session, facade });
+    await parts.flow.loginWithGoogle('id-token');
+    const held = parts.flow.resume();
+
+    await expect(parts.flow.logout()).rejects.toThrow();
+    release();
+    await held;
+
+    // The gate refused the end's own teardown, so the parked handoff owes it:
+    // it ends the session it was about to re-enter rather than reporting a
+    // sign-in over an account this context has already signed out.
+    expect(loggedIn(parts)).toHaveLength(1);
+    expect(parts.armed.at(-1)).toBeNull();
+    expect(session.calls.logouts).toBe(1);
+  });
+
+  it('refuses to hand the engine a session the end left behind', async () => {
+    const session = fakeSession({ loggedIn: true });
+    const parts = build({ session });
+
+    await parts.flow.logout();
+    // A provider session can outlive the end — it was not built yet, or its own
+    // teardown refused — and a resume would sign the context straight back in.
+    session.session.isLoggedIn = () => true;
+    await parts.flow.resume();
+
+    expect(parts.facade.calls.secrets).toHaveLength(0);
+  });
+
+  it('lets a deliberate login clear the latch the end set', async () => {
+    const parts = build();
+
+    await parts.flow.logout();
+    await parts.flow.loginWithGoogle('id-token');
+
+    expect(parts.facade.calls.secrets).toHaveLength(1);
   });
 });

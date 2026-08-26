@@ -59,9 +59,28 @@ interface EngineState {
   grants: Map<string, Array<[number, Permission]> | null>;
   /** `null` for an owner whose link records the engine could not open. */
   links: SharingInviteLinksDescriptor | null;
-  /** A share of the folder mints a scope at it, which a second share cannot. */
-  mintable: boolean;
+  /** The ground `share_scope` would refuse this target on, as the engine names it. */
+  standing: ShareStanding;
 }
+
+/** The engine's `ShareChecks` rules, and the pair of names each carries. */
+type ShareStanding = keyof typeof SHARE_STANDINGS;
+
+const SHARE_STANDINGS = {
+  accepted: { grant: null, inviteLink: null },
+  vaultRoot: {
+    grant: 'grant-target-is-the-vault-root',
+    inviteLink: 'invite-target-is-the-vault-root',
+  },
+  alreadyAScope: {
+    grant: 'grant-target-already-names-a-scope',
+    inviteLink: 'invite-target-already-names-a-scope',
+  },
+  envelopeVersion: {
+    grant: 'grant-parent-envelope-version-unsupported',
+    inviteLink: 'invite-parent-envelope-version-unsupported',
+  },
+} as const;
 
 /**
  * The sharing surface the dialog drives, over engine-side state the accepted
@@ -73,7 +92,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     contacts: held.contacts ?? [],
     grants: held.grants ?? new Map(),
     links: held.links === undefined ? NO_LINKS : held.links,
-    mintable: held.mintable ?? true,
+    standing: held.standing ?? 'accepted',
   };
   const answer = <T,>(name: string, value: T) =>
     refusals[name] === undefined ? Promise.resolve(value) : Promise.reject(refusals[name]);
@@ -99,7 +118,8 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
                     recipientIdentityPublicKey: identity(seed),
                     permission,
                   })),
-                  canMintShare: state.mintable,
+                  grantRefusal: SHARE_STANDINGS[state.standing].grant,
+                  inviteLinkRefusal: SHARE_STANDINGS[state.standing].inviteLink,
                   inviteLinks: state.links === null ? null : { ...state.links },
                 },
         })
@@ -132,7 +152,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         fragment: MINTED_FRAGMENT,
       }).then((outcome) => {
         state.links = { ...(state.links ?? NO_LINKS), live: true, expiresAt: expiresAt ?? null };
-        state.mintable = false;
+        state.standing = 'alreadyAScope';
         return outcome;
       })
     ),
@@ -206,7 +226,7 @@ async function click(testId: string) {
 function held(
   contacts: number[],
   rows: Array<[number, Permission]> | null = [],
-  rest: Partial<Pick<EngineState, 'links' | 'mintable'>> = {}
+  rest: Partial<Pick<EngineState, 'links' | 'standing'>> = {}
 ) {
   return { contacts, grants: new Map([[toHex(DOCS), rows]]), ...rest };
 }
@@ -463,7 +483,7 @@ describe('a link the engine already holds', () => {
   };
 
   it('draws the standing of a link this session never minted', async () => {
-    await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
 
     expect(screen.getByTestId('share-live-link')).toBeTruthy();
     expect(screen.getByTestId('share-live-link-expiry').textContent).toContain('expires');
@@ -472,13 +492,13 @@ describe('a link the engine already holds', () => {
   });
 
   it('offers no mint where the engine would refuse one', async () => {
-    await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
 
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 
   it('says so rather than offering a mint on a shared folder carrying no link', async () => {
-    await share(sharingEngine({}, held([1], [[1, 'read']], { mintable: false })));
+    await share(sharingEngine({}, held([1], [[1, 'read']], { standing: 'alreadyAScope' })));
 
     expect(screen.getByTestId('share-no-mint')).toBeTruthy();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
@@ -486,7 +506,10 @@ describe('a link the engine already holds', () => {
 
   it('ends the link on a revoke and leaves the grants it converted standing', async () => {
     const engine = await share(
-      sharingEngine({}, held([], [[CLAIMANT_SEED, 'read']], { links: live, mintable: false }))
+      sharingEngine(
+        {},
+        held([], [[CLAIMANT_SEED, 'read']], { links: live, standing: 'alreadyAScope' })
+      )
     );
 
     await click('share-revoke-link');
@@ -497,7 +520,9 @@ describe('a link the engine already holds', () => {
   });
 
   it('shows the grant a conversion committed', async () => {
-    const engine = await share(sharingEngine({}, held([], [], { links: live, mintable: false })));
+    const engine = await share(
+      sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' }))
+    );
 
     await click('share-convert-claims');
 
@@ -507,7 +532,7 @@ describe('a link the engine already holds', () => {
 
   it('offers to forget the records a cut left behind, and stops once pruned', async () => {
     const engine = await share(
-      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, mintable: false }))
+      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, standing: 'alreadyAScope' }))
     );
 
     expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');
@@ -530,5 +555,61 @@ describe('a link the engine already holds', () => {
     expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
     expect(screen.queryByTestId('share-links-unavailable')).toBeNull();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+});
+
+/**
+ * The engine refuses a share on three grounds, each under its own name per
+ * command (`ShareChecks`). What the dialog offers has to follow all three, and
+ * offer nothing the engine would refuse on the target's standing.
+ */
+describe('what the dialog offers for each ground the engine refuses on', () => {
+  const REFUSING: ShareStanding[] = ['vaultRoot', 'alreadyAScope', 'envelopeVersion'];
+
+  it('offers both a grant and a mint where the engine accepts both', async () => {
+    await share(sharingEngine({}, held([1], [], { standing: 'accepted' })));
+
+    fireEvent.change(screen.getByLabelText('contact'), { target: { value: key(1) } });
+
+    expect(screen.getByTestId('share-mint-link')).toBeTruthy();
+    expect(screen.getByTestId('share-grant').hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByTestId('share-no-grant')).toBeNull();
+    expect(screen.queryByTestId('share-no-mint')).toBeNull();
+  });
+
+  it.each(REFUSING)('dispatches neither where the engine refuses on %s', async (standing) => {
+    const engine = await share(sharingEngine({}, held([1], [], { standing })));
+
+    expect(screen.queryByLabelText('contact')).toBeNull();
+    expect(screen.queryByTestId('share-mint-link')).toBeNull();
+    expect(screen.getByTestId('share-grant').hasAttribute('disabled')).toBe(true);
+
+    await click('share-grant');
+    expect(engine.facade.grant).not.toHaveBeenCalled();
+    expect(engine.facade.createInviteLink).not.toHaveBeenCalled();
+  });
+
+  it.each(REFUSING)('names the engine’s own ground for %s, per command', async (standing) => {
+    await share(sharingEngine({}, held([1], [], { standing })));
+
+    expect(screen.getByTestId('share-no-grant').getAttribute('data-check')).toBe(
+      SHARE_STANDINGS[standing].grant
+    );
+    expect(screen.getByTestId('share-no-mint').getAttribute('data-check')).toBe(
+      SHARE_STANDINGS[standing].inviteLink
+    );
+  });
+
+  it('offers no grant where no read reached the scope, and says so in its own words', async () => {
+    const engine = await share(sharingEngine({}, held([1], null)));
+
+    // Absence is its own state: neither an offer, nor a refusal the engine made.
+    expect(screen.getByTestId('share-standing-unknown')).toBeTruthy();
+    expect(screen.queryByTestId('share-no-grant')).toBeNull();
+    expect(screen.queryByLabelText('contact')).toBeNull();
+    expect(screen.getByTestId('share-grant').hasAttribute('disabled')).toBe(true);
+
+    await click('share-grant');
+    expect(engine.facade.grant).not.toHaveBeenCalled();
   });
 });

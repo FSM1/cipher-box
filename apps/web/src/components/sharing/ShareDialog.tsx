@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
 import { useSharingActions } from '../../hooks/useSharingActions';
 import { expiryAt, inviteUrl, type LinkLifetime } from '../../sharing/inviteLink';
+import { refusalLabel } from '../../sharing/shareRefusals';
 import { sharingFor, sharingStore } from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
 import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
@@ -47,6 +48,12 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
   const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
   const busy = actions.busy !== null;
+  // The engine's verdict on this target's standing, not a rule re-derived here.
+  const grantRefusal = scope?.grantRefusal ?? null;
+  // A read that never landed carries no verdict either way, and the engine
+  // answers none rather than let a host offer what it would refuse
+  // (`crates/engine/src/facade.rs`, `scope_sharing`).
+  const standingUnknown = scope === null;
 
   const { reload } = actions;
   useEffect(() => {
@@ -145,7 +152,15 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           )}
 
           <p className="dialog-label">grant access</p>
-          {grantable.length === 0 ? (
+          {standingUnknown ? (
+            <p className="sharing-note" data-testid="share-standing-unknown">
+              {'// no read reached this folder — nothing can be granted until one does'}
+            </p>
+          ) : grantRefusal !== null ? (
+            <p className="sharing-note" data-testid="share-no-grant" data-check={grantRefusal}>
+              {`// ${refusalLabel(grantRefusal)}`}
+            </p>
+          ) : grantable.length === 0 ? (
             <p className="sharing-note" data-testid="share-no-contacts">
               {'// no contact left to grant here — import one'}
             </p>
@@ -233,7 +248,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               type="button"
               className="dialog-button dialog-button--primary"
               onClick={grant}
-              disabled={busy || chosen === null}
+              disabled={busy || chosen === null || grantRefusal !== null || standingUnknown}
               data-testid="share-grant"
             >
               {actions.busy === 'grant' ? 'granting...' : 'grant'}

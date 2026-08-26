@@ -11,7 +11,12 @@ export function AppSidebar() {
         <NavItem to="/files" icon="folder" label="Files" active={pathname.startsWith('/files')} />
         <NavItem to="/shared" icon="shared" label="Shared" active={false} comingSoon />
         <NavItem to="/bin" icon="bin" label="Bin" active={false} comingSoon />
-        <NavItem to="/settings" icon="settings" label="Settings" active={false} comingSoon />
+        <NavItem
+          to="/settings"
+          icon="settings"
+          label="Settings"
+          active={pathname.startsWith('/settings')}
+        />
       </nav>
     </aside>
   );

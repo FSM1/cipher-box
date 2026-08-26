@@ -737,3 +737,115 @@ describe('EngineClient leadership + transport swap', () => {
     relayB.close();
   });
 });
+
+describe('EngineClient origin-wide session end', () => {
+  /**
+   * The two steps a host's session end drives, in the order `createLoginFlow`
+   * drives them: announce to the origin, then tear this tab's own engine down.
+   */
+  const endSession = (client: EngineClient): void => {
+    client.endOriginSession();
+    void client.facade.logout();
+  };
+
+  it('signs a sibling out when the leader ends the session', async () => {
+    const { tab } = origin();
+    const a = tab();
+    const b = tab();
+    await tick();
+    await startTab(a);
+    await startTab(b);
+    expect(b.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+    endSession(a);
+    await tick();
+
+    expect(b.signedInAccount()).toBeNull();
+    expect(b.currentRole()).toBe('closed');
+    await a.dispose();
+    await b.dispose();
+  });
+
+  it('leaves no sibling to cold-start a replacement engine over the erased state', async () => {
+    const { tab, liveWorkers } = origin();
+    const provideSecret = vi.fn(() => Promise.resolve(fakeLoginSecret()));
+    const a = tab();
+    const b = tab({ secretSource: { provideSecret } });
+    await tick();
+    await startTab(a);
+    await startTab(b);
+    expect(liveWorkers()).toBe(1);
+
+    // The leader's teardown releases the engine lock, which is all a promotion
+    // needs; the sibling must have dropped its claim before that lands.
+    endSession(a);
+    for (let i = 0; i < 4; i += 1) await tick();
+
+    expect(provideSecret).not.toHaveBeenCalled();
+    expect(liveWorkers()).toBe(0);
+    await a.dispose();
+    await b.dispose();
+  });
+
+  it('ends the session in the leader when a follower ended it', async () => {
+    const { tab, liveWorkers } = origin();
+    const leader = tab();
+    const ending = tab();
+    const bystander = tab();
+    await tick();
+    await startTab(leader);
+    await startTab(ending);
+    await startTab(bystander);
+    expect(leader.currentRole()).toBe('leader');
+
+    endSession(ending);
+    for (let i = 0; i < 4; i += 1) await tick();
+
+    expect(leader.signedInAccount()).toBeNull();
+    expect(bystander.signedInAccount()).toBeNull();
+    expect(liveWorkers()).toBe(0);
+    await leader.dispose();
+    await ending.dispose();
+    await bystander.dispose();
+  });
+
+  it('tells the host its session ended, so it can end its own half', async () => {
+    const { tab } = origin();
+    const a = tab();
+    const b = tab();
+    const ended = vi.fn();
+    const unsubscribe = b.subscribeSessionEnd(ended);
+    await tick();
+    await startTab(a);
+    await startTab(b);
+
+    endSession(a);
+    await tick();
+
+    expect(ended).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    await a.dispose();
+    await b.dispose();
+  });
+
+  it('ends no session when a tab merely tears its own client down', async () => {
+    const { tab, liveWorkers } = origin();
+    const provideSecret = vi.fn(() => Promise.resolve(fakeLoginSecret()));
+    const a = tab();
+    const b = tab({ secretSource: { provideSecret } });
+    await tick();
+    await startTab(a);
+    await startTab(b);
+
+    // A provider remount disposes its client; the origin's session outlives it,
+    // and the surviving tab is promoted over the same account.
+    await a.dispose();
+    for (let i = 0; i < 4; i += 1) await tick();
+
+    expect(b.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+    expect(b.currentRole()).toBe('leader');
+    expect(provideSecret).toHaveBeenCalledTimes(1);
+    expect(liveWorkers()).toBe(1);
+    await b.dispose();
+  });
+});

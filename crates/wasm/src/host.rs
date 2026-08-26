@@ -759,10 +759,10 @@ mod tests {
         }
     }
 
-    /// The share dialog branches on all of them: it offers a mint only on a plain
-    /// `true`, takes the expiry verdict from the engine rather than its own
-    /// clock, and a deadline past 2^53 must survive as the `bigint` the engine
-    /// minted, never an f64 `number`.
+    /// The share dialog branches on all of them: it offers each mint only where
+    /// the engine reports no refusal for that kind, takes the expiry verdict from
+    /// the engine rather than its own clock, and a deadline past 2^53 must
+    /// survive as the `bigint` the engine minted, never an f64 `number`.
     #[wasm_bindgen_test]
     fn a_sharing_view_crosses_with_its_mint_verdict_and_link_standing() {
         let view = |state| {
@@ -772,17 +772,19 @@ mod tests {
                 state,
             }))
         };
-        let shared = |can_mint_share, invite_links| {
+        let shared = |grant_refusal, invite_link_refusal, invite_links| {
             view(Some(facade::ScopeSharing {
                 grants: Vec::new(),
-                can_mint_share,
+                grant_refusal,
+                invite_link_refusal,
                 invite_links,
             }))
         };
 
         let live = field(
             &shared(
-                false,
+                Some("grant-target-already-names-a-scope"),
+                Some("invite-target-already-names-a-scope"),
                 Some(facade::SharingInviteLinks {
                     live: true,
                     expires_at: Some(UnixMillis(u64::MAX)),
@@ -792,7 +794,14 @@ mod tests {
             ),
             "state",
         );
-        assert_eq!(field(&live, "canMintShare"), JsValue::from_bool(false));
+        assert_eq!(
+            field(&live, "grantRefusal"),
+            JsValue::from_str("grant-target-already-names-a-scope")
+        );
+        assert_eq!(
+            field(&live, "inviteLinkRefusal"),
+            JsValue::from_str("invite-target-already-names-a-scope")
+        );
         assert_eq!(field(&live, "grants").unchecked_into::<Array>().length(), 0);
         let links = field(&live, "inviteLinks");
         assert_eq!(field(&links, "live"), JsValue::from_bool(true));
@@ -811,10 +820,14 @@ mod tests {
         );
 
         let mintable = field(
-            &shared(true, Some(facade::SharingInviteLinks::default())),
+            &shared(None, None, Some(facade::SharingInviteLinks::default())),
             "state",
         );
-        assert_eq!(field(&mintable, "canMintShare"), JsValue::from_bool(true));
+        assert!(
+            field(&mintable, "grantRefusal").is_undefined(),
+            "an accepted grant carries no refusal, never an empty string"
+        );
+        assert!(field(&mintable, "inviteLinkRefusal").is_undefined());
         let none_live = field(&mintable, "inviteLinks");
         assert_eq!(field(&none_live, "expired"), JsValue::from_bool(false));
         assert!(
@@ -822,8 +835,19 @@ mod tests {
             "a link with no deadline carries none, never 0n"
         );
 
+        // A link the engine refuses on its own ground, at a scope a grant is
+        // still accepted at: the two verdicts are read apart.
+        let link_only = field(
+            &shared(None, Some("invite-target-is-the-vault-root"), None),
+            "state",
+        );
+        assert!(field(&link_only, "grantRefusal").is_undefined());
+        assert_eq!(
+            field(&link_only, "inviteLinkRefusal"),
+            JsValue::from_str("invite-target-is-the-vault-root")
+        );
         assert!(
-            field(&field(&shared(false, None), "state"), "inviteLinks").is_undefined(),
+            field(&link_only, "inviteLinks").is_undefined(),
             "a read that could not open the records withholds them"
         );
         assert!(

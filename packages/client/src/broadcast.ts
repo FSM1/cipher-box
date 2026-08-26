@@ -17,9 +17,12 @@
  *   moves upload buffers instead, so a chunk's plaintext leaves the follower's
  *   heap rather than being copied to every bystander.
  * - What a bystanding same-origin context sees on the channel, stated exactly:
- *   per-tab `clientId`s, the leadership token and the port-host address. No key
- *   bytes, no plaintext, no user-supplied names, and no node id, IPNS name,
- *   routing key or block count. Same origin remains the trust boundary.
+ *   per-tab `clientId`s, the leadership token, the port-host address, and that a
+ *   session on this origin has just ended. No key bytes, no plaintext, no
+ *   user-supplied names, and no node id, IPNS name, routing key or block count.
+ *   The session end names nobody, so what it adds is a timing signal — strictly
+ *   less than the leadership beacons already say about a session's life. Same
+ *   origin remains the trust boundary.
  */
 
 import type {
@@ -156,7 +159,29 @@ export type LeaderMessage =
   /** Where a follower may open its private port to this leadership. */
   | { type: 'cb:portHost'; token: string; address: string };
 
-export type BroadcastMessage = FollowerMessage | LeaderMessage;
+/**
+ * Any tab → every tab. The origin has one engine and one session; ending it in
+ * one tab ends it in all of them, or the tab that kept its claim wins the
+ * released lock and cold-starts a replacement engine over state the end just
+ * erased.
+ *
+ * It carries no leadership token, because no leadership mints it, and names no
+ * account, because the channel never does. The channel's first destructive verb:
+ * a forged one ends every tab's provider session too, so the member owes a full
+ * re-login rather than a reload. Still inside the boundary — a same-origin script
+ * already holds the context that can call logout itself — and a token could not
+ * bound it, since no leadership is behind the message to mint one.
+ */
+export type SessionMessage = { type: 'cb:sessionEnded' };
+
+export type BroadcastMessage = FollowerMessage | LeaderMessage | SessionMessage;
+
+/**
+ * The one session-end post, so every sender and reader agrees on its shape.
+ * Frozen: a reader compares against it, and a mutated singleton would silently
+ * stop this tab answering the end.
+ */
+export const SESSION_ENDED: SessionMessage = Object.freeze({ type: 'cb:sessionEnded' });
 
 /** The channel name pairing the broadcast wire with the `cipherbox-engine` lock. */
 export const BROADCAST_CHANNEL_NAME = 'cipherbox-engine';

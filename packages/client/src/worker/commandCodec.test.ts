@@ -806,7 +806,8 @@ describe('readSharing', () => {
           permission: fakeWasmEnums.Permission.Read,
         },
       ],
-      canMintShare: false,
+      grantRefusal: 'grant-target-already-names-a-scope',
+      inviteLinkRefusal: 'invite-target-already-names-a-scope',
       inviteLinks: links,
     },
   };
@@ -817,7 +818,8 @@ describe('readSharing', () => {
       contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey }],
       state: {
         grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
-        canMintShare: false,
+        grantRefusal: 'grant-target-already-names-a-scope',
+        inviteLinkRefusal: 'invite-target-already-names-a-scope',
         inviteLinks: links,
       },
     });

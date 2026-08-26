@@ -50,16 +50,18 @@ export type InviteLinkState =
   | { kind: 'unavailable' }
   | { kind: 'live'; links: SharingInviteLinksDescriptor }
   | { kind: 'mintable' }
-  | { kind: 'refused' };
+  | { kind: 'refused'; check: string };
 
 /**
  * A scope the engine reached carries a live link, takes a mint, or takes
  * neither. `unavailable` is the owner's link records refusing to open, which a
- * render must not spell as "no link here".
+ * render must not spell as "no link here"; `refused` carries the engine's own
+ * check name, because which ground refuses is the engine's to say.
  */
 export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
   const links = scope.inviteLinks;
   if (links === null) return { kind: 'unavailable' };
   if (links.live) return { kind: 'live', links };
-  return scope.canMintShare ? { kind: 'mintable' } : { kind: 'refused' };
+  const refusal = scope.inviteLinkRefusal;
+  return refusal === null ? { kind: 'mintable' } : { kind: 'refused', check: refusal };
 }

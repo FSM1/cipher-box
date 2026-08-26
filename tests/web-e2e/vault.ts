@@ -13,7 +13,9 @@ export const PAYLOAD = 'ciphertext round trip\n\tédition — 中文\r\nlast lin
 
 const PROBE = 'probe';
 
-export async function coldStart(page: Page): Promise<{ vault: VaultPage; files: FilesPage }> {
+export async function coldStart(
+  page: Page
+): Promise<{ vault: VaultPage; files: FilesPage; accountId: string }> {
   const vault = new VaultPage(page);
   const files = new FilesPage(page);
   await vault.open();
@@ -23,10 +25,10 @@ export async function coldStart(page: Page): Promise<{ vault: VaultPage; files: 
   await expect
     .poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null))
     .toBe(true);
-  await vault.coldStart();
+  const accountId = await vault.coldStart();
   await vault.settled();
   await expect(files.browser).toBeVisible();
-  return { vault, files };
+  return { vault, files, accountId };
 }
 
 /**

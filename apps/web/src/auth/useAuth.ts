@@ -122,6 +122,9 @@ export function useAuth(): Auth {
         progress,
         // `facade.logout` closes the client for good, so the tab needs a new one.
         afterLogout: rebuildEngine,
+        // The origin's engine and session are shared across its tabs, so ending
+        // one here ends it in all of them (`EngineClient.endOriginSession`).
+        endsSessionElsewhere: () => client?.endOriginSession(),
       }),
     [client, collector, exchange, progress, rebuildEngine, secrets, session]
   );

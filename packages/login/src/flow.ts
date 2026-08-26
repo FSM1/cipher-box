@@ -30,6 +30,12 @@ export interface LoginHost<C extends CollectedMaterial = CollectedMaterial> {
   progress: LoginProgress;
   /** Runs once a logout has torn the facade down, so the host can replace it. */
   afterLogout?: () => void;
+  /**
+   * Announces the session end to the host's other contexts, before either half
+   * tears down. Optional: a host whose session cannot outlive this context has
+   * nobody to tell.
+   */
+  endsSessionElsewhere?: () => void;
 }
 
 export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
@@ -81,6 +87,27 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
 let inFlight = false;
 let restore: { session: CoreKitSession; facade: LoginFacade | null; done: Promise<void> } | null =
   null;
+/**
+ * The provider session a session end retired, or `'any'` where the end could not
+ * name one because none was built yet. Cleared by the next deliberate login.
+ *
+ * A provider session can outlive the end that retired it — it arrived after the
+ * end reached this context, or its own teardown refused — and a handoff would
+ * otherwise hand the engine its secret straight back, re-entering the session
+ * that just ended and, after a forget, re-seeding what it erased.
+ */
+let retired: CoreKitSession | 'any' | null = null;
+
+/**
+ * Clears the module-scoped latches. For a host's tests, which share one module
+ * instance where a document would have reloaded between them; nothing in the app
+ * has a second document's worth of state to drop.
+ */
+export function resetLoginFlowLatches(): void {
+  inFlight = false;
+  restore = null;
+  retired = null;
+}
 
 /**
  * Runs `leg` and reports its refusal instead of throwing it, so a caller can
@@ -98,7 +125,17 @@ async function refusalOf(leg: () => Promise<void> | undefined): Promise<unknown>
 export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>(
   host: LoginHost<C>
 ): LoginFlow<C> {
-  const { exchange, collector, session, facade, secrets, account, progress, afterLogout } = host;
+  const {
+    exchange,
+    collector,
+    session,
+    facade,
+    secrets,
+    account,
+    progress,
+    afterLogout,
+    endsSessionElsewhere,
+  } = host;
 
   /** Serializes the auth transitions; a collision rejects rather than no-ops. */
   const exclusively = async (step: () => Promise<void>): Promise<void> => {
@@ -132,6 +169,12 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     secrets?.use(session);
     try {
       await handOffLoginSecret(facade, session);
+      // The end latches while this export is in flight, and its own teardown is
+      // the leg the serialization gate refuses; signing in here would re-enter
+      // the session it retired, so the catch below ends that session instead.
+      if (retired === 'any' || retired === session) {
+        throw new Error('the session ended before this sign-in finished');
+      }
       account.signedIn(method, email);
     } catch (failure) {
       secrets?.use(null);
@@ -149,6 +192,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
   const login = (collect: () => Promise<IdentityCredential>) =>
     exclusively(async () => {
       if (!session) throw new Error('the login provider is not ready');
+      retired = null;
       await session.login(await collect());
       await handOff();
     });
@@ -177,17 +221,25 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       const refusal = erase ?? teardown;
       if (refusal !== undefined) throw refusal;
     };
+    // Outside the serialization gate, which refuses outright while a sign-in is
+    // in flight: an end that collided with one would otherwise leave the
+    // re-export capability armed and the account still rendered. Announcing here
+    // also puts it ahead of the teardown, so the other contexts drop their claim
+    // well before this one releases what they would race for.
+    retired = session ?? 'any';
+    secrets?.use(null);
+    restore = null;
+    account.signedOut();
+    endsSessionElsewhere?.();
     return exclusively(async () => {
       const outcomes = await Promise.allSettled([endHalf(facade), endHalf(session)]);
-      secrets?.use(null);
-      restore = null;
-      account.signedOut();
-      afterLogout?.();
       // The halves run concurrently, so which one refuses *first* is a race;
       // the engine half is reported by position instead, deterministically.
       const failed = outcomes.find((outcome) => outcome.status === 'rejected');
       if (failed) throw failed.reason as Error;
-    });
+      // The host owes itself a fresh facade whatever the teardown answered: this
+      // one is closed either way, and a host still holding it cannot sign in.
+    }).finally(() => afterLogout?.());
   };
 
   const unavailable = <T>(method: IdentityMethod): Promise<T> =>
@@ -238,6 +290,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
       return exclusively(async () => {
         if (!session?.recoverWithPhrase)
           throw new Error('recovery is not available on this device');
+        retired = null;
         await session.recoverWithPhrase(phrase);
         await handOff();
       });
@@ -257,6 +310,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
     },
 
     resume() {
+      if (retired === 'any' || retired === session) return Promise.resolve();
       if (!session || !session.isLoggedIn()) return Promise.resolve();
       if (restore !== null && restore.session === session && restore.facade === facade) {
         return restore.done;

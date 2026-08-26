@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
+import type { EngineClient, MediaService } from '@cipherbox/client';
 import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
 import { errorMessage } from '../lib/errorMessage';
@@ -31,8 +31,11 @@ interface EngineContextValue {
 const EngineContext = createContext<EngineContextValue | null | undefined>(undefined);
 
 export interface EngineProviderProps {
-  /** Builds this tab's engine client. Read once, on mount. */
-  createClient: (secretSource: SecretSource) => EngineClient;
+  /**
+   * Builds this tab's engine client over the failover secret source, which is
+   * also where login arms and disarms the re-export. Read once, on mount.
+   */
+  createClient: (secretSource: LoginSecretSource) => EngineClient;
   children: ReactNode;
 }
 

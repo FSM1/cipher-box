@@ -923,10 +923,18 @@ impl ScopeSharing {
             .collect()
     }
 
-    /// Whether a further share of this scope would be accepted.
-    #[wasm_bindgen(getter, js_name = canMintShare)]
-    pub fn can_mint_share(&self) -> bool {
-        self.inner.can_mint_share
+    /// The refusal a contact grant at this scope would report, or `undefined`
+    /// where one would be accepted.
+    #[wasm_bindgen(getter, js_name = grantRefusal)]
+    pub fn grant_refusal(&self) -> Option<String> {
+        self.inner.grant_refusal.map(str::to_owned)
+    }
+
+    /// The refusal an invite-link mint at this scope would report, or
+    /// `undefined` where one would be accepted.
+    #[wasm_bindgen(getter, js_name = inviteLinkRefusal)]
+    pub fn invite_link_refusal(&self) -> Option<String> {
+        self.inner.invite_link_refusal.map(str::to_owned)
     }
 
     /// This owner's invite links at the scope, or `undefined` when the read could

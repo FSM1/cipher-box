@@ -1,0 +1,82 @@
+/* The /settings route: stacked sections over the app shell's main column. */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  max-width: 736px;
+  padding: var(--spacing-md);
+}
+
+.settings-heading {
+  margin: 0;
+  color: var(--color-text-primary);
+  text-transform: lowercase;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.settings-section h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  text-transform: lowercase;
+}
+
+.settings-section--danger {
+  border-color: var(--color-warning-dim);
+}
+
+.settings-ok {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) 1fr;
+  gap: var(--spacing-xs) var(--spacing-md);
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.settings-facts dt {
+  color: var(--color-text-dim);
+}
+
+.settings-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-md);
+  color: var(--color-text-dim);
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.terminal-btn--danger {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}

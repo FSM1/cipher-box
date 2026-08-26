@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it } from 'vitest';
 import { UserMenu } from './UserMenu';
@@ -37,26 +37,12 @@ describe('UserMenu', () => {
     expect(screen.queryByTestId('logout-button')).toBeNull();
   });
 
-  it('offers the recovery phrase while the account carries no factor policy', async () => {
+  it('sends the account surfaces to the settings route rather than hosting them', () => {
     renderMenu();
-    // The policy is read off the signed-in account, so the session lands first.
-    await screen.findByText('user@example.test');
 
     fireEvent.click(screen.getByRole('button', { expanded: false }));
 
-    expect(screen.getByTestId('recovery-setup-open')).not.toBeNull();
-    expect(screen.queryByTestId('recovery-enrolled')).toBeNull();
-  });
-
-  it('stops offering it once the account carries one', async () => {
-    renderMenu({ enrolled: true });
-    await screen.findByText('user@example.test');
-
-    fireEvent.click(screen.getByRole('button', { expanded: false }));
-
-    await waitFor(() => expect(screen.getByTestId('recovery-enrolled')).not.toBeNull());
-    // Offering it again would enroll a second time over a live policy.
-    expect(screen.queryByTestId('recovery-setup-open')).toBeNull();
+    expect(screen.getByTestId('user-menu-settings').getAttribute('href')).toBe('/settings');
   });
 
   it('names a session that carries no email, as a wallet login does', () => {

@@ -12,8 +12,8 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
 
 const scope = (
   inviteLinks: SharingInviteLinksDescriptor | null,
-  canMintShare = true
-): ScopeSharing => ({ grants: [], canMintShare, inviteLinks });
+  inviteLinkRefusal: string | null = null
+): ScopeSharing => ({ grants: [], grantRefusal: null, inviteLinkRefusal, inviteLinks });
 
 describe('the link URL', () => {
   it('carries the capability in the fragment, which reaches no server', () => {
@@ -59,11 +59,23 @@ describe('which link situation a scope is in', () => {
   it('reports the link a scope carries over any mint verdict', () => {
     const links = { ...NO_LINKS, live: true };
 
-    expect(inviteLinkState(scope(links, true))).toEqual({ kind: 'live', links });
+    expect(inviteLinkState(scope(links, 'invite-target-already-names-a-scope'))).toEqual({
+      kind: 'live',
+      links,
+    });
   });
 
   it('offers a mint only where the engine would take one', () => {
-    expect(inviteLinkState(scope(NO_LINKS, true))).toEqual({ kind: 'mintable' });
-    expect(inviteLinkState(scope(NO_LINKS, false))).toEqual({ kind: 'refused' });
+    expect(inviteLinkState(scope(NO_LINKS))).toEqual({ kind: 'mintable' });
+  });
+
+  it('carries the engine’s own ground for a refusal, whichever rule it was', () => {
+    for (const check of [
+      'invite-target-is-the-vault-root',
+      'invite-target-already-names-a-scope',
+      'invite-parent-envelope-version-unsupported',
+    ]) {
+      expect(inviteLinkState(scope(NO_LINKS, check))).toEqual({ kind: 'refused', check });
+    }
   });
 });

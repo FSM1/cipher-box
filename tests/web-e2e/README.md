@@ -18,6 +18,10 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   carries no dead letter — so a write that never published fails the gate
 - an upload and the file read back off the network, asserted byte for byte
 - signing out returns the tab to the front door
+- the settings route opens from the sidebar and names the signed-in account
+- a session end — a sign-out or a forget-this-device — reaches every tab of the
+  origin, and no promoted sibling re-exports a secret to cold-start a
+  replacement engine with
 - the shipping bundle exposes no introspection hook
 
 ## How the suite logs in

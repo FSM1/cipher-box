@@ -43,6 +43,18 @@ describe('App routes', () => {
     expect(await screen.findByRole('heading', { name: 'CipherBox' })).toBeDefined();
   });
 
+  it('renders the settings route inside the app shell', async () => {
+    renderAt('/settings', true);
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(await screen.findByTestId('settings-page')).toBeDefined();
+  });
+
+  it('sends a signed-out tab away from settings', async () => {
+    renderAt('/settings');
+    expect(await screen.findByRole('heading', { name: 'CipherBox' })).toBeDefined();
+    expect(screen.queryByTestId('settings-page')).toBeNull();
+  });
+
   it('serves the invite claim route to a signed-out tab, so the link survives', () => {
     renderAt('/invite');
     expect(screen.getByTestId('invite-claim')).toBeDefined();
