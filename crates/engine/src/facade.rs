@@ -6672,6 +6672,7 @@ mod tests {
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
 
+    use crate::api::{login_response, new_user_login_response};
     use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
     use crate::settings::settings_name;
     use crate::testkit::fakes::InMemoryRecordStore;
@@ -6946,7 +6947,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         // The vacancy probe answers, so the mint proceeds — and then the
         // head-block upload has no route, exactly as an unreachable API leaves it.
@@ -6988,7 +6989,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         // The vacancy probe answers, then the head-block upload has no route.
         device
@@ -7028,7 +7029,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         device
             .http
@@ -7112,7 +7113,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         // A configured base URL means the empty pointer chain provisions.
         serve_provisioning(&device);
@@ -7167,7 +7168,7 @@ mod tests {
         ));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         serve_provisioning(&device);
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
@@ -7242,7 +7243,7 @@ mod tests {
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
         device.http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-siwe", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-siwe", &"b".repeat(64), "gw-b"),
         ));
 
         let signature = vec![0xDE, 0xAD, 0xBE, 0xEF];
@@ -7899,7 +7900,7 @@ mod tests {
             ));
             device.http.enqueue_response(json_response(
                 200,
-                json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+                new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
             ));
             serve_provisioning(&device);
             block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");

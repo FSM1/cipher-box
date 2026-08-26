@@ -89,6 +89,33 @@ pub(crate) struct TestLoginResponse {
     pub private_key: String,
 }
 
+/// The login/refresh response body the auth tests enqueue — one home for its
+/// field names, so a wire rename touches this literal rather than every test.
+#[cfg(test)]
+pub(crate) fn login_response(
+    access_token: &str,
+    refresh_token: &str,
+    accelerator_token: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "gatewayToken": accelerator_token,
+    })
+}
+
+/// [`login_response`] for a login that implicitly created the account.
+#[cfg(test)]
+pub(crate) fn new_user_login_response(
+    access_token: &str,
+    refresh_token: &str,
+    accelerator_token: &str,
+) -> serde_json::Value {
+    let mut body = login_response(access_token, refresh_token, accelerator_token);
+    body["isNewUser"] = serde_json::json!(true);
+    body
+}
+
 /// A NestJS error envelope: `{ statusCode, message, error, code? }`. `message`
 /// is a string or an array of strings (validation failures); both are accepted.
 /// `code` is the stable machine discriminator the API stamps where one status

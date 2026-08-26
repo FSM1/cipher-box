@@ -734,6 +734,8 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 
+    use super::super::types::{login_response, new_user_login_response};
+
     use crate::seams::{AUTHORIZATION, Mailbox};
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
@@ -808,7 +810,7 @@ mod tests {
         ));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "gatewayToken": "gw-a", "isNewUser": true }),
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
     }
@@ -970,7 +972,7 @@ mod tests {
 
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         block_on(client.refresh()).expect("refresh");
 
@@ -1004,7 +1006,7 @@ mod tests {
         block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
 
         block_on(client.refresh()).expect("refresh");
@@ -1027,7 +1029,7 @@ mod tests {
         let (http, _creds, client) = fakes();
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "c".repeat(64), "gatewayToken": "gw-c" }),
+            login_response("jwt", &"c".repeat(64), "gw-c"),
         ));
         block_on(client.refresh()).expect("refresh via cookie");
         assert_eq!(body_json(&http.requests()[0]), json!({}));
@@ -1058,7 +1060,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "jwt expired" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
+            login_response("jwt-2", &"d".repeat(64), "gw-d"),
         ));
         http.enqueue_response(json_response(200, json!({ "success": true })));
 
@@ -1082,7 +1084,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "expired" }))); // quota attempt
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "d".repeat(64), "gatewayToken": "gw-d" }),
+            login_response("jwt-2", &"d".repeat(64), "gw-d"),
         )); // refresh ok
         http.enqueue_response(json_response(401, json!({ "message": "still bad" }))); // retry 401
 
@@ -1096,17 +1098,10 @@ mod tests {
     fn test_login_returns_the_keypair_and_redacts_the_private_key() {
         let (http, _creds, client) = fakes();
         let private_key = "11".repeat(32);
-        http.enqueue_response(json_response(
-            200,
-            json!({
-                "accessToken": "jwt",
-                "refreshToken": "e".repeat(64),
-                "gatewayToken": "gw-e",
-                "isNewUser": true,
-                "publicKey": "02cafe",
-                "privateKey": private_key,
-            }),
-        ));
+        let mut body = new_user_login_response("jwt", &"e".repeat(64), "gw-e");
+        body["publicKey"] = json!("02cafe");
+        body["privateKey"] = json!(private_key);
+        http.enqueue_response(json_response(200, body));
 
         let outcome = block_on(client.test_login("alice@test", "the-secret")).expect("test login");
         assert!(outcome.is_new_user);
@@ -1288,7 +1283,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "expired" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         http.enqueue_response(json_response(200, json!({ "messages": [] })));
 
@@ -1461,7 +1456,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
+            login_response("jwt", &"f".repeat(64), "gw-f"),
         ));
 
         assert!(matches!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
@@ -1493,7 +1488,7 @@ mod tests {
 
         http.release(json_response(
             200,
-            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64), "gatewayToken": "gw-f" }),
+            login_response("jwt", &"f".repeat(64), "gw-f"),
         ));
         assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert!(client.is_authenticated());
@@ -1535,11 +1530,7 @@ mod tests {
         ));
         http.enqueue_response(json_response(
             200,
-            json!({
-                "accessToken": "jwt-1\r\nX-Injected: yes",
-                "refreshToken": "a".repeat(64),
-                "gatewayToken": "gw-a",
-            }),
+            login_response("jwt-1\r\nX-Injected: yes", &"a".repeat(64), "gw-a"),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
 
@@ -1555,7 +1546,7 @@ mod tests {
         http.enqueue_response(json_response(401, json!({ "message": "no bearer" })));
         http.enqueue_response(json_response(
             200,
-            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64), "gatewayToken": "gw-b" }),
+            login_response("jwt-2", &"b".repeat(64), "gw-b"),
         ));
         http.enqueue_response(json_response(
             200,
