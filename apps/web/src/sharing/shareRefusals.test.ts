@@ -13,4 +13,9 @@ describe('how a share refusal reads to the member', () => {
   it('falls back to the engine’s own name for a refusal it has no phrasing for', () => {
     expect(refusalLabel('some-rule-a-later-build-added')).toBe('some-rule-a-later-build-added');
   });
+
+  it('reads a name that collides with a prototype key as itself', () => {
+    expect(refusalLabel('constructor')).toBe('constructor');
+    expect(refusalLabel('__proto__')).toBe('__proto__');
+  });
 });

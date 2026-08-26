@@ -1,6 +1,8 @@
 /** How a `share_scope` check name reads to the member; an unlisted one reaches them verbatim. */
 export function refusalLabel(check: string): string {
-  return SHARE_REFUSALS[check] ?? check;
+  // `hasOwn`, so a name that collides with a prototype key reads as itself
+  // rather than as whatever `Object.prototype` carries under it.
+  return Object.hasOwn(SHARE_REFUSALS, check) ? SHARE_REFUSALS[check] : check;
 }
 
 const SHARE_REFUSALS: Record<string, string> = {
