@@ -3,6 +3,12 @@
 # fragments messages, and stock fuser assumes one read() yields one message
 # (`src/channel.rs`, and the regression test beside it).
 #
+# It also carries the two-lifetime entry patch: `fuse_entry_out` times the name
+# binding and the attributes in separate fields, and upstream's `ReplyEntry::entry`
+# and `ReplyCreate::created` collapsed both onto one `Duration`, which zeroed the
+# name cache of any mount that suppresses only its attribute one (`src/reply.rs`,
+# `src/ll/reply.rs`, and the encoder tests beside them).
+#
 # Trimmed against upstream: the examples, the mount-requiring integration
 # tests, and their dev-dependencies are gone — this is a library the product
 # links, not a crate under development here. Every dependency is scoped to

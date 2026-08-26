@@ -21,7 +21,9 @@ use zeroize::Zeroizing;
 /// [`CacheBudget::block_bytes`] granularity.
 type BlockKey = (StreamHandle, u64);
 
-/// How much plaintext one mount may hold, and at what granularity.
+/// The memory ceilings one mount runs under: how much plaintext it may hold and
+/// at what granularity, and how much kernel state it tracks on the kernel's
+/// behalf.
 ///
 /// `block_bytes` is chosen to match the content plane's chunk framing so a
 /// cache block maps onto one sealed chunk. It is the mount's one framing width:
@@ -33,11 +35,22 @@ type BlockKey = (StreamHandle, u64);
 pub struct CacheBudget {
     max_bytes: usize,
     block_bytes: u64,
+    shadowed_nodes: usize,
+    shadowed_directories: usize,
 }
 
 impl CacheBudget {
     /// Blocks a mount may hold at once under either profile.
     const BLOCKS: usize = 64;
+
+    /// How many nodes' served attributes a mount tracks. Generous enough to
+    /// cover a working set a member actually stats, and finite whatever a peer
+    /// commits.
+    const SHADOWED_NODES: usize = 4096;
+
+    /// The directory counterpart of [`SHADOWED_NODES`](Self::SHADOWED_NODES).
+    /// Lower, because each entry is a whole listing rather than three fields.
+    const SHADOWED_DIRECTORIES: usize = 256;
 
     /// The production budget: 64 chunks of hot plaintext per mount.
     pub const PRODUCTION: Self = Self::of(ContentProfile::PRODUCTION, Self::BLOCKS);
@@ -53,6 +66,8 @@ impl CacheBudget {
             Some(max_bytes) if blocks > 0 => Some(Self {
                 max_bytes,
                 block_bytes: profile.chunk_size() as u64,
+                shadowed_nodes: Self::SHADOWED_NODES,
+                shadowed_directories: Self::SHADOWED_DIRECTORIES,
             }),
             _ => None,
         }
@@ -62,7 +77,29 @@ impl CacheBudget {
         Self {
             max_bytes: profile.chunk_size() * blocks,
             block_bytes: profile.chunk_size() as u64,
+            shadowed_nodes: Self::SHADOWED_NODES,
+            shadowed_directories: Self::SHADOWED_DIRECTORIES,
         }
+    }
+
+    /// The same budget, tracking at most `nodes` nodes and `directories`
+    /// listings on the kernel's behalf.
+    pub const fn tracking(self, nodes: usize, directories: usize) -> Self {
+        Self {
+            shadowed_nodes: nodes,
+            shadowed_directories: directories,
+            ..self
+        }
+    }
+
+    /// How many nodes' served attributes the mount may track.
+    pub const fn shadowed_nodes(&self) -> usize {
+        self.shadowed_nodes
+    }
+
+    /// How many directories' listings the mount may track.
+    pub const fn shadowed_directories(&self) -> usize {
+        self.shadowed_directories
     }
 
     /// The plaintext ceiling, in bytes.

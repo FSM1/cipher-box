@@ -114,6 +114,19 @@ impl CacheTtls {
             (_, size) => (size.unwrap_or(0), self.attr),
         }
     }
+
+    /// The size an entry reply reports, then the two lifetimes it carries: the
+    /// name binding's, and the attributes' as [`projected_size`](Self::projected_size)
+    /// decided it.
+    ///
+    /// Two lifetimes because the reply carries two, and `noattrcache`
+    /// suppresses only one of them: timing the name binding by the attribute
+    /// lifetime would leave a mount that keeps no attribute cache caching no
+    /// name binding either, which is not what suppressing it asked for.
+    pub fn projected_entry(&self, attrs: &Attributes) -> (u64, Duration, Duration) {
+        let (size, attr) = self.projected_size(attrs);
+        (size, self.entry, attr)
+    }
 }
 
 /// One mount technology's host adapter.
@@ -249,6 +262,33 @@ mod tests {
             ttls.projected_size(&node(NodeKind::Folder, None)),
             (0, ttls.attr)
         );
+    }
+
+    /// The entry reply's two lifetimes move independently: an unprojected size
+    /// and a suppressed attribute cache each zero the attribute one, and
+    /// neither is a reason to stop caching the name binding.
+    #[test]
+    fn only_the_attribute_lifetime_is_ever_zeroed_in_an_entry_reply() {
+        for attribute_cache in [true, false] {
+            let ttls = CacheTtls::for_host(
+                &HostCapabilities {
+                    push_invalidation: true,
+                    attribute_cache,
+                    case_insensitive_lookup: false,
+                },
+                &SyncTimingProfile::PRODUCTION,
+            );
+            for kind in [NodeKind::File, NodeKind::Folder] {
+                for size in [Some(4096), None] {
+                    let attrs = node(kind, size);
+                    let (reported, entry, attr) = ttls.projected_entry(&attrs);
+
+                    assert_eq!((reported, attr), ttls.projected_size(&attrs));
+                    assert_eq!(entry, ttls.entry, "{attribute_cache}/{kind:?}/{size:?}");
+                    assert!(!entry.is_zero(), "{attribute_cache}/{kind:?}/{size:?}");
+                }
+            }
+        }
     }
 
     /// A mount whose kernel keeps no attribute cache has nothing to time

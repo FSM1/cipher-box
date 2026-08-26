@@ -26,6 +26,5 @@ fn profile() -> MountProfile {
             attribute_cache: true,
             case_insensitive_lookup: false,
         },
-        resumable_readdir: true,
     }
 }

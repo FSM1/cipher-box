@@ -40,7 +40,7 @@ use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
 use crate::name::MAX_NAME_BYTES;
-use crate::ops::{Attributes, DirEntry, OperationCore};
+use crate::ops::{Attributes, DirEntry, DirHandleId, OperationCore};
 use crate::spill::restrict_dir;
 
 /// Inodes are per mount session and never reused, so there is no generation
@@ -77,8 +77,13 @@ const FILE_MODE: u16 = 0o600;
 /// bit.
 const DIRECTORY_MODE: u16 = 0o700;
 
-/// `.` and `..`, which a listing synthesizes ahead of the real children.
-const DOT_ENTRIES: usize = 2;
+/// `.` and `..`, which a listing synthesizes ahead of the children the core
+/// hands back. Both name the directory itself — the kernel resolves `..`
+/// through lookup and its own dcache, never through the inode a listing
+/// reports.
+const DOT_NAMES: [&str; 2] = [".", ".."];
+
+const DOT_ENTRIES: usize = DOT_NAMES.len();
 
 /// A request the projection cannot even name. Answered through the shared table
 /// rather than beside it, so no adapter drifts from another.
@@ -93,12 +98,6 @@ pub(crate) struct MountProfile {
     pub(crate) options: Vec<MountOption>,
     /// What the backend can do for the operation core.
     pub(crate) capabilities: HostCapabilities,
-    /// Whether a `readdir` sequence resumes at the cookie the previous reply
-    /// ended on. FUSE-T's smbfs client walks a directory in a single pass and
-    /// never returns for the rest, so a listing kept for it could only answer a
-    /// request that never comes (blueprint/desktop.md "The FS core and host
-    /// adapters" — readdir single-pass).
-    pub(crate) resumable_readdir: bool,
 }
 
 /// Every CipherBox mount's floor, whatever backend it is made on. Held here
@@ -208,10 +207,25 @@ enum FuseOp {
         handle: Option<HandleId>,
         reply: ReplyAttr,
     },
+    OpenDir {
+        ino: u64,
+        reply: ReplyOpen,
+    },
     ReadDir {
         ino: u64,
+        walk: DirHandleId,
         offset: usize,
         reply: ReplyDirectory,
+    },
+    ReleaseDir {
+        walk: DirHandleId,
+        reply: ReplyEmpty,
+    },
+    /// The kernel giving back references it took on entry replies. It expects
+    /// no answer, which is why this carries no reply.
+    Forget {
+        ino: u64,
+        count: u64,
     },
     Create {
         parent: u64,
@@ -287,15 +301,17 @@ impl FuseOp {
             FuseOp::Unlink { reply, .. }
             | FuseOp::RmDir { reply, .. }
             | FuseOp::Rename { reply, .. }
+            | FuseOp::ReleaseDir { reply, .. }
             | FuseOp::Flush { reply, .. }
             | FuseOp::FSync { reply, .. }
             | FuseOp::Release { reply, .. } => reply.error(errno),
             FuseOp::ReadDir { reply, .. } => reply.error(errno),
             FuseOp::Create { reply, .. } => reply.error(errno),
-            FuseOp::Open { reply, .. } => reply.error(errno),
+            FuseOp::Open { reply, .. } | FuseOp::OpenDir { reply, .. } => reply.error(errno),
             FuseOp::Read { reply, .. } => reply.error(errno),
             FuseOp::Write { reply, .. } => reply.error(errno),
             FuseOp::StatFs { reply, .. } => reply.error(errno),
+            FuseOp::Forget { .. } => {}
         }
     }
 }
@@ -311,73 +327,6 @@ impl FuseSession {
             // The engine task is gone; the mount is on its way down.
             refused.into_inner().refuse(libc::ENOTCONN);
         }
-    }
-}
-
-/// The listing the kernel is currently walking.
-///
-/// On a backend that resumes at the cookie the previous reply ended on,
-/// rendering the directory again per continuation makes one listing cost a
-/// render per reply buffer. One slot is enough — the kernel walks one stream at
-/// a time — and a miss simply renders.
-struct DirStream {
-    resumable: bool,
-    dir: Option<u64>,
-    entries: Vec<DirEntry>,
-}
-
-impl DirStream {
-    fn new(resumable: bool) -> Self {
-        Self {
-            resumable,
-            dir: None,
-            entries: Vec::new(),
-        }
-    }
-
-    /// Whether the listing in hand answers this request, or the directory has
-    /// to be rendered again. A fresh walk always renders, so a directory is
-    /// never served from a listing older than the walk asking for it.
-    fn serves(&self, ino: u64, offset: usize) -> bool {
-        self.resumable && offset != 0 && self.dir == Some(ino)
-    }
-
-    fn hold(&mut self, ino: u64, entries: Vec<DirEntry>) {
-        self.dir = Some(ino);
-        self.entries = entries;
-    }
-
-    fn forget(&mut self) {
-        self.dir = None;
-        self.entries = Vec::new();
-    }
-
-    /// Drop the listing a backend will not come back for — on a single-pass
-    /// mount that is every listing, and each one is a directory's worth of
-    /// filenames held for the life of the mount otherwise.
-    fn release(&mut self) {
-        if !self.resumable {
-            self.forget();
-        }
-    }
-
-    /// The entry a listing emits at `index`: the two dot entries, then the
-    /// children. Both dot entries name the directory itself — the kernel
-    /// resolves `..` through lookup and its own dcache, never through the inode
-    /// a listing reports.
-    fn at(&self, index: usize, ino: u64) -> Option<(u64, NodeKind, &OsStr)> {
-        match index {
-            0 => Some((ino, NodeKind::Folder, OsStr::new("."))),
-            1 => Some((ino, NodeKind::Folder, OsStr::new(".."))),
-            _ => self
-                .entries
-                .get(index - DOT_ENTRIES)
-                .map(|child| (child.ino, child.kind, OsStr::new(&child.name))),
-        }
-    }
-
-    fn len(&self) -> usize {
-        DOT_ENTRIES + self.entries.len()
     }
 }
 
@@ -405,7 +354,6 @@ pub struct FuseMount {
     invalidator: FuseInvalidator,
     ops: mpsc::UnboundedReceiver<FuseOp>,
     owner: Ownership,
-    listing: DirStream,
 }
 
 impl FuseMount {
@@ -429,7 +377,6 @@ impl FuseMount {
                 uid: nix::unistd::Uid::effective().as_raw(),
                 gid: nix::unistd::Gid::effective().as_raw(),
             },
-            listing: DirStream::new(profile.resumable_readdir),
         })
     }
 
@@ -459,7 +406,7 @@ impl FuseMount {
         mut op: KernelOp,
     ) {
         if let Some(op) = op.0.take() {
-            answer(core, op, self.owner, &mut self.listing).await;
+            answer(core, op, self.owner).await;
         }
     }
 
@@ -738,11 +685,17 @@ impl Filesystem for FuseSession {
         });
     }
 
+    /// The directory handle minted here is what pins one walk's listing, so a
+    /// second walk over the same directory gets its own.
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        self.dispatch(FuseOp::OpenDir { ino, reply });
+    }
+
     fn readdir(
         &mut self,
         _req: &Request<'_>,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         reply: ReplyDirectory,
     ) {
@@ -750,7 +703,33 @@ impl Filesystem for FuseSession {
             reply.error(malformed());
             return;
         };
-        self.dispatch(FuseOp::ReadDir { ino, offset, reply });
+        self.dispatch(FuseOp::ReadDir {
+            ino,
+            walk: DirHandleId(fh),
+            offset,
+            reply,
+        });
+    }
+
+    fn releasedir(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _flags: i32,
+        reply: ReplyEmpty,
+    ) {
+        self.dispatch(FuseOp::ReleaseDir {
+            walk: DirHandleId(fh),
+            reply,
+        });
+    }
+
+    fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
+        self.dispatch(FuseOp::Forget {
+            ino,
+            count: nlookup,
+        });
     }
 
     /// `close(2)` returns what this returns — the no-false-ack discipline's
@@ -815,7 +794,6 @@ async fn answer<T: SeamTypes>(
     core: &mut OperationCore<T, FuseInvalidator>,
     op: FuseOp,
     owner: Ownership,
-    listing: &mut DirStream,
 ) {
     match op {
         FuseOp::Lookup {
@@ -842,25 +820,27 @@ async fn answer<T: SeamTypes>(
             };
             attr(reply, owner, core.cache_ttls(), outcome);
         }
+        FuseOp::OpenDir { ino, reply } => match core.opendir(ino).await {
+            Ok(walk) => reply.opened(walk.0, 0),
+            Err(refusal) => reply.error(errno_of(&refusal)),
+        },
         FuseOp::ReadDir {
             ino,
+            walk,
             offset,
             mut reply,
-        } => {
-            if !listing.serves(ino, offset) {
-                match core.readdir(ino).await {
-                    Ok(entries) => listing.hold(ino, entries),
-                    Err(refusal) => {
-                        listing.forget();
-                        reply.error(errno_of(&refusal));
-                        return;
-                    }
-                }
+        } => match core.readdir(walk, cursor_of(offset)).await {
+            Ok(entries) => {
+                emit_listing(&mut reply, ino, offset, entries);
+                reply.ok();
             }
-            emit_listing(&mut reply, ino, offset, listing);
+            Err(refusal) => reply.error(errno_of(&refusal)),
+        },
+        FuseOp::ReleaseDir { walk, reply } => {
+            core.releasedir(walk);
             reply.ok();
-            listing.release();
         }
+        FuseOp::Forget { ino, count } => core.forget(ino, count),
         FuseOp::Create {
             parent,
             name,
@@ -871,9 +851,10 @@ async fn answer<T: SeamTypes>(
             let ttls = core.cache_ttls();
             match outcome {
                 Ok((attrs, handle)) => {
-                    let (size, ttl) = ttls.projected_size(&attrs);
+                    let (size, entry_ttl, attr_ttl) = ttls.projected_entry(&attrs);
                     reply.created(
-                        &ttl,
+                        &entry_ttl,
+                        &attr_ttl,
                         &file_attr(&attrs, size, owner),
                         GENERATION,
                         handle.0,
@@ -976,8 +957,8 @@ fn empty(reply: ReplyEmpty, outcome: Result<(), VfsError>) {
     }
 }
 
-/// One lifetime covers the name binding and the attributes both, so a
-/// provisional size holds the whole reply down to zero.
+/// The name binding and the attributes carry their own lifetimes, decided by
+/// [`CacheTtls::projected_entry`].
 fn entry(
     reply: ReplyEntry,
     owner: Ownership,
@@ -986,8 +967,13 @@ fn entry(
 ) {
     match outcome {
         Ok(attrs) => {
-            let (size, ttl) = ttls.projected_size(&attrs);
-            reply.entry(&ttl, &file_attr(&attrs, size, owner), GENERATION);
+            let (size, entry_ttl, attr_ttl) = ttls.projected_entry(&attrs);
+            reply.entry(
+                &entry_ttl,
+                &attr_ttl,
+                &file_attr(&attrs, size, owner),
+                GENERATION,
+            );
         }
         Err(refusal) => reply.error(errno_of(&refusal)),
     }
@@ -1031,14 +1017,43 @@ fn reply_statfs(reply: ReplyStatfs, stats: StatFs) {
     );
 }
 
-/// Pack `listing` into the reply buffer, resuming at `offset`.
-fn emit_listing(reply: &mut ReplyDirectory, ino: u64, offset: usize, listing: &DirStream) {
-    for index in offset..listing.len() {
-        let Some((child, kind, name)) = listing.at(index, ino) else {
-            break;
-        };
-        // The offset the kernel resumes at is the one *after* this entry.
-        if reply.add(child, index as i64 + 1, file_type(kind), name) {
+/// The core cursor a kernel `readdir` offset resumes at. The kernel counts the
+/// synthesized [`DOT_NAMES`] ahead of the children; the core counts children
+/// alone.
+fn cursor_of(offset: usize) -> usize {
+    offset.saturating_sub(DOT_ENTRIES)
+}
+
+/// One page in the kernel's offset space: the dot entries this `offset` has not
+/// passed, then `entries` — which the core already resumed at
+/// [`cursor_of(offset)`](cursor_of). Each carries the offset the kernel resumes
+/// at, which is the one *after* it.
+fn page(
+    ino: u64,
+    offset: usize,
+    entries: &[DirEntry],
+) -> impl Iterator<Item = (u64, NodeKind, &str, i64)> {
+    let dots = DOT_NAMES
+        .iter()
+        .enumerate()
+        .skip(offset.min(DOT_ENTRIES))
+        .map(move |(index, name)| (ino, NodeKind::Folder, *name, index as i64 + 1));
+    let base = offset.max(DOT_ENTRIES);
+    let children = entries.iter().enumerate().map(move |(step, child)| {
+        (
+            child.ino,
+            child.kind,
+            child.name.as_str(),
+            (base + step) as i64 + 1,
+        )
+    });
+    dots.chain(children)
+}
+
+/// Pack one [`page`] into the reply buffer, stopping where it fills.
+fn emit_listing(reply: &mut ReplyDirectory, ino: u64, offset: usize, entries: &[DirEntry]) {
+    for (child, kind, name, resume_at) in page(ino, offset, entries) {
+        if reply.add(child, resume_at, file_type(kind), OsStr::new(name)) {
             break;
         }
     }
@@ -1240,91 +1255,59 @@ mod tests {
         }
     }
 
-    fn stream() -> DirStream {
-        streaming(true)
+    /// One walk's worth of entries as the kernel sees them, resumed at
+    /// `offset` — the core hands back the children from that offset's cursor,
+    /// and this is what the adapter packs.
+    fn walk(ino: u64, offset: usize, children: &[DirEntry]) -> Vec<(u64, String, i64)> {
+        let tail = children.get(cursor_of(offset)..).unwrap_or_default();
+        page(ino, offset, tail)
+            .map(|(child, _, name, resume_at)| (child, name.to_owned(), resume_at))
+            .collect()
     }
 
-    fn streaming(resumable: bool) -> DirStream {
-        let mut listing = DirStream::new(resumable);
-        listing.hold(1, vec![child(2, "alpha"), child(3, "beta")]);
-        listing
+    fn children() -> Vec<DirEntry> {
+        vec![child(2, "alpha"), child(3, "beta"), child(4, "gamma")]
     }
 
     /// A listing leads with `.` and `..`, both naming the directory itself.
     #[test]
     fn a_listing_leads_with_the_dot_entries() {
-        let listing = stream();
-        assert_eq!(listing.len(), 4);
-        for index in [0, 1] {
-            let (ino, kind, name) = listing.at(index, 1).expect("a dot entry");
-            assert_eq!(ino, 1);
-            assert_eq!(kind, NodeKind::Folder);
-            assert_eq!(name, if index == 0 { "." } else { ".." });
-        }
+        let listed: Vec<_> = page(1, 0, &children())
+            .take(DOT_ENTRIES)
+            .map(|(ino, kind, name, _)| (ino, kind, name.to_owned()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (1, NodeKind::Folder, ".".to_owned()),
+                (1, NodeKind::Folder, "..".to_owned()),
+            ]
+        );
     }
 
-    /// The cookie the kernel resumes at is the index *after* the entry it took,
-    /// so resuming there must land on the next child, never repeat or skip one.
+    /// The cookie the kernel resumes at is the offset *after* the entry it
+    /// took, so resuming there must land on the next entry — never repeat or
+    /// skip one, and never re-emit a dot entry the walk has passed.
     #[test]
     fn a_continuation_resumes_on_the_entry_after_the_last_one_taken() {
-        let listing = stream();
-        let emitted: Vec<_> = (0..listing.len())
-            .filter_map(|index| listing.at(index, 1))
-            .map(|(ino, _, name)| (ino, name.to_owned()))
-            .collect();
+        let children = children();
+        let whole = walk(1, 0, &children);
 
-        for resumed in 0..listing.len() {
-            let rest: Vec<_> = (resumed..listing.len())
-                .filter_map(|index| listing.at(index, 1))
-                .map(|(ino, _, name)| (ino, name.to_owned()))
-                .collect();
-            assert_eq!(rest, emitted[resumed..], "resuming at {resumed}");
-        }
-    }
-
-    /// A walk that starts over must see the directory as it is now, or a mount
-    /// would serve a listing older than the `readdir` asking for it.
-    #[test]
-    fn a_fresh_walk_always_renders() {
-        for resumable in [true, false] {
-            assert!(!streaming(resumable).serves(1, 0));
+        for taken in 0..whole.len() {
+            let resume_at = whole[taken].2 as usize;
+            assert_eq!(
+                walk(1, resume_at, &children),
+                whole[taken + 1..],
+                "resuming at {resume_at}"
+            );
         }
     }
 
     #[test]
-    fn a_resumable_backend_continues_the_listing_in_hand() {
-        let listing = stream();
-        assert!(listing.serves(1, 1));
-        assert!(!listing.serves(2, 1), "another directory renders its own");
-        assert!(!DirStream::new(true).serves(1, 1), "an empty slot renders");
-    }
-
-    #[test]
-    fn a_single_pass_backend_is_never_served_from_a_previous_reply() {
-        let listing = streaming(false);
-        for offset in [0, 1, 2, usize::MAX] {
-            assert!(!listing.serves(1, offset), "at {offset}");
-        }
-    }
-
-    /// A listing a backend will not come back for is a directory's worth of
-    /// filenames held for the life of the mount.
-    #[test]
-    fn a_single_pass_backend_keeps_no_listing_after_its_reply() {
-        let mut kept = streaming(true);
-        kept.release();
-        assert!(
-            kept.serves(1, 1),
-            "a resumable backend keeps what it may ask for"
-        );
-
-        let mut dropped = streaming(false);
-        dropped.release();
-        assert_eq!(
-            dropped.len(),
-            DOT_ENTRIES,
-            "nothing but the dot entries left"
-        );
+    fn a_cookie_past_the_end_emits_nothing() {
+        let children = children();
+        assert!(walk(1, DOT_ENTRIES + children.len(), &children).is_empty());
+        assert!(walk(1, usize::MAX, &children).is_empty());
     }
 
     /// The floor is the shared wire's, not each backend's, so a new backend
@@ -1373,13 +1356,6 @@ mod tests {
                 "{allowed:?} narrows nothing and must pass"
             );
         }
-    }
-
-    #[test]
-    fn a_cookie_past_the_end_emits_nothing() {
-        let listing = stream();
-        assert!(listing.at(listing.len(), 1).is_none());
-        assert!(listing.at(usize::MAX, 1).is_none());
     }
 
     /// Everything the decoder refuses before the core sees it comes from the
