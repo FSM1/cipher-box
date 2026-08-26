@@ -172,22 +172,16 @@ routing-staging.cipherbox.cc {
 			max_size 64KB
 		}
 
-		# A /128 is no bucket at all: a caller holding the usual delegated IPv6 /64
-		# rotates the interface ID per request. Key on the /64 instead. An address
-		# whose network half is compressed falls through to itself — narrower than
-		# its true prefix, so never a bucket shared with someone else.
-		map {client_ip} {publish_bucket} {
-			~^([0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}:[0-9a-fA-F]{1,4}): "${1}::"
-			default {client_ip}
-		}
-
 		# Jitter blunts Retry-After: exact, it tells whoever shares an egress address
 		# with a member when that member last published, which is scope-mutation
-		# timing.
+		# timing. A /128 is no bucket at all — a caller holding the usual delegated
+		# IPv6 /64 rotates the interface ID per request — so the limiter masks the
+		# key to that /64 before it buckets.
 		rate_limit {
 			jitter 0.5
 			zone publish {
-				key {publish_bucket}
+				key {client_ip}
+				ipv6_prefix 64
 				events 60
 				window 1m
 			}

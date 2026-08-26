@@ -63,7 +63,7 @@ const PUBLISH_LEG = { method: 'PUT', path: '/routing/v1/ipns/*' };
 const READ_METHODS = ['GET', 'HEAD'];
 const CLIENT_IP = '{http.vars.client_ip}';
 /** The /64 the caller was delegated, not its chosen /128 (docker/Caddyfile). */
-const RATE_LIMIT_KEY = '{publish_bucket}';
+const PUBLISH_IPV6_PREFIX = 64;
 /**
  * Cloudflare appends to X-Forwarded-For, so every entry left of the caller's own
  * is caller-written; CF-Connecting-IP it writes and overwrites itself.
@@ -296,8 +296,12 @@ for (const { node, ancestors } of nodes) {
   const zones = limiters.flatMap((h) => Object.values(h.rate_limits ?? {}));
   check(zones.length > 0, `${vhost}: the open publish leg runs unrated into ${target}`);
   check(
-    zones.every((z) => z.key === RATE_LIMIT_KEY),
-    `${vhost}: a publish-leg rate zone does not key on ${RATE_LIMIT_KEY}, so a caller picks its own bucket`
+    zones.every((z) => z.key === CLIENT_IP),
+    `${vhost}: a publish-leg rate zone does not key on ${CLIENT_IP}, so a caller picks its own bucket`
+  );
+  check(
+    zones.every((z) => z.ipv6_prefix > 0 && z.ipv6_prefix <= PUBLISH_IPV6_PREFIX),
+    `${vhost}: a publish-leg rate zone does not mask its key to a /${PUBLISH_IPV6_PREFIX} or shorter, so an IPv6 caller rotates for a fresh bucket`
   );
   check(
     zones.every((z) => z.max_events <= MAX_PUBLISH_EVENTS && z.window > 0),
@@ -307,19 +311,6 @@ for (const { node, ancestors } of nodes) {
     !limiters.some((h) => h.log_key),
     `${vhost}: the publish rate limiter logs its key, putting a member address in a sink that ships offsite`
   );
-
-  // The key is only a /64 if something truncates it; a `map` that resolved to a
-  // constant would satisfy the key check above while sharing one bucket.
-  const [derives] = ahead.filter(
-    (h) => h.handler === 'map' && h.destinations?.[0] === RATE_LIMIT_KEY
-  );
-  check(derives !== undefined, `${vhost}: nothing derives ${RATE_LIMIT_KEY} ahead of the limiter`);
-  if (derives !== undefined) {
-    check(
-      derives.source === CLIENT_IP && derives.defaults?.[0] === CLIENT_IP,
-      `${vhost}: the publish bucket is not derived from ${CLIENT_IP}, falling back to it`
-    );
-  }
 }
 
 // Trusting the proxy in front and the API's hop count are one setting in two
