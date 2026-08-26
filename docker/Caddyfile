@@ -4,12 +4,53 @@
 {
 	auto_https off
 
+	order rate_limit before basicauth
+
+	# Trusting Cloudflare's ranges is what makes an IP-keyed limit key on a member
+	# rather than on a whole edge POP (blueprint/deploy.md). Mirrors
+	# cloudflare.com/ips; the Lint gate pins the set.
+	#
+	# `{client_ip}` reads CF-Connecting-IP, which Cloudflare writes itself and
+	# overwrites on the way in, rather than X-Forwarded-For, which it APPENDS to —
+	# leaving every entry left of the caller's own under the caller's control.
+	# Strict then refuses to believe either header from an untrusted peer.
+	# Verified: a caller whose own address is inside a Cloudflare range made
+	# X-Forwarded-For resolve to an entry it wrote, and one bucket per forged
+	# address is no bucket at all.
+	servers {
+		trusted_proxies_strict
+		client_ip_headers CF-Connecting-IP
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+
 	# Caddy's error log records client IP beside the requested URI, which re-links
 	# an account to its reads — the accelerator front must stay silent there too.
+	# The rate limiter logs each refusal under its own namespace, outside any
+	# vhost's access log, so it needs naming here rather than inheriting silence.
 	log accelerator_errors {
 		output discard
-		include http.log.error.accelerator
+		include http.log.error.accelerator http.handlers.rate_limit
 	}
+}
+
+# Cloudflare names the caller in headers of its own beside X-Forwarded-For, and
+# CF-Ray is the id its logs record next to the requested path — the join key
+# between a pseudonym at the verify leg and a CID at the accelerator. Nothing
+# that identifies a reader may reach an upstream whose stdout ships offsite
+# (blueprint/api.md, Egress).
+(strip_caller) {
+	header_up -CF-Connecting-IP
+	header_up -CF-Connecting-IPv6
+	header_up -CF-Pseudo-IPv4
+	header_up -CF-EW-Via
+	header_up -CF-Worker
+	header_up -CF-IPCountry
+	header_up -CF-Visitor
+	header_up -CF-Ray
+	header_up -CDN-Loop
+	header_up -True-Client-IP
+	header_up -X-Real-IP
+	header_up -Forwarded
 }
 
 api-staging.cipherbox.cc {
@@ -50,7 +91,8 @@ app-staging.cipherbox.cc {
 	header {
 		Access-Control-Allow-Origin "{$ACCELERATOR_ALLOWED_ORIGIN:https://app-staging.cipherbox.cc}"
 		Access-Control-Expose-Headers "Content-Length, Content-Range, Content-Type"
-		Vary Origin
+		# `+` appends; setting it would drop the upstream's own Vary members.
+		+Vary Origin
 	}
 
 	# A preflight carries no Authorization, so gating it would 401 every browser read.
@@ -71,13 +113,18 @@ app-staging.cipherbox.cc {
 	handle @read {
 		# The verify leg never learns the path, so never account+CID per read; the
 		# deletes drop client-supplied copies too. X-Forwarded-For stays — the API
-		# rate-limits this surface per client.
+		# rate-limits this surface per client. Range and Accept would describe the
+		# read as surely as the path: the byte window and block-vs-CAR shape.
 		reverse_proxy api:3000 {
 			method GET
 			rewrite /auth/gateway/verify?
 			header_up -X-Forwarded-Host
 			header_up -X-Forwarded-Uri
 			header_up -X-Forwarded-Method
+			header_up -Range
+			header_up -Accept
+			header_up -Referer
+			header_up -CF-Ray
 
 			# An empty handle_response continues to the content proxy below.
 			@alive status 204
@@ -95,6 +142,7 @@ app-staging.cipherbox.cc {
 		reverse_proxy {args[0]} {
 			header_up -Authorization
 			header_up -X-Forwarded-For
+			import strip_caller
 		}
 	}
 
@@ -118,14 +166,30 @@ routing-staging.cipherbox.cc {
 		path /routing/v1/ipns/*
 	}
 	handle @publish {
-		# An IPNS record is a couple of KB; the cap is all this ungated leg can
-		# bound on its own. Per-address rate limiting belongs at the edge.
+		# An IPNS record is a couple of KB. This cap and the rate below are the
+		# whole abuse budget of the leg.
 		request_body {
 			max_size 64KB
+		}
+
+		# Jitter blunts Retry-After: exact, it tells whoever shares an egress address
+		# with a member when that member last published, which is scope-mutation
+		# timing. A /128 is no bucket at all — a caller holding the usual delegated
+		# IPv6 /64 rotates the interface ID per request — so the limiter masks the
+		# key to that /64 before it buckets.
+		rate_limit {
+			jitter 0.5
+			zone publish {
+				key {client_ip}
+				ipv6_prefix 64
+				events 60
+				window 1m
+			}
 		}
 		reverse_proxy someguy:8190 {
 			header_up -Authorization
 			header_up -X-Forwarded-For
+			import strip_caller
 		}
 	}
 

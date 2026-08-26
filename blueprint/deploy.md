@@ -164,7 +164,7 @@ starved), same GHCR image flow, same scp-env + `compose pull` + migrations
 | `postgres`    | ports                                                                                                              |
 | `ipfs` (Kubo) | ports — pin store + trustless gateway upstream                                                                     |
 | `someguy`     | ports — the self-hosted `/routing/v1` accelerator (staging/production only; CI uses the promoted mock, testing.md) |
-| `caddy`       | ports — static web + reverse proxy + the accelerator front over Kubo and someguy (below)                           |
+| `caddy`       | ports — static web + reverse proxy + the accelerator front over Kubo and someguy (below); built, not stock         |
 | `alloy`       | ports — Grafana Cloud shipping unchanged                                                                           |
 | `redis`       | dies — nothing queues; throttling is in-process (verified effective by the contract suite)                         |
 | `tee-worker`  | dies (FSM1/cipher-box-next#24) — with it the Phala compose files, the CVM update ritual, and the simulator         |
@@ -184,10 +184,41 @@ pseudonym, is api.md (Egress); because neither vhost logs, those obligations
 are asserted against Caddy's adapted config in the **Lint** gate rather than
 read out of the Caddyfile. `TRUST_PROXY_HOPS` must equal the number of
 `X-Forwarded-For` entries that actually reach the API, not the number of boxes
-in front of it: Caddy carries no `trusted_proxies`, so it replaces Cloudflare's
-header with a single entry of its own and the count is 1. Every IP-keyed rate
-limit keys on the address that resolves to — Cloudflare's edge, until Caddy is
-given Cloudflare's ranges to trust.
+in front of it. Caddy is given Cloudflare's published ranges as
+`trusted_proxies`, so it keeps the member address Cloudflare appended and adds
+its own beside it: two entries arrive and the count is 2. The two settings are
+one unit — trust without the count keys every IP-keyed limit on Cloudflare's
+edge, the count without the trust runs off the end of the header onto an entry
+the caller wrote — so the same **Lint** gate holds them to each other.
+
+`{client_ip}` reads **`CF-Connecting-IP`** under `trusted_proxies_strict`, not
+`X-Forwarded-For`. Cloudflare _appends_ to the latter, so every entry left of the
+caller's own is caller-written, and strict mode walks past trusted ranges to the
+first entry outside them — which for a caller whose own address sits inside a
+Cloudflare range (a Worker, WARP, a Tunnel) is an entry it wrote. Cloudflare
+writes and overwrites `CF-Connecting-IP` itself, so it has no prepend surface;
+strict still refuses both headers from an untrusted peer, so a direct-to-origin
+request cannot forge either.
+
+Two residual assumptions, neither closed here. The trust is _Cloudflare-wide_,
+not zone-specific: any Cloudflare tenant can route to the origin address, so the
+front believes a proxy it has not authenticated. And the range list is a
+hand-mirrored snapshot — the Lint gate pins the set against edits but cannot see
+Cloudflare changing it, where a departed range would make its new owner a trusted
+proxy.
+
+The open `/routing/v1` **PUT** publish leg (api.md, Egress) carries no token, so
+a size cap and a per-caller rate are its whole abuse budget; both are asserted in
+that gate. The rate keys on the delegated IPv6 **/64** rather than the address,
+since a caller holding one rotates its interface ID freely, and its refusals are
+jittered so `Retry-After` does not report when whoever shares an egress address
+last published. A Cloudflare rule was the alternative and was not taken: the
+origin answers its own address directly, so an edge-only limit is walked around
+rather than enforced. The limiter is a module stock Caddy lacks, so the proxy
+ships as an image built from `docker/caddy/Dockerfile` — pushed beside the API
+image, and built again by the checker so the config is adapted under what runs.
+Its refusals log under a namespace of their own, which is discarded with the
+front's other logs rather than reaching the default sink.
 
 **Web hosting**: Caddy keeps serving the static bundle from
 `/opt/cipherbox/web` — but the artifact deployed is the production build

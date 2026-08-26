@@ -37,6 +37,8 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
   const OTHER_CLIENT = '203.0.113.9';
   /** An entry no proxy wrote — whatever the caller chose to prepend. */
   const SPOOF = '192.0.2.44';
+  /** The Cloudflare edge Caddy appends once it trusts the ranges in front. */
+  const EDGE = '162.158.0.1';
 
   beforeAll(async () => {
     db = await createIntegrationDatabase({ poolMax: 5 });
@@ -119,5 +121,20 @@ describe('trust-proxy client-address resolution (real Postgres)', () => {
     expect(await exhaust(app, `${SPOOF}, ${CLIENT}`)).toBe(429);
     // Same real client, a different invented entry: a fresh budget.
     expect((await challenge(app, `198.18.0.1, ${CLIENT}`)).status).toBe(400);
+  });
+
+  /** The staging chain: Cloudflare appends the member, Caddy appends the edge. */
+  it('resolves the member behind Cloudflare and Caddy at two hops', async () => {
+    const app = await boot('2');
+    expect(await exhaust(app, `${CLIENT}, ${EDGE}`)).toBe(429);
+    expect((await challenge(app, `${SPOOF}, ${CLIENT}, ${EDGE}`)).status).toBe(429);
+    expect((await challenge(app, `${OTHER_CLIENT}, ${EDGE}`)).status).toBe(400);
+  });
+
+  /** One hop short of that chain: every member behind an edge shares its bucket. */
+  it('collapses a whole Cloudflare edge into one bucket at one hop', async () => {
+    const app = await boot('1');
+    expect(await exhaust(app, `${CLIENT}, ${EDGE}`)).toBe(429);
+    expect((await challenge(app, `${OTHER_CLIENT}, ${EDGE}`)).status).toBe(429);
   });
 });

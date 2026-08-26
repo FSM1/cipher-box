@@ -203,9 +203,14 @@ decay) inverted into structure.
   logging client IPs belongs here too: the pseudonym removes the account from
   the gateway tier, but an IP recorded beside a read re-links it — and that
   applies to the accelerators' own logs, which ship offsite, so the client
-  address is stripped alongside the pseudonym on every leg into Kubo or someguy.
-  The one place the front forwards it is the verify subrequest, so that
-  surface's rate limit bounds a member rather than the front.
+  address is stripped alongside the pseudonym on every leg into Kubo or someguy —
+  in `X-Forwarded-For` and in the whole `CF-*` family Cloudflare adds beside it,
+  `CF-Ray` above all, since that is the id under which Cloudflare's own logs
+  record the requested path and would join a pseudonym at the verify leg to a CID
+  at the accelerator. The one place the front forwards the address is the verify
+  subrequest, so that surface's rate limit bounds a member rather than the front;
+  `Range` and `Accept` are stripped there, since the byte window and the
+  block-vs-CAR shape describe the read as surely as its path would.
 - **What the verify leg costs.** The API is told, per read, that this session is
   alive and which address asked — no CID and no name. It already sees that
   address on every other route the same member calls, so the pairing is not new;
