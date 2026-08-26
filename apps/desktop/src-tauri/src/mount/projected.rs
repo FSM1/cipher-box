@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 
 use cipherbox_engine::{Engine, Event};
 use cipherbox_fuse::{CacheBudget, FuseInvalidator, FuseMount, OperationCore, SpillArea};
+use tokio::sync::oneshot;
 
-use super::MountStatus;
+use super::{FromMount, MountStatus};
 use crate::engine::DesktopSeamTypes;
 
 pub use cipherbox_fuse::KernelOp;
+
+/// What the mounting thread hands back: the mount it made, or why it made none.
+pub type Mounted = Result<FuseMount, String>;
 
 /// Shown once the kernel session has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
@@ -20,6 +24,10 @@ const ENDED: &str = "the vault was unmounted outside CipherBox; sign out and bac
 /// composed. A mount refusal, not a reason to refuse the session.
 const NO_HOME: &str = "this device has no home directory to mount the vault under";
 
+/// Shown when the mounting thread ended without a verdict, which leaves the
+/// session with no mount and no reason from the mount itself.
+const NO_VERDICT: &str = "the mount stopped before it said whether it had been made";
+
 /// The vault's mount point: `~/CipherBox`, the name v1 taught members to look
 /// for.
 fn mount_point(home_dir: &Path) -> PathBuf {
@@ -28,6 +36,16 @@ fn mount_point(home_dir: &Path) -> PathBuf {
 
 /// The session's engine, and the filesystem it is projected through.
 pub enum Projection {
+    /// The mount is being made on a thread of its own, and the verdict will
+    /// arrive on `landing`. The engine serves reads meanwhile: a mount that
+    /// takes seconds is a mount point that is not there yet, never a session
+    /// that has stopped answering.
+    Opening {
+        engine: Box<Engine<DesktopSeamTypes>>,
+        spill: SpillArea,
+        at: PathBuf,
+        landing: oneshot::Receiver<Mounted>,
+    },
     /// No mount: the engine stands alone, and `refusal` is why the vault is not
     /// also a filesystem.
     Detached {
@@ -44,34 +62,51 @@ pub enum Projection {
 }
 
 impl Projection {
-    /// Mounts the vault for a session that has already started, or hands back an
+    /// Starts the mount for a session that has already started, or hands back an
     /// engine that stands alone and the reason it does.
+    ///
+    /// Returns without waiting on the mount: the spill area opens here because
+    /// a mount with nowhere to spill would have to be torn down again, and the
+    /// mount itself lands through [`next`](Self::next).
     pub fn open(
         engine: Engine<DesktopSeamTypes>,
         home_dir: Option<&Path>,
         account_dir: &Path,
     ) -> Self {
+        let engine = Box::new(engine);
         let Some(home_dir) = home_dir else {
             return Self::Detached {
-                engine: Box::new(engine),
+                engine,
                 refusal: NO_HOME.to_owned(),
             };
         };
         let at = mount_point(home_dir);
-        match mount(&at, account_dir) {
-            Ok((mount, spill)) => Self::Projected {
-                core: Box::new(OperationCore::new(
+        let spill = match SpillArea::production(account_dir) {
+            Ok(spill) => spill,
+            Err(error) => {
+                return Self::Detached {
                     engine,
-                    mount.invalidator(),
-                    CacheBudget::PRODUCTION,
-                    spill,
-                )),
-                mount: Some(mount),
+                    refusal: format!("the mount has nowhere to spill writes: {error}"),
+                };
+            }
+        };
+
+        let (verdict, landing) = oneshot::channel();
+        let mounting = at.clone();
+        match std::thread::Builder::new()
+            .name("cipherbox-mount".to_owned())
+            .spawn(move || {
+                let _ = verdict.send(mount(&mounting));
+            }) {
+            Ok(_) => Self::Opening {
+                engine,
+                spill,
                 at,
+                landing,
             },
-            Err(refusal) => Self::Detached {
-                engine: Box::new(engine),
-                refusal,
+            Err(error) => Self::Detached {
+                engine,
+                refusal: format!("the mount could not be started: {error}"),
             },
         }
     }
@@ -79,41 +114,69 @@ impl Projection {
     /// The session's one engine, wherever it is being held.
     pub fn engine_mut(&mut self) -> &mut Engine<DesktopSeamTypes> {
         match self {
-            Self::Detached { engine, .. } => engine,
+            Self::Opening { engine, .. } | Self::Detached { engine, .. } => engine,
             Self::Projected { core, .. } => core.engine_mut(),
         }
     }
 
     pub fn status(&self) -> MountStatus {
         match self {
+            Self::Opening { .. } => MountStatus::Opening,
             Self::Detached { refusal, .. } => MountStatus::refused(refusal),
             Self::Projected { mount: None, .. } => MountStatus::refused(ENDED),
-            Self::Projected { at, .. } => MountStatus {
-                path: Some(at.display().to_string()),
-                refusal: None,
+            Self::Projected { at, .. } => MountStatus::Mounted {
+                path: at.display().to_string(),
             },
         }
     }
 
-    /// The next kernel operation, or `None` the one time the kernel session
-    /// ends under a live app: the mount status has moved, and a host that only
-    /// re-reads on a wake would go on showing the mount point otherwise.
-    ///
-    /// Never resolves without a live mount, so a host may wait on it beside its
-    /// other wake sources whether or not this session projects anything.
-    pub async fn next_op(&mut self) -> Option<KernelOp> {
-        let Self::Projected {
-            mount: Some(live), ..
+    /// Folds the mounting thread's verdict in: the engine moves into the
+    /// operation core the mount feeds, or stands alone with the refusal.
+    pub fn settled(self, landed: Mounted) -> Self {
+        let Self::Opening {
+            engine, spill, at, ..
         } = self
         else {
-            return core::future::pending().await;
+            return self;
         };
-        match live.next_op().await {
-            Some(op) => Some(op),
-            None => {
-                self.detach();
-                None
-            }
+        match landed {
+            Ok(mount) => Self::Projected {
+                core: Box::new(OperationCore::new(
+                    *engine,
+                    mount.invalidator(),
+                    CacheBudget::PRODUCTION,
+                    spill,
+                )),
+                mount: Some(mount),
+                at,
+            },
+            Err(refusal) => Self::Detached { engine, refusal },
+        }
+    }
+
+    /// The next thing the mount wakes the session with.
+    ///
+    /// Cancel-safe, and never resolves while there is nothing to wake for, so a
+    /// host waits on it beside its other wake sources whether or not this
+    /// session projects anything. Making the mount and serving it are the two
+    /// states of one thing, which is why one wake source carries both.
+    pub async fn next(&mut self) -> FromMount {
+        match self {
+            Self::Opening { landing, .. } => FromMount::Landed(
+                (&mut *landing)
+                    .await
+                    .unwrap_or_else(|_| Err(NO_VERDICT.to_owned())),
+            ),
+            Self::Projected {
+                mount: Some(live), ..
+            } => match live.next_op().await {
+                Some(op) => FromMount::Op(op),
+                None => {
+                    self.detach();
+                    FromMount::Ended
+                }
+            },
+            _ => core::future::pending().await,
         }
     }
 
@@ -169,14 +232,11 @@ impl Projection {
     }
 }
 
-/// Mount, and open the spill area the mount's writes land in. The spill area
-/// comes first: a mount with nowhere to spill would have to be torn down again.
-fn mount(at: &Path, account_dir: &Path) -> Result<(FuseMount, SpillArea), String> {
-    let spill = SpillArea::production(account_dir)
-        .map_err(|error| format!("the mount has nowhere to spill writes: {error}"))?;
-    let mount = cipherbox_fuse::mount(at)
-        .map_err(|error| format!("{} could not be mounted: {error}", at.display()))?;
-    Ok((mount, spill))
+/// Mount at `at`, naming the mount point in whatever refused it — the member's
+/// next move is to go and look at it.
+fn mount(at: &Path) -> Mounted {
+    cipherbox_fuse::mount(at)
+        .map_err(|error| format!("{} could not be mounted: {error}", at.display()))
 }
 
 #[cfg(test)]
@@ -191,9 +251,9 @@ mod tests {
         let at = mount_point(home.path());
         std::fs::write(&at, b"not a directory").expect("a file in the way");
 
-        let refusal = mount(&at, &home.path().join("account"))
-            .err()
-            .expect("a file in the way is not mountable");
+        let Err(refusal) = mount(&at) else {
+            panic!("a file in the way is not mountable");
+        };
         assert!(refusal.contains(&at.display().to_string()), "{refusal}");
     }
 }

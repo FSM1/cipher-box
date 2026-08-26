@@ -1643,6 +1643,28 @@ impl EventStream {
     pub fn try_next(&mut self) -> Option<Event> {
         self.receiver.try_recv().ok()
     }
+
+    /// A stream fed by hand, so a host can drive its own session loop over the
+    /// events it would see (`test-kit`). Never reachable from a production
+    /// build: the engine is the only thing that emits.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn piped() -> (EventSink, Self) {
+        let (sender, receiver) = mpsc::unbounded();
+        (EventSink(sender), Self { receiver })
+    }
+}
+
+/// The sending half of a hand-fed [`EventStream::piped`]. Closing it ends the
+/// stream, as dropping the engine ends a real one.
+#[cfg(any(test, feature = "test-kit"))]
+pub struct EventSink(mpsc::UnboundedSender<Event>);
+
+#[cfg(any(test, feature = "test-kit"))]
+impl EventSink {
+    /// Emits one event.
+    pub fn send(&self, event: Event) {
+        let _ = self.0.unbounded_send(event);
+    }
 }
 
 /// A rendered read of the engine's state: the gate-passing base snapshot with

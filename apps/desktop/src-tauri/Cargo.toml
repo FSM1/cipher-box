@@ -20,6 +20,9 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 # Minisign-verified updates over the one GitHub release stream; the key it
 # verifies against is `plugins.updater.pubkey` in tauri.conf.json.
 tauri-plugin-updater = "2"
+# Parked writes reach the member as a system notification, edge-triggered so a
+# dead letter that keeps reporting is announced once.
+tauri-plugin-notification = "2"
 # The engine this shell hosts, and the seam set it is constructed over.
 cipherbox-engine.workspace = true
 cipherbox-desktop-seams.workspace = true
@@ -45,6 +48,9 @@ cipherbox-fuse.workspace = true
 [dev-dependencies]
 # The callback listener is exercised over a real loopback socket.
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
+# The session loop is driven over a hand-fed event stream, so what a burst of
+# events costs the window is asserted rather than timed.
+cipherbox-engine = { workspace = true, features = ["test-kit"] }
 # The engine host's tests open its real file stores under a temp root, and the
 # mount-point tests prepare one under a throwaway home.
 tempfile = "3"

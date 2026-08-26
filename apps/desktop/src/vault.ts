@@ -26,11 +26,15 @@ export interface VaultWarning {
 }
 
 /**
- * Whether the vault is also projected as a filesystem, and where. Exactly one
- * of the two is set: a mount with no path could not be opened, and a session
- * with no mount and no reason is the silent failure this line prevents.
+ * Whether the vault is also projected as a filesystem, and where. `opening` is
+ * a state a read lands in rather than waits out — the mount runs beside the
+ * session — and a session with no mount always carries the reason, because a
+ * mount that is silently absent is one the member goes on working without.
  */
-export type MountStatus = { path: string; refusal: null } | { path: null; refusal: string };
+export type MountStatus =
+  | { state: 'opening' }
+  | { state: 'mounted'; path: string }
+  | { state: 'refused'; reason: string };
 
 export interface VaultStatus {
   /** Items directly under the vault root. */

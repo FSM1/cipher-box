@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_engine::Entropy;
@@ -19,10 +20,15 @@ use cipherbox_engine::entropy::{EntropyError, fresh_bytes, fresh_seed};
 use zeroize::Zeroizing;
 
 use crate::error::VfsError;
+use crate::lease::{self, Lease};
 
-/// The engine data dir's child that holds every spill file. Fixed, because
-/// opening the area deletes what is in it.
+/// The engine data dir's child holding every area's directory. Fixed, because
+/// the account directory is shared and this is the part of it the mount owns.
 const SPILL_DIR: &str = "spill";
+
+/// Distinguishes the areas one process opens; the pid distinguishes processes.
+/// Together they name a directory no other live area writes into.
+static AREA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// AAD domain for a spill block. The block index rides in the AAD, so a slot
 /// moved to another offset in the same file no longer opens.
@@ -30,8 +36,16 @@ const SPILL_AAD_DOMAIN: &[u8] = b"cipherbox/spill/v1";
 
 /// The engine data dir's spill area: where every handle's sealed spill file is
 /// minted, and the one place the per-handle keys come from.
+///
+/// Each area owns a directory of its own under the account's `spill/`, claimed
+/// for as long as it lives ([`crate::lease`]). Nothing stops a second instance
+/// from signing into the same account, and an area that swept the shared
+/// directory would delete that instance's live spill files mid-write.
 pub struct SpillArea {
     dir: PathBuf,
+    /// Held for the life of the area: what tells a sibling instance this
+    /// directory is not debris to reclaim.
+    _lease: Lease,
     entropy: Box<dyn Entropy>,
 }
 
@@ -46,33 +60,44 @@ impl SpillArea {
     /// weakened one. A host mount has no reason to choose, so it is given none.
     ///
     /// The last path component is this constructor's, not the caller's:
-    /// opening an area deletes every file in it.
+    /// opening an area deletes every file in the directory it claims.
     pub fn production(data_dir: &Path) -> io::Result<Self> {
         Self::open(data_dir.join(SPILL_DIR), Box::new(OsEntropy))
     }
 
-    /// Open the spill area at `dir` under an injected source, for the vfs suite
-    /// (`test-kit`). Never reachable from a production build — see
+    /// Open a spill area under `root` with an injected source, for the vfs
+    /// suite (`test-kit`). Never reachable from a production build — see
     /// [`production`](Self::production) for why substituting the source is a
     /// keystream reuse rather than a weakening.
     #[cfg(any(test, feature = "test-kit"))]
-    pub fn seeded(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
-        Self::open(dir, entropy)
+    pub fn seeded(root: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+        Self::open(root, entropy)
     }
 
-    /// Open the spill area at `dir`, creating it and sweeping whatever a
-    /// previous run left behind. That debris is deleted rather than
-    /// overwritten.
-    fn open(dir: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+    /// Claim a directory under `root` and sweep it, reclaiming whatever an
+    /// instance that is no longer running left beside it.
+    fn open(root: PathBuf, entropy: Box<dyn Entropy>) -> io::Result<Self> {
+        fs::create_dir_all(&root)?;
+        restrict_dir(&root)?;
+
+        let dir = root.join(format!(
+            "area.{}.{}",
+            std::process::id(),
+            AREA_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(&dir)?;
         restrict_dir(&dir)?;
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
-                fs::remove_file(entry.path())?;
-            }
-        }
-        Ok(Self { dir, entropy })
+        let lease = lease::claim(&dir)?.ok_or_else(|| {
+            io::Error::other("another CipherBox is already writing to this spill area")
+        })?;
+
+        reclaim(&root, &dir)?;
+        sweep(&dir)?;
+        Ok(Self {
+            dir,
+            _lease: lease,
+            entropy,
+        })
     }
 
     /// Mint a spill file under a fresh per-handle key, framed in `block_bytes`
@@ -101,6 +126,39 @@ impl SpillArea {
             next_nonce: 0,
         })
     }
+}
+
+/// Delete what `root` holds beside `mine` and beside every directory a live
+/// area still claims. Taking the lease is what proves a sibling is gone; it is
+/// held across the delete so a sibling that starts meanwhile is not swept.
+fn reclaim(root: &Path, mine: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == mine {
+            continue;
+        }
+        if !entry.file_type()?.is_dir() {
+            fs::remove_file(&path)?;
+            continue;
+        }
+        if let Some(_dead) = lease::claim(&path)? {
+            fs::remove_dir_all(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Delete the spill files in this area's own directory — a previous run's,
+/// whose keys died with it. The lease file stays: it is this run's claim.
+fn sweep(dir: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() && !lease::is_lock_file(&entry.file_name()) {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// The target's CSPRNG. Fail-closed: a draw that cannot be served is an error,
@@ -335,9 +393,20 @@ mod tests {
         SpillArea::seeded(dir.to_path_buf(), Box::new(SeededEntropy::new(7))).expect("spill area")
     }
 
+    /// The spill files an area's directory holds, by name.
+    fn spilled(area: &SpillArea) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&area.dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !lease::is_lock_file(name.as_ref()))
+            .collect();
+        names.sort();
+        names
+    }
+
     /// A seam reporting success having written nothing would seal every spill
-    /// under one known key and give every spill file one name, so two areas over
-    /// one dir would unlink each other's live spill.
+    /// under one known key and give every spill file one name, so two spills in
+    /// one area would unlink each other.
     #[test]
     fn a_silent_seam_mints_no_spill() {
         let dir = tempfile::tempdir().unwrap();
@@ -347,10 +416,47 @@ mod tests {
             matches!(area.create(8), Err(VfsError::Internal { message }) if message.contains("all-zero")),
             "the refusal is the entropy guard, not any internal error"
         );
+        assert!(spilled(&area).is_empty(), "no spill file is left behind");
+    }
+
+    /// Two instances sign into one account and each opens an area over its
+    /// `spill/`; neither may sweep the other's live files.
+    #[test]
+    fn a_live_areas_spill_survives_another_areas_open() {
+        let root = tempfile::tempdir().unwrap();
+        let mut first = area(root.path());
+        let live = first.create(8).unwrap();
+        assert_eq!(spilled(&first).len(), 1);
+
+        let second = area(root.path());
+        assert_ne!(second.dir, first.dir, "each area claims its own directory");
         assert!(
-            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
-            "no spill file is left behind"
+            live.path.exists(),
+            "an open spill file survives a sibling area opening"
         );
+        assert!(
+            spilled(&second).is_empty(),
+            "and is not the sibling's to see"
+        );
+    }
+
+    /// A killed instance leaves its directory behind with nothing holding it;
+    /// the next area reclaims it rather than leaking it forever.
+    #[test]
+    fn a_dead_areas_directory_is_reclaimed() {
+        let root = tempfile::tempdir().unwrap();
+        // What a killed process leaves: its directory and its unopenable
+        // ciphertext, with nothing holding the claim.
+        let abandoned = root.path().join("area.4294967295.0");
+        fs::create_dir_all(&abandoned).unwrap();
+        fs::write(
+            abandoned.join("spill.0011"),
+            b"ciphertext whose key is gone",
+        )
+        .unwrap();
+
+        let _live = area(root.path());
+        assert!(!abandoned.exists(), "a dead area's directory is reclaimed");
     }
 
     #[test]

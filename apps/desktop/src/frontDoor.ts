@@ -244,14 +244,18 @@ function vault(model: ShellModel): HTMLElement {
  * is there works in a folder nothing is watching.
  */
 function mountLine(mount: MountStatus): HTMLElement {
-  if (mount.path !== null) {
-    return text('p', `Mounted at ${mount.path}`, { class: 'muted', 'data-vault': 'mount' });
+  switch (mount.state) {
+    case 'opening':
+      return text('p', 'Mounting your vault…', { class: 'muted', 'data-vault': 'mount-opening' });
+    case 'mounted':
+      return text('p', `Mounted at ${mount.path}`, { class: 'muted', 'data-vault': 'mount' });
+    case 'refused':
+      return text('p', mount.reason, {
+        class: 'error',
+        role: 'alert',
+        'data-vault': 'mount-refused',
+      });
   }
-  return text('p', mount.refusal, {
-    class: 'error',
-    role: 'alert',
-    'data-vault': 'mount-refused',
-  });
 }
 
 /**

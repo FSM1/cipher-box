@@ -6,7 +6,7 @@ use std::path::Path;
 
 use cipherbox_engine::{Engine, Event};
 
-use super::MountStatus;
+use super::{FromMount, MountStatus};
 use crate::engine::DesktopSeamTypes;
 
 /// The refusal the window renders. A mount is not something a member can fix
@@ -15,6 +15,9 @@ const NO_ADAPTER: &str = "CipherBox does not mount your vault on this platform y
 
 /// One decoded kernel request. There is no mount to decode one from.
 pub enum KernelOp {}
+
+/// A mounting thread's verdict. There is no mount to make, so none arrives.
+pub enum Mounted {}
 
 /// The session's engine, held where a mounted platform holds an operation core.
 pub struct Projection(Engine<DesktopSeamTypes>);
@@ -36,8 +39,12 @@ impl Projection {
         MountStatus::refused(NO_ADAPTER)
     }
 
-    pub async fn next_op(&mut self) -> Option<KernelOp> {
+    pub async fn next(&mut self) -> FromMount {
         core::future::pending().await
+    }
+
+    pub fn settled(self, landed: Mounted) -> Self {
+        match landed {}
     }
 
     pub async fn answer(&mut self, op: KernelOp) {
