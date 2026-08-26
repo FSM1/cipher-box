@@ -736,9 +736,9 @@ fn every_read_path_operation_runs_the_ttl_check_against_the_node_it_has_in_view(
 
     clock.advance(stale_after());
     block_on(core.getattr(file.ino)).expect("getattr");
-    let hinted = core.last_refresh_hint().expect("a stale file fires a hint");
-    assert_ne!(
-        hinted, root,
+    assert_eq!(
+        core.last_refresh_hint(),
+        Some(file.node),
         "a getattr on a file puts the file itself in view: its size and mtime are in its own record, not the parent's listing"
     );
 }

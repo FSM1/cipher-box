@@ -3858,6 +3858,7 @@ mod tests {
                 AuthorError::HeadTooLarge { size: 2, limit: 1 },
                 Halt::HeadOversized,
             ),
+            (AuthorError::GrantSectionTooLarge, Halt::HeadOversized),
         ] {
             let check = error.check();
             assert_eq!(classify_author(error), expected, "{check}");

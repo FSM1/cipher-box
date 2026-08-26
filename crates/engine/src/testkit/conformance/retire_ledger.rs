@@ -170,4 +170,32 @@ where
         Some(quoted),
         "every field survives a replay and a reopen"
     );
+
+    // The one field a replay moves, and only toward `Retired`: a delete retires
+    // the record out from under a debt an earlier prune journaled, and a backing
+    // that kept `Published` would leave that debt unsettleable.
+    let advanced = root(4);
+    after_reopen
+        .owe(alice, &[owed(&advanced, 64)])
+        .await
+        .unwrap();
+    after_reopen
+        .owe(
+            alice,
+            &[OwedRetire::whole_retired(NODE, advanced.clone(), 64)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        open()
+            .await
+            .owed(alice)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.target == advanced)
+            .map(|entry| entry.owing),
+        Some(OwingRecord::Retired),
+        "a hard delete must advance a held entry's class, durably"
+    );
 }
