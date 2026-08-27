@@ -71,7 +71,44 @@
             }
           }
         },
-        "summary": "Issue a single-use login challenge bound to an identity publicKey",
+        "summary": "Issue a single-use login challenge bound to an identity publicKey; POST /auth/login is the only route that accepts it",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/challenge/step-up": {
+      "post": {
+        "operationId": "AuthController_stepUpChallenge",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpChallengeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Issue a single-use challenge that authorises one account-management operation and no other",
         "tags": [
           "Auth"
         ]
@@ -125,7 +162,34 @@
             }
           }
         },
-        "summary": "Issue a single-use SIWE nonce",
+        "summary": "Issue a single-use SIWE nonce for a wallet sign-in; the link route refuses it",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/siwe/link-challenge": {
+      "post": {
+        "operationId": "AuthController_siweLinkChallenge",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiweChallengeResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Issue a single-use SIWE nonce that only POST /auth/siwe/link will accept",
         "tags": [
           "Auth"
         ]
@@ -1516,6 +1580,22 @@
           "expiresAt"
         ]
       },
+      "StepUpChallengeRequestDto": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "link",
+              "unlink"
+            ],
+            "description": "The account-management operation the challenge will authorise"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
       "LoginRequestDto": {
         "type": "object",
         "properties": {
@@ -1611,7 +1691,7 @@
           },
           "challenge": {
             "type": "string",
-            "description": "A fresh challenge from POST /auth/challenge, verbatim"
+            "description": "A fresh challenge from POST /auth/challenge/step-up with operation 'link'"
           },
           "challengeSignature": {
             "type": "string",
@@ -1687,7 +1767,7 @@
           },
           "challenge": {
             "type": "string",
-            "description": "A fresh challenge from POST /auth/challenge, verbatim"
+            "description": "A fresh challenge from POST /auth/challenge/step-up with operation 'unlink'"
           },
           "signature": {
             "type": "string",

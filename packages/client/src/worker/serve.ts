@@ -96,7 +96,7 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           return;
         }
         case 'siweChallenge': {
-          const result = await host.siweChallenge();
+          const result = await host.siweChallenge(request.intent);
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }

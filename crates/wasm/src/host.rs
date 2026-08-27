@@ -21,8 +21,8 @@ use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
     ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, OwnerScopedFloorStore,
-    SeamSet, SeamTypes, StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile,
-    WriteHandle, WriteTarget,
+    SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy, StreamHandle,
+    SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -409,16 +409,19 @@ impl EngineHandle {
         })
     }
 
-    /// Issues the single-use nonce an EIP-4361 message must embed. Resolves
-    /// with the nonce as a string; rejects with the engine error.
+    /// Issues the single-use nonce an EIP-4361 message must embed, for the
+    /// named intent (`"login"` or `"link"`). Resolves with the nonce as a
+    /// string; rejects with the engine error, or with a decode refusal when
+    /// the intent is not one the API mints a pool for.
     #[wasm_bindgen(js_name = siweChallenge)]
-    pub fn siwe_challenge(&self) -> Promise {
+    pub fn siwe_challenge(&self, intent: String) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
+            let intent = siwe_intent(&intent)?;
             let nonce = engine
                 .read()
                 .await
-                .siwe_challenge()
+                .siwe_challenge(intent)
                 .await
                 .map_err(engine_error)?;
             Ok(JsValue::from_str(&nonce))
@@ -533,6 +536,17 @@ impl EngineHandle {
                 None => JsValue::UNDEFINED,
             })
         })
+    }
+}
+
+/// Maps the host's intent string onto the pool the nonce is minted from.
+/// Fail-closed: an unknown intent never reaches a mint, so a typo cannot fall
+/// back to the sign-in pool and hand the link route a replayable nonce.
+fn siwe_intent(intent: &str) -> Result<SiweIntent, JsValue> {
+    match intent {
+        "login" => Ok(SiweIntent::Login),
+        "link" => Ok(SiweIntent::Link),
+        other => Err(js_sys::Error::new(&format!("unknown siwe intent: {other}")).into()),
     }
 }
 

@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
 import { AUTH_METHOD_KINDS, type AuthMethodKind } from '../entities/auth-method.entity';
+import { STEP_UP_OPERATIONS, type StepUpOperation } from '../services/challenge.service';
 
 const HEX_PUBLIC_KEY = /^(02|03)[0-9a-fA-F]{64}$|^04[0-9a-fA-F]{128}$/;
 const HEX_COMPACT_SIGNATURE = /^[0-9a-fA-F]{128}$/;
@@ -24,6 +25,15 @@ export class ChallengeResponseDto {
 
   @ApiProperty({ description: 'Challenge expiry, ISO 8601' })
   expiresAt!: string;
+}
+
+export class StepUpChallengeRequestDto {
+  @ApiProperty({
+    enum: STEP_UP_OPERATIONS,
+    description: 'The account-management operation the challenge will authorise',
+  })
+  @IsIn([...STEP_UP_OPERATIONS])
+  operation!: StepUpOperation;
 }
 
 export class LoginRequestDto {
@@ -86,7 +96,9 @@ export class SiweLoginRequestDto {
 }
 
 export class SiweLinkRequestDto extends SiweLoginRequestDto {
-  @ApiProperty({ description: 'A fresh challenge from POST /auth/challenge, verbatim' })
+  @ApiProperty({
+    description: "A fresh challenge from POST /auth/challenge/step-up with operation 'link'",
+  })
   @IsString()
   @MaxLength(256)
   challenge!: string;
@@ -131,7 +143,9 @@ export class UnlinkMethodRequestDto {
   @IsUUID()
   methodId!: string;
 
-  @ApiProperty({ description: 'A fresh challenge from POST /auth/challenge, verbatim' })
+  @ApiProperty({
+    description: "A fresh challenge from POST /auth/challenge/step-up with operation 'unlink'",
+  })
   @IsString()
   @MaxLength(256)
   challenge!: string;

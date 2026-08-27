@@ -18,7 +18,11 @@ import {
 import { Clock } from '../../common/clock';
 import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
-import { ChallengeService } from './challenge.service';
+import {
+  ChallengeService,
+  STEP_UP_CHALLENGE_KINDS,
+  type StepUpOperation,
+} from './challenge.service';
 import { IdentityService } from './identity.service';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
 import { TokenPair, TokenService } from './token.service';
@@ -79,7 +83,23 @@ export class AuthService {
 
   issueIdentityChallenge(publicKey: string): { challenge: string; expiresAt: Date } {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    return this.challengeService.issueIdentityChallenge(canonicalKey);
+    return this.challengeService.issueIdentityChallenge('identity-login', canonicalKey);
+  }
+
+  /**
+   * Issue the re-proof challenge for one account-management operation. The key
+   * comes from the caller's session, never from the request body, so a mint
+   * cannot be aimed at another account's identity key.
+   */
+  issueStepUpChallenge(
+    publicKey: string,
+    operation: StepUpOperation
+  ): { challenge: string; expiresAt: Date } {
+    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
+    return this.challengeService.issueIdentityChallenge(
+      STEP_UP_CHALLENGE_KINDS[operation],
+      canonicalKey
+    );
   }
 
   async identityLogin(
@@ -88,7 +108,7 @@ export class AuthService {
     signature: string
   ): Promise<LoginResult> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-login', canonicalKey);
     this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
 
     let user = await this.userRepository.findOne({ where: { publicKey: canonicalKey } });
@@ -108,7 +128,12 @@ export class AuthService {
   }
 
   issueSiweNonce(): { nonce: string; expiresAt: Date } {
-    return this.challengeService.issueSiweNonce();
+    return this.challengeService.issueSiweNonce('siwe-login');
+  }
+
+  /** Issue the nonce a wallet-link message must embed (owner-authenticated). */
+  issueSiweLinkNonce(): { nonce: string; expiresAt: Date } {
+    return this.challengeService.issueSiweNonce('siwe-link');
   }
 
   async siweLogin(message: string, signature: `0x${string}`): Promise<LoginResult> {
@@ -116,7 +141,7 @@ export class AuthService {
     if (!nonce) {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
-    this.challengeService.consume(nonce, 'siwe');
+    this.challengeService.consume(nonce, 'siwe-login');
     const address = await this.siweService.verifySiweMessage(
       message,
       signature,
@@ -161,14 +186,14 @@ export class AuthService {
     challengeSignature: string
   ): Promise<void> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-link', canonicalKey);
     this.identityService.verifyChallengeSignature(challenge, challengeSignature, canonicalKey);
 
     const nonce = parseSiweMessage(message).nonce;
     if (!nonce) {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
-    this.challengeService.consume(nonce, 'siwe');
+    this.challengeService.consume(nonce, 'siwe-link');
     const address = await this.siweService.verifySiweMessage(
       message,
       signature,
@@ -224,7 +249,7 @@ export class AuthService {
     signature: string
   ): Promise<void> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-unlink', canonicalKey);
     this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
 
     await runLockGuardedTransaction(this.dataSource, async (manager) => {

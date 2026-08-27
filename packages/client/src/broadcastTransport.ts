@@ -51,6 +51,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -266,8 +267,8 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<AuthMethodDescriptor[]>({ kind: 'authMethods' });
   }
 
-  siweChallenge(): Promise<string> {
-    return this.read<string>({ kind: 'siweChallenge' });
+  siweChallenge(intent: SiweIntent): Promise<string> {
+    return this.read<string>({ kind: 'siweChallenge', intent });
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {

@@ -447,6 +447,13 @@ export type EventDescriptor =
       error: string | null;
     };
 
+/**
+ * Which SIWE surface a nonce is minted for. The API keeps one challenge pool
+ * per intent and refuses a cross-intent spend, so the caller names the
+ * operation the wallet signature will authorise.
+ */
+export type SiweIntent = 'login' | 'link';
+
 /** A UI → worker request. `id` correlates the eventual response. */
 export type WorkerRequest =
   | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string }
@@ -460,7 +467,7 @@ export type WorkerRequest =
   | { type: 'receivedShares'; id: number }
   | { type: 'vaultStorage'; id: number }
   | { type: 'authMethods'; id: number }
-  | { type: 'siweChallenge'; id: number }
+  | { type: 'siweChallenge'; id: number; intent: SiweIntent }
   | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
   | { type: 'readStream'; id: number; handle: StreamHandle; offset: number; length: number }

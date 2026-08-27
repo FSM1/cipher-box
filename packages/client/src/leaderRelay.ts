@@ -510,7 +510,7 @@ export class LeaderRelay {
       case 'authMethods':
         return this.transport.authMethods();
       case 'siweChallenge':
-        return this.transport.siweChallenge();
+        return this.transport.siweChallenge(read.intent);
       case 'download':
         return this.transport.download(read.node);
       default:

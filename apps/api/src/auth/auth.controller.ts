@@ -34,6 +34,7 @@ import {
   SiweChallengeResponseDto,
   SiweLinkRequestDto,
   SiweLoginRequestDto,
+  StepUpChallengeRequestDto,
   TestLoginRequestDto,
   TestLoginResponseDto,
   TokenResponseDto,
@@ -66,11 +67,38 @@ export class AuthController {
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({
-    summary: 'Issue a single-use login challenge bound to an identity publicKey',
+    summary:
+      'Issue a single-use login challenge bound to an identity publicKey; POST /auth/login is the only route that accepts it',
   })
   @ApiOkResponse({ type: ChallengeResponseDto })
   challenge(@Body() body: ChallengeRequestDto): ChallengeResponseDto {
     const { challenge, expiresAt } = this.authService.issueIdentityChallenge(body.publicKey);
+    return { challenge, expiresAt: expiresAt.toISOString() };
+  }
+
+  @Post('challenge/step-up')
+  @UseInterceptors(AuthMetricsInterceptor)
+  @HttpCode(200)
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Issue a single-use challenge that authorises one account-management operation and no other',
+  })
+  @ApiOkResponse({ type: ChallengeResponseDto })
+  stepUpChallenge(
+    @Body() body: StepUpChallengeRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): ChallengeResponseDto {
+    const { publicKey } = request.user;
+    if (!publicKey) {
+      throw new ForbiddenException('Insufficient token scope');
+    }
+    const { challenge, expiresAt } = this.authService.issueStepUpChallenge(
+      publicKey,
+      body.operation
+    );
     return { challenge, expiresAt: expiresAt.toISOString() };
   }
 
@@ -100,10 +128,27 @@ export class AuthController {
   @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
-  @ApiOperation({ summary: 'Issue a single-use SIWE nonce' })
+  @ApiOperation({
+    summary: 'Issue a single-use SIWE nonce for a wallet sign-in; the link route refuses it',
+  })
   @ApiOkResponse({ type: SiweChallengeResponseDto })
   siweChallenge(): SiweChallengeResponseDto {
     const { nonce, expiresAt } = this.authService.issueSiweNonce();
+    return { nonce, expiresAt: expiresAt.toISOString() };
+  }
+
+  @Post('siwe/link-challenge')
+  @UseInterceptors(AuthMetricsInterceptor)
+  @HttpCode(200)
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Issue a single-use SIWE nonce that only POST /auth/siwe/link will accept',
+  })
+  @ApiOkResponse({ type: SiweChallengeResponseDto })
+  siweLinkChallenge(): SiweChallengeResponseDto {
+    const { nonce, expiresAt } = this.authService.issueSiweLinkNonce();
     return { nonce, expiresAt: expiresAt.toISOString() };
   }
 

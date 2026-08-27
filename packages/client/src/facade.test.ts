@@ -18,6 +18,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -45,6 +46,7 @@ class FakeTransport implements EngineTransport {
   authMethodReads = 0;
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
+  siweChallengeIntents: SiweIntent[] = [];
   opened: Uint8Array[] = [];
   reads: Array<{ handle: StreamHandle; offset: number; length: number }> = [];
   closedStreams: StreamHandle[] = [];
@@ -123,8 +125,9 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve([]);
   }
 
-  siweChallenge(): Promise<string> {
+  siweChallenge(intent: SiweIntent): Promise<string> {
     this.siweChallenges += 1;
+    this.siweChallengeIntents.push(intent);
     return Promise.resolve(FAKE_SIWE_NONCE);
   }
 
@@ -526,8 +529,11 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
+    await expect(facade.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
     expect(transport.siweChallenges).toBe(1);
+    // The facade forwards the intent verbatim: the pool the API mints from is
+    // the caller's statement of what the signature will authorise.
+    expect(transport.siweChallengeIntents).toEqual(['link']);
   });
 
   it('forwards a vault-storage read', async () => {

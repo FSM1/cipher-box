@@ -22,6 +22,12 @@ pub(crate) struct ChallengeRequest<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct StepUpChallengeRequest<'a> {
+    pub operation: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct LoginRequest<'a> {
     pub public_key: &'a str,
     pub challenge: &'a str,

@@ -33,6 +33,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -55,7 +56,7 @@ export type WireRead =
   | { kind: 'receivedShares' }
   | { kind: 'vaultStorage' }
   | { kind: 'authMethods' }
-  | { kind: 'siweChallenge' }
+  | { kind: 'siweChallenge'; intent: SiweIntent }
   | { kind: 'download'; node: Uint8Array };
 
 /** A follower ranged-read step, driven against the leader's engine stream. */

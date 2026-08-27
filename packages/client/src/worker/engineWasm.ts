@@ -11,6 +11,8 @@
  * stable command/handle surface frozen in `crates/wasm`.
  */
 
+import type { SiweIntent } from './protocol.js';
+
 /** Opaque wasm-bindgen `NodeId` handle. */
 export type WasmNodeId = object;
 
@@ -220,7 +222,7 @@ export interface WasmEngineHandle {
   receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
   vaultStorage(): Promise<WasmVaultStorageView>;
   authMethods(): Promise<readonly WasmAuthMethod[]>;
-  siweChallenge(): Promise<string>;
+  siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<WasmOpenedStream>;
   /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */

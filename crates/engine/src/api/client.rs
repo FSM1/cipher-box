@@ -22,8 +22,8 @@ use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
     MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
     RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
-    TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest,
-    UploadResult,
+    StepUpChallengeRequest, TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse,
+    UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
@@ -161,7 +161,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         Ok(LoginOutcome { is_new_user })
     }
 
-    /// Issue a single-use SIWE nonce to embed in an EIP-4361 message.
+    /// Issue a single-use SIWE nonce for a wallet sign-in.
     pub async fn siwe_challenge(&self) -> Result<SiweNonce, ApiError> {
         let request = HttpRequest {
             method: HttpMethod::Post,
@@ -171,15 +171,18 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             credentials: HttpCredentials::Include,
             timeout_ms: Some(CONTROL_TIMEOUT_MS),
         };
-        let response = ok_or_err(self.http.send(request).await?)?;
-        let body: SiweChallengeResponse = decode(&response)?;
-        if !is_eip4361_nonce(&body.nonce) {
-            return Err(ApiError::Decode("unusable siwe nonce".into()));
-        }
-        Ok(SiweNonce {
-            nonce: body.nonce,
-            expires_at: body.expires_at,
-        })
+        siwe_nonce(ok_or_err(self.http.send(request).await?)?)
+    }
+
+    /// Issue the single-use SIWE nonce a wallet-link message must embed. Its
+    /// own pool, from an owner-authenticated route: a nonce minted here is
+    /// refused at every sign-in route, and a sign-in nonce is refused at
+    /// `POST /auth/siwe/link`.
+    pub async fn siwe_link_challenge(&self) -> Result<SiweNonce, ApiError> {
+        let response = self
+            .request_authed(HttpMethod::Post, "/auth/siwe/link-challenge")
+            .await?;
+        siwe_nonce(ok_or_err(response)?)
     }
 
     /// SIWE wallet login (secondary method). The host collects the wallet
@@ -200,16 +203,37 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         Ok(LoginOutcome { is_new_user })
     }
 
-    /// Fetch a challenge for `public_key`, refusing one the API could not have
-    /// issued before it reaches the identity key ([`is_identity_challenge`]).
+    /// Fetch a login challenge for `public_key`, refusing one the API could not
+    /// have issued before it reaches the identity key ([`is_identity_challenge`]).
     async fn identity_challenge(&self, public_key: &str) -> Result<String, ApiError> {
         let response = self
             .post_json("/auth/challenge", &ChallengeRequest { public_key })
             .await?;
         let response = ok_or_err(response)?;
         let body: ChallengeResponse = decode(&response)?;
-        if !is_identity_challenge(&body.challenge) {
+        if !is_identity_challenge(&body.challenge, IDENTITY_CHALLENGE_PREFIX) {
             return Err(ApiError::Decode("unusable login challenge".into()));
+        }
+        Ok(body.challenge)
+    }
+
+    /// Fetch the re-proof challenge for one account-management operation. The
+    /// key is the session's, so the request names only the operation; the
+    /// answer must carry that operation's tag before the identity key sees it.
+    async fn step_up_challenge(&self, operation: StepUpOperation) -> Result<String, ApiError> {
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                "/auth/challenge/step-up",
+                &StepUpChallengeRequest {
+                    operation: operation.wire(),
+                },
+            )
+            .await?;
+        let response = ok_or_err(response)?;
+        let body: ChallengeResponse = decode(&response)?;
+        if !is_identity_challenge(&body.challenge, operation.challenge_prefix()) {
+            return Err(ApiError::Decode("unusable step-up challenge".into()));
         }
         Ok(body.challenge)
     }
@@ -230,7 +254,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         method_id: &str,
         signer: &impl ChallengeSigner,
     ) -> Result<(), ApiError> {
-        let challenge = self.identity_challenge(&signer.public_key_hex()).await?;
+        let challenge = self.step_up_challenge(StepUpOperation::Unlink).await?;
         let signature = signer.sign_challenge(&challenge);
         let response = self
             .json_authed(
@@ -256,7 +280,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         signature: &str,
         signer: &impl ChallengeSigner,
     ) -> Result<(), ApiError> {
-        let challenge = self.identity_challenge(&signer.public_key_hex()).await?;
+        let challenge = self.step_up_challenge(StepUpOperation::Link).await?;
         let challenge_signature = signer.sign_challenge(&challenge);
         let response = self
             .json_authed(
@@ -737,22 +761,62 @@ const IDENTITY_CHALLENGE_PREFIX: &str = "cipherbox-login:v2:";
 /// The challenge's random tail: 32 bytes rendered lowercase hex.
 const IDENTITY_CHALLENGE_NONCE_LEN: usize = 64;
 
-/// Whether the server's answer is a challenge this key may sign: the login
-/// domain tag followed by exactly the API's random tail.
+/// An account-management operation that re-proves the identity key. The API
+/// mints one challenge pool per operation and refuses a cross-operation spend,
+/// so the engine names the operation at the mint and holds the answer to that
+/// operation's tag.
+#[derive(Clone, Copy)]
+enum StepUpOperation {
+    Link,
+    Unlink,
+}
+
+impl StepUpOperation {
+    /// The `operation` field `POST /auth/challenge/step-up` takes.
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Link => "link",
+            Self::Unlink => "unlink",
+        }
+    }
+
+    /// The domain tag the API stamps on this operation's challenge.
+    fn challenge_prefix(self) -> &'static str {
+        match self {
+            Self::Link => "cipherbox-link:v2:",
+            Self::Unlink => "cipherbox-unlink:v2:",
+        }
+    }
+}
+
+/// Whether the server's answer is a challenge this key may sign for `prefix`:
+/// that operation's domain tag followed by exactly the API's random tail.
 ///
 /// The signer hands `sha256(utf8(challenge))` to the secp256k1 identity key,
 /// so an unchecked challenge makes that key a signing oracle for any UTF-8
 /// preimage. Pinning the whole shape — not just the tag — leaves a hostile
-/// responder no steerable byte outside the hex alphabet the API renders.
-fn is_identity_challenge(challenge: &str) -> bool {
-    challenge
-        .strip_prefix(IDENTITY_CHALLENGE_PREFIX)
-        .is_some_and(|nonce| {
-            nonce.len() == IDENTITY_CHALLENGE_NONCE_LEN
-                && nonce
-                    .bytes()
-                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        })
+/// responder no steerable byte outside the hex alphabet the API renders, and
+/// pinning the tag per operation keeps a login challenge from reaching the
+/// signer on a link or an unlink.
+fn is_identity_challenge(challenge: &str, prefix: &str) -> bool {
+    challenge.strip_prefix(prefix).is_some_and(|nonce| {
+        nonce.len() == IDENTITY_CHALLENGE_NONCE_LEN
+            && nonce
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// Decode a nonce mint, refusing one outside the EIP-4361 class.
+fn siwe_nonce(response: HttpResponse) -> Result<SiweNonce, ApiError> {
+    let body: SiweChallengeResponse = decode(&response)?;
+    if !is_eip4361_nonce(&body.nonce) {
+        return Err(ApiError::Decode("unusable siwe nonce".into()));
+    }
+    Ok(SiweNonce {
+        nonce: body.nonce,
+        expires_at: body.expires_at,
+    })
 }
 
 /// EIP-4361 fixes the nonce at 8+ alphanumerics. The check is fail-closed
@@ -863,10 +927,14 @@ mod tests {
         (http, creds, client)
     }
 
-    /// A challenge shaped exactly as the API issues one: the login domain tag
-    /// plus 32 random bytes in lowercase hex.
+    /// A challenge shaped exactly as the API issues one: the operation's domain
+    /// tag plus 32 random bytes in lowercase hex.
+    fn challenge_for(prefix: &str) -> String {
+        prefix.to_owned() + &"0123456789abcdef".repeat(4)
+    }
+
     fn challenge() -> String {
-        IDENTITY_CHALLENGE_PREFIX.to_owned() + &"0123456789abcdef".repeat(4)
+        challenge_for(IDENTITY_CHALLENGE_PREFIX)
     }
 
     /// Log in so the client holds an access token and a stored refresh token.
@@ -913,37 +981,55 @@ mod tests {
 
     /// Every shape the API could not have issued. Each breaks a different part
     /// of the pin, so none is subsumed by another.
-    fn hostile_challenges() -> Vec<String> {
+    fn hostile_challenges_for(prefix: &str) -> Vec<String> {
         let hex64 = "0123456789abcdef".repeat(4);
-        vec![
+        let mut cases = vec![
             String::new(),
             // The tag with no tail at all.
-            IDENTITY_CHALLENGE_PREFIX.to_owned(),
+            prefix.to_owned(),
             // No domain tag: an arbitrary preimage of the responder's choosing.
             hex64.clone(),
             // Another protocol's tag, and an older version of this one.
             format!("cipherbox-grant:v2:{hex64}"),
             format!("cipherbox-login:v1:{hex64}"),
             // The tag as a suffix, not a prefix — guards a `contains` regression.
-            format!("{hex64}{IDENTITY_CHALLENGE_PREFIX}"),
+            format!("{hex64}{prefix}"),
             // Right tag and alphabet, wrong width — short, then long.
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}", &hex64[..63]),
-            format!("{IDENTITY_CHALLENGE_PREFIX}{hex64}0"),
+            format!("{prefix}{}", &hex64[..63]),
+            format!("{prefix}{hex64}0"),
             // Right width, outside the hex alphabet: all-caps, one uppercase
             // digit among 64, then a wholly attacker-chosen tail.
-            format!(
-                "{IDENTITY_CHALLENGE_PREFIX}{}",
-                "0123456789ABCDEF".repeat(4)
-            ),
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}A", &hex64[..63]),
-            format!("{IDENTITY_CHALLENGE_PREFIX}{:_<64}", "sign anything"),
+            format!("{prefix}{}", "0123456789ABCDEF".repeat(4)),
+            format!("{prefix}{}A", &hex64[..63]),
+            format!("{prefix}{:_<64}", "sign anything"),
             // 64 chars but 65 bytes, then 64 bytes with a multi-byte tail: the
             // width check counts bytes, and the alphabet catches what it misses.
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}\u{e9}", &hex64[..63]),
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}\u{e9}", &hex64[..62]),
+            format!("{prefix}{}\u{e9}", &hex64[..63]),
+            format!("{prefix}{}\u{e9}", &hex64[..62]),
             // An interior control character; the tail is echoed to /auth/login.
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}\0", &hex64[..63]),
-        ]
+            format!("{prefix}{}\0", &hex64[..63]),
+        ];
+        // Every other operation's well-formed tag: the shape is perfect and the
+        // operation is wrong, which is what the operation binding refuses.
+        cases.extend(
+            ALL_CHALLENGE_PREFIXES
+                .into_iter()
+                .filter(|other| *other != prefix)
+                .map(|other| format!("{other}{hex64}")),
+        );
+        cases
+    }
+
+    /// Every domain tag the API stamps, so a new operation joins the cross
+    /// matrix by being added here.
+    const ALL_CHALLENGE_PREFIXES: [&str; 3] = [
+        IDENTITY_CHALLENGE_PREFIX,
+        "cipherbox-link:v2:",
+        "cipherbox-unlink:v2:",
+    ];
+
+    fn hostile_challenges() -> Vec<String> {
+        hostile_challenges_for(IDENTITY_CHALLENGE_PREFIX)
     }
 
     /// The accept side of the pin: every tail the API's hex renderer can emit
@@ -951,10 +1037,10 @@ mod tests {
     /// rather than in staging.
     #[test]
     fn the_shape_the_api_issues_is_accepted_at_the_class_boundaries() {
-        for tail in ["0".repeat(64), "f".repeat(64), "0123456789abcdef".repeat(4)] {
-            assert!(is_identity_challenge(&format!(
-                "{IDENTITY_CHALLENGE_PREFIX}{tail}"
-            )));
+        for prefix in ALL_CHALLENGE_PREFIXES {
+            for tail in ["0".repeat(64), "f".repeat(64), "0123456789abcdef".repeat(4)] {
+                assert!(is_identity_challenge(&format!("{prefix}{tail}"), prefix));
+            }
         }
     }
 
@@ -1805,7 +1891,11 @@ mod tests {
         let (http, _creds, client) = fakes();
         login(&http, &client);
         let sent_after_login = http.requests().len();
-        http.enqueue_response(json_response(200, json!({ "challenge": challenge() })));
+        let unlink_challenge = challenge_for(StepUpOperation::Unlink.challenge_prefix());
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": unlink_challenge.clone() }),
+        ));
         http.enqueue_response(json_response(200, json!({ "success": true })));
 
         block_on(client.unlink_auth_method("method-1", &StubSigner)).expect("unlink");
@@ -1813,22 +1903,72 @@ mod tests {
         let requests = http.requests();
         let sent = &requests[sent_after_login..];
         assert_eq!(sent.len(), 2, "one challenge, then one unlink");
-        assert_eq!(sent[0].url, "http://api.test/auth/challenge");
-        assert_eq!(
-            body_json(&sent[0])["publicKey"],
-            StubSigner.public_key_hex()
+        assert_eq!(sent[0].url, "http://api.test/auth/challenge/step-up");
+        assert_eq!(body_json(&sent[0])["operation"], "unlink");
+        assert!(
+            has_bearer(&sent[0]),
+            "the step-up mint is owner-authenticated"
+        );
+        assert!(
+            body_json(&sent[0]).get("publicKey").is_none(),
+            "the mint reads the key off the token, never the body"
         );
         assert_eq!(sent[1].method, HttpMethod::Post);
         assert_eq!(sent[1].url, "http://api.test/auth/unlink");
         assert!(has_bearer(&sent[1]));
         let body = body_json(&sent[1]);
         assert_eq!(body["methodId"], "method-1");
-        assert_eq!(body["challenge"], challenge());
-        assert_eq!(body["signature"], format!("sig-for-{}", challenge()));
+        assert_eq!(body["challenge"], unlink_challenge);
+        assert_eq!(body["signature"], format!("sig-for-{unlink_challenge}"));
         assert!(
             body.get("publicKey").is_none(),
             "the server reads the key off the token, never the body"
         );
+    }
+
+    /// A link is a change to which keys open the account, and it mints from the
+    /// link pool alone — so a nonce or a challenge for any other operation is
+    /// worthless here.
+    #[test]
+    fn siwe_link_mints_the_link_challenge_and_the_link_nonce() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        let link_challenge = challenge_for(StepUpOperation::Link.challenge_prefix());
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": link_challenge.clone() }),
+        ));
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(client.siwe_link("siwe-message", "0xsig", &StubSigner)).expect("link");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent[0].url, "http://api.test/auth/challenge/step-up");
+        assert_eq!(body_json(&sent[0])["operation"], "link");
+        assert_eq!(sent[1].url, "http://api.test/auth/siwe/link");
+        assert_eq!(body_json(&sent[1])["challenge"], link_challenge);
+    }
+
+    #[test]
+    fn the_link_nonce_comes_from_its_own_authenticated_route() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "nonce": "a1b2c3d4e5f60718", "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+
+        let nonce = block_on(client.siwe_link_challenge()).expect("nonce");
+
+        assert_eq!(nonce.nonce, "a1b2c3d4e5f60718");
+        let requests = http.requests();
+        let mint = &requests[sent_after_login];
+        assert_eq!(mint.method, HttpMethod::Post);
+        assert_eq!(mint.url, "http://api.test/auth/siwe/link-challenge");
+        assert!(has_bearer(mint), "an attacker cannot mint a link nonce");
     }
 
     /// The unlink challenge clears the same pin the login one does — it goes
@@ -1846,20 +1986,36 @@ mod tests {
             }
         }
 
-        for challenge in hostile_challenges() {
-            let (http, _creds, client) = fakes();
-            http.enqueue_response(json_response(
-                200,
-                json!({ "challenge": challenge.clone() }),
-            ));
-            assert_eq!(
-                block_on(client.unlink_auth_method("method-1", &PanickingSigner)).unwrap_err(),
-                ApiError::Decode("unusable login challenge".into()),
-                "challenge {challenge:?} must be refused"
-            );
-            let requests = http.requests();
-            assert_eq!(requests.len(), 1, "only /auth/challenge for {challenge:?}");
-            assert_eq!(requests[0].url, "http://api.test/auth/challenge");
+        for (operation, refuse) in [
+            (
+                StepUpOperation::Unlink,
+                &(|client: &ApiClient<ScriptedHttp, InMemoryCredentialStore>| {
+                    block_on(client.unlink_auth_method("method-1", &PanickingSigner))
+                })
+                    as &dyn Fn(&ApiClient<ScriptedHttp, InMemoryCredentialStore>) -> _,
+            ),
+            (StepUpOperation::Link, &|client: &ApiClient<
+                ScriptedHttp,
+                InMemoryCredentialStore,
+            >| {
+                block_on(client.siwe_link("siwe-message", "0xsig", &PanickingSigner))
+            }),
+        ] {
+            for challenge in hostile_challenges_for(operation.challenge_prefix()) {
+                let (http, _creds, client) = fakes();
+                http.enqueue_response(json_response(
+                    200,
+                    json!({ "challenge": challenge.clone() }),
+                ));
+                assert_eq!(
+                    refuse(&client).unwrap_err(),
+                    ApiError::Decode("unusable step-up challenge".into()),
+                    "challenge {challenge:?} must be refused"
+                );
+                let requests = http.requests();
+                assert_eq!(requests.len(), 1, "only the mint for {challenge:?}");
+                assert_eq!(requests[0].url, "http://api.test/auth/challenge/step-up");
+            }
         }
     }
 }
