@@ -59,7 +59,6 @@ use crate::grants::{
     recipient_blinded_tag,
 };
 use crate::mailbox::{VerifiedMailboxItem, post_sealed};
-use crate::rotation::derive_write_name;
 use crate::seams::{Mailbox, SeamResult, UnixMillis};
 
 /// The throwaway identity an invite link's grant is wrapped to.
@@ -286,16 +285,17 @@ pub struct MintedInvite {
 ///
 /// Owner-only by construction: it takes the owner's encryption subkey secret for
 /// the pairwise ECDH, and only the owner's identity signature over the resulting
-/// commitment authorises the set. The scope root's `ipnsName` is **derived** from
-/// `write_scope_seed`, never accepted as input — the tag binds that name and the
-/// link holder re-derives it from the record it resolves, so binding anything but
-/// the real resolvable name would mint a link nobody can self-locate.
+/// commitment authorises the set. `ipns_name` MUST be the scope root's real
+/// resolvable name ([`GranteeScopePlan::ipns_name`](super::GranteeScopePlan::ipns_name),
+/// which derives it) — the tag binds that name and the link holder re-derives it
+/// from the record it resolves, so binding anything else would mint a link
+/// nobody can self-locate.
 pub fn mint_invite_grant(
     owner_identity_signer: &EcdsaSigner,
     owner_enc_secret: &X25519Secret,
     invitee: &EphemeralInvitee,
     scope_id: &[u8; 16],
-    write_scope_seed: &[u8; SECRET_LEN],
+    ipns_name: &IpnsName,
     permission: Permission,
     expires_at: Option<UnixMillis>,
 ) -> Result<MintedInvite, InviteError> {
@@ -303,7 +303,6 @@ pub fn mint_invite_grant(
         Some(deadline) => Some(NonZeroU64::new(deadline.0).ok_or(InviteError::InvalidExpiry)?),
         None => None,
     };
-    let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
     let mut row = mint_grant_row(
         owner_identity_signer,
         owner_enc_secret,
@@ -923,7 +922,8 @@ mod tests {
     use super::*;
     use crate::grants::{PublishedGrantBlob, enforce_committed_ledger, self_locate};
     use crate::rotation::{
-        CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
+        CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, derive_write_name,
+        reseal_scope_root,
     };
     use crate::testkit::{SeededEntropy, SilentEntropy};
     use cipherbox_core::seal::{
@@ -973,7 +973,7 @@ mod tests {
             &owner_enc(),
             &invitee(),
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
             permission,
             expires_at,
         )
@@ -1146,7 +1146,7 @@ mod tests {
             &owner_enc(),
             &minted,
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
             Permission::Read,
             Some(EXPIRES_AT),
         )
@@ -1228,7 +1228,7 @@ mod tests {
                 &owner_enc(),
                 &invitee(),
                 &SCOPE,
-                &WRITE_SCOPE_SEED,
+                &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
                 Permission::Read,
                 Some(UnixMillis(0)),
             )
@@ -1262,7 +1262,7 @@ mod tests {
             &owner_enc(),
             &minted,
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
             Permission::Read,
             None,
         )
@@ -1273,7 +1273,7 @@ mod tests {
             &owner_enc(),
             &minted,
             &SCOPE,
-            &[0x56; 32],
+            &derive_write_name(&[0x56; 32], &SCOPE),
             Permission::Read,
             None,
         )
@@ -1295,7 +1295,7 @@ mod tests {
             &owner_enc(),
             &minted,
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
             Permission::Write,
             None,
         )
@@ -1326,7 +1326,7 @@ mod tests {
             &owner_enc(),
             &minted,
             &SCOPE,
-            &WRITE_SCOPE_SEED,
+            &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
             Permission::Read,
             None,
         )
@@ -1479,7 +1479,7 @@ mod tests {
             &owner_enc(),
             &EphemeralInvitee::from_secret(&[secret; 32]).expect("valid"),
             &SCOPE,
-            write_scope_seed,
+            &derive_write_name(write_scope_seed, &SCOPE),
             permission,
             expires_at,
         )

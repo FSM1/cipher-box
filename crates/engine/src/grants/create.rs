@@ -1,13 +1,20 @@
-//! Owner-side read-grant creation (blueprint/engine.md "Grants and ledger:
-//! Grant creation").
+//! Owner-side grant creation (blueprint/engine.md "Grants and ledger: Grant
+//! creation").
 //!
-//! Mints the owner-only **read** sharing path in the sequence the blueprint
-//! fixes: converge the subtree, mint the grantee scope at read epoch 1, publish
+//! Mints the owner-only sharing path in the sequence the blueprint fixes:
+//! converge the subtree, mint the grantee scope at read epoch 1, publish
 //! grantee-first, re-key the reparented descendants under the fresh derivation,
 //! then post the sealed share pointer. Convergence is the load-bearing
 //! correctness rule — a grant over a subtree that cannot be proven
 //! epoch-converged is refused **fail-closed**, so a new grantee can never regress
 //! through an ancestor scope's history (CONTEXT.md "Epoch-converged").
+//!
+//! A **write** grant owes one further step this module does not run: the name
+//! wave that moves the minted scope off the names the scope it left derives.
+//! [`GranteeScopePlan::write_scope_seed`] carries the fresh seed that wave cuts
+//! to; the wave itself is
+//! [`rotate_scope_write`](crate::rotation::rotate_scope_write), driven by the
+//! caller over the minted root.
 //!
 //! # Simulation boundary
 //!
@@ -17,9 +24,6 @@
 //!
 //! # Not implemented here
 //!
-//! - **Write grants**: the write-scope cut via [`rotate_scope_write`](super::
-//!   super::rotation::rotate_scope_write) plus the both-seeds grant blob, layered
-//!   on this identical skeleton.
 //! - **Invites**: ephemeral-key blobs, bearer write-link flagging, claim
 //!   conversion.
 //!
@@ -54,11 +58,8 @@ use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 
 /// The fresh grantee scope minted at the granted folder. `scope_id` is the
-/// folder's node id (a scope root's node id is its scope id). The read grant
-/// anchors only the read plane at epoch 1; the write plane stays the folder's
-/// inherited one (flat derivation), so `write_scope_seed`/`write_epoch` are the
-/// folder's current write-scope material — no write-scope cut (that is the
-/// write-grant follow-on).
+/// folder's node id (a scope root's node id is its scope id). The mint anchors
+/// the read plane at epoch 1.
 ///
 /// The scope root's `ipnsName` is **derived** from `write_scope_seed` +
 /// `scope_id`, never accepted as input: the blinded tag and the commitment both
@@ -75,8 +76,19 @@ pub struct GranteeScopePlan<'a> {
     pub parent_node_seed: &'a [u8; SECRET_LEN],
     /// The vault owner's encryption subkey public key — the owner-blob target.
     pub owner_enc_pub: &'a X25519Public,
-    /// The folder's inherited write-scope seed (read grants cut no write scope).
+    /// The folder's **current** write-scope seed — the scope it is leaving, and
+    /// what its resolvable name derives from ([`Self::ipns_name`]).
     pub write_scope_seed: &'a [u8; SECRET_LEN],
+    /// The freshly minted write-scope seed a **write** grant seals the new scope
+    /// under, or `None` for a read grant (which cuts no write scope).
+    ///
+    /// A `Permission::Write` row's grant blob carries this value verbatim
+    /// (`rotation/reseal.rs`), so a write grant that fell back to
+    /// [`write_scope_seed`](Self::write_scope_seed) would hand the grantee every
+    /// name in the scope the folder is leaving. The name wave that follows the
+    /// mint is what moves the subtree onto names the granted scope's own seed
+    /// derives (blueprint/engine.md "Grant creation").
+    pub write_cut: Option<&'a [u8; SECRET_LEN]>,
     /// The folder's current write epoch.
     pub write_epoch: u64,
     /// The scope's pointer read key.
@@ -94,6 +106,13 @@ impl GranteeScopePlan<'_> {
     /// plan binds the same bytes because they all read it here.
     pub fn ipns_name(&self) -> IpnsName {
         derive_write_name(self.write_scope_seed, &self.scope_id)
+    }
+
+    /// The write-scope seed the minted scope's blobs and owner-write blob are
+    /// sealed under — the cut for a write grant, the inherited seed otherwise
+    /// (see [`write_cut`](Self::write_cut)).
+    fn sealed_write_scope_seed(&self) -> &[u8; SECRET_LEN] {
+        self.write_cut.unwrap_or(self.write_scope_seed)
     }
 }
 
@@ -292,20 +311,26 @@ pub trait ScopeRootPromoter {
     ) -> Result<(), RotationPublishError>;
 }
 
-/// Mint a read grant for one recipient over `grantee`'s folder.
+/// Mint a grant for one recipient over `grantee`'s folder at `permission`.
 ///
 /// The recipient's row over [`mint_grantee_scope`], then the mailbox share
 /// pointer that tells them where to look. Fail-closed **through the grantee
 /// publish**; past that point the sequence is not atomic — see
 /// [`CreateGrantError`] for what each post-publish variant leaves committed.
+///
+/// A `Permission::Write` grant additionally owes the write-scope cut: the caller
+/// mints [`GranteeScopePlan::write_scope_seed`] fresh, and runs the name wave
+/// over the minted scope once this returns (blueprint/engine.md "Grant
+/// creation").
 #[allow(clippy::too_many_arguments)]
-pub async fn create_read_grant<E, R, P, M>(
+pub async fn create_grant<E, R, P, M>(
     entropy: &mut E,
     resolver: &R,
     publisher: &P,
     mailbox: &M,
     grantee: &GranteeScopePlan<'_>,
     recipient: &GrantRecipient<'_>,
+    permission: Permission,
     owner: &OwnerGrantKeys<'_>,
     parent: &ParentScopePlan<'_>,
 ) -> Result<CreateGrantOutcome, CreateGrantError>
@@ -328,7 +353,7 @@ where
         recipient.enc_pub,
         &grantee.scope_id,
         name_bytes,
-        Permission::Read,
+        permission,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
     let converged = converge_grant_subtree(resolver, publisher, grantee, parent).await?;
@@ -340,7 +365,7 @@ where
         scope_root_name: name_bytes.to_vec(),
         sharer_identity_pk: owner.identity_signer.verifying_key().to_sec1(),
         display_name: recipient.display_name.clone(),
-        permission: Permission::Read,
+        permission,
     };
     let ephemeral = fresh_ephemeral(entropy).map_err(CreateGrantError::Entropy)?;
     // Fresh random, never derived: the API keeps only
@@ -486,7 +511,7 @@ where
             override_seed: &override_seed,
             read_epoch: 1,
             prev: None,
-            write_scope_seed: grantee.write_scope_seed,
+            write_scope_seed: grantee.sealed_write_scope_seed(),
             write_epoch: grantee.write_epoch,
             write_history: WriteHistory::Carried(&[]),
             pointer_read_key: grantee.pointer_read_key,
@@ -1097,6 +1122,7 @@ mod tests {
             parent_node_seed: &parent_node_seed,
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
+            write_cut: None,
             write_epoch: 1,
             pointer_read_key: &grantee_pointer_read_key,
             subtree_child_index: &[],
@@ -1137,13 +1163,14 @@ mod tests {
             current_child_index: &[],
             carried_history_links: &[],
         };
-        let outcome = block_on(create_read_grant(
+        let outcome = block_on(create_grant(
             &mut entropy,
             &net,
             &net,
             &recorder,
             &grantee,
             &recipient,
+            Permission::Read,
             &owner,
             &parent,
         ))
@@ -1228,6 +1255,7 @@ mod tests {
                 parent_node_seed: &parent_node_seed,
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &grantee_write_scope_seed,
+                write_cut: None,
                 write_epoch: 1,
                 pointer_read_key: &grantee_pointer_read_key,
                 subtree_child_index: subtree,
@@ -1268,13 +1296,14 @@ mod tests {
                 current_child_index: &[],
                 carried_history_links: &[],
             };
-            block_on(create_read_grant(
+            block_on(create_grant(
                 &mut entropy,
                 &net,
                 &net,
                 &mailbox,
                 &grantee,
                 &recipient,
+                Permission::Read,
                 &owner,
                 &parent,
             ))

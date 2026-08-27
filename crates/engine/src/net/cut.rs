@@ -28,8 +28,9 @@ use crate::net::rotation::{
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CommittedSet, CutRotator, MAX_ROTATION_ATTEMPTS,
-    ResolveFailure, Retryable, RevokedCommittedSet, RotateScopePlan, RotateScopeWritePlan,
-    ScopeRootIdentity, WriteRotateError, WriteRotationOutcome, bounded, cascade_rotate_scope,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokedCommittedSet,
+    RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity, ScopeRootPublisher, WriteHistory,
+    WriteRotateError, WriteRotationOutcome, bounded, cascade_rotate_scope, reseal_scope_root,
     rotate_scope_write,
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
@@ -163,6 +164,80 @@ where
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
+    async fn publish_cut_set(
+        &self,
+        scope_root: NodeId,
+        cut: &RevokedCommittedSet,
+    ) -> Result<(), CascadeError> {
+        let resolve_failed = |reason| CascadeError::Resolve {
+            scope_id: scope_root.0,
+            reason,
+        };
+        let scope = self.scope(scope_root).map_err(resolve_failed)?;
+        self.bounded(async || {
+            let net = self.rotation_net();
+            let current = net.resolve_anchored(&scope).await.map_err(resolve_failed)?;
+            // Idempotent by comparison, never by assumption: a read cascade or a
+            // grant mint may already have published this set, and republishing
+            // would spend a CAS to change nothing.
+            if current.commitment == cut.commitment {
+                return Ok(());
+            }
+            // Metadata-only: the same override seed at the same read epoch, so
+            // `prev = None` mints no history link and the read-epoch floor never
+            // moves (blueprint/engine.md "rotateScopeWrite" — a write cut leaves
+            // the read plane's clock alone).
+            let section = reseal_scope_root(
+                &mut *self.entropy.borrow_mut(),
+                &ScopeRootIdentity {
+                    v: current.v,
+                    scope_id: scope_root.0,
+                    ipns_name: self.scope_root_name.as_str().as_bytes(),
+                    owner_enc_pub: &current.owner_enc_pub,
+                    owner_enc_secret: Some(self.keys.enc_secret),
+                    ascent: self.parent_node_seed.map(AscentAuthority::ParentSeed),
+                    owes_ascent_link: current.carried_ascent_link,
+                    pseudonym_signer: &current.pseudonym_signer,
+                },
+                &ResealSeeds {
+                    override_seed: &current.override_seed,
+                    read_epoch: current.current_read_epoch,
+                    prev: None,
+                    write_scope_seed: &current.write_scope_seed,
+                    write_epoch: current.write_epoch,
+                    write_history: WriteHistory::Carried(&current.write_history_link),
+                    pointer_read_key: &current.pointer_read_key,
+                },
+                &CommittedSet {
+                    owner_identity: self.keys.identity,
+                    commitment: &cut.commitment,
+                    commitment_sig: &cut.commitment_sig,
+                    grant_ledger: &cut.grant_ledger,
+                    direct_child_scope_index: &current.direct_child_scope_index,
+                    revoked_recipients: &cut.revoked_recipients,
+                },
+                &current.carried_history_links,
+            )
+            .map_err(|error| CascadeError::Reseal {
+                scope_id: scope_root.0,
+                error,
+            })?;
+            net.publish_scope_root(&ResealedScopeRoot {
+                scope_id: scope_root.0,
+                ipns_name: self.scope_root_name.as_str().as_bytes().to_vec(),
+                read_epoch: current.current_read_epoch,
+                write_epoch: current.write_epoch,
+                section,
+            })
+            .await
+            .map_err(|error| CascadeError::Publish {
+                scope_id: scope_root.0,
+                error,
+            })
+        })
+        .await
+    }
+
     async fn rotate_read_plane(
         &self,
         scope_root: NodeId,

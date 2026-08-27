@@ -6571,6 +6571,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_wave_refuses_a_downgrade_the_root_never_published_release_active() {
+        // A downgrade rotates no read plane, so nothing publishes the demoted
+        // set unless the cut publishes it itself (`rotate_on_cut`). Wired
+        // without that step, the wave reads the record's own pre-cut set and
+        // must refuse: minting from it would re-wrap the fresh
+        // `writeScopeSeed` to a party the owner just demoted to read.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let demoted = recipient_blinded_tag(
+            &write_grantee(),
+            &owner_enc().public(),
+            root.name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let mut plan = root.grant_section.commitment.clone();
+        for entry in plan.entries.iter_mut().filter(|e| e.tag == demoted) {
+            assert_eq!(entry.permission, Permission::Write);
+            entry.permission = Permission::Read;
+        }
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &plan);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(
+            !published_at(&harness, &moved.new_name),
+            "nothing is published, so the demoted party never receives the fresh write seed",
+        );
+    }
+
     /// A floor store that fires a scope-pointer consult from *inside* a publish
     /// window: the sighting lands on the publish guard's own write-epoch floor
     /// read, not before the publish like

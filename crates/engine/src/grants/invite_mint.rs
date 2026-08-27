@@ -45,6 +45,13 @@ pub struct InviteMintPlan<'a> {
     /// recorded copy is the authority for it
     /// ([`RecordedInvite::expires_at`](super::RecordedInvite::expires_at)).
     pub expires_at: Option<UnixMillis>,
+    /// What the link grants. A `Permission::Write` link is a **bearer** write
+    /// capability: the fragment carries the seed every name in the minted scope
+    /// derives from, so revoking or expiring one is only real via a write
+    /// rotation (blueprint/engine.md "Invites"). The caller mints
+    /// [`GranteeScopePlan::write_scope_seed`] fresh and runs that rotation, as
+    /// for any write grant.
+    pub permission: Permission,
 }
 
 /// A minted link as the host must present it: one opaque URL fragment
@@ -96,11 +103,9 @@ impl std::error::Error for InviteMintError {}
 /// the link, mint and publish the fresh scope its row is the whole committed set
 /// of, and hand back the bearer capability.
 ///
-/// Owner-only by construction and read-only, exactly as
-/// [`create_read_grant`](super::create_read_grant) is: the scope this publishes
-/// is signed under the owner's writer pseudonym and its commitment under the
-/// owner identity, and it inherits the parent's write plane — so a write row's
-/// blob would hand the bearer the seed every name in that scope derives from.
+/// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
+/// is: the scope this publishes is signed under the owner's writer pseudonym and
+/// its commitment under the owner identity, so no other session can author it.
 pub async fn mint_invite_link<E, R, P, S>(
     entropy: &mut E,
     resolver: &R,
@@ -116,13 +121,14 @@ where
     S: InviteStore,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
+    let scope_root_name = plan.grantee.ipns_name();
     let minted = mint_invite_grant(
         owner.identity_signer,
         owner.enc_secret,
         &invitee,
         &plan.grantee.scope_id,
-        plan.grantee.write_scope_seed,
-        Permission::Read,
+        &scope_root_name,
+        plan.permission,
         plan.expires_at,
     )
     .map_err(InviteMintError::Mint)?;
@@ -133,7 +139,7 @@ where
         invite_secret: invitee.secret().clone(),
         owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
             .encode(),
-        scope_root_name: plan.grantee.ipns_name().as_str().as_bytes().to_vec(),
+        scope_root_name: scope_root_name.as_str().as_bytes().to_vec(),
     }
     .encode()
     .map_err(InviteMintError::Mint)?;
@@ -402,6 +408,7 @@ mod tests {
                 parent_node_seed: &PARENT_NODE_SEED,
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &WRITE_SCOPE_SEED,
+                write_cut: None,
                 write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
@@ -446,6 +453,7 @@ mod tests {
                     grantee: &grantee,
                     parent: &parent,
                     expires_at,
+                    permission: Permission::Read,
                 },
             ))
         }

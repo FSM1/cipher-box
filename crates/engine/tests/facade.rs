@@ -71,8 +71,8 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
             },
-            EngineError::UnsupportedTarget {
-                check: "downgrade-needs-a-pre-wave-reseal",
+            EngineError::MalformedInput {
+                check: "recipient-identity-key-length",
             },
         ),
         (
@@ -335,10 +335,11 @@ fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
     );
 }
 
-/// A write link would hand the bearer the write-scope seed the whole parent
-/// scope derives its names from, so it is refused ahead of every other check.
+/// A write link runs the same mint a read link does, so an offline engine
+/// stops at the scope material it has not resolved rather than refusing the
+/// permission itself.
 #[test]
-fn minting_a_write_invite_link_is_refused() {
+fn minting_a_write_invite_link_reaches_the_same_mint_a_read_link_does() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
@@ -350,8 +351,8 @@ fn minting_a_write_invite_link_is_refused() {
             permission: Permission::Write,
             expires_at: None,
         })),
-        Err(EngineError::UnsupportedTarget {
-            check: "write-links-need-a-write-scope-cut"
+        Err(EngineError::ContentUnavailable {
+            message: "no write scope seed is held for the vault root".to_owned()
         }),
     );
 }

@@ -32,7 +32,7 @@ use cipherbox_engine::api::{
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
     GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter,
-    SharePointer, create_read_grant,
+    SharePointer, create_grant,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1396,7 +1396,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let mut entropy = SeededEntropy::new(954);
     let net = LocalNet;
 
-    create_read_grant(
+    create_grant(
         &mut entropy,
         &net,
         &net,
@@ -1407,6 +1407,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             parent_node_seed: &parent_node_seed,
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
+            write_cut: None,
             write_epoch: 1,
             pointer_read_key: &grantee_pointer_read_key,
             subtree_child_index: &[],
@@ -1416,6 +1417,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             enc_pub: &recipient_enc_pub,
             display_name: "Shared Folder".to_string(),
         },
+        Permission::Read,
         &OwnerGrantKeys {
             enc_secret: &owner_enc,
             identity_signer: &owner_identity,
