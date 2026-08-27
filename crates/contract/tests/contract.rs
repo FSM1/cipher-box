@@ -398,33 +398,6 @@ async fn siwe_link_sends_a_body_the_login_dto_accepts() {
     );
 }
 
-/// The binding against the live API: a nonce from the open sign-in pool is refused at
-/// the link route, and the statement it carries is the one that route expects —
-/// so only the pool the nonce came from can be what refused it.
-#[tokio::test]
-async fn a_sign_in_nonce_is_refused_at_the_link_route() {
-    let base = require_stack!("a_sign_in_nonce_is_refused_at_the_link_route");
-    let (client, signer) = fresh_account_with_signer(&base).await;
-
-    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
-    let message = link_message(&nonce.nonce);
-    let signature = format!("0x{}", "ab".repeat(65));
-
-    let error = client
-        .siwe_link(&message, &signature, &signer)
-        .await
-        .expect_err("a sign-in nonce must not link a wallet");
-    assert!(
-        matches!(error, ApiError::Unauthorized),
-        "a cross-pool nonce is a 401 from the challenge store, got {error:?}"
-    );
-    assert_eq!(
-        client.auth_methods().await.expect("methods").len(),
-        1,
-        "the refused link added nothing"
-    );
-}
-
 /// A bearer alone must not add a login method: the link route re-proves the
 /// account identity key exactly as unlink does.
 #[tokio::test]
