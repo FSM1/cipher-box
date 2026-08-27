@@ -727,10 +727,11 @@ where
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
             let preserved = match op.content_root_cid() {
-                Some(_) => self.preserve_dead_letter(*op_id, op).await?,
+                Some(_) => self.preserve_dead_letter(*op_id).await?,
                 None => Preservation::Kept,
             };
             self.abandon(scope, *op_id, op).await?;
+            self.release_if_refused(preserved, op).await;
             report
                 .dead_letters
                 .push((*op_id, op.target, preserved.observed(*reason)));
@@ -800,7 +801,7 @@ where
                     Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
                     return;
                 };
                 let handed_back = if owes_its_name {
@@ -809,6 +810,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
+                    self.release_if_refused(preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -819,10 +821,11 @@ where
             // upload of the version now at the name, and unpinning content a
             // live record names is loss where leaving rows charged is a leak.
             Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
-                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
                     return;
                 };
                 if self.dequeue_op(op_id).await.is_ok() {
+                    self.release_if_refused(preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -835,12 +838,13 @@ where
             // which for a restored replay keeps the resurrection candidate alive
             // at the owner's own expense.
             Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
-                let Ok(preserved) = self.preserve_dead_letter(op_id, op).await else {
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
                     return;
                 };
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
                     && self.dequeue_op(op_id).await.is_ok()
                 {
+                    self.release_if_refused(preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -3009,23 +3013,28 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
-    ///
-    /// A [`Preservation::Refused`] set keeps nothing, and the record leaving the
-    /// queue takes the version's only content key with it — so its blocks are
-    /// released here rather than left to orphan GC, which the same unreadable
-    /// set stands down for as long as it is there.
-    async fn preserve_dead_letter(&self, op_id: OpId, op: &Op) -> Result<Preservation, Halt> {
+    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<Preservation, Halt> {
         let queued = self.staging.queued_ops().await.map_err(seam)?;
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
-        let preserved = preserve_dead_letter(self.staging, record, self.scheduler.now())
+        preserve_dead_letter(self.staging, record, self.scheduler.now())
             .await
-            .map_err(seam)?;
+            .map_err(seam)
+    }
+
+    /// Drop the version a [`Preservation::Refused`] set could not hold, once the
+    /// op has left the queue. The refusal keeps nothing and the record takes the
+    /// version's only content key with it, so orphan GC — which the same
+    /// unreadable set stands down — would never collect the blocks.
+    ///
+    /// Ordered after the abandonment, never before: [`Self::registered_by`]
+    /// reads the manifest these blocks carry, and an abandonment that fails
+    /// leaves the op queued and still publishable.
+    async fn release_if_refused(&self, preserved: Preservation, op: &Op) {
         if preserved == Preservation::Refused {
             self.release_staged_blocks(op).await;
         }
-        Ok(preserved)
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from

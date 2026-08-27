@@ -5382,6 +5382,77 @@ fn a_dead_letter_no_preserved_set_will_hold_still_reaches_the_host() {
     }
 }
 
+/// A refusal releases the version no preserved set will hold — but only once the
+/// abandonment has retired what that version registered. The leaf CIDs are read
+/// off the staged root manifest, so releasing first would leave every leaf row
+/// charged against the account with no record left that could ever name them.
+#[test]
+fn a_refused_dead_letter_retires_its_blocks_before_it_releases_them() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(PRESERVED_DEAD_LETTERS, b"not a preserved record"),
+    )
+    .expect("the foreign set stages");
+
+    // A version of a node no gate-passing state holds: terminally unrebasable,
+    // so the abandonment goes through the retire that reads the manifest.
+    let (leaves, root_block, root_cid) = frame_version(&(0..40u8).collect::<Vec<_>>());
+    stage_blocks(&alice, &leaves, &root_block, &root_cid);
+    stage(
+        &alice,
+        &Op::update_content(
+            NodeId([0xAB; 16]),
+            StagedContent {
+                root_cid: root_cid.clone(),
+                plaintext_size: 40,
+                sealed_content_key: b"never opened".to_vec(),
+                epoch: EPOCH,
+            },
+            None,
+            1,
+            UnixMillis(4_242),
+        ),
+        Some(&root_block),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::PreservationRefused,
+                ..
+            }
+        )),
+        "the refusal is what decided this abandonment"
+    );
+    let mut expected: Vec<String> = leaves
+        .iter()
+        .map(|leaf| encode_content_cid_str(&leaf.cid))
+        .chain([encode_content_cid_str(&root_cid)])
+        .collect();
+    expected.sort();
+    let mut retired = retire_targets(&alice);
+    retired.sort();
+    retired.dedup();
+    assert_eq!(
+        retired, expected,
+        "every block the version registered is handed back, root and leaves alike"
+    );
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        leaves.iter().all(|leaf| !staged.contains(&leaf.cid)) && !staged.contains(&root_cid),
+        "and only then are they released"
+    );
+}
+
 /// Register-first stops a publish only after its head block has uploaded and
 /// charged its own pin row, and each attempt re-authors under a fresh seal
 /// nonce — so a retrying op orphans a byte-different head every pass. Each
@@ -7082,6 +7153,16 @@ fn a_restored_queue_never_republishes_a_create_the_record_plane_already_carries(
         "and the name no published parent references is handed back, so the \
          republisher stops keeping the resurrection candidate alive"
     );
+    // The name goes back; the version does not. A refusal is the only
+    // abandonment that releases, and this one preserved.
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(!backup.staged.is_empty(), "the restore had blocks to keep");
+    for (cid, _) in &backup.staged {
+        assert!(
+            staged.contains(cid),
+            "the restored version this create staged is kept, not released"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
