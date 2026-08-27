@@ -5002,7 +5002,9 @@ where {
             )
             .resolve_anchored(&target.scope)
             .await
-            .map_err(|e| target.resolve_error("write-grant-scope-root-unreadable", e))?;
+            // The mint published this root and the parent's index names it, so
+            // a gate rejection here is a trust violation, never a bad target.
+            .map_err(EngineError::from_resolve_failure)?;
         let cut = cut_for_write_grant(&GrantCutPlan {
             commitment: &current.commitment,
             commitment_sig: &current.commitment_sig,
