@@ -23,8 +23,9 @@ use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
     GrantSetCommitment, GrantSetEntry, Permission, PreservedFields, ReadBody,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, SignedSealed, WriteBody, decode_envelope,
-    decode_write_body, has_grant_section, open_grant_blob, open_read_body, sign_grant_set, unseal,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed,
+    WriteBody, decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
+    open_owner_history_link, open_read_body, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -2378,6 +2379,43 @@ where
         open_write_scope_seed_at(self.owner_enc_secret, envelope, owb, write_epoch)
     }
 
+    /// The **pre-wave** write scope seed the moved root's write history link
+    /// carries, and only when it derives the root name this plan is moving off.
+    ///
+    /// The link is HPKE auth-mode, owner as sender and recipient, so no
+    /// committed writer can mint one. The name check is what additionally pins
+    /// it to *this* wave rather than an earlier rotation of the same scope.
+    ///
+    /// `None` on anything unreadable: without it the resume tombstones nothing,
+    /// which leaks a registration instead of retiring a live name.
+    fn superseded_write_scope_seed(
+        &self,
+        envelope: &Envelope,
+        section: &GrantSection,
+        write_scope_seed: &[u8; SECRET_LEN],
+        write_epoch: u64,
+    ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+        let body = open_write_body(
+            envelope,
+            section,
+            &self.scope_id,
+            write_scope_seed,
+            write_epoch,
+        )
+        .ok()?;
+        let ctx = AadContext {
+            v: envelope.v,
+            id: envelope.id,
+            scope: self.scope_id,
+            epoch: write_epoch,
+            struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
+        };
+        let payload =
+            open_owner_history_link(self.owner_enc_secret, &ctx, &body.write_history_link).ok()?;
+        let prev = Zeroizing::new(*payload.prev_seed());
+        (derive_write_name(&prev, &self.scope_id) == *self.current_root_name).then_some(prev)
+    }
+
     /// The adopter every root read of this scope runs through, under the
     /// rotating root's own ancestor seed when it has one.
     fn root_adopter<'i>(&'i self, identity: &'i EcdsaVerifier) -> RootAdopter<'i, H, F> {
@@ -2916,10 +2954,19 @@ where
         let seed = self
             .write_scope_seed_at(&gated.envelope, &gated.section, repoint.write_epoch)
             .ok_or(ResolveFailure::Rejected)?;
+        let prev_write_scope_seed = self
+            .superseded_write_scope_seed(
+                &gated.envelope,
+                &gated.section,
+                &seed,
+                repoint.write_epoch,
+            )
+            .map(|prev| SecretBytes::new(*prev));
         Ok(Some(ResumedWriteWave {
             write_scope_seed: SecretBytes::new(*seed),
             root_name: repoint.current_root,
             write_epoch: repoint.write_epoch,
+            prev_write_scope_seed,
         }))
     }
 }
