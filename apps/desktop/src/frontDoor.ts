@@ -180,10 +180,22 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
 /** Shown until a sign-in mints the vault; nothing publishes before then. */
 const UNPROVISIONED = 'CipherBox has not created your vault yet, so nothing will publish';
 
+/**
+ * Enrollment and device approval are the web app's (ADR 0009 D2 and consequence
+ * 5), so this window offers neither affordance and says where they live — the
+ * rule ADR 0008 applies to every method on this host: the affordance and the
+ * truth agree.
+ */
+const SECURITY_LINES = [
+  'Sign-in factors and device approval are managed in CipherBox on the web.',
+  'Your recovery phrase is the guaranteed way back into your account, with no second device.',
+];
+
 function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   const section = element('section', { class: 'signed-in' });
   section.append(text('p', model.email ?? 'Signed in'));
   section.append(vault(model));
+  section.append(security());
 
   const out = text('button', 'Sign out', {
     'data-action': 'logout',
@@ -193,6 +205,12 @@ function signedIn(model: ShellModel, actions: ShellActions): HTMLElement {
   out.addEventListener('click', () => actions.logout());
   section.append(out);
   return section;
+}
+
+function security(): HTMLElement {
+  const panel = element('section', { class: 'security', 'data-security': 'panel' });
+  panel.append(...SECURITY_LINES.map((line) => note(line)));
+  return panel;
 }
 
 /** Counts and a rung; the files themselves are the mount's surface. */

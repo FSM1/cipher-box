@@ -24,6 +24,8 @@ publish.workspace = true
 test-support = []
 
 [dependencies]
+# The XChaCha20-Poly1305 primitive the Core Kit store seals its slots with.
+cipherbox-core.workspace = true
 cipherbox-engine.workspace = true
 futures-channel.workspace = true
 zeroize.workspace = true
@@ -47,8 +49,9 @@ keyring = { version = "3", features = [
     "async-io",
     "crypto-rust",
 ] }
-# Tokio backs the Scheduler seam (timers, background tasks, wall clock).
-tokio = { version = "1", features = ["rt", "time"] }
+# Tokio backs the Scheduler seam (timers, background tasks, wall clock); its
+# async mutex is what keeps the Core Kit store's wrapping key single-minted.
+tokio = { version = "1", features = ["rt", "time", "sync"] }
 # Free bytes on the data-dir volume, for the measured storage policy. Pure
 # Rust over rustix/windows-sys — no libc, no C toolchain.
 fs4 = { version = "1", default-features = false }
@@ -65,3 +68,6 @@ cipherbox-engine = { workspace = true, features = ["test-kit"] }
 cipherbox-core.workspace = true
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 tempfile = "3"
+# `CoreKitWrappingKey` is implemented in `tests/` by a yielding double, and its
+# signature names the crate's own `Zeroizing`.
+zeroize.workspace = true

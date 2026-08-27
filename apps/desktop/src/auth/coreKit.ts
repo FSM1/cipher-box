@@ -3,6 +3,7 @@
  * sequencing that drives it is `@cipherbox/login`'s.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import {
@@ -16,34 +17,34 @@ import type { DesktopConfig } from '../config';
 
 /**
  * Bounds the Web3Auth-held session record and the signatures a login secret
- * re-export needs: long enough to outlast a working session, short enough not
- * to survive a night on a shared machine, which the SDK's 86400s default does.
+ * re-export needs: long enough to outlast a working session, short enough that
+ * the record expires well inside the SDK's 86400s default. The store now
+ * survives a quit, so this window is what an unlocked keyring on a shared
+ * machine exposes.
  */
 const SESSION_SECONDS = 8 * 60 * 60;
 
 /**
- * The Core Kit store, in memory for the process lifetime.
+ * The Core Kit store, in the OS keyring's custody.
  *
- * What the SDK keeps there is a secp256k1 scalar that both addresses and
- * decrypts the Web3Auth record holding the login secret. Nothing on this host
- * may hold that at rest without a keychain-backed CredentialStore seam
- * (blueprint/desktop.md, "Engine wiring"), so a restart is a fresh sign-in
- * rather than a scalar left on disk.
+ * What the SDK keeps here is a secp256k1 scalar that both addresses and
+ * decrypts the Web3Auth record holding the login secret. The shell seals every
+ * slot under a key the keyring holds and this webview never sees
+ * (`crates/desktop-seams`, `SealedCoreKitStore`), so a device factor a recovery
+ * minted survives a restart without ever sitting on disk in the clear.
  */
-class MemoryStore {
-  private readonly items = new Map<string, string>();
-
+class KeyringStore {
   getItem(key: string): Promise<string | null> {
-    return Promise.resolve(this.items.get(key) ?? null);
+    return invoke<string | null>('core_kit_get_item', { key });
   }
 
   setItem(key: string, value: string): Promise<void> {
-    this.items.set(key, value);
-    return Promise.resolve();
+    return invoke('core_kit_set_item', { key, value });
   }
 
-  purge(): void {
-    this.items.clear();
+  /** Drops every slot and the key that opens them. */
+  purge(): Promise<void> {
+    return invoke('core_kit_purge');
   }
 }
 
@@ -54,7 +55,7 @@ class ShellSession implements CoreKitSession {
 
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
-    private readonly store: MemoryStore,
+    private readonly store: KeyringStore,
     private readonly verifier: string
   ) {}
 
@@ -77,8 +78,18 @@ class ShellSession implements CoreKitSession {
       // not built here yet, so fail rather than half-log-in, and end the
       // partial session rather than leave it resident on the device.
       await this.coreKit.logout().catch(() => undefined);
-      this.store.purge();
-      throw new Error('this device needs a recovery phrase before it can sign in');
+      // A store that refused the drop is carried alongside the reason the login
+      // failed: what the partial sign-in left behind is a device factor, and a
+      // caller told only to find a phrase would never learn it is still here.
+      const left = await this.store.purge().then(
+        () => null,
+        (error: unknown) => (error instanceof Error ? error.message : String(error))
+      );
+      throw new Error(
+        left === null
+          ? 'this device needs a recovery phrase before it can sign in'
+          : `this device needs a recovery phrase before it can sign in, and what that attempt left behind is still on this device: ${left}`
+      );
     }
     await this.coreKit.commitChanges();
     this.signedInEmail = credential.email;
@@ -108,8 +119,10 @@ class ShellSession implements CoreKitSession {
     } finally {
       this.signedInEmail = null;
       // The SDK's own logout blanks its session id and leaves the rest of its
-      // store standing, a device factor share among it.
-      this.store.purge();
+      // store standing, a device factor share among it. A refusal here reaches
+      // the window: the login flow has already reported the host signed out, so
+      // a device that still holds a factor would otherwise say nothing.
+      await this.store.purge();
     }
   }
 
@@ -124,7 +137,7 @@ class ShellSession implements CoreKitSession {
 
 /** Builds the shell's Core Kit session from the build-time environment. */
 export function createCoreKitSession(config: DesktopConfig): CoreKitSession {
-  const store = new MemoryStore();
+  const store = new KeyringStore();
   const coreKit = new Web3AuthMPCCoreKit({
     web3AuthClientId: config.web3AuthClientId,
     web3AuthNetwork:

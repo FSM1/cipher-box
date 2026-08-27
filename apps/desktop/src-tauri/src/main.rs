@@ -30,14 +30,20 @@ fn main() {
             session::session_start,
             session::session_logout,
             session::session_forget_device,
-            session::vault_status
+            session::vault_status,
+            session::core_kit_get_item,
+            session::core_kit_set_item,
+            session::core_kit_purge
         ])
         .setup(|app| {
             // Menu-bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // After the tray: this opens a directory with an fsync barrier, and
+            // nothing before the menu-bar icon should wait on a disk.
             tray::build(app.handle())?;
+            session::open_key_custody(app.handle())?;
             Ok(())
         })
         .on_window_event(|window, event| {

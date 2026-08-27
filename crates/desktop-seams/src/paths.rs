@@ -25,6 +25,14 @@ pub fn account_data_dir(data_local_dir: &Path, account_id: &str) -> SeamResult<P
     Ok(data_local_dir.join("cipherbox").join(account_id))
 }
 
+/// The device's Core Kit store directory:
+/// `<data_local_dir>/cipherbox/core-kit-store/` — beside the account
+/// directories rather than under one
+/// ([`SealedCoreKitStore`](crate::SealedCoreKitStore)).
+pub fn core_kit_store_dir(data_local_dir: &Path) -> PathBuf {
+    data_local_dir.join("cipherbox").join("core-kit-store")
+}
+
 /// True only when `account_id` is exactly one `Normal` path component with no
 /// embedded separator on any platform — so `..`, `.`, `/tmp`, `a/b`, `C:\tmp`,
 /// and the empty string are all rejected.

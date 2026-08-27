@@ -37,10 +37,13 @@ impl Entropy for OsEntropy {
 }
 
 /// Opens every durable store under `account_dir` and builds the whole seam set.
+/// `credentials` is the app's one keyring handle rather than a service name: the
+/// worker queue it carries is what orders a credential write against the logout
+/// delete issued after it.
 pub fn seam_set(
     config: &EngineConfig,
     account_dir: &Path,
-    keyring_service: &str,
+    credentials: KeyringCredentialStore,
 ) -> SeamResult<SeamSet<DesktopSeamTypes>> {
     Ok(SeamSet::<DesktopSeamTypes> {
         floor_store: OwnerScopedFloorStore::new(FileFloorStore::open(account_dir.join("floors"))?),
@@ -49,6 +52,6 @@ pub fn seam_set(
         scheduler: TokioScheduler::new(),
         staging_store: FileStagingStore::open(account_dir.join("staging"))?,
         snapshot_cache: FileSnapshotCache::open(account_dir.join("cache"))?,
-        credential_store: KeyringCredentialStore::new(keyring_service)?,
+        credential_store: credentials,
     })
 }

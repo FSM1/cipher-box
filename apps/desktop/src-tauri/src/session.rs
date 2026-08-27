@@ -4,20 +4,53 @@
 //!
 //! These commands are the handover: `session_start` takes the login secret and
 //! hands it to the engine ([`crate::engine`]), which is where it stops being
-//! this shell's to hold. The webview never sees a key, a token, or a name — the
-//! only thing that comes back out is [`VaultStatus`].
+//! this shell's to hold. Nothing the engine holds comes back out — the only
+//! value it returns to the webview is [`VaultStatus`].
+//!
+//! The `core_kit_*` commands are the one exception, and are not the engine's:
+//! they hand the login SDK back its own store, which that SDK reads before a
+//! session exists and already holds in webview memory. What this side adds is
+//! custody at rest — the slots are sealed under a keyring-held key
+//! ([`SealedCoreKitStore`]), which the webview never sees.
 
+use cipherbox_desktop_seams::{KeyringCredentialStore, SealedCoreKitStore, core_kit_store_dir};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::engine::{
-    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, SessionEnv, Shell, VaultStatus,
+    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, OsEntropy, SessionEnv, Shell,
+    VaultStatus,
 };
 use crate::tray;
 
 /// Fired when the engine emits, so the window re-reads what it renders.
 pub const VAULT_CHANGED: &str = "vault-changed";
+
+/// The device's Core Kit store, as the shell holds it.
+type CoreKitStore = SealedCoreKitStore<KeyringCredentialStore>;
+
+/// Opens the app's one keyring handle and the Core Kit store it seals, and
+/// hands both to Tauri to hold.
+pub fn open_key_custody(app: &AppHandle) -> Result<(), String> {
+    let credentials = KeyringCredentialStore::new(app.config().identifier.clone())
+        .map_err(|error| error.to_string())?;
+    let core_kit = CoreKitStore::open(
+        core_kit_store_dir(&local_data_dir(app)?),
+        credentials.clone(),
+        Box::new(OsEntropy),
+    )
+    .map_err(|error| error.to_string())?;
+    app.manage(credentials);
+    app.manage(core_kit);
+    Ok(())
+}
+
+fn local_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .local_data_dir()
+        .map_err(|error| format!("this device has no local data directory: {error}"))
+}
 
 /// The login secret an invoke body carries, or why it is not one.
 fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
@@ -40,12 +73,9 @@ fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
     let repainting = app.clone();
     Ok(SessionEnv {
         config: EngineConfig::compiled()?,
-        data_local_dir: app
-            .path()
-            .local_data_dir()
-            .map_err(|error| format!("this device has no local data directory: {error}"))?,
+        data_local_dir: local_data_dir(app)?,
         home_dir: app.path().home_dir().ok(),
-        keyring_service: app.config().identifier.clone(),
+        credentials: app.state::<KeyringCredentialStore>().inner().clone(),
         shell: Shell {
             changed: Box::new(move || {
                 let _ = repainting.emit(VAULT_CHANGED, ());
@@ -66,25 +96,72 @@ pub async fn session_start(
     engine.start(secret, session_env(&app)?).await
 }
 
-/// Ends the session: the engine stops and drops, and this device's stored
-/// refresh token goes with it.
+/// Ends the session: the engine revokes this device's credential and stops.
 ///
-/// `async` so a sync body runs on the thread pool rather than inline on the
-/// IPC thread: this waits on the engine thread, and the keyring delete inside
-/// it is a blocking OS call.
-#[tauri::command(async)]
-pub fn session_logout(engine: State<'_, EngineHost>) {
-    engine.log_out();
+/// The join runs off the async runtime: it waits on the engine thread, whose
+/// last request reaches the network and the keyring.
+#[tauri::command]
+pub async fn session_logout(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<EngineHost>().log_out())
+        .await
+        .unwrap_or_else(|error| Err(format!("signing out did not finish: {error}")))
 }
 
-/// Forgets this device: everything a logout does, and then the durable stores a
-/// logout keeps. Nothing of this account is left on this machine.
+/// Forgets this device: everything a logout does, then the durable stores a
+/// logout keeps, then the Core Kit store. Nothing of this account is left on
+/// this machine, in the keyring included — and the Core Kit store is the
+/// device's rather than the account's, so what every account on it held goes
+/// too.
 ///
-/// `async` for the same reason [`session_logout`] is — this waits on the engine
-/// thread and then on the filesystem.
-#[tauri::command(async)]
-pub fn session_forget_device(engine: State<'_, EngineHost>) -> Result<(), String> {
-    engine.forget_device()
+/// The engine leg waits on the engine thread and then on the filesystem, so it
+/// runs off the async runtime. The two legs run together: they share no
+/// directory and no keyring account, and neither refusal spares the other.
+#[tauri::command]
+pub async fn session_forget_device(
+    app: AppHandle,
+    core_kit: State<'_, CoreKitStore>,
+) -> Result<(), String> {
+    let (forgotten, purged) = tokio::join!(
+        tauri::async_runtime::spawn_blocking(move || app.state::<EngineHost>().forget_device()),
+        core_kit.purge(),
+    );
+    let forgotten = forgotten
+        .unwrap_or_else(|error| Err(format!("forgetting this device did not finish: {error}")));
+    forgotten.and(purged.map_err(|error| error.to_string()))
+}
+
+/// One Core Kit store slot, or `None` when this device holds nothing openable
+/// for it.
+#[tauri::command]
+pub async fn core_kit_get_item(
+    core_kit: State<'_, CoreKitStore>,
+    key: String,
+) -> Result<Option<String>, String> {
+    core_kit
+        .get_item(&key)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Seals one Core Kit store slot. What lands on disk is ciphertext; the key
+/// that opens it stays in the OS keyring.
+#[tauri::command]
+pub async fn core_kit_set_item(
+    core_kit: State<'_, CoreKitStore>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    core_kit
+        .set_item(&key, &value)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Drops every Core Kit store slot and the key that opens them — what a sign-out
+/// leaves behind otherwise is a device factor at rest.
+#[tauri::command]
+pub async fn core_kit_purge(core_kit: State<'_, CoreKitStore>) -> Result<(), String> {
+    core_kit.purge().await.map_err(|error| error.to_string())
 }
 
 /// The live vault's status, as the signed-in window renders it.
