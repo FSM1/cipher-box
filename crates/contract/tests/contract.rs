@@ -6,8 +6,9 @@
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
-//! SIWE secondary surface, logout revocation, the pin/name registry and quota,
-//! the mailbox lifecycle, and a raw endpoint round-trip.
+//! SIWE secondary surface, the login-method list and its unlink, logout
+//! revocation, the pin/name registry and quota, the mailbox lifecycle, and a raw
+//! endpoint round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
@@ -25,8 +26,8 @@ use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
-    ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
-    REGISTRY_BATCH_REFUSED,
+    ApiClient, ApiError, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
+    NameRegistration, REGISTRY_BATCH_REFUSED,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
@@ -88,12 +89,19 @@ fn expect_auth<T>(what: &str, result: Result<T, ApiError>) -> T {
 /// always a fresh `(account, ...)` pair — no cross-run collision on the shared
 /// CI database.
 async fn fresh_account(base: &str) -> Client {
+    fresh_account_with_signer(base).await.0
+}
+
+/// The same, keeping the identity key it created the account with — which the
+/// unlink surface re-proves.
+async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSigner) {
     let client = new_client(base);
+    let signer = random_identity_signer();
     expect_auth(
         "identity login creates the account",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&signer).await,
     );
-    client
+    (client, signer)
 }
 
 macro_rules! require_stack {
@@ -350,6 +358,157 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
     assert!(
         matches!(error, ApiError::Unauthorized | ApiError::Status { .. }),
         "unlinked/invalid SIWE is refused, got {error:?}"
+    );
+}
+
+/// The engine formats a wallet signature once, at the facade, and a mocked
+/// transport will certify whatever it is handed — so the shape only becomes a
+/// fact here, where the DTO's `HEX_ETH_SIGNATURE` answers 400 for anything else
+/// before the SIWE service runs.
+#[tokio::test]
+async fn siwe_link_sends_a_body_the_login_dto_accepts() {
+    let base = require_stack!("siwe_link_sends_a_body_the_login_dto_accepts");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+
+    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         0x0000000000000000000000000000000000000000\n\n\
+         Link wallet to CipherBox account\n\nNonce: {}\n",
+        nonce.nonce
+    );
+    // The exact string `Command::SiweLink` builds from 65 signature bytes.
+    let signature = format!("0x{}", "ab".repeat(65));
+
+    let error = client
+        .siwe_link(&message, &signature, &signer)
+        .await
+        .expect_err("the all-0xab signature cannot recover a wallet address");
+    assert!(
+        !matches!(error, ApiError::Status { status: 400, .. }),
+        "the API refused the engine's own link body as malformed: {error:?}"
+    );
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "an unverifiable wallet signature is a 401 from the SIWE service, got {error:?}"
+    );
+}
+
+/// A bearer alone must not add a login method: the link route re-proves the
+/// account identity key exactly as unlink does.
+#[tokio::test]
+async fn siwe_link_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("siwe_link_without_a_fresh_challenge_is_refused");
+    let (client, _signer) = fresh_account_with_signer(&base).await;
+
+    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         0x0000000000000000000000000000000000000000\n\n\
+         Link wallet to CipherBox account\n\nNonce: {}\n",
+        nonce.nonce
+    );
+    let signature = format!("0x{}", "ab".repeat(65));
+
+    let error = client
+        .siwe_link(&message, &signature, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        1,
+        "the refused link added nothing"
+    );
+}
+
+// --- login methods: list and unlink (blueprint/api.md) ---------------------
+
+#[tokio::test]
+async fn auth_methods_lists_only_the_callers_rows_in_display_form() {
+    let base = require_stack!("auth_methods_lists_only_the_callers_rows_in_display_form");
+    let mine = fresh_account(&base).await;
+    let theirs = fresh_account(&base).await;
+
+    let rows = mine.auth_methods().await.expect("the caller's methods");
+    assert_eq!(
+        rows.len(),
+        1,
+        "a fresh account carries exactly its identity row"
+    );
+    assert_eq!(rows[0].kind, AuthMethodKind::Identity);
+    assert!(!rows[0].id.is_empty() && !rows[0].created_at.is_empty());
+    if let Some(display) = &rows[0].identifier_display {
+        assert!(
+            display.len() < 64,
+            "the row carries a display form, never the 32-byte identifier hash: {display:?}"
+        );
+    }
+
+    let others = theirs
+        .auth_methods()
+        .await
+        .expect("the other account's rows");
+    assert!(
+        others
+            .iter()
+            .all(|row| rows.iter().all(|mine| mine.id != row.id)),
+        "the read is scoped to the caller's own rows"
+    );
+}
+
+/// The account IS its identity key, and `identityLogin` re-inserts the row on
+/// the next login — so removing it would revoke nothing. Every account carries
+/// one, which is also why the last-remaining-method refusal has no reachable
+/// case here.
+#[tokio::test]
+async fn unlinking_the_identity_method_is_refused() {
+    let base = require_stack!("unlinking_the_identity_method_is_refused");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+    let rows = client.auth_methods().await.expect("methods");
+    assert_eq!(rows.len(), 1, "a fresh account has one method");
+    assert_eq!(rows[0].kind, AuthMethodKind::Identity);
+
+    let error = client
+        .unlink_auth_method(&rows[0].id, &signer)
+        .await
+        .expect_err("the identity method cannot be unlinked");
+    assert!(
+        matches!(error, ApiError::Status { status: 409, .. }),
+        "an unlink that would revoke nothing is a 409, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        1,
+        "the refused unlink deleted nothing"
+    );
+}
+
+/// The challenge is bound to the key that asked for it, so a signature from any
+/// other key proves nothing about the account being stripped — and that check
+/// runs ahead of the last-method count, which is why a one-method account still
+/// answers 401 rather than 409.
+#[tokio::test]
+async fn unlink_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("unlink_without_a_fresh_challenge_is_refused");
+    let (client, _signer) = fresh_account_with_signer(&base).await;
+    let rows = client.auth_methods().await.expect("methods");
+
+    let error = client
+        .unlink_auth_method(&rows[0].id, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not unlink");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        rows.len(),
+        "the refused unlink deleted nothing"
     );
 }
 

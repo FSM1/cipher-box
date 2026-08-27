@@ -9,7 +9,10 @@
 
 import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
+  AuthMethodDescriptor,
+  AuthMethodKind,
   BlockedOpDescriptor,
+  ByoKind,
   CommandDescriptor,
   DeadLetterReason,
   EventDescriptor,
@@ -17,14 +20,19 @@ import type {
   OpProgressPhase,
   PendingClass,
   Permission,
+  PinMode,
   ReceivedShareDescriptor,
   ReceivedShareResolution,
+  ReclaimStallReason,
+  SettingsOrigin,
   SharingDescriptor,
   SnapshotDescriptor,
   Staleness,
+  VaultStorageDescriptor,
 } from './protocol.js';
 import type {
   EngineWasm,
+  WasmAuthMethod,
   WasmBlockedOp,
   WasmCommand,
   WasmEvent,
@@ -34,6 +42,7 @@ import type {
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
+  WasmVaultStorageView,
 } from './engineWasm.js';
 
 /**
@@ -301,6 +310,13 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
         text(descriptor.message, 'message'),
         bytes(descriptor.signature, 'signature')
       );
+    case 'siweLink':
+      return wasm.Command.siweLink(
+        text(descriptor.message, 'message'),
+        bytes(descriptor.signature, 'signature')
+      );
+    case 'unlinkAuthMethod':
+      return wasm.Command.unlinkAuthMethod(text(descriptor.methodId, 'methodId'));
     case 'logout':
       return wasm.Command.logout();
     case 'forgetDevice':
@@ -495,6 +511,139 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };
+}
+
+function pinModeFrom(wasm: EngineWasm, mode: number): PinMode {
+  switch (mode) {
+    case wasm.PinMode.Hosted:
+      return 'hosted';
+    case wasm.PinMode.External:
+      return 'external';
+    case wasm.PinMode.Dual:
+      return 'dual';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
+      // guessed mode would misreport where this vault's bytes land.
+      throw new Error(`unknown WASM pin mode value: ${mode}`);
+  }
+}
+
+function byoKindFrom(wasm: EngineWasm, kind: number | undefined): ByoKind | null {
+  switch (kind) {
+    case undefined:
+      return null;
+    case wasm.ByoKind.Kubo:
+      return 'kubo';
+    case wasm.ByoKind.Psa:
+      return 'psa';
+    case wasm.ByoKind.Pinata:
+      return 'pinata';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch.
+      throw new Error(`unknown WASM provider kind value: ${kind}`);
+  }
+}
+
+function settingsOriginFrom(wasm: EngineWasm, origin: number): SettingsOrigin {
+  switch (origin) {
+    case wasm.SettingsOrigin.Resolved:
+      return 'resolved';
+    case wasm.SettingsOrigin.Stale:
+      return 'stale';
+    case wasm.SettingsOrigin.Defaults:
+      return 'defaults';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
+      // guessed origin would present the documented defaults as the member's
+      // own choice.
+      throw new Error(`unknown WASM settings origin value: ${origin}`);
+  }
+}
+
+function stallReasonFrom(wasm: EngineWasm, reason: number): ReclaimStallReason {
+  switch (reason) {
+    case wasm.ReclaimStallReason.NodeUnreadable:
+      return 'nodeUnreadable';
+    case wasm.ReclaimStallReason.TargetStillLive:
+      return 'targetStillLive';
+    case wasm.ReclaimStallReason.TargetUnexpandable:
+      return 'targetUnexpandable';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, and a
+      // stall reported without its reason is the silent failure the ledger
+      // exists to surface.
+      throw new Error(`unknown WASM reclaim stall reason value: ${reason}`);
+  }
+}
+
+function authMethodKindFrom(wasm: EngineWasm, kind: number): AuthMethodKind {
+  switch (kind) {
+    case wasm.AuthMethodKind.Identity:
+      return 'identity';
+    case wasm.AuthMethodKind.Wallet:
+      return 'wallet';
+    case wasm.AuthMethodKind.Test:
+      return 'test';
+    case wasm.AuthMethodKind.Unknown:
+      return 'unknown';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch. The
+      // engine already spells a kind this build does not know as `Unknown`.
+      throw new Error(`unknown WASM auth method kind value: ${kind}`);
+  }
+}
+
+/**
+ * Reads a wasm-bindgen `VaultStorageView`'s getters into a descriptor.
+ *
+ * The `u64` figures narrow to JS numbers here: they are display quantities the
+ * chrome does arithmetic on, and no storage figure reaches the safe-integer
+ * ceiling.
+ */
+export function readVaultStorage(
+  wasm: EngineWasm,
+  view: WasmVaultStorageView
+): VaultStorageDescriptor {
+  const settings = view.settings;
+  const quota = view.quota;
+  return {
+    settings: {
+      pinMode: pinModeFrom(wasm, settings.pinMode),
+      byoEndpoint: settings.byoEndpoint ?? null,
+      byoKind: byoKindFrom(wasm, settings.byoKind),
+      byoCredentialStored: settings.byoCredentialStored,
+      keepLatestVersions: settings.keepLatestVersions ?? null,
+      origin: settingsOriginFrom(wasm, settings.origin),
+    },
+    quota:
+      quota === undefined
+        ? null
+        : {
+            usedBytes: Number(quota.usedBytes),
+            limitBytes: Number(quota.limitBytes),
+            advisory: quota.advisory,
+          },
+    pendingReclaimBytes: Number(view.pendingReclaimBytes),
+    reclaimStalls: view.reclaimStalls.map((stall) => ({
+      node: stall.node,
+      target: stall.target,
+      reason: stallReasonFrom(wasm, stall.reason),
+    })),
+  };
+}
+
+/** Reads the wasm-bindgen `AuthMethod` rows into descriptors. */
+export function readAuthMethods(
+  wasm: EngineWasm,
+  rows: readonly WasmAuthMethod[]
+): AuthMethodDescriptor[] {
+  return rows.map((row) => ({
+    id: row.id,
+    kind: authMethodKindFrom(wasm, row.kind),
+    identifierDisplay: row.identifierDisplay ?? null,
+    createdAt: row.createdAt,
+    lastUsedAt: row.lastUsedAt ?? null,
+  }));
 }
 
 export function permissionFrom(wasm: EngineWasm, permission: number): Permission {

@@ -15,6 +15,7 @@ import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   NodeKind,
@@ -24,6 +25,7 @@ import type {
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -126,6 +128,16 @@ export class EngineFacade {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.transport.receivedShares();
+  }
+
+  /** The storage pane's whole read. */
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return this.transport.vaultStorage();
+  }
+
+  /** The login methods on this account, in the display form the API serves. */
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    return this.transport.authMethods();
   }
 
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -326,6 +338,16 @@ export class EngineFacade {
 
   siweLogin(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'siweLogin', message, signature });
+  }
+
+  /** Links a signed EIP-4361 message to the account this session already holds. */
+  siweLink(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'siweLink', message, signature });
+  }
+
+  /** Unlinks one login method. The engine re-proves the account identity key. */
+  unlinkAuthMethod(methodId: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'unlinkAuthMethod', methodId });
   }
 
   private command(descriptor: CommandDescriptor): Promise<CommandOutcomeDescriptor> {

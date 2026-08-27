@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { RecoveryPhraseSetup } from '../components/auth/RecoveryPhraseSetup';
 import { AppShell } from '../components/layout/AppShell';
+import { AuthMethodsPane } from '../components/settings/AuthMethodsPane';
 import { ForgetDeviceDialog } from '../components/settings/ForgetDeviceDialog';
+import { QuotaChrome } from '../components/settings/QuotaChrome';
 import { VaultSettingsForm } from '../components/settings/VaultSettingsForm';
 import { useEngineAccount } from '../engine/useEngineSession';
+import { useVaultStorage } from '../hooks/useVaultStorage';
 import { useAuthState } from '../stores/auth.store';
 
 /** Which dialog the route has raised, if any. */
@@ -11,14 +14,16 @@ type Raised = 'recovery' | 'forget' | null;
 
 /**
  * Account and vault settings, behind `RequireAuth` (blueprint/web-client.md
- * "Composition"). The route shell: sign-in identity, the recovery phrase, BYO
- * pinning and vault settings, and forget-this-device. Linking login methods and
- * the MFA/device-approval surface land here with their own scope.
+ * "Composition"). The route shell: sign-in identity, the recovery phrase, the
+ * login methods on the account, BYO pinning with its quota chrome, and
+ * forget-this-device. The MFA/device-approval surface lands here with its own
+ * scope.
  */
 export function SettingsPage() {
   const account = useEngineAccount();
   const { email, method, recoveryEnrolled } = useAuthState();
   const [raised, setRaised] = useState<Raised>(null);
+  const { storage, error: storageError, reload } = useVaultStorage();
 
   return (
     <AppShell>
@@ -60,9 +65,27 @@ export function SettingsPage() {
           )}
         </section>
 
+        <AuthMethodsPane />
+
         <section className="settings-section" data-testid="settings-vault">
           <h3>storage</h3>
-          <VaultSettingsForm />
+          {storageError !== null && (
+            <p className="dialog-error" role="alert" data-testid="settings-storage-error">
+              {storageError}
+            </p>
+          )}
+          <QuotaChrome storage={storage} />
+          {/* A save replaces the whole record, so the form waits for the read
+              that says what the record holds. Publishing defaults over an
+              unresolved record is the member's call to take on, and only a
+              landed read can offer it. */}
+          {storage === null ? (
+            <p className="sharing-note" data-testid="settings-storage-pending">
+              {'// settings not read yet — nothing can be published until they are.'}
+            </p>
+          ) : (
+            <VaultSettingsForm summary={storage.settings} onSaved={reload} />
+          )}
         </section>
 
         <section

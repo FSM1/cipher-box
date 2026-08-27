@@ -17,7 +17,9 @@ import { User } from './user.entity';
  * - 'wallet': SIWE wallet login (secondary; linked to an existing account).
  * - 'test': staging-gated test-login (never available in production).
  */
-export type AuthMethodKind = 'identity' | 'wallet' | 'test';
+export const AUTH_METHOD_KINDS = ['identity', 'wallet', 'test'] as const;
+
+export type AuthMethodKind = (typeof AUTH_METHOD_KINDS)[number];
 
 @Entity('auth_methods')
 @Index('uq_auth_methods_kind_identifier', ['kind', 'identifierHash'], { unique: true })

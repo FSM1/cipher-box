@@ -7,6 +7,7 @@
 import { wipeTransfer } from '../buffers.js';
 import { commandTransfer } from './protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -14,6 +15,7 @@ import type {
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
@@ -26,10 +28,12 @@ import {
   minted,
   nodeId,
   permissionFrom,
+  readAuthMethods,
   readEvent,
   readReceivedShare,
   readSharing,
   readSnapshot,
+  readVaultStorage,
   record,
   text,
 } from './commandCodec.js';
@@ -57,6 +61,8 @@ export interface EngineHostLike {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   /** Reads this vault's accepted shares and the engine's verdict on each. */
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
+  vaultStorage(): Promise<VaultStorageDescriptor>;
+  authMethods(): Promise<AuthMethodDescriptor[]>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Opens a read stream pinned to the node's current head content version. */
@@ -260,6 +266,14 @@ export class EngineHost implements EngineHostLike {
   async receivedShares(): Promise<ReceivedShareDescriptor[]> {
     const rows = await this.handle.receivedShares();
     return rows.map((row) => readReceivedShare(this.wasm, row));
+  }
+
+  async vaultStorage(): Promise<VaultStorageDescriptor> {
+    return readVaultStorage(this.wasm, await this.handle.vaultStorage());
+  }
+
+  async authMethods(): Promise<AuthMethodDescriptor[]> {
+    return readAuthMethods(this.wasm, await this.handle.authMethods());
   }
 
   siweChallenge(): Promise<string> {

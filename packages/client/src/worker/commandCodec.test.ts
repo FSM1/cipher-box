@@ -3,13 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { fakeWasmEnums } from '../testkit.js';
 import {
   buildCommand,
+  readAuthMethods,
   readEvent,
   readReceivedShare,
   readSharing,
   readSnapshot,
+  readVaultStorage,
 } from './commandCodec.js';
 import type { CommandDescriptor } from './protocol.js';
-import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
+import type {
+  EngineWasm,
+  WasmEvent,
+  WasmSnapshotView,
+  WasmVaultStorageView,
+} from './engineWasm.js';
 
 /**
  * A structural stand-in for the wasm-bindgen namespace: only the mirror-enum
@@ -531,6 +538,62 @@ describe('buildCommand', () => {
       );
     });
   });
+
+  describe('auth', () => {
+    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[]> } => {
+      const calls: Record<string, unknown[]> = {};
+      const wasm = {
+        ...fakeWasmEnums,
+        Command: new Proxy(
+          {},
+          {
+            get:
+              (_target, name: string) =>
+              (...args: unknown[]) => {
+                calls[name] = args;
+                return {};
+              },
+          }
+        ),
+      } as unknown as EngineWasm;
+      return { wasm, calls };
+    };
+
+    it('builds a wallet link from the message and its raw signature bytes', () => {
+      const { wasm, calls } = spyWasm();
+      const signature = new Uint8Array(65).fill(9);
+
+      buildCommand(wasm, { kind: 'siweLink', message: 'link me', signature });
+
+      expect(calls.siweLink).toEqual(['link me', signature]);
+    });
+
+    it('builds an unlink from the method id alone', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'unlinkAuthMethod', methodId: '3f2a-uuid' });
+
+      expect(calls.unlinkAuthMethod).toEqual(['3f2a-uuid']);
+    });
+
+    it('refuses a link or an unlink whose fields are not what they claim', () => {
+      const { wasm } = spyWasm();
+      const refusesAuth =
+        (descriptor: unknown): (() => unknown) =>
+        () =>
+          buildCommand(wasm, descriptor as CommandDescriptor);
+
+      expect(
+        refusesAuth({ kind: 'siweLink', message: 12345, signature: new Uint8Array() })
+      ).toThrow('invalid request field message: number');
+      expect(refusesAuth({ kind: 'siweLink', message: 'link me', signature: 'abcd' })).toThrow(
+        'invalid request field signature: string'
+      );
+      expect(refusesAuth({ kind: 'unlinkAuthMethod', methodId: null })).toThrow(
+        'invalid request field methodId: null'
+      );
+    });
+  });
 });
 
 describe('readEvent', () => {
@@ -887,6 +950,136 @@ describe('readReceivedShare', () => {
     // A guessed class would paint a revoked share as still granted.
     expect(() => readReceivedShare(fakeWasm, { ...row, resolution: 'granted-ish' })).toThrow(
       'unknown WASM resolution class: granted-ish'
+    );
+  });
+});
+
+describe('readVaultStorage', () => {
+  const view = (): WasmVaultStorageView => ({
+    settings: {
+      pinMode: fakeWasmEnums.PinMode.Dual,
+      byoEndpoint: 'https://kubo.example',
+      byoKind: fakeWasmEnums.ByoKind.Psa,
+      byoCredentialStored: true,
+      keepLatestVersions: 5,
+      origin: fakeWasmEnums.SettingsOrigin.Stale,
+    },
+    quota: { usedBytes: 512n, limitBytes: 2048n, advisory: true },
+    pendingReclaimBytes: 0n,
+    reclaimStalls: [
+      {
+        node: new Uint8Array(16).fill(3),
+        target: 'bafyDoomedRoot',
+        reason: fakeWasmEnums.ReclaimStallReason.TargetStillLive,
+      },
+    ],
+  });
+
+  it('reads the settings, the quota and the stalled debts through', () => {
+    expect(readVaultStorage(fakeWasm, view())).toEqual({
+      settings: {
+        pinMode: 'dual',
+        byoEndpoint: 'https://kubo.example',
+        byoKind: 'psa',
+        byoCredentialStored: true,
+        keepLatestVersions: 5,
+        origin: 'stale',
+      },
+      quota: { usedBytes: 512, limitBytes: 2048, advisory: true },
+      pendingReclaimBytes: 0,
+      reclaimStalls: [
+        { node: new Uint8Array(16).fill(3), target: 'bafyDoomedRoot', reason: 'targetStillLive' },
+      ],
+    });
+  });
+
+  it('reads a vault with no provider and an unanswered probe as null, never as blank', () => {
+    const bare = readVaultStorage(fakeWasm, {
+      ...view(),
+      settings: {
+        pinMode: fakeWasmEnums.PinMode.Hosted,
+        byoEndpoint: undefined,
+        byoKind: undefined,
+        byoCredentialStored: false,
+        keepLatestVersions: undefined,
+        origin: fakeWasmEnums.SettingsOrigin.Defaults,
+      },
+      quota: undefined,
+    });
+
+    expect(bare.settings.byoEndpoint).toBeNull();
+    expect(bare.settings.byoKind).toBeNull();
+    expect(bare.settings.keepLatestVersions).toBeNull();
+    expect(bare.quota).toBeNull();
+  });
+
+  it.each([
+    ['pin mode', { pinMode: 42 }, 'unknown WASM pin mode value: 42'],
+    ['provider kind', { byoKind: 42 }, 'unknown WASM provider kind value: 42'],
+    ['settings origin', { origin: 42 }, 'unknown WASM settings origin value: 42'],
+  ])('fails closed on a %s it cannot map', (_name, override, message) => {
+    const base = view();
+    expect(() =>
+      readVaultStorage(fakeWasm, { ...base, settings: { ...base.settings, ...override } })
+    ).toThrow(message);
+  });
+
+  it('fails closed on a stall reason it cannot map', () => {
+    // A guessed reason would tell a member the wrong thing about a debt that
+    // never drains.
+    const base = view();
+    expect(() =>
+      readVaultStorage(fakeWasm, {
+        ...base,
+        reclaimStalls: [{ ...base.reclaimStalls[0]!, reason: 42 }],
+      })
+    ).toThrow('unknown WASM reclaim stall reason value: 42');
+  });
+});
+
+describe('readAuthMethods', () => {
+  const row = {
+    id: '3f2a-uuid',
+    kind: fakeWasmEnums.AuthMethodKind.Wallet,
+    identifierDisplay: '0x1234…abcd',
+    createdAt: '2026-08-27T10:00:00.000Z',
+    lastUsedAt: '2026-08-27T11:00:00.000Z',
+  };
+
+  it('reads the display form through, and an absent one as null', () => {
+    // The second row is the kind this build does not know: the engine already
+    // spells it `Unknown`, and a row is a display fact, not a trust decision.
+    expect(
+      readAuthMethods(fakeWasm, [
+        row,
+        {
+          ...row,
+          kind: fakeWasmEnums.AuthMethodKind.Unknown,
+          identifierDisplay: undefined,
+          lastUsedAt: undefined,
+        },
+      ])
+    ).toEqual([
+      {
+        id: '3f2a-uuid',
+        kind: 'wallet',
+        identifierDisplay: '0x1234…abcd',
+        createdAt: '2026-08-27T10:00:00.000Z',
+        lastUsedAt: '2026-08-27T11:00:00.000Z',
+      },
+      {
+        id: '3f2a-uuid',
+        kind: 'unknown',
+        identifierDisplay: null,
+        createdAt: '2026-08-27T10:00:00.000Z',
+        lastUsedAt: null,
+      },
+    ]);
+  });
+
+  it('fails closed on a kind value it cannot map', () => {
+    expect(() => readAuthMethods(fakeWasm, [{ ...row, kind: 42 }])).toThrow(
+      'unknown WASM auth method kind value: 42'
     );
   });
 });

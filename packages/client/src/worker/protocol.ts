@@ -242,6 +242,72 @@ export interface VaultSettingsDescriptor {
   keepLatestVersions: number | null;
 }
 
+/** Whose choice a settings summary reports (mirrors the facade `SettingsOrigin`). */
+export type SettingsOrigin = 'resolved' | 'stale' | 'defaults';
+
+/**
+ * The member's settings as a host may see them, as data. The provider
+ * credential is absent by construction — the wasm boundary exists to keep it
+ * uncrossable.
+ */
+export interface VaultSettingsSummaryDescriptor {
+  pinMode: PinMode;
+  byoEndpoint: string | null;
+  byoKind: ByoKind | null;
+  /** Whether a provider bearer is stored. The bearer itself never crosses. */
+  byoCredentialStored: boolean;
+  /** `null` keeps every version within quota. */
+  keepLatestVersions: number | null;
+  origin: SettingsOrigin;
+}
+
+/** Why a reclaim debt did not settle (mirrors the facade `ReclaimStallReason`). */
+export type ReclaimStallReason = 'nodeUnreadable' | 'targetStillLive' | 'targetUnexpandable';
+
+/** One debt a reclaim pass left owed, as data (mirrors `ReclaimStall`). */
+export interface ReclaimStallDescriptor {
+  node: Uint8Array;
+  /** The doomed version's root `contentCid`. */
+  target: string;
+  reason: ReclaimStallReason;
+}
+
+/** The account's hosted-storage figures, as data (mirrors the facade `QuotaView`). */
+export interface QuotaDescriptor {
+  usedBytes: number;
+  limitBytes: number;
+  /** True where the figure is a hint rather than a ceiling. */
+  advisory: boolean;
+}
+
+/**
+ * The storage pane's whole read, as data (mirrors the facade `VaultStorageView`).
+ * A wire projection of view state the engine owns, not the forbidden
+ * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
+ */
+export interface VaultStorageDescriptor {
+  settings: VaultSettingsSummaryDescriptor;
+  /** `null` when the quota probe did not answer. */
+  quota: QuotaDescriptor | null;
+  pendingReclaimBytes: number;
+  reclaimStalls: ReclaimStallDescriptor[];
+}
+
+/** What established a login method (mirrors the facade `AuthMethodKind`). */
+export type AuthMethodKind = 'identity' | 'wallet' | 'test' | 'unknown';
+
+/**
+ * One login method on the account, as data (mirrors the facade `AuthMethod`).
+ * Display form only: the identifier hash never crosses.
+ */
+export interface AuthMethodDescriptor {
+  id: string;
+  kind: AuthMethodKind;
+  identifierDisplay: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 /**
  * One write intent, as data. Each variant's `kind` matches the facade command
  * builder name (`crates/wasm` `Command`), so the worker maps it mechanically.
@@ -283,6 +349,9 @@ export type CommandDescriptor =
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
+  /** Links a host-collected wallet signature to the account already signed in. */
+  | { kind: 'siweLink'; message: string; signature: Uint8Array }
+  | { kind: 'unlinkAuthMethod'; methodId: string }
   | { kind: 'logout' }
   | { kind: 'forgetDevice' };
 
@@ -378,6 +447,8 @@ export type WorkerRequest =
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'sharing'; id: number; scope: Uint8Array | null }
   | { type: 'receivedShares'; id: number }
+  | { type: 'vaultStorage'; id: number }
+  | { type: 'authMethods'; id: number }
   | { type: 'siweChallenge'; id: number }
   | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
@@ -391,7 +462,8 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
-   * the rows for `receivedShares`, the plaintext `ArrayBuffer`
+   * the rows for `receivedShares`, the storage read for `vaultStorage`, the
+   * rows for `authMethods`, the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
@@ -405,6 +477,8 @@ export type WorkerMessage =
         | SnapshotDescriptor
         | SharingDescriptor
         | ReceivedShareDescriptor[]
+        | VaultStorageDescriptor
+        | AuthMethodDescriptor[]
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | bigint

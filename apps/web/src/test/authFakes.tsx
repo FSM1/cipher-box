@@ -4,7 +4,12 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { EngineClient, VaultSettingsDescriptor } from '@cipherbox/client';
+import type {
+  AuthMethodDescriptor,
+  EngineClient,
+  VaultSettingsDescriptor,
+  VaultStorageDescriptor,
+} from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
@@ -38,13 +43,32 @@ export interface EngineCalls {
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
   siwe: { message: string; signature: Uint8Array }[];
+  /** The wallet links, kept apart from `siwe`: a link is not a login. */
+  siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
   logouts: number;
   /** How many times this tab announced the session end to the origin. */
   originSessionEnds: number;
   /** The settings each accepted or refused save carried. */
   vaultSettings: VaultSettingsDescriptor[];
+  /** The method id each unlink named. */
+  unlinked: string[];
 }
+
+/** A hosted vault whose ledger has drained, as the storage pane first reads it. */
+export const FAKE_VAULT_STORAGE: VaultStorageDescriptor = {
+  settings: {
+    pinMode: 'hosted',
+    byoEndpoint: null,
+    byoKind: null,
+    byoCredentialStored: false,
+    keepLatestVersions: null,
+    origin: 'resolved',
+  },
+  quota: { usedBytes: 1024, limitBytes: 4096, advisory: false },
+  pendingReclaimBytes: 0,
+  reclaimStalls: [],
+};
 
 /**
  * The engine as a host reads it: a `start` the engine resolved *is* the session,
@@ -52,16 +76,26 @@ export interface EngineCalls {
  * engine, exactly as `EngineClient` publishes it.
  */
 export function fakeEngineClient(
-  overrides: Partial<Record<'start' | 'logout' | 'saveVaultSettings', () => Promise<void>>> = {}
+  overrides: Partial<{
+    start: () => Promise<void>;
+    logout: () => Promise<void>;
+    saveVaultSettings: () => Promise<void>;
+    unlinkAuthMethod: () => Promise<void>;
+    /** What the storage pane reads back; `null` stands for a probe that failed. */
+    vaultStorage: () => Promise<VaultStorageDescriptor>;
+    authMethods: () => Promise<AuthMethodDescriptor[]>;
+  }> = {}
 ) {
   const calls: EngineCalls = {
     started: [],
     secrets: [],
     logouts: 0,
     siwe: [],
+    siweLinks: [],
     siweChallenges: 0,
     originSessionEnds: 0,
     vaultSettings: [],
+    unlinked: [],
   };
   const sessionListeners = new Set<() => void>();
   const sessionEndListeners = new Set<() => void>();
@@ -100,6 +134,16 @@ export function fakeEngineClient(
         calls.siwe.push({ message, signature });
         return Promise.resolve();
       },
+      siweLink(message: string, signature: Uint8Array) {
+        calls.siweLinks.push({ message, signature });
+        return Promise.resolve();
+      },
+      unlinkAuthMethod(methodId: string) {
+        calls.unlinked.push(methodId);
+        return overrides.unlinkAuthMethod?.() ?? Promise.resolve();
+      },
+      vaultStorage: () => overrides.vaultStorage?.() ?? Promise.resolve(FAKE_VAULT_STORAGE),
+      authMethods: () => overrides.authMethods?.() ?? Promise.resolve([]),
       async logout() {
         calls.logouts += 1;
         // The engine is zeroized either way: `EngineFacade.logout` tears the

@@ -172,7 +172,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SiweLoginRequestDto"
+                "$ref": "#/components/schemas/SiweLinkRequestDto"
               }
             }
           }
@@ -194,7 +194,74 @@
             "bearer": []
           }
         ],
-        "summary": "Link a SIWE wallet to the authenticated account",
+        "summary": "Link a SIWE wallet to the authenticated account, re-proving the account identity key",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/methods": {
+      "get": {
+        "operationId": "AuthController_listMethods",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the login methods on the authenticated account, in display form only",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/unlink": {
+      "post": {
+        "operationId": "AuthController_unlink",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlinkMethodRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unlink one login method, re-proving the account identity key",
         "tags": [
           "Auth"
         ]
@@ -1531,6 +1598,33 @@
           "signature"
         ]
       },
+      "SiweLinkRequestDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 message text"
+          },
+          "signature": {
+            "type": "string",
+            "description": "EIP-191 signature over the message, 0x-prefixed hex"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "A fresh challenge from POST /auth/challenge, verbatim"
+          },
+          "challengeSignature": {
+            "type": "string",
+            "description": "Compact secp256k1 signature over sha256(challenge) by the account identity key, 64 bytes hex"
+          }
+        },
+        "required": [
+          "message",
+          "signature",
+          "challenge",
+          "challengeSignature"
+        ]
+      },
       "LogoutResponseDto": {
         "type": "object",
         "properties": {
@@ -1540,6 +1634,70 @@
         },
         "required": [
           "success"
+        ]
+      },
+      "AuthMethodDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Row id, the handle POST /auth/unlink takes",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "How the method authenticates",
+            "enum": [
+              "identity",
+              "wallet",
+              "test"
+            ]
+          },
+          "identifierDisplay": {
+            "type": "string",
+            "description": "Truncated human-readable identifier; the stored hash never crosses",
+            "nullable": true,
+            "example": "02a1633c…51b5dc"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "When the method was linked, ISO 8601"
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "description": "Last login through this method, ISO 8601",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "identifierDisplay",
+          "createdAt",
+          "lastUsedAt"
+        ]
+      },
+      "UnlinkMethodRequestDto": {
+        "type": "object",
+        "properties": {
+          "methodId": {
+            "type": "string",
+            "description": "The auth-method row to unlink",
+            "format": "uuid"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "A fresh challenge from POST /auth/challenge, verbatim"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
+          }
+        },
+        "required": [
+          "methodId",
+          "challenge",
+          "signature"
         ]
       },
       "RefreshRequestDto": {

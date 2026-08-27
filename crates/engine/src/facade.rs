@@ -37,10 +37,10 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
-use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
+use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
+    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
@@ -90,8 +90,9 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    PlacementRefusal, PlacementSource, SessionPlacement, SettingsPublishError, VaultSettings,
-    decide_placement, load_settings, placement_of, publish_settings,
+    PlacementRefusal, PlacementSource, SessionPlacement, SettingsOrigin, SettingsPublishError,
+    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
+    publish_settings, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -455,6 +456,35 @@ impl fmt::Debug for ReceivedShareRow {
             .field("resolution", &self.resolution)
             .finish()
     }
+}
+
+/// The storage pane's whole read: the member's own settings minus the provider
+/// credential, the account quota, and what a published prune still owes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultStorageView {
+    /// The settings this session loaded, redacted.
+    pub settings: VaultSettingsSummary,
+    /// `None` when the quota probe did not answer — a settings read is never
+    /// blocked by one (blueprint/engine.md "defaults, never blocked").
+    pub quota: Option<QuotaView>,
+    /// Vault-level pinned bytes a published prune still owes the registry.
+    pub pending_reclaim_bytes: u64,
+    /// Debts the last reclaim pass could not settle, and why.
+    pub reclaim_stalls: Vec<ReclaimStall>,
+}
+
+/// The account quota as the storage pane renders it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaView {
+    /// Bytes counted against the account.
+    pub used_bytes: u64,
+    /// The account's limit.
+    pub limit_bytes: u64,
+    /// Whether the figure is a hint rather than a ceiling. Derived from the
+    /// vaulted mode, never from the account flag, for the reason
+    /// [`pre_flight_quota_check`](crate::content::pre_flight_quota_check)
+    /// gives.
+    pub advisory: bool,
 }
 
 /// One retained dead-lettered op and why it will never publish. The reason is
@@ -827,6 +857,18 @@ pub enum Command {
         /// The wallet signature bytes.
         signature: Vec<u8>,
     },
+    /// Link a host-collected SIWE wallet signature to the signed-in account.
+    SiweLink {
+        /// The signed SIWE message.
+        message: String,
+        /// The wallet signature bytes.
+        signature: Vec<u8>,
+    },
+    /// Unlink one login method. Re-proves the account identity key server-side.
+    UnlinkAuthMethod {
+        /// The row `/auth/methods` served.
+        method_id: String,
+    },
     /// Log out: zeroize engine state; durable seams survive by design.
     Logout,
     /// Forget this device: end the session and erase every durable seam —
@@ -863,6 +905,8 @@ impl Command {
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLogin { .. } => "siweLogin",
+            Command::SiweLink { .. } => "siweLink",
+            Command::UnlinkAuthMethod { .. } => "unlinkAuthMethod",
             Command::Logout => "logout",
             Command::ForgetDevice => "forgetDevice",
         }
@@ -1790,6 +1834,13 @@ fn share_display_name(rendered: &Snapshot, node: NodeId) -> Result<String, Engin
         });
     }
     Ok(name)
+}
+
+/// A host-collected wallet signature in the one encoding the API's SIWE DTO
+/// accepts: `0x` + lowercase hex. Applied here rather than in [`ApiClient`],
+/// whose SIWE calls take an already-formatted string.
+fn eth_signature_hex(signature: &[u8]) -> String {
+    format!("0x{}", hex_lower(signature))
 }
 
 /// A resolved scope root's owner signature, parsed. Unparseable is a verdict on
@@ -2750,6 +2801,10 @@ pub struct Engine<T: SeamTypes> {
     /// like [`tick_enc_subkey`](Self::tick_enc_subkey) — the config it holds
     /// carries the member's provider bearer.
     placement: Rc<RefCell<Option<SessionPlacement>>>,
+    /// The host-visible summary of the settings this session loaded, refreshed
+    /// by a confirmed save. Redacted at construction
+    /// ([`VaultSettings::summary`]), so the provider bearer never enters it.
+    settings_summary: RefCell<Option<VaultSettingsSummary>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -2825,6 +2880,7 @@ impl<T: SeamTypes> Engine<T> {
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
+                settings_summary: RefCell::new(None),
                 byo_reconciled: Cell::new(false),
                 api: None,
                 started: false,
@@ -2902,6 +2958,7 @@ impl<T: SeamTypes> Engine<T> {
         )
         .await;
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
+        *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
         drop(secret);
 
@@ -3092,6 +3149,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut placement) = self.placement.try_borrow_mut() {
             *placement = None;
+        }
+        if let Ok(mut summary) = self.settings_summary.try_borrow_mut() {
+            *summary = None;
         }
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
@@ -3356,6 +3416,7 @@ impl<T: SeamTypes> Engine<T> {
         self.session = None;
         *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
+        *self.settings_summary.borrow_mut() = None;
         self.session_bearer.clear();
         self.accelerator_bearer.clear();
     }
@@ -4109,7 +4170,25 @@ where {
             }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-                api.siwe_login(&message, &hex_lower(&signature))
+                api.siwe_login(&message, &eth_signature_hex(&signature))
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::SiweLink { message, signature } => {
+                let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
+                api.siwe_link(&message, &eth_signature_hex(&signature), &signer)
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::UnlinkAuthMethod { method_id } => {
+                let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
+                api.unlink_auth_method(&method_id, &signer)
                     .await
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
@@ -5261,6 +5340,7 @@ where {
         // adopted what it published: the session's byte destinations follow, or
         // an `External` save keeps feeding the hosted leg until the next start.
         *self.placement.borrow_mut() = Some(SessionPlacement::member(placement_of(settings)));
+        *self.settings_summary.borrow_mut() = Some(settings.summary(SettingsOrigin::Resolved));
         self.byo_reconciled.set(false);
         Ok(())
     }
@@ -5998,6 +6078,40 @@ where {
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
+    }
+
+    /// The storage pane's whole read ([`VaultStorageView`]).
+    pub async fn vault_storage(&self) -> Result<VaultStorageView, EngineError> {
+        self.live_session()?;
+        let settings = self
+            .settings_summary
+            .borrow()
+            .clone()
+            .ok_or(EngineError::NotStarted)?;
+        let quota = match &self.api {
+            Some(api) => api.quota().await.ok(),
+            None => None,
+        };
+        Ok(VaultStorageView {
+            quota: quota.map(|quota| QuotaView {
+                used_bytes: quota.used_bytes,
+                limit_bytes: quota.limit_bytes,
+                // The vaulted mode is authoritative for this device; the account
+                // flag adds what a sibling device placed externally, which this
+                // device's settings cannot show.
+                advisory: settings.pin_mode != PinMode::Hosted || quota.advisory,
+            }),
+            settings,
+            pending_reclaim_bytes: self.pending_reclaim_bytes(),
+            reclaim_stalls: self.reclaim_stalls(),
+        })
+    }
+
+    /// The login methods on this account, for the account settings pane.
+    pub async fn auth_methods(&self) -> Result<Vec<AuthMethod>, EngineError> {
+        self.live_session()?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        api.auth_methods().await.map_err(EngineError::from_api)
     }
 
     /// The shares this vault has accepted, key-free, each carrying the engine's
@@ -6753,9 +6867,13 @@ mod tests {
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
 
-    use crate::api::{login_response, new_user_login_response};
+    use core::num::NonZeroU64;
+
+    use crate::api::{ChallengeSigner, login_response, new_user_login_response};
+    use crate::content::{ByoIpfsConfig, ByoKind, RetentionPolicy};
+    use crate::net::retire::ReclaimStallReason;
     use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
-    use crate::settings::settings_name;
+    use crate::settings::{cached_settings_block, settings_name};
     use crate::testkit::fakes::InMemoryRecordStore;
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
@@ -7316,6 +7434,24 @@ mod tests {
         );
     }
 
+    /// An EIP-191 signature is 65 bytes; anything shorter would pass a test
+    /// that only checks the encoding while the API refuses the length.
+    const WALLET_SIGNATURE_FIXTURE: [u8; 65] = [0xAB; 65];
+
+    /// The API refuses a `signature` outside `HEX_ETH_SIGNATURE`
+    /// (`/^0x[0-9a-fA-F]{130}$/`, apps/api/src/auth/dto/auth.dto.ts) with a 400
+    /// before the SIWE service ever sees it, so asserting the encoding alone
+    /// pins a body the server cannot accept.
+    fn assert_eth_signature_wire_shape(sent: &Value) {
+        let signature = sent.as_str().expect("the signature crosses as a string");
+        assert!(
+            signature.len() == 132
+                && signature.starts_with("0x")
+                && signature[2..].bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "the API's SiweLoginRequestDto refuses this signature: {signature:?}"
+        );
+    }
+
     #[test]
     fn siwe_login_command_forwards_message_and_hex_signature() {
         // Offline: `start` skips cold-start login, so only the SIWE exchange is
@@ -7327,7 +7463,7 @@ mod tests {
             login_response("jwt-siwe", &"b".repeat(64), "gw-b"),
         ));
 
-        let signature = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let signature = WALLET_SIGNATURE_FIXTURE.to_vec();
         block_on(engine.command(Command::SiweLogin {
             message: "siwe-message".to_owned(),
             signature: signature.clone(),
@@ -7342,10 +7478,243 @@ mod tests {
         assert_eq!(request.url, "/auth/siwe/login");
         let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["message"], "siwe-message");
+        assert_eth_signature_wire_shape(&body["signature"]);
         assert_eq!(
             body["signature"],
-            hex_lower(&signature),
-            "the wallet signature crosses the wire hex-encoded"
+            format!("0x{}", hex_lower(&signature)),
+            "the wallet signature crosses the wire 0x-prefixed hex"
+        );
+    }
+
+    #[test]
+    fn siwe_link_command_forwards_message_and_hex_signature() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let before = device.http.requests().len();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+        ));
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "success": true })));
+
+        let signature = WALLET_SIGNATURE_FIXTURE.to_vec();
+        block_on(engine.command(Command::SiweLink {
+            message: "siwe-link-message".to_owned(),
+            signature: signature.clone(),
+        }))
+        .expect("siwe link");
+
+        let requests = device.http.requests();
+        let request = requests[before..].last().expect("a link request was sent");
+        assert_eq!(request.url, "/auth/siwe/link");
+        let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["message"], "siwe-link-message");
+        assert_eth_signature_wire_shape(&body["signature"]);
+        assert_eq!(
+            body["signature"],
+            format!("0x{}", hex_lower(&signature)),
+            "the wallet signature crosses the wire 0x-prefixed hex"
+        );
+    }
+
+    /// A link changes which keys open the account, so it carries the same
+    /// live-possession proof [`Command::UnlinkAuthMethod`] does.
+    #[test]
+    fn siwe_link_command_reproves_the_identity_key() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let before = device.http.requests().len();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+        ));
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(engine.command(Command::SiweLink {
+            message: "siwe-link-message".to_owned(),
+            signature: WALLET_SIGNATURE_FIXTURE.to_vec(),
+        }))
+        .expect("siwe link");
+
+        let signer = IdentityChallengeSigner::from_signer(
+            engine.session().expect("live").identity().clone(),
+        );
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 2, "one challenge, then one link");
+        assert_eq!(sent[0].url, "/auth/challenge");
+        assert_eq!(sent[1].url, "/auth/siwe/link");
+        let body: Value = serde_json::from_slice(sent[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["challenge"], LOGIN_CHALLENGE_FIXTURE);
+        assert_eq!(
+            body["challengeSignature"],
+            signer.sign_challenge(LOGIN_CHALLENGE_FIXTURE),
+            "the account identity key signed the challenge the server issued"
+        );
+    }
+
+    #[test]
+    fn unlink_auth_method_command_reproves_the_identity_key() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let before = device.http.requests().len();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+        ));
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(engine.command(Command::UnlinkAuthMethod {
+            method_id: "method-1".to_owned(),
+        }))
+        .expect("unlink");
+
+        let signer = IdentityChallengeSigner::from_signer(
+            engine.session().expect("live").identity().clone(),
+        );
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 2, "one challenge, then one unlink");
+        assert_eq!(sent[0].url, "/auth/challenge");
+        let challenge_body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(challenge_body["publicKey"], signer.public_key_hex());
+        assert_eq!(sent[1].url, "/auth/unlink");
+        let body: Value = serde_json::from_slice(sent[1].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["methodId"], "method-1");
+        assert_eq!(body["challenge"], LOGIN_CHALLENGE_FIXTURE);
+        assert_eq!(
+            body["signature"],
+            signer.sign_challenge(LOGIN_CHALLENGE_FIXTURE),
+            "the account identity key signed the challenge the server issued"
+        );
+    }
+
+    /// The bearer the member typed is in the record this device read back, and
+    /// still must not reach the host: the summary is redacted at construction.
+    #[test]
+    fn vault_storage_reports_the_saved_provider_without_its_bearer() {
+        const BEARER: &str = "provider-bearer-do-not-leak";
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        let settings = VaultSettings {
+            pin_mode: PinMode::Dual,
+            byo: Some(ByoIpfsConfig {
+                endpoint: "https://node.example".to_owned(),
+                kind: ByoKind::Kubo,
+                access_token: Some(Zeroizing::new(BEARER.to_owned())),
+            }),
+            retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
+        };
+        let (key, block) = cached_settings_block(&[7u8; 32], &settings, &mut SeededEntropy::new(9));
+        block_on(device.snapshot_cache.put(&key, &block)).expect("seed last-known-good");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        // The account flag lags the vaulted mode, so the server says the rows
+        // are authoritative while this vault already places bytes off them.
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "usedBytes": 10, "limitBytes": 100, "advisory": false }),
+        ));
+
+        let view = block_on(engine.vault_storage()).expect("storage view");
+
+        assert_eq!(
+            view.settings,
+            VaultSettingsSummary {
+                pin_mode: PinMode::Dual,
+                byo_endpoint: Some("https://node.example".to_owned()),
+                byo_kind: Some(ByoKind::Kubo),
+                byo_credential_stored: true,
+                retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
+                origin: SettingsOrigin::Stale,
+            },
+        );
+        assert!(
+            !format!("{view:?}").contains(BEARER),
+            "the provider bearer must not survive into the host-visible view"
+        );
+        assert_eq!(
+            view.quota,
+            Some(QuotaView {
+                used_bytes: 10,
+                limit_bytes: 100,
+                advisory: true,
+            }),
+            "a vault placing bytes off the hosted store reads its quota as a hint, \
+             whatever the account flag says"
+        );
+    }
+
+    /// A sibling device placing bytes externally sets the account flag while
+    /// this device still reads `Hosted`, so deriving the hint from the vaulted
+    /// mode alone renders a ceiling that does not bind.
+    #[test]
+    fn vault_storage_keeps_an_advisory_flag_a_hosted_vault_cannot_see() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "usedBytes": 10, "limitBytes": 100, "advisory": true }),
+        ));
+
+        let view = block_on(engine.vault_storage()).expect("storage view");
+
+        assert_eq!(
+            view.settings.pin_mode,
+            PinMode::Hosted,
+            "this device's own settings place every byte on the hosted store"
+        );
+        assert_eq!(
+            view.quota,
+            Some(QuotaView {
+                used_bytes: 10,
+                limit_bytes: 100,
+                advisory: true,
+            }),
+            "the account flag survives a vaulted mode that cannot account for it"
+        );
+    }
+
+    /// A debt the pass could not settle prices at nothing, so the byte figure
+    /// alone reads as a drained ledger. The stall list is what tells them apart.
+    #[test]
+    fn vault_storage_prices_a_stalled_reclaim_above_zero() {
+        let (mut engine, _events, _device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let stall = ReclaimStall {
+            node: [3u8; 16],
+            target: "bafystalledroot".to_owned(),
+            reason: ReclaimStallReason::TargetStillLive,
+        };
+        engine.pending_reclaim.set(0);
+        engine.reclaim_stalls.borrow_mut().push(stall.clone());
+
+        let view = block_on(engine.vault_storage()).expect("storage view");
+
+        assert_eq!(view.pending_reclaim_bytes, 0);
+        assert_eq!(view.reclaim_stalls, vec![stall]);
+    }
+
+    /// blueprint/engine.md "defaults, never blocked": the member's own settings
+    /// are readable whether or not the account quota answered.
+    #[test]
+    fn vault_storage_degrades_when_the_quota_probe_fails() {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let before = device.http.requests().len();
+
+        // Nothing is scripted, so the quota probe fails at the seam.
+        let view = block_on(engine.vault_storage()).expect("a failed probe is not an error");
+
+        assert!(view.quota.is_none());
+        assert_eq!(view.settings.origin, SettingsOrigin::Defaults);
+        assert!(
+            device.http.requests().len() > before,
+            "the probe was attempted, not skipped"
         );
     }
 

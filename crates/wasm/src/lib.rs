@@ -168,9 +168,10 @@ impl From<facade::Permission> for Permission {
 
 // ---------------------------------------------------------------------------
 // Vault settings — the member's placement, provider and retention choice, as a
-// host builds it for `Command.saveVaultSettings`. Write-only across the
-// boundary: no getter reads a config back out, so a stored provider credential
-// never crosses back into JS.
+// host builds it for `Command.saveVaultSettings` and reads it back through
+// `EngineHandle.vaultStorage`. The *credential* is write-only across the
+// boundary: [`VaultSettingsSummary`] reports only that one is stored, so the
+// provider bearer never crosses back into JS.
 // ---------------------------------------------------------------------------
 
 /// Where a version's bytes are pinned.
@@ -195,6 +196,16 @@ impl From<PinMode> for EnginePinMode {
     }
 }
 
+impl From<EnginePinMode> for PinMode {
+    fn from(mode: EnginePinMode) -> Self {
+        match mode {
+            EnginePinMode::Hosted => PinMode::Hosted,
+            EnginePinMode::External => PinMode::External,
+            EnginePinMode::Dual => PinMode::Dual,
+        }
+    }
+}
+
 /// The kind of member-supplied IPFS provider, which fixes the reachability
 /// probe.
 #[wasm_bindgen]
@@ -214,6 +225,16 @@ impl From<ByoKind> for EngineByoKind {
             ByoKind::Kubo => EngineByoKind::Kubo,
             ByoKind::Psa => EngineByoKind::Psa,
             ByoKind::Pinata => EngineByoKind::Pinata,
+        }
+    }
+}
+
+impl From<EngineByoKind> for ByoKind {
+    fn from(kind: EngineByoKind) -> Self {
+        match kind {
+            EngineByoKind::Kubo => ByoKind::Kubo,
+            EngineByoKind::Psa => ByoKind::Psa,
+            EngineByoKind::Pinata => ByoKind::Pinata,
         }
     }
 }
@@ -1059,6 +1080,293 @@ impl ReceivedShareRow {
 }
 
 // ---------------------------------------------------------------------------
+// The storage pane's read surface, and the account's login methods.
+// ---------------------------------------------------------------------------
+
+/// Whose choice a [`VaultSettingsSummary`] reports.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsOrigin {
+    /// The published record opened and validated.
+    Resolved,
+    /// This device's last-known-good copy: still the member's choice.
+    Stale,
+    /// Nothing here is the member's choice, only the documented defaults.
+    Defaults,
+}
+
+impl From<cipherbox_engine::SettingsOrigin> for SettingsOrigin {
+    fn from(origin: cipherbox_engine::SettingsOrigin) -> Self {
+        match origin {
+            cipherbox_engine::SettingsOrigin::Resolved => SettingsOrigin::Resolved,
+            cipherbox_engine::SettingsOrigin::Stale => SettingsOrigin::Stale,
+            cipherbox_engine::SettingsOrigin::Defaults => SettingsOrigin::Defaults,
+        }
+    }
+}
+
+/// The member's settings as a host may see them. The provider bearer is absent
+/// by construction, not withheld by these getters.
+#[wasm_bindgen]
+pub struct VaultSettingsSummary {
+    inner: cipherbox_engine::VaultSettingsSummary,
+}
+
+#[wasm_bindgen]
+impl VaultSettingsSummary {
+    /// Where a version's bytes are pinned.
+    #[wasm_bindgen(getter, js_name = pinMode)]
+    pub fn pin_mode(&self) -> PinMode {
+        self.inner.pin_mode.into()
+    }
+
+    /// The member's own provider endpoint, or `undefined`.
+    #[wasm_bindgen(getter, js_name = byoEndpoint)]
+    pub fn byo_endpoint(&self) -> Option<String> {
+        self.inner.byo_endpoint.clone()
+    }
+
+    /// That provider's kind, or `undefined`.
+    #[wasm_bindgen(getter, js_name = byoKind)]
+    pub fn byo_kind(&self) -> Option<ByoKind> {
+        self.inner.byo_kind.map(ByoKind::from)
+    }
+
+    /// Whether a provider bearer is stored. The bearer itself never crosses.
+    #[wasm_bindgen(getter, js_name = byoCredentialStored)]
+    pub fn byo_credential_stored(&self) -> bool {
+        self.inner.byo_credential_stored
+    }
+
+    /// How many versions are kept, or `undefined` to keep every version.
+    ///
+    /// A bound wider than this host can represent saturates rather than
+    /// reading as `undefined`: a bound must never widen to no bound at all.
+    #[wasm_bindgen(getter, js_name = keepLatestVersions)]
+    pub fn keep_latest_versions(&self) -> Option<u32> {
+        match self.inner.retention {
+            RetentionPolicy::KeepAll => None,
+            RetentionPolicy::KeepLatest(n) => Some(u32::try_from(n.get()).unwrap_or(u32::MAX)),
+        }
+    }
+
+    /// Whose choice this summary reports.
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> SettingsOrigin {
+        self.inner.origin.into()
+    }
+}
+
+impl VaultSettingsSummary {
+    /// Wraps an engine settings summary. Never exported to JS.
+    pub fn from_facade(inner: cipherbox_engine::VaultSettingsSummary) -> Self {
+        Self { inner }
+    }
+}
+
+/// The account quota as the storage pane renders it.
+#[wasm_bindgen]
+pub struct QuotaView {
+    inner: facade::QuotaView,
+}
+
+#[wasm_bindgen]
+impl QuotaView {
+    /// Bytes counted against the account (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = usedBytes)]
+    pub fn used_bytes(&self) -> u64 {
+        self.inner.used_bytes
+    }
+
+    /// The account's limit (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = limitBytes)]
+    pub fn limit_bytes(&self) -> u64 {
+        self.inner.limit_bytes
+    }
+
+    /// Whether the figure is a hint rather than a ceiling.
+    #[wasm_bindgen(getter)]
+    pub fn advisory(&self) -> bool {
+        self.inner.advisory
+    }
+}
+
+/// Why a reclaim debt did not settle.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReclaimStallReason {
+    /// The owing node's published record, or a version it names, could not be
+    /// established this pass.
+    NodeUnreadable,
+    /// The node's published record still names this doomed root.
+    TargetStillLive,
+    /// The doomed root itself could not be expanded.
+    TargetUnexpandable,
+}
+
+impl From<cipherbox_engine::ReclaimStallReason> for ReclaimStallReason {
+    fn from(reason: cipherbox_engine::ReclaimStallReason) -> Self {
+        match reason {
+            cipherbox_engine::ReclaimStallReason::NodeUnreadable => {
+                ReclaimStallReason::NodeUnreadable
+            }
+            cipherbox_engine::ReclaimStallReason::TargetStillLive => {
+                ReclaimStallReason::TargetStillLive
+            }
+            cipherbox_engine::ReclaimStallReason::TargetUnexpandable => {
+                ReclaimStallReason::TargetUnexpandable
+            }
+        }
+    }
+}
+
+/// A debt the reclaim pass left owed, and why. A stalled debt prices at
+/// nothing, so the byte figure alone cannot tell one from a drained ledger.
+#[wasm_bindgen]
+pub struct ReclaimStall {
+    inner: cipherbox_engine::ReclaimStall,
+}
+
+#[wasm_bindgen]
+impl ReclaimStall {
+    /// The 16 raw bytes of the node owing the debt.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Vec<u8> {
+        self.inner.node.to_vec()
+    }
+
+    /// The doomed version's root `contentCid`.
+    #[wasm_bindgen(getter)]
+    pub fn target(&self) -> String {
+        self.inner.target.clone()
+    }
+
+    /// What stopped it.
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> ReclaimStallReason {
+        self.inner.reason.into()
+    }
+}
+
+/// The storage pane's whole read (`facade::VaultStorageView`).
+#[wasm_bindgen]
+pub struct VaultStorageView {
+    inner: facade::VaultStorageView,
+}
+
+#[wasm_bindgen]
+impl VaultStorageView {
+    /// The settings this session loaded, redacted.
+    #[wasm_bindgen(getter)]
+    pub fn settings(&self) -> VaultSettingsSummary {
+        VaultSettingsSummary::from_facade(self.inner.settings.clone())
+    }
+
+    /// The account quota, or `undefined` when the probe did not answer.
+    #[wasm_bindgen(getter)]
+    pub fn quota(&self) -> Option<QuotaView> {
+        self.inner.quota.map(|inner| QuotaView { inner })
+    }
+
+    /// Pinned bytes a published prune still owes the registry (a `u64`,
+    /// crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = pendingReclaimBytes)]
+    pub fn pending_reclaim_bytes(&self) -> u64 {
+        self.inner.pending_reclaim_bytes
+    }
+
+    /// Debts the last reclaim pass could not settle.
+    #[wasm_bindgen(getter, js_name = reclaimStalls)]
+    pub fn reclaim_stalls(&self) -> Vec<ReclaimStall> {
+        self.inner
+            .reclaim_stalls
+            .iter()
+            .cloned()
+            .map(|inner| ReclaimStall { inner })
+            .collect()
+    }
+}
+
+impl VaultStorageView {
+    /// Wraps an engine storage view. Never exported to JS.
+    pub fn from_facade(inner: facade::VaultStorageView) -> Self {
+        Self { inner }
+    }
+}
+
+/// Which login surface an [`AuthMethod`] admits.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethodKind {
+    /// The account identity key.
+    Identity,
+    /// A linked SIWE wallet.
+    Wallet,
+    /// The staging-gated test login.
+    Test,
+    /// A kind this build does not know, rendered as-is.
+    Unknown,
+}
+
+impl From<cipherbox_engine::AuthMethodKind> for AuthMethodKind {
+    fn from(kind: cipherbox_engine::AuthMethodKind) -> Self {
+        match kind {
+            cipherbox_engine::AuthMethodKind::Identity => AuthMethodKind::Identity,
+            cipherbox_engine::AuthMethodKind::Wallet => AuthMethodKind::Wallet,
+            cipherbox_engine::AuthMethodKind::Test => AuthMethodKind::Test,
+            cipherbox_engine::AuthMethodKind::Unknown => AuthMethodKind::Unknown,
+        }
+    }
+}
+
+/// One login method on the account. Display form only: the identifier hash
+/// never crosses.
+#[wasm_bindgen]
+pub struct AuthMethod {
+    inner: cipherbox_engine::AuthMethod,
+}
+
+#[wasm_bindgen]
+impl AuthMethod {
+    /// The row id `Command.unlinkAuthMethod` names.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+
+    /// Which login surface this row admits.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> AuthMethodKind {
+        self.inner.kind.into()
+    }
+
+    /// A truncated, human-readable form of the identifier, or `undefined`.
+    #[wasm_bindgen(getter, js_name = identifierDisplay)]
+    pub fn identifier_display(&self) -> Option<String> {
+        self.inner.identifier_display.clone()
+    }
+
+    /// When the row was created, ISO 8601.
+    #[wasm_bindgen(getter, js_name = createdAt)]
+    pub fn created_at(&self) -> String {
+        self.inner.created_at.clone()
+    }
+
+    /// When the row last logged in, ISO 8601, or `undefined`.
+    #[wasm_bindgen(getter, js_name = lastUsedAt)]
+    pub fn last_used_at(&self) -> Option<String> {
+        self.inner.last_used_at.clone()
+    }
+}
+
+impl AuthMethod {
+    /// Wraps an engine login-method row. Never exported to JS.
+    pub fn from_facade(inner: cipherbox_engine::AuthMethod) -> Self {
+        Self { inner }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Commands — the write-intent surface. Built by the host, consumed (later) by
 // the engine handle; payload readback is deliberately absent so no user data or
 // key material can be read back out through the boundary. Only the stable
@@ -1245,6 +1553,18 @@ impl Command {
     #[wasm_bindgen(js_name = siweLogin)]
     pub fn siwe_login(message: String, signature: Vec<u8>) -> Command {
         Self::wrap(facade::Command::SiweLogin { message, signature })
+    }
+
+    /// Link a host-collected SIWE wallet signature to the signed-in account.
+    #[wasm_bindgen(js_name = siweLink)]
+    pub fn siwe_link(message: String, signature: Vec<u8>) -> Command {
+        Self::wrap(facade::Command::SiweLink { message, signature })
+    }
+
+    /// Unlink one login method, re-proving the account identity key.
+    #[wasm_bindgen(js_name = unlinkAuthMethod)]
+    pub fn unlink_auth_method(method_id: String) -> Command {
+        Self::wrap(facade::Command::UnlinkAuthMethod { method_id })
     }
 
     /// Log out: zeroize engine state; durable seams survive by design.

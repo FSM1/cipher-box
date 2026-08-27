@@ -82,4 +82,27 @@ export type {
   ByoKind,
   ByoIpfsConfigDescriptor,
   VaultSettingsDescriptor,
+  SettingsOrigin,
+  VaultSettingsSummaryDescriptor,
+  QuotaDescriptor,
+  ReclaimStallReason,
+  ReclaimStallDescriptor,
+  VaultStorageDescriptor,
+  AuthMethodKind,
+  AuthMethodDescriptor,
 } from './worker/protocol.js';
+
+export {
+  formatBytes,
+  originNotice,
+  prefillFromSummary,
+  quotaChrome,
+  reclaimStallReason,
+  settingsSaveVerdict,
+} from './settings/quota.js';
+export type {
+  OriginNotice,
+  QuotaChrome,
+  SettingsSaveIntent,
+  SettingsSaveVerdict,
+} from './settings/quota.js';

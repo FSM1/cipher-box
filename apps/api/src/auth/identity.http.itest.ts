@@ -28,7 +28,7 @@ import { IdentityService } from './services/identity.service';
 import { IdentitySubjectService } from './services/identity-subject.service';
 import { IdentityTokenService } from './services/identity-token.service';
 import { MailProvider } from './services/mail.provider';
-import { SiweService } from './services/siwe.service';
+import { SIWE_LOGIN_STATEMENT, SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
 import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { AcceleratorTokenService } from './services/accelerator-token.service';
@@ -141,6 +141,7 @@ describe('identity exchange HTTP flows (real Postgres)', () => {
       nonce: nonceRes.body.nonce,
       uri: 'http://localhost:5173',
       version: '1',
+      statement: SIWE_LOGIN_STATEMENT,
     });
     return { message, signature: await account.signMessage({ message }) };
   }

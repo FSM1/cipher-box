@@ -45,12 +45,14 @@ import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -236,6 +238,14 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.read<ReceivedShareDescriptor[]>({ kind: 'receivedShares' });
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return this.read<VaultStorageDescriptor>({ kind: 'vaultStorage' });
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    return this.read<AuthMethodDescriptor[]>({ kind: 'authMethods' });
   }
 
   siweChallenge(): Promise<string> {

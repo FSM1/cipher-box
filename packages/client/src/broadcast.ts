@@ -26,6 +26,7 @@
  */
 
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -33,6 +34,7 @@ import type {
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -50,6 +52,8 @@ export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }
   | { kind: 'receivedShares' }
+  | { kind: 'vaultStorage' }
+  | { kind: 'authMethods' }
   | { kind: 'siweChallenge' }
   | { kind: 'download'; node: Uint8Array };
 
@@ -129,6 +133,8 @@ export type PortResponse =
         | SnapshotDescriptor
         | SharingDescriptor
         | ReceivedShareDescriptor[]
+        | VaultStorageDescriptor
+        | AuthMethodDescriptor[]
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | string

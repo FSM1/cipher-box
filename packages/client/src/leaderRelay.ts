@@ -39,12 +39,14 @@ import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
 } from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
@@ -449,6 +451,8 @@ export class LeaderRelay {
       | SnapshotDescriptor
       | SharingDescriptor
       | ReceivedShareDescriptor[]
+      | VaultStorageDescriptor
+      | AuthMethodDescriptor[]
       | CommandOutcomeDescriptor
       | ArrayBuffer
       | string
@@ -484,7 +488,13 @@ export class LeaderRelay {
   private readValue(
     read: WireRead
   ): Promise<
-    SnapshotDescriptor | SharingDescriptor | ReceivedShareDescriptor[] | ArrayBuffer | string
+    | SnapshotDescriptor
+    | SharingDescriptor
+    | ReceivedShareDescriptor[]
+    | VaultStorageDescriptor
+    | AuthMethodDescriptor[]
+    | ArrayBuffer
+    | string
   > {
     switch (read.kind) {
       case 'snapshot':
@@ -493,6 +503,10 @@ export class LeaderRelay {
         return this.transport.sharing(read.scope);
       case 'receivedShares':
         return this.transport.receivedShares();
+      case 'vaultStorage':
+        return this.transport.vaultStorage();
+      case 'authMethods':
+        return this.transport.authMethods();
       case 'siweChallenge':
         return this.transport.siweChallenge();
       case 'download':

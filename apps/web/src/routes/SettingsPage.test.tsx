@@ -59,10 +59,44 @@ describe('the settings route', () => {
     expect(screen.getByTestId('settings-recovery-on')).toBeTruthy();
   });
 
-  it('hosts the vault settings form', () => {
-    renderSettings();
+  it('hosts the vault settings form once the storage read lands', async () => {
+    await act(async () => void renderSettings());
 
     expect(screen.getByTestId('vault-settings-form')).toBeTruthy();
+    expect(screen.queryByTestId('settings-storage-pending')).toBeNull();
+  });
+
+  it('withholds the settings form while the storage read has not answered', () => {
+    // A form rendered here would publish documented defaults over whatever the
+    // vault holds, and blank a stored provider credential on the way.
+    renderSettings(fakeEngineClient({ vaultStorage: () => new Promise(() => {}) }));
+
+    expect(screen.queryByTestId('vault-settings-form')).toBeNull();
+    expect(screen.getByTestId('settings-storage-pending')).toBeTruthy();
+  });
+
+  it('withholds it again where the storage read is refused outright', async () => {
+    await act(
+      async () =>
+        void renderSettings(
+          fakeEngineClient({ vaultStorage: () => Promise.reject(new Error('engine offline')) })
+        )
+    );
+
+    expect(screen.queryByTestId('vault-settings-form')).toBeNull();
+    expect(screen.getByTestId('settings-storage-error').textContent).toContain('engine offline');
+  });
+
+  it('renders the quota chrome beside the storage form', async () => {
+    await act(async () => void renderSettings());
+
+    expect(screen.getByTestId('settings-quota')).toBeTruthy();
+  });
+
+  it('hosts the login-methods pane', async () => {
+    await act(async () => void renderSettings());
+
+    expect(screen.getByTestId('settings-auth-methods')).toBeTruthy();
   });
 
   it('asks before forgetting the device, and erases nothing until it is told to', async () => {
