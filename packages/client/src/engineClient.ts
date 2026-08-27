@@ -40,6 +40,7 @@ import type {
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  OpenedStream,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -359,6 +360,19 @@ export class EngineClient implements EngineTransport {
     this.settleParkedStarts(null);
   }
 
+  /**
+   * The origin's one engine holds someone else, so this tab's session has
+   * nothing behind it and no leadership change can give it one. Publishing the
+   * sign-out is what stops the host rendering a vault it can never read.
+   */
+  private engineHeldElsewhere(): void {
+    if (this.role !== 'follower' || this.accountId === null) return;
+    this.holdsAccount(null);
+    // Nothing here holds that account now, so greeting under it only asks the
+    // leader to refuse this tab again.
+    (this.current as BroadcastTransport).forgetAccount();
+  }
+
   /** Settles every start parked on an engine becoming reachable. */
   private settleParkedStarts(failure: Error | null): void {
     fanOut(
@@ -465,12 +479,12 @@ export class EngineClient implements EngineTransport {
     return this.current.download(node);
   }
 
-  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
+  async openContentStream(node: Uint8Array): Promise<OpenedStream> {
     const generation = this.generation;
-    const inner = await this.current.openContentStream(node);
+    const opened = await this.current.openContentStream(node);
     // The engine that minted this went away mid-open; its stream went with it.
     if (generation !== this.generation) throw unknownHandle('stream');
-    return this.streams.open(inner);
+    return { handle: this.streams.open(opened.handle), size: opened.size };
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -566,6 +580,7 @@ export class EngineClient implements EngineTransport {
         accountId: this.accountId ?? this.pendingLogin ?? undefined,
         onLeadershipChange: () => this.retireHandles(),
         onAdopted: (accountId) => this.reachedEngine(accountId),
+        onHeldElsewhere: () => this.engineHeldElsewhere(),
       }
     );
     this.swapCurrent(follower);

@@ -15,6 +15,7 @@ import type {
   AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -132,9 +133,9 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opened.push(node);
-    return Promise.resolve(3n);
+    return Promise.resolve({ handle: 3n, size: 0 });
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -472,7 +473,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16).fill(3);
 
-    const handle = await facade.openContentStream(node);
+    const { handle } = await facade.openContentStream(node);
     const window = await facade.readStream(handle, 4096, 2);
     await facade.closeStream(handle);
 

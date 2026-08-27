@@ -7,7 +7,7 @@ import {
   type MediaReader,
 } from './broker.js';
 import { EngineRequestError } from '../correlatedTransport.js';
-import type { StreamHandle } from '../worker/protocol.js';
+import type { OpenedStream, StreamHandle } from '../worker/protocol.js';
 import type { MediaRequest, MediaResponse } from './protocol.js';
 import { StreamRegistry } from './registry.js';
 
@@ -32,8 +32,10 @@ class FakeReader implements MediaReader {
   maxConcurrent = 0;
   /** Set to make reads reject. */
   failure: Error | null = null;
-  /** Set below the registered size to model a version that shrank after the ticket was minted. */
+  /** Set below the fixture to model an engine that clamps a read to fewer bytes. */
   liveSize: number | null = null;
+  /** The size the open reports; set below the registered size to model a version that shrank after the ticket was minted. */
+  pinnedSize: number | null = null;
   /** The engine's open-stream ceiling; opening past it refuses like the real one. */
   ceiling = Number.POSITIVE_INFINITY;
   /** Fires inside `closeStream`, to land a broker call mid-reclaim. */
@@ -48,7 +50,7 @@ class FakeReader implements MediaReader {
     return this.live.size;
   }
 
-  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
+  async openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opens.push(node);
     // A real open resolves, gates, and fetches the root manifest; it suspends.
     await flush();
@@ -57,7 +59,7 @@ class FakeReader implements MediaReader {
     }
     const handle = this.nextHandle++;
     this.live.add(handle);
-    return handle;
+    return { handle, size: this.pinnedSize ?? this.bytes.length };
   }
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -526,6 +528,64 @@ describe('MediaBroker', () => {
     expect(h.reader.calls).toEqual([
       { offset: 0, length: 4 },
       { offset: 4, length: 4 },
+    ]);
+  });
+
+  it('frames a whole-file head from the pinned version, not the ticket mint-time size', async () => {
+    const h = harness(20);
+    // The file shrank between the mint and the read: the ticket still says 20.
+    h.reader.pinnedSize = 6;
+    h.reader.liveSize = 6;
+
+    h.send({ type: 'cb:media:open', requestId: 11, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    for (let pull = 0; pull < 3; pull += 1) {
+      h.send({ type: 'cb:media:pull', requestId: 11 });
+      await flush();
+    }
+    await waitFor(() => h.received.length === 4, 'end');
+
+    const head = h.received[0];
+    expect(head).toMatchObject({ type: 'cb:media:head', status: 200 });
+    // Exactly the bytes the body carries: an over-framed length reaches a media
+    // element as a network error.
+    expect(head.type === 'cb:media:head' ? head.headers : []).toContainEqual([
+      'content-length',
+      '6',
+    ]);
+    expect(bodyOf(h.received)).toEqual(plaintext(20).slice(0, 6));
+  });
+
+  it('frames a range head against the pinned version', async () => {
+    const h = harness(20);
+    h.reader.pinnedSize = 6;
+    h.reader.liveSize = 6;
+
+    h.send({ type: 'cb:media:open', requestId: 12, ticket: h.ticket, range: 'bytes=2-' });
+    await waitFor(() => h.received.length === 1, 'head');
+
+    const head = h.received[0];
+    expect(head).toMatchObject({ type: 'cb:media:head', status: 206 });
+    expect(head.type === 'cb:media:head' ? head.headers : []).toContainEqual([
+      'content-range',
+      'bytes 2-5/6',
+    ]);
+  });
+
+  it('refuses a range the pinned version no longer holds', async () => {
+    const h = harness(20);
+    h.reader.pinnedSize = 6;
+    h.reader.liveSize = 6;
+
+    // Inside the mint-time size, past the end of the version the stream pinned.
+    h.send({ type: 'cb:media:open', requestId: 13, ticket: h.ticket, range: 'bytes=10-15' });
+    await waitFor(() => h.received.length === 1, 'head');
+
+    const head = h.received[0];
+    expect(head).toMatchObject({ type: 'cb:media:head', status: 416 });
+    expect(head.type === 'cb:media:head' ? head.headers : []).toContainEqual([
+      'content-range',
+      'bytes */6',
     ]);
   });
 

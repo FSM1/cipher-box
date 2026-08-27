@@ -50,6 +50,7 @@ import type {
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  OpenedStream,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -95,6 +96,12 @@ export interface BroadcastTransportOptions {
    * so the owner learns its session is live however it was reached.
    */
   onAdopted?: (accountId: string) => void;
+  /**
+   * Fires when a brokerage is refused by a leadership whose engine holds
+   * `heldBy` instead. The origin hosts one engine, so nothing here will serve
+   * this tab under the account it greets with, however leadership moves next.
+   */
+  onHeldElsewhere?: (heldBy: string) => void;
 }
 
 export class BroadcastTransport extends CorrelatedTransport {
@@ -124,6 +131,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
   private readonly onAdopted: (accountId: string) => void;
+  private readonly onHeldElsewhere: (heldBy: string) => void;
 
   // The account this tab is signed in as; `null` until `start` (or the session a
   // replaced transport was already serving). Rides every port greeting, where
@@ -150,6 +158,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.portTimeoutMs = options.portTimeoutMs ?? DEFAULT_PORT_TIMEOUT_MS;
     this.onLeadershipChange = options.onLeadershipChange ?? ((): void => undefined);
     this.onAdopted = options.onAdopted ?? ((): void => undefined);
+    this.onHeldElsewhere = options.onHeldElsewhere ?? ((): void => undefined);
     this.accountId = options.accountId ?? null;
     this.presenceHeld = this.holdPresence(locks);
     this.armLeaderReady();
@@ -256,8 +265,8 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<ArrayBuffer>({ kind: 'download', node });
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
-    return this.stream<StreamHandle>({ kind: 'openContentStream', node });
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
+    return this.stream<OpenedStream>({ kind: 'openContentStream', node });
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -293,9 +302,12 @@ export class BroadcastTransport extends CorrelatedTransport {
     if (this.portPromise) return this.portPromise;
     const attempt = this.brokerPort();
     this.portPromise = attempt;
-    // A failed broker must not latch: the next read asks the leader again.
-    attempt.catch(() => {
+    attempt.catch((error: unknown) => {
+      // A failed broker must not latch: the next read asks the leader again.
       if (this.portPromise === attempt) this.portPromise = null;
+      if (error instanceof EngineHeldElsewhereError && error.heldBy !== null) {
+        this.onHeldElsewhere(error.heldBy);
+      }
     });
     return attempt;
   }
@@ -311,7 +323,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     // greeting it would send names an account and a leadership already left.
     const accountId = this.accountId;
     const generation = this.portGeneration;
-    await this.leaderReady;
+    await this.awaitLeader();
     if (this.closed) throw retryError();
     // Before the greeting, never after: a leader watching a presence name this
     // tab does not hold is granted at once and reclaims a live tab.
@@ -389,6 +401,17 @@ export class BroadcastTransport extends CorrelatedTransport {
       port.removeEventListener('message', listener);
       port.close();
     };
+  }
+
+  /**
+   * A leadership to broker with, under the brokerage timeout like every other
+   * step. An origin every tab has retired from leading never elects one, and an
+   * unbounded wait here parks every read of the tab forever.
+   */
+  private awaitLeader(): Promise<void> {
+    return this.awaitBrokerage<void>('no tab of this origin leads it', (settle) => {
+      void this.leaderReady.then(settle, (error: unknown) => this.abortBrokerage?.(asError(error)));
+    });
   }
 
   /** This tab's presence, under the brokerage timeout like every other step. */

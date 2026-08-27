@@ -14,6 +14,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
@@ -131,9 +132,9 @@ class ReadHost extends StubEngineHost {
     return this.respondDownload();
   }
 
-  openContentStream(node: Uint8Array): Promise<bigint> {
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opened.push(node);
-    return Promise.resolve(11n);
+    return Promise.resolve({ handle: 11n, size: 0 });
   }
 
   readStream(handle: bigint, offset: number, length: number): Promise<ArrayBuffer> {
@@ -186,7 +187,7 @@ describe('serveEngine read requests', () => {
     const transport = new LocalTransport(worker);
 
     const node = new Uint8Array(16).fill(4);
-    const handle = await transport.openContentStream(node);
+    const { handle } = await transport.openContentStream(node);
     const content = await transport.readStream(handle, 1024, 2);
     await transport.closeStream(handle);
 

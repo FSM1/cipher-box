@@ -22,9 +22,11 @@ export interface HarnessOptions {
   channelName: string;
   /**
    * Which engine worker the leader spawns: the journal fake (default), the real
-   * WASM engine, or the fake that serves ranged plaintext.
+   * WASM engine, the fake that serves ranged plaintext, or none at all —
+   * `'broken'` throws instead of constructing one, which retires the tab from
+   * the election the way a promotion that cannot cold-start does.
    */
-  worker?: 'journal' | 'engine' | 'media';
+  worker?: 'journal' | 'engine' | 'media' | 'broken';
 }
 
 /** A page.evaluate-safe ranged-read projection; bytes as hex. */
@@ -85,6 +87,7 @@ declare global {
     cbEvents(): ObservedEvent[];
     cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
+    cbSignedIn(): string | null;
     cbStart(accountId?: string): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
     cbUpload(name: string, bytesHex: string): Promise<string>;
@@ -113,7 +116,7 @@ function settle(error: unknown): string {
 // A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
 const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
 
-const WORKER_URLS: Record<NonNullable<HarnessOptions['worker']>, URL> = {
+const WORKER_URLS: Record<Exclude<NonNullable<HarnessOptions['worker']>, 'broken'>, URL> = {
   engine: new URL('./engine.worker.ts', import.meta.url),
   media: new URL('./mediaEngine.worker.ts', import.meta.url),
   journal: new URL('./journalEngine.worker.ts', import.meta.url),
@@ -125,12 +128,14 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
   if (!(await awaitServiceWorkerControl())) {
     throw new Error('no Service Worker took control of this tab');
   }
-  const workerUrl = WORKER_URLS[worker ?? 'journal'];
   client = new EngineClient({
     locks: navigator.locks,
     lockName,
     createChannel: () => new BroadcastChannel(channelName),
-    spawnWorker: () => new Worker(workerUrl, { type: 'module' }),
+    spawnWorker: () => {
+      if (worker === 'broken') throw new Error('this tab cannot host an engine');
+      return new Worker(WORKER_URLS[worker ?? 'journal'], { type: 'module' });
+    },
     // Failover re-derivation: a real login re-exports this from Core Kit.
     secretSource: {
       provideSecret: () => Promise.resolve({ secret: secret(), accountId: TEST_ACCOUNT_ID }),
@@ -142,6 +147,9 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
   client.subscribe((event) => events.push({ kind: event.kind, ...collect(event) }));
   await awaitElection(client, lockName);
 };
+
+/** The account this tab's engine plane reports, or `null` when it holds none. */
+window.cbSignedIn = (): string | null => client?.signedInAccount() ?? null;
 
 /** Every engine event this tab's facade received, in arrival order. */
 window.cbEvents = (): ObservedEvent[] => events;
@@ -213,7 +221,7 @@ window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
 window.cbReadStream = async (offset: number, length: number): Promise<RangeResult> => {
   let handle: bigint | null = null;
   try {
-    handle = await client!.openContentStream(rootNode);
+    handle = (await client!.openContentStream(rootNode)).handle;
     const window_ = await client!.readStream(handle, offset, length);
     return { bytesHex: hex(new Uint8Array(window_)) };
   } catch (error) {

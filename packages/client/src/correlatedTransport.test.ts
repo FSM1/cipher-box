@@ -10,6 +10,7 @@ import {
 import type {
   AuthMethodDescriptor,
   CommandOutcomeDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -95,7 +96,7 @@ class ProbeTransport extends CorrelatedTransport {
   download(): Promise<ArrayBuffer> {
     return unsupported();
   }
-  openContentStream(): Promise<WriteHandle> {
+  openContentStream(): Promise<OpenedStream> {
     return unsupported();
   }
   readStream(): Promise<ArrayBuffer> {

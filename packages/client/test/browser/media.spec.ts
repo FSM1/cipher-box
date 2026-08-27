@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import { hex } from './hexUtil.js';
-import { fixtureSlice, LEADER_SEED, SECOND_TAB_SEED, TAB_SEED } from './mediaFixture.js';
+import {
+  fixtureSlice,
+  LEADER_CONTENT_BYTES,
+  LEADER_SEED,
+  SECOND_TAB_SEED,
+  TAB_SEED,
+} from './mediaFixture.js';
 import type { MediaFetchResult } from './media.js';
 import { MEDIA_WINDOW_BYTES } from '../../src/media/protocol.js';
 
@@ -245,7 +251,7 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
     expect(await b.start('engine')).toBe(true);
     expect(await b.awaitControl()).toBe(true);
 
-    const size = 96 * 1024;
+    const size = LEADER_CONTENT_BYTES;
     const result = await b.fetch(await b.ticket(size));
 
     expect(result.status).toBe(200);

@@ -742,6 +742,41 @@ impl SettingsHold {
     }
 }
 
+/// A freshly opened read stream and the plaintext size of the version it
+/// pinned.
+///
+/// The size crosses with the handle because the only correct length for a
+/// ranged response head is the one the stream will actually serve; a size read
+/// before the pin can already name a superseded version.
+#[wasm_bindgen]
+pub struct OpenedStream {
+    handle: u64,
+    size: f64,
+}
+
+#[wasm_bindgen]
+impl OpenedStream {
+    /// The handle every window of this stream is read against.
+    #[wasm_bindgen(getter)]
+    pub fn handle(&self) -> u64 {
+        self.handle
+    }
+
+    /// The pinned version's plaintext size in bytes. A JS number, not a
+    /// `bigint`, so it pairs with the whole-number offsets `readStream` takes.
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> f64 {
+        self.size
+    }
+}
+
+impl OpenedStream {
+    /// For the engine handle and the boundary tests; never exported to JS.
+    pub fn new(handle: u64, size: f64) -> Self {
+        Self { handle, size }
+    }
+}
+
 /// A key-free snapshot of one folder for a host UI paint: children, breadcrumb
 /// trail, retained dead letters, and the staleness rung.
 #[wasm_bindgen]

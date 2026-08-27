@@ -1514,6 +1514,40 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
     );
 }
 
+/// The size a stream reports is its pinned version's, never the head's: a
+/// ranged reader that framed a response from a later, shorter version would
+/// promise more bytes than the body it serves can carry.
+#[test]
+fn a_stream_reports_the_size_of_the_version_it_pinned() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let long: Vec<u8> = (0..200u8).collect();
+    let short: Vec<u8> = (0..40u8).collect();
+
+    let (mut engine_a, _events_a, mut tasks, node) = publish_clip(&world, &blocks, &long);
+    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
+
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
+    write_file(&mut engine_a, WriteTarget::Version { node }, &short).expect("the update commits");
+    tick(&world, &engine_a, &mut tasks);
+
+    assert_eq!(engine_b.stream_size(stream), Some(long.len() as u64));
+    // The head really did shrink, so the size above is the pin and not a stale
+    // resolve.
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head version reads"),
+        short
+    );
+
+    engine_b.close_stream(stream);
+    assert_eq!(
+        engine_b.stream_size(stream),
+        None,
+        "a closed handle pins no version"
+    );
+}
+
 /// A stream resolves, gates, and verifies its root once, however many windows it
 /// serves — the per-window cost the media pipe's ranged read paid on every
 /// megabyte.

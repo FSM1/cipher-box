@@ -36,9 +36,12 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, Command, CommandOutcome, Event, NodeId, ReceivedShareRow, SharingView,
-    SnapshotView, VaultStorageView,
+    AuthMethod, Command, CommandOutcome, Event, NodeId, OpenedStream, ReceivedShareRow,
+    SharingView, SnapshotView, VaultStorageView,
 };
+
+/// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
+const MAX_SAFE_SIZE: u64 = (1u64 << 53) - 1;
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -444,19 +447,30 @@ impl EngineHandle {
 
     /// Opens a ranged-read stream over a file node, pinning the head version for
     /// the handle's whole life so no window can come from a different one.
-    /// Resolves with the handle id; rejects with the engine error.
+    /// Resolves with the handle and that version's plaintext size; rejects with
+    /// the engine error.
     #[wasm_bindgen(js_name = openContentStream)]
     pub fn open_content_stream(&self, node: &NodeId) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
         future_to_promise(async move {
+            let engine = engine.read().await;
             let handle = engine
-                .read()
-                .await
                 .open_content_stream(node)
                 .await
                 .map_err(engine_error)?;
-            Ok(JsValue::from(handle.0))
+            let size = engine
+                .stream_size(handle)
+                .ok_or_else(|| engine_error(EngineError::UnknownStreamHandle))?;
+            // `readStream` addresses windows with whole JS numbers, and
+            // `resolveMediaRequest` refuses an offset past `MAX_SAFE_INTEGER`:
+            // a size no read could ever reach must not frame a response head.
+            if size > MAX_SAFE_SIZE {
+                return Err(
+                    JsError::new("the pinned version is larger than a read can address").into(),
+                );
+            }
+            Ok(OpenedStream::new(handle.0, size as f64).into())
         })
     }
 

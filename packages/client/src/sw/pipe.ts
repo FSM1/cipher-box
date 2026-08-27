@@ -29,13 +29,24 @@ export interface MediaPipeOptions {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
-/** A pull drives a real ranged engine read over the network, so it gets a far longer leash. */
-const DEFAULT_PULL_TIMEOUT_MS = 30000;
+/**
+ * A pull drives a real ranged engine read over the network, and an open drives
+ * the resolve, the adoption gate and the root-manifest fetch the head is framed
+ * from. Both get a far longer leash than brokering a port does.
+ */
+const DEFAULT_ENGINE_TIMEOUT_MS = 30000;
 
 /** One entry for every offer and request without a client identity; a real client id is never empty. */
 const ANONYMOUS_CLIENT = '';
 
 type MediaHeadResponse = Extract<MediaResponse, { type: 'cb:media:head' }>;
+
+/**
+ * How an open ended without a head: `'refused'` is the tab answering that its
+ * engine could not open the stream the head frames from, `'silent'` a port that
+ * said nothing at all. Only the second is evidence about the port itself.
+ */
+type OpenFailure = 'refused' | 'silent';
 
 /** A client's end of the pipe, with the listener bound to it. */
 interface PortEntry {
@@ -81,8 +92,8 @@ export class MediaPipe {
     options: MediaPipeOptions = {}
   ) {
     this.brokerTimeoutMs = options.brokerTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.pullTimeoutMs = options.pullTimeoutMs ?? DEFAULT_PULL_TIMEOUT_MS;
+    this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_ENGINE_TIMEOUT_MS;
+    this.pullTimeoutMs = options.pullTimeoutMs ?? DEFAULT_ENGINE_TIMEOUT_MS;
   }
 
   /** The whole prefix is the pipe's: a malformed ticket is its 404, not the network's. */
@@ -150,11 +161,14 @@ export class MediaPipe {
     const requestId = this.nextRequestId;
     this.nextRequestId += 1;
     const head = await this.open(port, requestId, ticket, range);
-    if (!head) {
+    if (head === 'silent') {
       this.post(port, { type: 'cb:media:close', requestId });
       this.discardPort(port);
       return null;
     }
+    // The port is alive and answered, so re-brokering and retrying would only
+    // ask the same engine the same question again.
+    if (head === 'refused') return sealed(503);
     // Only these two carry a body; `Response` throws on a body under a
     // null-body status, and the port that named the status is untrusted.
     if (head.status !== 200 && head.status !== 206) {
@@ -204,21 +218,25 @@ export class MediaPipe {
     requestId: number,
     ticket: string,
     range: string | null
-  ): Promise<MediaHeadResponse | null> {
+  ): Promise<MediaHeadResponse | OpenFailure> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.sinks.delete(requestId);
-        resolve(null);
+        resolve('silent');
       }, this.responseTimeoutMs);
       this.sinks.set(requestId, {
         port,
         deliver: (response) => {
-          // An error answers the open as unusable — a dead port fails it now
-          // rather than at the response deadline, so the retry re-brokers at once.
           if (response.type !== 'cb:media:head' && response.type !== 'cb:media:error') return;
           clearTimeout(timer);
           this.sinks.delete(requestId);
-          resolve(response.type === 'cb:media:head' ? response : null);
+          if (response.type === 'cb:media:head') {
+            resolve(response);
+            return;
+          }
+          // A port already detached is `detachPort` settling this open, not the
+          // tab answering it: its replacement is the one to ask.
+          resolve(this.holds(port) ? 'refused' : 'silent');
         },
       });
       this.post(port, { type: 'cb:media:open', requestId, ticket, range });
@@ -357,6 +375,12 @@ export class MediaPipe {
 
   private post(port: MessagePortLike, message: MediaRequest): void {
     port.postMessage(message);
+  }
+
+  /** Whether this port is still one of the adopted ends. */
+  private holds(port: MessagePortLike): boolean {
+    for (const entry of this.ports.values()) if (entry.port === port) return true;
+    return false;
   }
 
   private discardPort(port: MessagePortLike): void {

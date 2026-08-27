@@ -7,7 +7,8 @@
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import { StubEngineHost } from '../../src/testkit.js';
 import type { CommandOutcomeDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
-import { fixtureBuffer, LEADER_SEED } from './mediaFixture.js';
+import type { OpenedStream } from '../../src/worker/protocol.js';
+import { fixtureBuffer, LEADER_CONTENT_BYTES, LEADER_SEED } from './mediaFixture.js';
 
 class MediaHost extends StubEngineHost {
   start(): Promise<void> {
@@ -22,8 +23,8 @@ class MediaHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  openContentStream(_node: Uint8Array): Promise<bigint> {
-    return Promise.resolve(1n);
+  openContentStream(_node: Uint8Array): Promise<OpenedStream> {
+    return Promise.resolve({ handle: 1n, size: LEADER_CONTENT_BYTES });
   }
 
   readStream(_handle: bigint, offset: number, length: number): Promise<ArrayBuffer> {

@@ -3,14 +3,14 @@
 import { engineErrorCode, isRecoverableEngineError } from '../correlatedTransport.js';
 import { errorMessage } from '../errorMessage.js';
 import type { MessagePortLike } from '../portRelay.js';
-import type { StreamHandle } from '../worker/protocol.js';
+import type { OpenedStream, StreamHandle } from '../worker/protocol.js';
 import { MEDIA_WINDOW_BYTES, type MediaRequest, type MediaResponse } from './protocol.js';
 import { resolveMediaRequest } from './range.js';
-import type { StreamRegistry } from './registry.js';
+import type { MediaSource, StreamRegistry } from './registry.js';
 
 /** The engine capabilities the pipe needs; `EngineClient` satisfies them. */
 export interface MediaReader {
-  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  openContentStream(node: Uint8Array): Promise<OpenedStream>;
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
   closeStream(handle: StreamHandle): Promise<void>;
 }
@@ -39,13 +39,14 @@ export interface MediaBrokerOptions {
 }
 
 /**
- * The one engine stream every response for a ticket reads against, opened on the
- * first pull — a ticket answered with a head and then abandoned costs no
- * resolve. Pinning per ticket rather than per request holds a single content
- * version across a whole playback, not merely one response.
+ * The one engine stream every response for a ticket reads against, opened by the
+ * first request's head — which is framed from the version it pins. Pinning per
+ * ticket rather than per request holds a single content version across a whole
+ * playback, not merely one response, so the later requests of a playback pay no
+ * further resolve.
  */
 interface Pin {
-  stream: Promise<StreamHandle> | null;
+  stream: Promise<OpenedStream> | null;
   cursors: number;
   linger: ReturnType<typeof setTimeout> | null;
 }
@@ -70,8 +71,8 @@ interface IdleWaiter {
 
 /** An open engine stream and the memo it came from, so a failure can drop it. */
 interface Pinned {
-  readonly handle: StreamHandle;
-  readonly stream: Promise<StreamHandle>;
+  readonly opened: OpenedStream;
+  readonly stream: Promise<OpenedStream>;
 }
 
 /** An open response body: the unread remainder of a resolved window. */
@@ -84,8 +85,8 @@ interface Cursor {
    * of them: concatenating windows of two content versions under one
    * `Content-Range` is a tear the reader cannot detect.
    */
-  bound: Promise<StreamHandle> | null;
-  /** The mint-time window end, pulled in when a read proves the version is shorter. */
+  bound: Promise<OpenedStream> | null;
+  /** The end of the window the head framed. */
   end: number;
   offset: number;
   /** Reads chain onto this so two pulls can never straddle one cursor. */
@@ -224,7 +225,6 @@ export class MediaBroker {
   }
 
   private acquire(ticket: string): Pin {
-    for (const waiter of this.idleWaiters.get(ticket) ?? []) waiter.read = true;
     const held = this.pins.get(ticket);
     if (held === undefined) {
       const pin: Pin = { stream: null, cursors: 1, linger: null };
@@ -246,8 +246,8 @@ export class MediaBroker {
   }
 
   /** Resolves when the engine has the stream back. */
-  private release(stream: Promise<StreamHandle>): Promise<void> {
-    return stream.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+  private release(stream: Promise<OpenedStream>): Promise<void> {
+    return stream.then(({ handle }) => this.reader.closeStream(handle)).catch(() => undefined);
   }
 
   private discard(pin: Pin): Promise<void> | null {
@@ -277,7 +277,7 @@ export class MediaBroker {
   }
 
   /** Drops a stream the pin still names, so the next pull opens a fresh one. */
-  private forget(pin: Pin, stream: Promise<StreamHandle>): void {
+  private forget(pin: Pin, stream: Promise<OpenedStream>): void {
     if (pin.stream !== stream) return;
     pin.stream = null;
     void this.release(stream);
@@ -287,7 +287,7 @@ export class MediaBroker {
     const pin = cursor.pin;
     const stream = (pin.stream ??= this.reader.openContentStream(cursor.node));
     try {
-      return { handle: await stream, stream };
+      return { opened: await stream, stream };
     } catch (error) {
       // A rejected open must not be remembered, or every cursor on the ticket
       // replays it.
@@ -333,35 +333,66 @@ export class MediaBroker {
     ticket: string,
     range: string | null
   ): void {
-    const postHead = (status: number, headers: Array<[string, string]>): void => {
-      post(port, { type: 'cb:media:head', requestId, status, headers });
-    };
-
     // A repeat id supersedes whatever it names, whatever this open resolves to.
     this.drop(requestId);
 
     const source = this.registry.lookup(ticket);
     if (source === undefined) {
-      postHead(404, []);
+      post(port, { type: 'cb:media:head', requestId, status: 404, headers: [] });
       return;
     }
 
-    const head = resolveMediaRequest(range, source.size, source);
-    if (head.status === 416) {
-      postHead(head.status, head.headers);
-      return;
-    }
-
-    this.cursors.set(requestId, {
+    // Claimed before the framing suspends, so a superseding open retires this
+    // one rather than racing it, and a pull chains behind the head rather than
+    // reading a window nothing has framed yet.
+    const cursor: Cursor = {
       ticket,
       node: source.node,
       pin: this.acquire(ticket),
       bound: null,
-      offset: head.window.offset,
-      end: head.window.offset + head.window.length,
+      offset: 0,
+      end: 0,
       pump: Promise.resolve(),
-    });
-    postHead(head.status, head.headers);
+    };
+    this.cursors.set(requestId, cursor);
+    cursor.pump = this.frame(port, requestId, cursor, source, range).catch(() => undefined);
+  }
+
+  /**
+   * Opens the ticket's engine stream and frames the head from the version it
+   * pinned. The ticket's mint-time size can already name a superseded version,
+   * and a head framed from it over-frames a version that shrank — which reaches
+   * a media element as a network error rather than as a shorter file.
+   */
+  private async frame(
+    port: MessagePortLike,
+    requestId: number,
+    cursor: Cursor,
+    source: MediaSource,
+    range: string | null
+  ): Promise<void> {
+    let pinned: Pinned;
+    try {
+      pinned = await this.pinnedStream(cursor);
+    } catch (error) {
+      this.fail(port, requestId, cursor, error);
+      return;
+    }
+    if (!this.isCurrent(requestId, cursor)) return;
+    cursor.bound = pinned.stream;
+
+    const head = resolveMediaRequest(range, pinned.opened.size, source);
+    if (head.status === 416) {
+      this.drop(requestId);
+      post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
+      return;
+    }
+    cursor.offset = head.window.offset;
+    cursor.end = head.window.offset + head.window.length;
+    // Only a framed head means a body claims the ticket; a 404 or a 416 carries
+    // none.
+    for (const waiter of this.idleWaiters.get(cursor.ticket) ?? []) waiter.read = true;
+    post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
   }
 
   private pull(port: MessagePortLike, requestId: number): void {
@@ -403,7 +434,6 @@ export class MediaBroker {
     }
     if (!this.isCurrent(requestId, cursor)) return;
 
-    cursor.bound ??= pinned.stream;
     if (cursor.bound !== pinned.stream) {
       this.fail(port, requestId, cursor, new Error('the content version changed mid-response'));
       return;
@@ -411,7 +441,7 @@ export class MediaBroker {
 
     let chunk: ArrayBuffer;
     try {
-      chunk = await this.reader.readStream(pinned.handle, offset, length);
+      chunk = await this.reader.readStream(pinned.opened.handle, offset, length);
     } catch (error) {
       // A handle the engine no longer knows is dead for every cursor sharing it,
       // so the ticket re-opens. Any other read failure leaves the pinned version
@@ -440,9 +470,9 @@ export class MediaBroker {
       return;
     }
     cursor.offset = offset + delivered;
-    // A short read means the live version is smaller than the head promised;
-    // ending here is a clean EOF, where under-delivering content-length is a
-    // network error to the media element.
+    // The head frames from the pinned version, so a short read is the engine
+    // clamping rather than a version change; ending here is a clean EOF, where
+    // under-delivering content-length is a network error to the media element.
     if (delivered < length) cursor.end = cursor.offset;
   }
 

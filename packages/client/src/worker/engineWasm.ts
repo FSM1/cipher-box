@@ -90,6 +90,12 @@ export interface WasmBlockedOp {
   readonly neededBytes: bigint;
 }
 
+/** wasm-bindgen `OpenedStream` — a read stream and the size of its pinned version. */
+export interface WasmOpenedStream {
+  readonly handle: bigint;
+  readonly size: number;
+}
+
 /** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */
 export interface WasmSnapshotView {
   readonly root: Uint8Array;
@@ -211,7 +217,7 @@ export interface WasmEngineHandle {
   authMethods(): Promise<readonly WasmAuthMethod[]>;
   siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
-  openContentStream(node: WasmNodeId): Promise<bigint>;
+  openContentStream(node: WasmNodeId): Promise<WasmOpenedStream>;
   /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */
   readStream(handle: bigint, offset: number, length: number): Promise<Uint8Array>;
   closeStream(handle: bigint): Promise<unknown>;

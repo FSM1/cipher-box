@@ -60,6 +60,8 @@ let client: EngineClient | null = null;
 let readerCalls = 0;
 let openCalls = 0;
 let portRequests = 0;
+/** The size the last ticket was minted for; the local fixture has no length of its own. */
+let mintedSize = 0;
 
 // A worker that restarted lost its port and must ask for one; counting the asks
 // is how the spec distinguishes a re-broker from a port that never died.
@@ -71,7 +73,7 @@ navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
 const localReader = (seed: number): MediaReader => ({
   openContentStream: () => {
     openCalls += 1;
-    return Promise.resolve(1n);
+    return Promise.resolve({ handle: 1n, size: mintedSize });
   },
   readStream: (_handle, offset, length) => {
     readerCalls += 1;
@@ -121,8 +123,10 @@ window.cbMediaStart = async ({ reader, seed }: MediaStartOptions): Promise<boole
 /** A registration does not control the tab until it claims; a fetch before that misses the pipe. */
 window.cbMediaAwaitControl = (): Promise<boolean> => awaitServiceWorkerControl();
 
-window.cbMediaTicket = (size: number, mimeType: string): string =>
-  service!.createStreamUrl({ node: new Uint8Array(16).fill(3), size, mimeType });
+window.cbMediaTicket = (size: number, mimeType: string): string => {
+  mintedSize = size;
+  return service!.createStreamUrl({ node: new Uint8Array(16).fill(3), size, mimeType });
+};
 
 window.cbMediaReaderCalls = (): number => readerCalls;
 

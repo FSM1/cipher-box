@@ -33,6 +33,7 @@ import type {
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
+  OpenedStream,
   StreamHandle,
   VaultStorageDescriptor,
   WriteHandle,
@@ -101,8 +102,8 @@ export type PortRequest =
  * Leader → follower, over that follower's private port. A `download` or
  * `readStream` result is the plaintext buffer itself, transferred rather than
  * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string;
- * `openContentStream` and `beginWrite` the handle they minted; `commitWrite` the
- * durable op id. Nothing here carries the leadership token but the adoption
+ * `beginWrite` the handle it minted, `openContentStream` that handle and the
+ * size of the version it pinned; `commitWrite` the durable op id. Nothing here carries the leadership token but the adoption
  * itself: the port is private to one leadership, so holding the far end *is* the
  * proof the token stands in for on the channel.
  */
@@ -138,6 +139,7 @@ export type PortResponse =
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | string
+        | OpenedStream
         | StreamHandle
         | WriteHandle;
     }

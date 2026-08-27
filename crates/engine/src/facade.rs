@@ -6418,6 +6418,18 @@ where {
             .map(|stream| stream.version.content_cid.clone())
     }
 
+    /// The plaintext size of the version a live stream pinned: the exact length
+    /// every window off it can serve, so a ranged reader frames a response head
+    /// against the bytes it will get rather than a size read before the pin.
+    /// `None` for a handle the engine does not hold.
+    pub fn stream_size(&self, handle: StreamHandle) -> Option<u64> {
+        self.streams
+            .borrow()
+            .open
+            .get(&handle)
+            .map(|stream| stream.version.size)
+    }
+
     /// Release a read stream. Idempotent — an unknown handle is already gone.
     pub fn close_stream(&self, handle: StreamHandle) {
         self.streams.borrow_mut().open.remove(&handle);

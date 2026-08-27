@@ -25,7 +25,7 @@ interface LeadershipHarness {
   cbCreate(options: {
     lockName: string;
     channelName: string;
-    worker?: 'journal' | 'engine' | 'media';
+    worker?: 'journal' | 'engine' | 'media' | 'broken';
   }): Promise<void>;
   cbObserve(channelName: string): void;
   cbObserved(): ObservedMessage[];
@@ -34,6 +34,7 @@ interface LeadershipHarness {
   cbEvents(): ObservedEvent[];
   cbReadStream(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
+  cbSignedIn(): string | null;
   cbStart(accountId?: string): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
   cbUpload(name: string, bytesHex: string): Promise<string>;
@@ -62,7 +63,7 @@ function harness(page: Page): {
   create(
     lockName: string,
     channelName: string,
-    worker?: 'journal' | 'engine' | 'media'
+    worker?: 'journal' | 'engine' | 'media' | 'broken'
   ): Promise<void>;
   observe(channelName: string): Promise<void>;
   observed(): Promise<ObservedMessage[]>;
@@ -71,6 +72,7 @@ function harness(page: Page): {
   events(): Promise<ObservedEvent[]>;
   readStream(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
+  signedIn(): Promise<string | null>;
   start(accountId?: string): Promise<string>;
   createFile(name: string): Promise<string>;
   upload(name: string, bytesHex: string): Promise<string>;
@@ -107,6 +109,7 @@ function harness(page: Page): {
         { offset, length }
       ),
     role: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbRole()),
+    signedIn: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbSignedIn()),
     start: (accountId?: string) =>
       page.evaluate(
         (id) => (window as unknown as LeadershipHarness).cbStart(id),
@@ -582,5 +585,37 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(await signingIn.createFile('after-the-queue-drained.txt')).toBe('ok');
 
     for (const tab of tabs) await tab.dispose();
+  });
+
+  test('a tab whose origin runs out of tabs able to lead reports no session and no hang', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const hosting = harness(await openTab(context));
+    const broken = harness(await openTab(context));
+
+    await hosting.create(lockName, channelName, 'media');
+    expect(await hosting.role()).toBe('leader');
+    // This tab can never host an engine, so once the leader goes the origin has
+    // nobody left to elect.
+    await broken.create(lockName, channelName, 'broken');
+    expect(await hosting.start()).toBe('ok');
+    expect(await broken.start()).toBe('ok');
+    expect(await broken.signedIn()).toBe(TEST_ACCOUNT_ID);
+
+    await hosting.dispose();
+
+    // The lock is neither held nor wanted: the promotion aborted and retired
+    // this tab from the election, which is what makes the origin leaderless.
+    await expect.poll(() => broken.lockState(lockName)).toEqual({ held: 0, pending: 0 });
+    expect(await broken.role()).toBe('follower');
+    // A vault nothing can read must not be rendered as a live session...
+    await expect.poll(() => broken.signedIn()).toBeNull();
+    // ...and a read of it must fail rather than park for the tab's whole life.
+    const read = await broken.readStream(0, 16);
+    expect(read.bytesHex).toBeUndefined();
+    expect(read.error).toBe('no tab of this origin leads it');
+
+    await broken.dispose();
   });
 });

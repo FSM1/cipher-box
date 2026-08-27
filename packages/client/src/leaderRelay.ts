@@ -45,6 +45,7 @@ import type {
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
+  OpenedStream,
   StreamHandle,
   VaultStorageDescriptor,
   WriteHandle,
@@ -457,6 +458,7 @@ export class LeaderRelay {
       | ArrayBuffer
       | string
       | bigint
+      | OpenedStream
       | undefined
     >
   ): Promise<void> {
@@ -547,6 +549,7 @@ export class LeaderRelay {
           entry,
           clientId,
           this.transport.beginWrite(write.target, write.size),
+          (handle) => handle,
           (handle) => this.transport.abortWrite(handle)
         )
       );
@@ -597,13 +600,14 @@ export class LeaderRelay {
     entry: PortEntry,
     clientId: string,
     stream: WireStream
-  ): Promise<StreamHandle | ArrayBuffer | undefined> {
+  ): Promise<OpenedStream | ArrayBuffer | undefined> {
     if (stream.kind === 'openContentStream') {
       return this.bind(
         'stream',
         entry,
         clientId,
         this.transport.openContentStream(stream.node),
+        (opened) => opened.handle,
         (handle) => this.transport.closeStream(handle)
       );
     }
@@ -632,20 +636,22 @@ export class LeaderRelay {
    * that re-brokered mid-mint all retire it — and a handle its owner will never
    * receive is a handle nothing will ever release.
    */
-  private async bind(
+  private async bind<T>(
     kind: HandleKind,
     entry: PortEntry,
     clientId: string,
-    minting: Promise<bigint>,
+    minting: Promise<T>,
+    handleOf: (minted: T) => bigint,
     close: (handle: bigint) => Promise<unknown>
-  ): Promise<bigint> {
-    const handle = await minting;
+  ): Promise<T> {
+    const minted = await minting;
+    const handle = handleOf(minted);
     if (!this.ports.has(entry)) {
       void close(handle).catch(() => undefined);
       throw unknownHandle(kind);
     }
     this.owners(kind).set(handle, clientId);
-    return handle;
+    return minted;
   }
 
   private owners(kind: HandleKind): Map<bigint, string> {
