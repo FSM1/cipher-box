@@ -337,10 +337,7 @@ fn published_grant_section(
     blocks: &Blocks,
     node: NodeId,
 ) -> Option<GrantSection> {
-    let head = published_head(world, blocks, &write_name(node))?;
-    let envelope = decode_envelope(&head).expect("the head decodes");
-    grant_section_bytes(&envelope)
-        .map(|bytes| decode_grant_section(bytes).expect("the section decodes"))
+    published_grant_section_at(world, blocks, &write_name(node))
 }
 
 /// The grant section published at `name`, if the record there is a scope root.

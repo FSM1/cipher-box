@@ -4967,6 +4967,13 @@ where {
     /// and proven owner-signed by [`cut_for_write_grant`] — the same authority a
     /// revoke's cut runs under, never a set this session merely believes it
     /// wrote.
+    ///
+    /// This runs inside the non-atomic tail
+    /// [`CreateGrantError`](crate::grants::CreateGrantError) already documents:
+    /// the grantee root is published and the share pointer posted before it. A
+    /// failure therefore leaves a grantee holding a seed that derives nothing,
+    /// which is fail-closed — they read through child refs and write nowhere —
+    /// and self-heals on the next pointer consult once a later attempt cuts.
     async fn cut_granted_write_scope(
         &self,
         node: NodeId,
