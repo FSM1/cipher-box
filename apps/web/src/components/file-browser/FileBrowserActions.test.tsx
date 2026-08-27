@@ -740,12 +740,7 @@ describe('the vault browser read path over the facade', () => {
 });
 
 describe('the vault browser read path over the streaming pipe', () => {
-  const minted: {
-    node: Uint8Array;
-    size: number;
-    mimeType: string;
-    downloadName?: string;
-  }[] = [];
+  const minted: Parameters<MediaService['createStreamUrl']>[0][] = [];
   const revoked: string[] = [];
   let saves = trackSaves();
   /** Whether the browser opens the save the ticket was minted for. */
@@ -794,12 +789,7 @@ describe('the vault browser read path over the streaming pipe', () => {
         streaming: true,
         start: () => Promise.resolve(),
         dispose: () => Promise.resolve(),
-        createStreamUrl: (source: {
-          node: Uint8Array;
-          size: number;
-          mimeType: string;
-          downloadName?: string;
-        }) => {
+        createStreamUrl: (source: Parameters<MediaService['createStreamUrl']>[0]) => {
           minted.push(source);
           return `/stream/ticket-${minted.length}`;
         },
@@ -838,8 +828,10 @@ describe('the vault browser read path over the streaming pipe', () => {
     });
 
     expect(engine.facade.download).not.toHaveBeenCalled();
+    // No length: the pipe frames the head from the version its engine stream
+    // pins, so a size recorded when the ticket was minted travels nowhere.
     expect(minted).toEqual([
-      { node: NOTE, size: 12, mimeType: 'application/octet-stream', downloadName: 'notes.txt' },
+      { node: NOTE, mimeType: 'application/octet-stream', downloadName: 'notes.txt' },
     ]);
     // The name rides the pipe's `content-disposition`, not the link's attribute.
     expect(saves.navigated).toEqual(['/stream/ticket-1']);
