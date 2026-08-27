@@ -78,8 +78,18 @@ class ShellSession implements CoreKitSession {
       // not built here yet, so fail rather than half-log-in, and end the
       // partial session rather than leave it resident on the device.
       await this.coreKit.logout().catch(() => undefined);
-      await this.store.purge().catch(() => undefined);
-      throw new Error('this device needs a recovery phrase before it can sign in');
+      // A store that refused the drop is carried alongside the reason the login
+      // failed: what the partial sign-in left behind is a device factor, and a
+      // caller told only to find a phrase would never learn it is still here.
+      const left = await this.store.purge().then(
+        () => null,
+        (error: unknown) => (error instanceof Error ? error.message : String(error))
+      );
+      throw new Error(
+        left === null
+          ? 'this device needs a recovery phrase before it can sign in'
+          : `this device needs a recovery phrase before it can sign in, and what that attempt left behind is still on this device: ${left}`
+      );
     }
     await this.coreKit.commitChanges();
     this.signedInEmail = credential.email;

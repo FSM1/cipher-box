@@ -68,3 +68,6 @@ cipherbox-engine = { workspace = true, features = ["test-kit"] }
 cipherbox-core.workspace = true
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 tempfile = "3"
+# `CoreKitWrappingKey` is implemented in `tests/` by a yielding double, and its
+# signature names the crate's own `Zeroizing`.
+zeroize.workspace = true

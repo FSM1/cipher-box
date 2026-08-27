@@ -27,6 +27,7 @@ use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
 use cipherbox_engine::testkit::{SeededEntropy, block_on, conformance};
 use cipherbox_engine::{Entropy, StagingRetireLedger};
+use zeroize::Zeroizing;
 
 mod mock_http;
 use mock_http::MockServer;
@@ -1059,6 +1060,73 @@ fn what_the_webview_can_put_in_a_slot_is_bounded() {
             .count(),
         8,
         "no refused write left a slot behind"
+    );
+}
+
+/// A credential store that yields before it answers, which is what a real
+/// keyring call does to the task that made it. It makes the interleave below
+/// deterministic rather than a race the test happens to lose.
+struct YieldingKeys(FileCredentialStore);
+
+impl CoreKitWrappingKey for YieldingKeys {
+    async fn store_core_kit_wrapping_key(&self, key: &[u8]) -> SeamResult<()> {
+        tokio::task::yield_now().await;
+        self.0.store_core_kit_wrapping_key(key).await
+    }
+
+    async fn load_core_kit_wrapping_key(&self) -> SeamResult<Option<Zeroizing<Vec<u8>>>> {
+        tokio::task::yield_now().await;
+        self.0.load_core_kit_wrapping_key().await
+    }
+
+    async fn clear_core_kit_wrapping_key(&self) -> SeamResult<()> {
+        self.0.clear_core_kit_wrapping_key().await
+    }
+}
+
+/// The slot count bounds concurrent writers too. Counting outside the lock lets
+/// every writer see the same free room and then take it one at a time, which is
+/// the IPC storage bound gone — so the count and the write are one critical
+/// section.
+#[tokio::test]
+async fn concurrent_writes_cannot_grow_the_store_past_its_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let open = || {
+        SealedCoreKitStore::open(
+            dir.path().join("core-kit-store"),
+            YieldingKeys(FileCredentialStore::open(dir.path().join("credentials")).unwrap()),
+            Box::new(SeededEntropy::new(41)),
+        )
+        .unwrap()
+    };
+
+    let seeded = open();
+    for slot in 0..7 {
+        seeded
+            .set_item(&format!("slot-{slot}"), "a device factor")
+            .await
+            .unwrap();
+    }
+
+    // Re-opened, so the first racer has to reach the keyring for the key and
+    // suspends there — which is what lets the second one count the same free
+    // room before the first has written into it.
+    let store = open();
+    let (first, second) = tokio::join!(
+        store.set_item("racer-a", "a device factor"),
+        store.set_item("racer-b", "a device factor"),
+    );
+
+    assert!(
+        first.is_ok() ^ second.is_ok(),
+        "one writer takes the last slot and the other is refused",
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("core-kit-store"))
+            .unwrap()
+            .count(),
+        8,
+        "the bound held against both writers",
     );
 }
 

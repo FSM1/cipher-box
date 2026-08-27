@@ -47,6 +47,7 @@ const INVALID_SECRET: &str = "the login secret is not a valid identity scalar";
 const NO_SESSION: &str = "no session is live on this device";
 const ALREADY_LIVE: &str = "a session is already live on this device";
 const POISONED: &str = "the session state is unreadable; restart CipherBox";
+const UNENDED: &str = "the session did not answer; restart CipherBox and sign out again";
 
 /// The most warnings retained at once. An identical warning dedupes rather than
 /// accumulating, so this bounds distinct kind-and-detail pairs, not tick count.
@@ -266,18 +267,27 @@ impl EngineHost {
     }
 
     /// Hands the engine thread its last request, waits for the thread, and
-    /// reports what the facade said. `Ok(())` when there was no session to end.
+    /// reports what the facade said. `Ok(())` only when there was no session to
+    /// end.
+    ///
+    /// A live session that answered nothing is a refusal rather than a success:
+    /// the credential it authenticated with outlives it, so silence here may not
+    /// be read as an erase that ran.
     fn end_session(&self, forget: bool) -> Result<(), String> {
         let (verdict, mut answered) = oneshot::channel();
-        if let Ok(live) = self.live.lock()
-            && let Some(live) = live.as_ref()
         {
+            let live = self.live.lock().map_err(|_| POISONED)?;
+            let Some(live) = live.as_ref() else {
+                return Ok(());
+            };
             let _ = live.requests.send(Request::EndSession { forget, verdict });
         }
         // The join is what proves the thread reached the request, so the verdict
         // has either landed by here or never will.
         self.stop();
-        answered.try_recv().unwrap_or(Ok(()))
+        answered
+            .try_recv()
+            .unwrap_or_else(|_| Err(UNENDED.to_owned()))
     }
 
     /// Forgets this device: the engine erases every durable seam a logout
@@ -855,6 +865,31 @@ mod tests {
         assert!(host.log_out().is_ok());
     }
 
+    /// A live session whose thread has already returned answers nothing, and a
+    /// logout that heard no verdict may not report the credential dropped: the
+    /// refresh token the keyring still holds outlives the session it belonged
+    /// to. Only the no-session case is a success.
+    #[test]
+    fn a_live_session_that_answers_nothing_refuses_the_logout() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (requests, inbox) = mpsc::unbounded_channel();
+        // Dropping the receiver fails the send exactly as a thread that has
+        // already returned does.
+        drop(inbox);
+        let host = EngineHost {
+            live: Mutex::new(Some(Live {
+                requests,
+                thread: std::thread::spawn(|| {}),
+                account_dir: dir.path().join("account"),
+            })),
+        };
+
+        assert!(
+            host.log_out().is_err(),
+            "a session that ran no logout command must not report one",
+        );
+    }
+
     /// The session outlives a mount it could not make: the engine is still
     /// this session's to read from, and the refusal is reported beside the
     /// vault rather than instead of it (blueprint/desktop.md "Lifecycle").
@@ -912,9 +947,11 @@ mod tests {
             std::fs::write(&acked, b"journaled, unpublished").expect("a queued op");
             let _ = started.await;
 
+            // No API answers here, so the engine never starts and the facade
+            // never runs the command: what this asserts is which stores the
+            // sweep reaches, not the verdict the facade would have given.
             if forget {
-                host.forget_device()
-                    .expect("a live session can be forgotten");
+                let _ = host.forget_device();
                 assert!(!account.exists(), "a forget leaves nothing of this account");
             } else {
                 let _ = host.log_out();
@@ -940,8 +977,10 @@ mod tests {
                 })),
             };
 
+            // Neither verdict is read: no loop serves this channel, and which
+            // request was sent is the whole of what this asserts.
             if forget {
-                host.forget_device().expect("a live session is forgettable");
+                let _ = host.forget_device();
             } else {
                 let _ = host.log_out();
             }

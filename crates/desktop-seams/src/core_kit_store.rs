@@ -129,10 +129,11 @@ impl<C: CoreKitWrappingKey> SealedCoreKitStore<C> {
         if value.len() > MAX_SLOT_BYTES {
             return Err(SeamError::new("core_kit_store: the value is too large"));
         }
-        self.room_for(&path)?;
-        // The lock spans the mint and the write, so a purge cannot sweep the
-        // directory between them and leave the slot that mint was for standing.
+        // The lock spans the count, the mint and the write, so a purge cannot
+        // sweep the directory between them and leave the slot that mint was for
+        // standing, and concurrent writes cannot each count the same free room.
         let mut held = self.wrapping.lock().await;
+        self.room_for(&path)?;
         let wrapping = self
             .resolve(&mut held, Mint::WhenAbsent)
             .await?

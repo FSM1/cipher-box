@@ -115,4 +115,16 @@ describe("the shell's Core Kit store", () => {
     await expect(session.login(credential)).rejects.toThrow('recovery phrase');
     expect(ipc).toHaveBeenCalledWith('core_kit_purge');
   });
+
+  // What the partial sign-in left behind is a device factor, so a caller told
+  // only to find a recovery phrase would never learn it is still on the disk.
+  it('says so when a partial login could not be cleared, and still names the phrase', async () => {
+    sdk.status = 'needs-a-share';
+    const session = createCoreKitSession(config);
+    ipc.mockRejectedValue(new Error('the keyring is locked'));
+
+    await expect(session.login(credential)).rejects.toThrow(
+      /recovery phrase[\s\S]*the keyring is locked/
+    );
+  });
 });
