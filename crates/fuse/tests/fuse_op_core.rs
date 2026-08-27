@@ -432,6 +432,36 @@ fn unlink_and_rmdir_hold_each_other_to_their_own_kind() {
     );
 }
 
+/// A host that decides a delete's disposition before it carries the delete out
+/// has to be told the same verdict the removal itself would reach — the step
+/// that carries it out may have no status to report the difference with.
+#[test]
+fn removable_answers_what_the_removal_itself_would() {
+    let (mut core, _adapter) = mount();
+    let dir = block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
+    let (file, _) = block_on(core.create(ROOT_INO, "f.txt", Access::Write)).unwrap();
+    block_on(core.create(dir.ino, "inner", Access::Write)).unwrap();
+
+    assert_eq!(
+        block_on(core.removable(dir.ino, NodeKind::Folder)),
+        Err(VfsError::NotEmpty)
+    );
+    assert_eq!(
+        block_on(core.removable(dir.ino, NodeKind::File)),
+        Err(VfsError::IsADirectory)
+    );
+    assert_eq!(
+        block_on(core.removable(file.ino, NodeKind::Folder)),
+        Err(VfsError::NotADirectory)
+    );
+    block_on(core.removable(file.ino, NodeKind::File)).expect("a file is always removable");
+
+    block_on(core.unlink(dir.ino, "inner")).unwrap();
+    block_on(core.removable(dir.ino, NodeKind::Folder)).expect("an emptied folder is removable");
+    // The verdict and the removal agree, which is the whole contract.
+    block_on(core.rmdir(ROOT_INO, "dir")).unwrap();
+}
+
 #[test]
 fn an_inode_survives_a_rename() {
     let (mut core, _adapter) = mount();

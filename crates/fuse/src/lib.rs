@@ -39,13 +39,9 @@ pub use adapters::linux::mount;
 pub use adapters::macos::mount;
 #[cfg(windows)]
 pub use adapters::windows::mount;
-/// What a WinFsp mount declares to the operation core. Exported because the
-/// portable vfs suite drives the core with this profile on the Windows leg;
-/// the FUSE profiles are reachable from their own modules and never leave the
-/// crate.
 #[cfg(windows)]
 pub use adapters::windows::{
-    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, OpenNode, WinFspInvalidator, WinFspMount,
+    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, WinFspInvalidator, WinFspMount,
 };
 pub use cache::CacheBudget;
 #[cfg(unix)]

@@ -318,8 +318,7 @@ describe('the front door', () => {
     expect(security?.querySelector('a')).toBeNull();
   });
 
-  // WinFsp's licence asks that this notice be shown wherever the work is, so a
-  // screen that stopped showing it is a licence condition dropped, not a
+  // A screen that stopped showing this is a licence condition dropped, not a
   // cosmetic regression.
   it.each(['starting', 'signedOut', 'signedIn'] as const)(
     'shows the WinFsp notice and its project address while %s',

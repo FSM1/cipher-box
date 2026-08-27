@@ -545,6 +545,20 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.remove(parent, name, NodeKind::Folder).await
     }
 
+    /// Whether [`unlink`](Self::unlink) or [`rmdir`](Self::rmdir) would be
+    /// allowed to make `ino` vanish, without making it vanish.
+    ///
+    /// For a host that decides a delete's disposition one call before it
+    /// carries the delete out: the same predicate the removal itself gates on,
+    /// so an approved disposition cannot fail at a step that has no status to
+    /// report.
+    pub async fn removable(&mut self, ino: u64, kind: NodeKind) -> Result<(), VfsError> {
+        let view = self.render().await?;
+        let node = self.node_of(ino)?;
+        let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
+        removable(&view, &meta, kind)
+    }
+
     /// Move and/or rename a node, replacing an existing destination the way
     /// POSIX rename does.
     pub async fn rename(

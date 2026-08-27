@@ -67,11 +67,8 @@ fuser = { path = "../../third-party/fuser", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # WinFsp's user-mode filesystem host, through winfsp-rs — the only mount
-# technology Windows has (blueprint/desktop.md "Backends").
-#
-# WinFsp is GPLv3, and so is this binding: the combined work ships under GPLv3,
-# with WinFsp's commercial licence as the escape hatch. The attribution its
-# licence asks for is carried in the desktop UI and in `docs/ATTRIBUTION.md`.
+# technology Windows has (blueprint/desktop.md "Backends"). Both are GPLv3;
+# what that means for the combined work is in `docs/ATTRIBUTION.md`.
 #
 # `system` resolves WinFsp through `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir`
 # — the headers and import library at build time, the DLL at `winfsp_init` — so
@@ -89,9 +86,8 @@ futures-channel.workspace = true
 futures-core.workspace = true
 # WinFsp speaks UTF-16 at every name-bearing edge; the engine stores UTF-8.
 widestring = "1"
-# The two FFI shapes this crate cannot express, because it forbids `unsafe`:
-# the mounting user's SID, and the copy into WinFsp's descriptor out-buffer.
-# The descriptor itself is assembled here, in safe Rust.
+# The Windows FFI shapes this crate cannot express, because it forbids
+# `unsafe`. The descriptor itself is assembled here, in safe Rust.
 cipherbox-win-security = { path = "../win-security" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
