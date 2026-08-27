@@ -3099,7 +3099,7 @@ where
                 let record_bytes = self.publish_pointer_record(&name, &signer, block).await?;
                 // The scope pointer is the only landed re-point channel and its
                 // EOL is client-signed, so an unenrolled pointer lapses and a
-                // read-only survivor never finds the moved root again (#1136).
+                // read-only survivor never finds the moved root again.
                 // The pointer plane keys it: a scope root's node id is its scope
                 // id, so the node plane already holds the root's own record
                 // under these same bytes.
@@ -7122,7 +7122,7 @@ mod tests {
     fn a_confirmed_pointer_flip_enrols_the_pointer_beside_the_scope_root_record() {
         // A scope root's node id IS its scope id, so both records claim the same
         // 16 bytes. The plane discriminator is what stops the pointer's
-        // enrolment from evicting the root's own held record (#1136).
+        // enrolment from evicting the root's own held record.
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
