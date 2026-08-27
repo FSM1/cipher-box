@@ -16,6 +16,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+use caseless::Caseless;
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -225,6 +226,10 @@ impl Snapshot {
     }
 
     /// Removes a node and every link that references it (as parent or child).
+    ///
+    /// Shallow: whatever `id` alone reached is left behind, present but
+    /// unreachable. A node that is going away for good wants
+    /// [`remove_deleted`](Self::remove_deleted) instead.
     pub fn remove_node(&mut self, id: NodeId) {
         self.nodes.remove(&id);
         self.links.retain(|l| l.parent != id && l.child != id);
@@ -388,19 +393,30 @@ impl Snapshot {
 /// decomposed key the same, and **again after** it, because the case map is not
 /// closed under canonical equivalence: `J` + U+030C folds to a decomposed `ǰ`
 /// whose precomposed twin U+01F0 folds to itself, and the two would key apart
-/// while rendering identically. Compatibility equivalence is deliberately not
-/// folded — `ﬁle` and `file` are names a user can tell apart. The stored name
-/// is never mutated.
+/// while rendering identically. NFKC is deliberately not applied — `①` and `1`
+/// are names a user can tell apart. The stored name is never mutated.
 ///
 /// Zeroizing because the key is a near-verbatim copy of the name, built per
 /// sibling on every lookup. Sized exactly: a growth realloc would free an
 /// intermediate holding the name that zeroizing the result cannot reach
 /// ([`suffix_name`] pre-sizes for the same reason).
 pub fn collation_key(name: &str) -> Zeroizing<String> {
-    let folded = || name.nfc().flat_map(char::to_lowercase).nfc();
+    let folded = || case_fold(name.nfc()).nfc();
     let mut key = Zeroizing::new(String::with_capacity(folded().map(char::len_utf8).sum()));
     key.extend(folded());
     key
+}
+
+/// The comparator's fold alone, without either normalization pass — Unicode
+/// *full* case folding (`CaseFolding.txt` status `C` and `F`), not a lowercase
+/// mapping. The two differ on names users really type: `Σ`, `σ` and final `ς`
+/// are one letter to a fold and up to three to a lowercase mapping, and `ſ`
+/// folds to `s` where lowercasing leaves it alone.
+///
+/// Public so `crates/fuse`'s junk filter folds by calling the comparator rather
+/// than by re-deriving it — a table revision then moves both at once.
+pub fn case_fold<I: Iterator<Item = char>>(chars: I) -> impl Iterator<Item = char> {
+    chars.default_case_fold()
 }
 
 /// The auto-suffix for an add/add collision loser: ` (n)` inserted before the
@@ -616,10 +632,53 @@ mod tests {
             );
         }
 
-        // Compatibility equivalence is *not* folded: NFKC would collapse these,
-        // and a comparator that did would refuse names users can tell apart.
-        assert_ne!(collation_key("\u{fb01}le"), collation_key("file"));
+        // NFKC is *not* applied: a comparator that folded compatibility
+        // equivalence would refuse names users can tell apart.
         assert_ne!(collation_key("\u{2460}"), collation_key("1"));
+        assert_ne!(collation_key("\u{ff41}"), collation_key("a"));
+    }
+
+    /// The comparator's frozen case-fold vectors, beside the NFC ones above:
+    /// each family is one name a user can type several ways, and the vault
+    /// holds one entry for all of them. A lowercase mapping splits every family
+    /// here, which is why the comparator folds instead
+    /// (blueprint/engine.md rebase table: "NFC-normalized + case-folded").
+    /// Written as escapes so the file's own encoding cannot silently normalize
+    /// a case away.
+    #[test]
+    fn collation_key_applies_full_case_folding() {
+        for (case, family) in [
+            // Greek sigma: capital, medial and final are one letter to a fold.
+            // The final form is what a lowercased Greek word actually ends in,
+            // so this is the common pair, not the exotic one.
+            (
+                "greek sigma",
+                &["\u{39f}\u{3a3}", "\u{3bf}\u{3c2}", "\u{3bf}\u{3c3}"][..],
+            ),
+            // Latin long s: a fold maps it to `s`, a lowercase mapping does not.
+            (
+                "latin long s",
+                &[".d\u{17f}_store", ".ds_store", ".DS_Store"][..],
+            ),
+            // A fold that expands one character into two.
+            (
+                "latin sharp s",
+                &["stra\u{df}e", "STRA\u{1e9e}E", "strasse"][..],
+            ),
+            // The same expansion rule reaches the Latin ligatures, whose case
+            // mapping is two letters. This is the case law, not NFKC: `①` and
+            // `1` still key apart, because `①` has no case mapping at all.
+            ("latin fi ligature", &["\u{fb01}le", "file"][..]),
+        ] {
+            for pair in family.windows(2) {
+                assert_ne!(pair[0], pair[1], "{case}: the inputs differ as bytes");
+                assert_eq!(
+                    collation_key(pair[0]),
+                    collation_key(pair[1]),
+                    "{case}: one name, however it was typed"
+                );
+            }
+        }
     }
 
     /// Normalization runs before the fold, so a decomposed name still collides

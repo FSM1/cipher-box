@@ -633,6 +633,11 @@ fn relocation_guards(
 /// replace land under the entered name instead of auto-suffixing off the node
 /// it is replacing. The replaced node drops under the conditional-delete rule,
 /// so a concurrent edit to it still wins.
+///
+/// A vacate is a delete, so it takes the replaced node's whole subtree with it
+/// ([`Snapshot::remove_deleted`]) and a later op in the same pass that targets
+/// a descendant dead-letters as `TargetGone` — the same law
+/// [`rebase_delete`] states for the delete direction.
 fn rebase_move(
     working: &mut Snapshot,
     op: &Op,
@@ -696,14 +701,17 @@ fn rebase_move(
         None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
     };
 
-    if let Some(replaced) = vacating {
-        working.remove_node(replaced.node);
-    }
     if current_parent != Some(new_parent) {
         if let Some(current) = current_parent {
             working.unlink(current, op.target);
         }
         working.link_next(new_parent, op.target);
+    }
+    // After the re-link, never before: the replaced node may be the target's
+    // own ancestor, and cascading first would sweep the target this op moves
+    // out of that subtree.
+    if let Some(replaced) = vacating {
+        working.remove_deleted(replaced.node);
     }
     if let Some(node) = working.node_mut(op.target) {
         node.rename(effective.clone());
@@ -1581,6 +1589,125 @@ mod tests {
         assert_eq!(base.parent_of(id(2)), Some(id(1)));
         assert_eq!(base.node(id(2)).unwrap().name(), "target.txt");
         assert!(base.children(id(0)).iter().all(|c| c.id != id(2)));
+    }
+
+    /// The vacate is a delete, so it owes the delete's cascade: a descendant of
+    /// the replaced folder still answering is a node no walk reaches.
+    #[test]
+    fn a_move_that_replaces_a_folder_takes_its_subtree() {
+        let mut base = replace_tree(1);
+        with_node(&mut base, id(3), id(4), "inner", NodeKind::Folder);
+        with_node(&mut base, id(4), id(5), "deep.bin", NodeKind::File);
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(!base.contains(id(3)), "the replaced folder is gone");
+        assert!(
+            !base.contains(id(4)),
+            "and no descendant is left parentless"
+        );
+        assert!(!base.contains(id(5)));
+        assert_eq!(base.parent_of(id(2)), Some(id(1)));
+    }
+
+    /// The rebase decision for a later op under a vacated folder, stated the
+    /// same way the delete direction states it: the node is gone from the
+    /// working base, so the op has nothing to rebase onto.
+    #[test]
+    fn an_op_under_a_vacated_folder_dead_letters_as_target_gone() {
+        let mut base = replace_tree(1);
+        with_node(&mut base, id(3), id(4), "deep.bin", NodeKind::File);
+        let local = base.clone();
+
+        let report = replay(
+            &base,
+            &local,
+            &[
+                (
+                    OpId(1),
+                    Op::move_node(
+                        id(2),
+                        id(0),
+                        id(1),
+                        "target.txt",
+                        replacing(1),
+                        1,
+                        AT,
+                        ScopeCrossing::Intra,
+                    ),
+                ),
+                (OpId(2), Op::rename(id(4), "renamed.bin", 1, AT)),
+            ],
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(report.applied.len(), 1, "the move applies");
+        assert_eq!(
+            report.dead_letters,
+            vec![(OpId(2), DeadLetterReason::TargetGone)],
+            "the op under the vacated folder has nothing left to rebase onto"
+        );
+    }
+
+    /// The ordering hazard: the replaced node is the moved target's own
+    /// ancestor, so a cascade taken before the re-link would sweep the target.
+    #[test]
+    fn a_move_out_of_the_folder_it_replaces_keeps_its_target() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "target.txt", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "keep", NodeKind::Folder);
+        with_node(&mut base, id(1), id(3), "sweep.bin", NodeKind::File);
+        with_node(&mut base, id(2), id(4), "kept.bin", NodeKind::File);
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(1),
+                id(0),
+                "target.txt",
+                Some(Replaced {
+                    node: id(1),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some(Zeroizing::new("target.txt".to_owned())),
+                suffixed: false,
+                scope_exit_trigger: None,
+            },
+            "the target takes the name its own ancestor held"
+        );
+        assert_eq!(base.parent_of(id(2)), Some(id(0)), "the target survives");
+        assert!(base.contains(id(4)), "and so does what it carries");
+        assert!(!base.contains(id(1)), "the replaced ancestor is gone");
+        assert!(!base.contains(id(3)), "and so is what it alone reached");
     }
 
     #[test]

@@ -78,8 +78,8 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
     }
 }
 
-/// Render a relink or a move: vacate the node the op replaces, re-link under
-/// the destination when the parent actually changes, and take the new name.
+/// Render a relink or a move: re-link under the destination when the parent
+/// actually changes, vacate the node the op replaces, and take the new name.
 fn relocate(
     view: &mut Snapshot,
     op: &Op,
@@ -89,15 +89,19 @@ fn relocate(
 ) {
     // A node never replaces itself — vacating the target would erase the very
     // node this op moves (`crate::sync::rebase` refuses it the same way).
-    if let Some(replaced) = replacing.filter(|node| *node != op.target) {
-        view.remove_node(replaced);
-    }
+    let vacating = replacing.filter(|node| *node != op.target);
     let current = view.parent_of(op.target);
     if current != Some(new_parent) {
         if let Some(current) = current {
             view.unlink(current, op.target);
         }
         view.link_next(new_parent, op.target);
+    }
+    // After the re-link, never before: a vacate destroys the replaced node, so
+    // it takes the subtree with it, and the replaced node may be the target's
+    // own ancestor. Cascading first would sweep the target this op moves out.
+    if let Some(replaced) = vacating {
+        view.remove_deleted(replaced);
     }
     if let Some(node) = view.node_mut(op.target) {
         if let Some(new_name) = new_name {
@@ -241,6 +245,139 @@ mod tests {
 
         assert!(view.contains(id(1)), "the target survives its own replace");
         assert_eq!(view.node(id(1)).unwrap().name(), "g.txt");
+    }
+
+    /// A vacate destroys the replaced node, so it owes the same cascade a
+    /// delete owes: a descendant still answering is a path no walk reaches.
+    #[test]
+    fn overlay_move_replacing_a_folder_renders_its_subtree_gone() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "f.txt", NodeKind::File));
+        base.upsert_node(NodeMeta::new(id(3), "target", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(4), "inner", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(5), "deep.bin", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(0), id(2), 1);
+        base.link(id(1), id(3), 1);
+        base.link(id(3), id(4), 1);
+        base.link(id(4), id(5), 1);
+
+        let view = apply_overlay(
+            &base,
+            &[Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target",
+                Some(Replaced {
+                    node: id(3),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            )],
+        );
+
+        assert!(!view.contains(id(3)), "the replaced folder is gone");
+        assert!(
+            !view.contains(id(4)),
+            "and no descendant is left parentless"
+        );
+        assert!(!view.contains(id(5)));
+        assert_eq!(view.parent_of(id(2)), Some(id(1)), "the move still landed");
+        assert!(base.contains(id(5)), "the base snapshot is untouched");
+    }
+
+    /// The ordering hazard the cascade introduces: the replaced node is the
+    /// moved target's own ancestor, so a cascade taken before the re-link would
+    /// sweep the target — and everything under it — away with it.
+    #[test]
+    fn overlay_move_out_of_the_folder_it_replaces_keeps_the_target() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "target", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "keep", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(3), "sweep.txt", NodeKind::File));
+        base.upsert_node(NodeMeta::new(id(4), "kept.bin", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(1), id(2), 1);
+        base.link(id(1), id(3), 1);
+        base.link(id(2), id(4), 1);
+
+        let view = apply_overlay(
+            &base,
+            &[Op::move_node(
+                id(2),
+                id(1),
+                id(0),
+                "target",
+                Some(Replaced {
+                    node: id(1),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            )],
+        );
+
+        assert!(view.contains(id(2)), "the moved target survives");
+        assert_eq!(view.parent_of(id(2)), Some(id(0)), "linked at the dest");
+        assert_eq!(view.node(id(2)).unwrap().name(), "target");
+        assert!(view.contains(id(4)), "and so does what it carries");
+        assert!(!view.contains(id(1)), "the replaced ancestor is gone");
+        assert!(!view.contains(id(3)), "and so is what it alone reached");
+    }
+
+    /// A pending delete inside the folder a later move replaces. The two
+    /// cascades compose: the delete's subtree stays gone, and the vacate takes
+    /// the rest of the folder rather than stranding the delete's siblings.
+    #[test]
+    fn overlay_move_replacing_a_folder_under_a_pending_delete() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "f.txt", NodeKind::File));
+        base.upsert_node(NodeMeta::new(id(3), "target", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(4), "doomed", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(5), "sibling.bin", NodeKind::File));
+        base.upsert_node(NodeMeta::new(id(6), "under-doomed.bin", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(0), id(2), 1);
+        base.link(id(1), id(3), 1);
+        base.link(id(3), id(4), 1);
+        base.link(id(3), id(5), 1);
+        base.link(id(4), id(6), 1);
+
+        let view = apply_overlay(
+            &base,
+            &[
+                Op::delete(id(4), 1, AT, 1),
+                Op::move_node(
+                    id(2),
+                    id(0),
+                    id(1),
+                    "target",
+                    Some(Replaced {
+                        node: id(3),
+                        sequence: 1,
+                    }),
+                    1,
+                    AT,
+                    ScopeCrossing::Intra,
+                ),
+            ],
+        );
+
+        assert!(!view.contains(id(4)), "the pending delete still holds");
+        assert!(!view.contains(id(6)));
+        assert!(
+            !view.contains(id(3)),
+            "the vacate takes the replaced folder"
+        );
+        assert!(!view.contains(id(5)), "and the sibling it alone reached");
+        assert_eq!(view.parent_of(id(2)), Some(id(1)));
+        assert_eq!(view.node(id(2)).unwrap().name(), "target");
     }
 
     #[test]

@@ -14,6 +14,8 @@
 //! top. Everything the wider tier refuses stays listable and removable, or a
 //! name another client committed would be stranded in the vault forever.
 
+use cipherbox_engine::sync::case_fold;
+
 /// The longest name the projection admits, in bytes. `statfs` advertises this
 /// same constant, so what is advertised is what is enforced.
 pub const MAX_NAME_BYTES: usize = 255;
@@ -104,15 +106,15 @@ const JUNK_NAMES: &[&str] = &[
 /// Platform-junk name prefixes, already folded.
 const JUNK_PREFIXES: &[&str] = &["._", ".trash-"];
 
-/// Case-folded name equality against an already-folded ASCII literal, using the
-/// engine's Unicode fold rather than an ASCII one — U+212A KELVIN SIGN
-/// lowercases to `k`, so `des\u{212A}top.ini` is `desktop.ini` to the engine's
+/// Case-folded name equality against an already-folded ASCII literal, calling
+/// the engine's comparator fold rather than re-deriving one — U+212A KELVIN
+/// SIGN folds to `k`, so `des\u{212A}top.ini` is `desktop.ini` to the engine's
 /// comparator and must be to the junk filter too. It skips the comparator's NFC
 /// step, which every entry in the lists below being ASCII is what makes safe: no
 /// composition reaches an ASCII string from a name that is not already one.
 /// Folds lazily so a listing allocates nothing.
 fn folds_to(name: &str, folded: &str) -> bool {
-    name.chars().flat_map(char::to_lowercase).eq(folded.chars())
+    case_fold(name.chars()).eq(folded.chars())
 }
 
 /// Whether the name is platform junk: refused on create, hidden from
@@ -121,12 +123,9 @@ fn folds_to(name: &str, folded: &str) -> bool {
 pub fn is_platform_junk(name: &str) -> bool {
     JUNK_NAMES.iter().any(|junk| folds_to(name, junk))
         || JUNK_PREFIXES.iter().any(|prefix| {
-            let head: String = name
-                .chars()
-                .flat_map(char::to_lowercase)
+            case_fold(name.chars())
                 .take(prefix.chars().count())
-                .collect();
-            head == *prefix
+                .eq(prefix.chars())
         })
 }
 
@@ -195,6 +194,7 @@ fn is_reserved_device(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_engine::sync::collation_key;
 
     #[test]
     fn ordinary_names_are_admitted() {
@@ -299,14 +299,26 @@ mod tests {
 
     #[test]
     fn junk_folds_the_way_the_engines_comparator_does() {
-        // U+212A KELVIN SIGN lowercases to `k`, so the engine's comparator
-        // sees `desktop.ini`. An ASCII-only fold here would let it through as
-        // a distinct name that is nonetheless name-equal in the vault.
-        assert!(is_platform_junk("des\u{212A}top.ini"));
-        assert_eq!(
-            validate_name("des\u{212A}top.ini"),
-            Err(NameError::PlatformJunk)
-        );
+        // Each of these is name-equal to a junk literal under the engine's
+        // comparator, so the filter must refuse it too — otherwise the mount
+        // creates a name the vault already holds. U+212A KELVIN SIGN folds to
+        // `k`; U+017F LATIN SMALL LETTER LONG S folds to `s`, which a lowercase
+        // mapping does not do at all.
+        for (name, junk) in [
+            ("des\u{212A}top.ini", "desktop.ini"),
+            (".d\u{17f}_store", ".ds_store"),
+            (".\u{17f}potlight-v100", ".spotlight-v100"),
+            // A prefix match folds by the same rule.
+            (".tra\u{17f}h-1000", ".trash-1000"),
+        ] {
+            assert!(is_platform_junk(name), "{name:?} is junk to the comparator");
+            assert_eq!(validate_name(name), Err(NameError::PlatformJunk));
+            assert_eq!(
+                collation_key(name),
+                collation_key(junk),
+                "{name:?} is one vault entry with {junk:?}, so the filter must agree"
+            );
+        }
     }
 
     #[test]
