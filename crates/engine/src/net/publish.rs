@@ -134,6 +134,12 @@ pub enum PublishError {
     /// release-active so no path can ever PUT an unopenable pointer (security
     /// rule 8; encode/decode fail-closed symmetry).
     EmptyHeadCid,
+    /// The inline request carried an empty `Value`. The pointer plane's decode
+    /// side (`sync/pointer.rs::open_repoint`) rejects empty bytes as a trust
+    /// violation, so signing them would mint an unopenable re-point channel
+    /// that the liveness loop would then renew for 90 days. Refused
+    /// release-active (security rule 8; encode/decode fail-closed symmetry).
+    EmptyInlineValue,
     /// The marshalled record exceeded [`MAX_RECORD_BYTES`], which
     /// [`fanout_get_verify`](super::fanout_get_verify) skips. Publishing it
     /// would mint bytes this client can never re-resolve — the sequence floor
@@ -191,6 +197,11 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
+    // Encode/decode fail-closed symmetry (security rule 8), the inline arm's
+    // mirror of `publish`'s empty-head refusal below.
+    if request.value.is_empty() {
+        return Err(PublishError::EmptyInlineValue);
+    }
     run(
         transport,
         api,

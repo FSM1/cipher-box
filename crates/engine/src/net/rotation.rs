@@ -2845,9 +2845,9 @@ where
         .await
         .map_err(|error| match error {
             PublishError::Register(_) => WritePublishError::RegistryFull,
-            PublishError::EmptyHeadCid | PublishError::RecordTooLarge { .. } => {
-                WritePublishError::Rejected
-            }
+            PublishError::EmptyHeadCid
+            | PublishError::EmptyInlineValue
+            | PublishError::RecordTooLarge { .. } => WritePublishError::Rejected,
             _ => WritePublishError::NotLanded,
         })?;
         match receipt.outcome {

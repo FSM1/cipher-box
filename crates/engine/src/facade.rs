@@ -70,9 +70,9 @@ use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate,
-    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold,
-    resolve_child, run_liveness_loop,
+    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet,
+    assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -2099,6 +2099,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
             Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
             Err(PublishError::EmptyHeadCid) => "empty head CID (never published)".to_owned(),
+            Err(PublishError::EmptyInlineValue) => {
+                "empty inline value (never published)".to_owned()
+            }
             Err(PublishError::RecordTooLarge { size, limit }) => {
                 format!("record of {size} bytes over the {limit}-byte cap (never published)")
             }
@@ -2494,6 +2497,47 @@ async fn live_settings_record<R: RecordTransport>(
             None
         }
         _ => Some(held),
+    }
+}
+
+/// Drop every held scope pointer the record plane no longer serves.
+///
+/// The resolve tick replaces each node-plane record in place; the pointer plane
+/// has no such refresher, and only a local rotation ever writes it. So a
+/// re-point another device landed leaves this session's entry stale, and both
+/// liveness layers would keep it alive: the keyless re-PUT would re-seed a
+/// retired re-point block hourly, and a sub-EOL renewal would re-sign it at a
+/// higher sequence and roll the scope back to a root name that no longer holds.
+///
+/// Only a positively observed *different* record supersedes, on the same terms
+/// as [`live_settings_record`]: a plane this pass cannot read is availability.
+async fn drop_superseded_pointers<R: RecordTransport>(transport: &R, held: &RefCell<HeldRecords>) {
+    let pointers: Vec<(HeldKey, HeldRecord)> = held
+        .borrow()
+        .iter()
+        .filter(|(key, _)| key.plane == RecordPlane::ScopePointer)
+        .map(|(key, record)| (*key, record.clone()))
+        .collect();
+    for (key, record) in pointers {
+        let Ok(name) = IpnsName::parse(&record.routing_key) else {
+            continue;
+        };
+        let Some((live, _)) = fanout_get_verify(transport, &name).await else {
+            continue;
+        };
+        if live.value == record.value.record_value() {
+            continue;
+        }
+        // The verdict names the record this pass read: a flip that landed across
+        // the fetch installed its own confirmed entry, and dropping that one
+        // would take the fresh pointer out of the renewal.
+        let mut held = held.borrow_mut();
+        if held
+            .get(&key)
+            .is_some_and(|current| current.record_bytes == record.record_bytes)
+        {
+            held.remove(&key);
+        }
     }
 }
 
@@ -3595,6 +3639,7 @@ where {
                     return LivenessControl::Stop;
                 }
                 let settings = live_settings_record(&transport, &settings_record).await;
+                drop_superseded_pointers(&transport, &held).await;
                 let records: Vec<HeldRecord> =
                     held.borrow().values().cloned().chain(settings).collect();
                 keyless_re_put(&transport, &records).await;
@@ -6893,6 +6938,8 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
     use crate::net::HeldValue;
     use serde_json::{Value, json};
 
@@ -7077,6 +7124,64 @@ mod tests {
             Some(saved.record_bytes),
             "a save sharing the inspected head CID is still a different record"
         );
+    }
+
+    const POINTER_SCOPE: [u8; 16] = [0x77; 16];
+
+    /// A held scope pointer whose record serves `served` at `sequence`, while
+    /// the held entry renews `ours`.
+    fn pointer_held(
+        ours: &[u8],
+        served: &[u8],
+        sequence: u64,
+    ) -> (InMemoryRecordStore, HeldRecord) {
+        const TTL_NANOS: u64 = 2_000_000_000;
+        const EOL: &str = "2099-01-01T00:00:00Z";
+        let signer = Ed25519Signer::from_seed([0x21; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        let live = IpnsRecord::create_v2(&signer, served, sequence, TTL_NANOS, EOL).marshal();
+        for endpoint in store.endpoints() {
+            store.seed_record(&endpoint, name.as_str(), live.clone());
+        }
+        let held = HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes: IpnsRecord::create_v2(&signer, ours, 1, TTL_NANOS, EOL).marshal(),
+            signer,
+            value: HeldValue::Inline(ours.to_vec()),
+            content_cids: Vec::new(),
+        };
+        (store, held)
+    }
+
+    fn after_the_pointer_sweep(store: InMemoryRecordStore, held: HeldRecord) -> usize {
+        let map = RefCell::new(HeldRecords::new());
+        map.borrow_mut()
+            .insert(HeldKey::scope_pointer(POINTER_SCOPE), held);
+        block_on(drop_superseded_pointers(&store, &map));
+        map.borrow().len()
+    }
+
+    #[test]
+    fn a_scope_pointer_the_plane_superseded_leaves_the_held_set() {
+        // Only a local rotation writes this plane, so a re-point from another
+        // device leaves this session re-PUTting a retired block hourly.
+        let (store, held) = pointer_held(b"our-repoint", b"a-newer-repoint", 2);
+        assert_eq!(after_the_pointer_sweep(store, held), 0);
+    }
+
+    #[test]
+    fn a_scope_pointer_the_plane_still_serves_stays_in_the_renewal() {
+        let (store, held) = pointer_held(b"our-repoint", b"our-repoint", 1);
+        assert_eq!(after_the_pointer_sweep(store, held), 1);
+    }
+
+    #[test]
+    fn a_scope_pointer_no_endpoint_serves_stays_in_the_renewal() {
+        // A plane this pass cannot read is availability, never supersession.
+        let (_store, held) = pointer_held(b"our-repoint", b"our-repoint", 1);
+        let empty = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        assert_eq!(after_the_pointer_sweep(empty, held), 1);
     }
 
     /// Shaped as the API issues one; the engine signs nothing else.

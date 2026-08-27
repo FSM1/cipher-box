@@ -296,6 +296,8 @@ where
 /// device landed is visible only here: re-signing this session's own superseded
 /// block at a higher sequence would roll the scope back to a root name that no
 /// longer holds, so a differing live `Value` refuses the renewal fail-closed.
+/// The accepted residual: an endpoint set that suppresses the freshest record
+/// denies the renewal, which is the safe half of that trade.
 #[allow(clippy::too_many_arguments)]
 async fn eol_republish_inline<T, H, C, F, Sch>(
     transport: &T,
@@ -435,7 +437,9 @@ mod tests {
 
     use super::super::eol;
     use super::super::fanout::MAX_RECORD_BYTES;
-    use super::super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
+    use super::super::publish::{
+        InlineRecordRequest, PublishError, PublishOutcome, PublishRequest, publish, publish_inline,
+    };
     use crate::api::ApiClient;
     use crate::profile::SyncTimingProfile;
     use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
@@ -559,6 +563,49 @@ mod tests {
         assert!(
             device.http.requests().is_empty(),
             "an empty head CID never reaches the API",
+        );
+    }
+
+    /// Release-active, so this assertion fires in a release build too.
+    #[test]
+    fn publish_inline_fails_closed_on_an_empty_value() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = Ed25519Signer::from_seed([13u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        // Encode/decode fail-closed symmetry (security rule 8): the pointer
+        // plane's `open_repoint` rejects empty bytes as a trust violation, so
+        // the inline arm refuses before any registration or PUT.
+        let out = block_on(publish_inline(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &InlineRecordRequest {
+                name: &name,
+                signer: &signer,
+                value: &[],
+                min_current_sequence: None,
+            },
+        ));
+        assert_eq!(out, Err(PublishError::EmptyInlineValue));
+        assert!(
+            device.http.requests().is_empty(),
+            "an empty inline value never reaches the API",
+        );
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert!(
+            device
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "and it never reaches the transport",
         );
     }
 

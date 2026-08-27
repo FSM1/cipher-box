@@ -43,9 +43,9 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
 fn publish_verdict(error: PublishError) -> WritePublishError {
     match error {
         PublishError::Register(_) => WritePublishError::RegistryFull,
-        PublishError::EmptyHeadCid | PublishError::RecordTooLarge { .. } => {
-            WritePublishError::Rejected
-        }
+        PublishError::EmptyHeadCid
+        | PublishError::EmptyInlineValue
+        | PublishError::RecordTooLarge { .. } => WritePublishError::Rejected,
         PublishError::AllEndpointsFailed | PublishError::FloorRead(_) => {
             WritePublishError::NotLanded
         }
