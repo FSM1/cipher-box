@@ -85,7 +85,7 @@ as web's IndexedDB stores; a stolen disk yields sealed bytes only.
 | **Scheduler**       | Tokio — timers, background tasks, wall clock                                                                                                                                                                                      |
 | **StagingStore**    | The v1 write journal generalized: one durable record per op (JSON or CBOR row + fsync barrier), sidecar files for staged ciphertext, `.json`-before-`.bin` removal ordering, orphan-sidecar GC. Covers **all** mutations, not two |
 | **SnapshotCache**   | Sealed record/metadata cache files in the data dir; unsealed in the engine on read                                                                                                                                                |
-| **CredentialStore** | OS keychain (`keyring`), one service name; stores the refresh token and last-account id only — never key material                                                                                                                 |
+| **CredentialStore** | OS keychain (`keyring`), one service name; stores the refresh token, the last-account id, and the key that seals the login SDK's Core Kit store — never a seed, and never a key in the KDF catalog                                |
 
 The facade is called directly (in-process async Rust) — no RPC layer, no
 worker, no tab leadership; the single-writer invariant is free on desktop

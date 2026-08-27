@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdentityCredential } from '@cipherbox/login';
+import { invoke } from '@tauri-apps/api/core';
 import type { DesktopConfig } from '../config';
+import { createCoreKitSession } from './coreKit';
 
 /** What the SDK is handed as its store, and what the shell put behind it. */
 interface CoreKitStorage {
@@ -9,10 +11,6 @@ interface CoreKitStorage {
   purge(): Promise<void>;
 }
 
-const ipc = vi.hoisted(() => ({
-  invoke: vi.fn((): Promise<unknown> => Promise.resolve(null)),
-}));
-
 const sdk = vi.hoisted(() => ({
   status: 'logged-in',
   storage: null as CoreKitStorage | null,
@@ -20,7 +18,7 @@ const sdk = vi.hoisted(() => ({
   loginWithJWT: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: ipc.invoke }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@toruslabs/tss-dkls-lib', () => ({ tssLib: {} }));
 vi.mock('@cipherbox/login', () => ({
   accountIdFromTssPoint: () => 'an-account-id',
@@ -43,7 +41,7 @@ vi.mock('@web3auth/mpc-core-kit', () => ({
   },
 }));
 
-const { createCoreKitSession } = await import('./coreKit');
+const ipc = vi.mocked(invoke);
 
 const config = {
   web3AuthClientId: 'a-client',
@@ -66,8 +64,8 @@ function storage(): CoreKitStorage {
 }
 
 beforeEach(() => {
-  ipc.invoke.mockReset();
-  ipc.invoke.mockResolvedValue(null);
+  ipc.mockReset();
+  ipc.mockResolvedValue(null);
   sdk.logout.mockClear();
   sdk.loginWithJWT.mockClear();
   sdk.status = 'logged-in';
@@ -79,14 +77,14 @@ describe("the shell's Core Kit store", () => {
     createCoreKitSession(config);
 
     await storage().setItem('corekit_store', 'a device factor');
-    expect(ipc.invoke).toHaveBeenCalledWith('core_kit_set_item', {
+    expect(ipc).toHaveBeenCalledWith('core_kit_set_item', {
       key: 'corekit_store',
       value: 'a device factor',
     });
 
-    ipc.invoke.mockResolvedValueOnce('a device factor');
+    ipc.mockResolvedValueOnce('a device factor');
     await expect(storage().getItem('corekit_store')).resolves.toBe('a device factor');
-    expect(ipc.invoke).toHaveBeenCalledWith('core_kit_get_item', { key: 'corekit_store' });
+    expect(ipc).toHaveBeenCalledWith('core_kit_get_item', { key: 'corekit_store' });
   });
 
   // The SDK's own logout blanks its session id and leaves the rest of its store
@@ -97,14 +95,15 @@ describe("the shell's Core Kit store", () => {
     await session.logout();
 
     expect(sdk.logout).toHaveBeenCalled();
-    expect(ipc.invoke).toHaveBeenCalledWith('core_kit_purge');
+    expect(ipc).toHaveBeenCalledWith('core_kit_purge');
   });
 
-  it('ends the sign-out even when the store refuses the drop', async () => {
+  it('reports a store that refused the drop rather than signing out in silence', async () => {
     const session = createCoreKitSession(config);
-    ipc.invoke.mockRejectedValue(new Error('the keyring is locked'));
+    ipc.mockRejectedValue(new Error('the keyring is locked'));
 
-    await expect(session.logout()).resolves.toBeUndefined();
+    await expect(session.logout()).rejects.toThrow('the keyring is locked');
+    expect(sdk.logout).toHaveBeenCalled();
   });
 
   // A partial session must not stay resident: this device holds no factor, so
@@ -114,6 +113,6 @@ describe("the shell's Core Kit store", () => {
     const session = createCoreKitSession(config);
 
     await expect(session.login(credential)).rejects.toThrow('recovery phrase');
-    expect(ipc.invoke).toHaveBeenCalledWith('core_kit_purge');
+    expect(ipc).toHaveBeenCalledWith('core_kit_purge');
   });
 });

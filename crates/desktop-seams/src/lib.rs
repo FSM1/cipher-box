@@ -21,13 +21,10 @@
 //! - [`ReqwestHttp`], [`ReqwestRecordTransport`] — `reqwest` over rustls.
 //! - [`TokioScheduler`] — timers, background tasks, wall clock on Tokio.
 //!
-//! Alongside those seven, [`SealedCoreKitStore`] is not a seam trait either:
-//! it is the login SDK's own store, read before a session exists, so nothing
-//! in the engine can serve it.
-//!
-//! Alongside them, [`measured_storage_policy`] is the desktop leg of the
-//! host-to-engine storage measurement: not a seam trait, a construction-time
-//! figure the shell hands [`cipherbox_engine::Engine::new`].
+//! Two exports are not seam traits: [`SealedCoreKitStore`], the login SDK's own
+//! store, and [`measured_storage_policy`], the desktop leg of the
+//! host-to-engine storage measurement — a construction-time figure the shell
+//! hands [`cipherbox_engine::Engine::new`].
 //!
 //! This crate constructs no engine and touches no webview — the desktop shell
 //! does both.

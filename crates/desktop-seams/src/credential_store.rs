@@ -47,11 +47,6 @@ fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
 /// seed, and never the short-lived access JWT (which lives in engine memory
 /// only). Every value is stored as opaque secret bytes.
 ///
-/// The wrapping key is the one key this store holds, and it is the reason it
-/// holds it: what it seals is local state only, it derives nothing in the KDF
-/// catalog, and it never leaves this device (blueprint/desktop.md "OS
-/// keychain").
-///
 /// `Debug` is derived and safe: the struct carries only the service name and a
 /// queue handle, both non-secret; no token is ever held in memory by this
 /// handle.

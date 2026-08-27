@@ -17,8 +17,10 @@ import type { DesktopConfig } from '../config';
 
 /**
  * Bounds the Web3Auth-held session record and the signatures a login secret
- * re-export needs: long enough to outlast a working session, short enough not
- * to survive a night on a shared machine, which the SDK's 86400s default does.
+ * re-export needs: long enough to outlast a working session, short enough that
+ * the record expires well inside the SDK's 86400s default. The store now
+ * survives a quit, so this window is what an unlocked keyring on a shared
+ * machine exposes.
  */
 const SESSION_SECONDS = 8 * 60 * 60;
 
@@ -31,7 +33,7 @@ const SESSION_SECONDS = 8 * 60 * 60;
  * (`crates/desktop-seams`, `SealedCoreKitStore`), so a device factor a recovery
  * minted survives a restart without ever sitting on disk in the clear.
  */
-export class KeyringStore {
+class KeyringStore {
   getItem(key: string): Promise<string | null> {
     return invoke<string | null>('core_kit_get_item', { key });
   }
@@ -107,8 +109,10 @@ class ShellSession implements CoreKitSession {
     } finally {
       this.signedInEmail = null;
       // The SDK's own logout blanks its session id and leaves the rest of its
-      // store standing, a device factor share among it.
-      await this.store.purge().catch(() => undefined);
+      // store standing, a device factor share among it. A refusal here reaches
+      // the window: the login flow has already reported the host signed out, so
+      // a device that still holds a factor would otherwise say nothing.
+      await this.store.purge();
     }
   }
 

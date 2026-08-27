@@ -194,22 +194,27 @@ fn rung(staleness: Staleness) -> &'static str {
     }
 }
 
-/// What the host asks of the engine thread. A logout request is terminal — the
-/// loop ends on it rather than serving on against a session the facade has
-/// already ended; a quit closes the channel instead.
+/// What the host asks of the engine thread. [`Request::EndSession`] is terminal
+/// — the loop ends on it rather than serving on against a session the facade
+/// has already ended; a quit closes the channel instead.
 enum Request {
     /// Read the vault's status, and answer here.
     Status(oneshot::Sender<Result<VaultStatus, String>>),
     /// Force a refresh with nocache semantics — the tray's "Sync Now".
     Refresh(oneshot::Sender<Result<(), String>>),
-    /// End the session at the facade, which revokes this device's refresh token
-    /// and drops the local copy. A logout is not a quit: the durable stores
-    /// survive both, but the credential survives only the quit
+    /// End the session at the facade. A logout is not a quit: the durable
+    /// stores survive both, but the credential survives only the quit
     /// (blueprint/desktop.md, "Lifecycle").
-    ForgetCredentials,
-    /// The same, plus the last-account id — the one datum of this account the
-    /// keyring holds outside the account directory a forget removes.
-    ForgetCredentialsAndAccount,
+    EndSession {
+        /// Erase those durable stores too, through the facade's own
+        /// [`Command::ForgetDevice`], and drop the last-account id — the one
+        /// datum of this account the engine does not hold.
+        forget: bool,
+        /// Where the facade's verdict lands. A credential the keyring still
+        /// holds outlives the session it belongs to, so an erase that reports
+        /// success it did not achieve is the one outcome this may not produce.
+        verdict: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// The live session: the channel into its engine thread, the thread itself, and
@@ -247,35 +252,40 @@ impl EngineHost {
         outcome
     }
 
-    /// Logs out: the engine thread ends the session at the facade, which revokes
-    /// this device's refresh token at the API before dropping the local copy,
-    /// and then the thread joins as [`stop`](Self::stop) does. The durable
-    /// stores survive by design; an explicit "forget this device" is what sweeps
-    /// them.
+    /// Logs out: the engine thread ends the session at the facade, then joins as
+    /// [`stop`](Self::stop) does. The durable stores survive by design; an
+    /// explicit "forget this device" is what sweeps them.
+    ///
+    /// Reports the facade's verdict: a refresh token the keyring still holds
+    /// outlives the session it belonged to, so a logout that did not drop it
+    /// must not report success.
     ///
     /// Idempotent — the login flow calls it on paths where no session is live.
-    pub fn log_out(&self) {
-        self.end_session(Request::ForgetCredentials);
+    pub fn log_out(&self) -> Result<(), String> {
+        self.end_session(false)
     }
 
-    /// Hands the engine thread its last request and ends the session.
-    fn end_session(&self, last: Request) {
+    /// Hands the engine thread its last request, waits for the thread, and
+    /// reports what the facade said. `Ok(())` when there was no session to end.
+    fn end_session(&self, forget: bool) -> Result<(), String> {
+        let (verdict, mut answered) = oneshot::channel();
         if let Ok(live) = self.live.lock()
             && let Some(live) = live.as_ref()
         {
-            // Not awaited: the join in `stop` is what proves the thread reached
-            // it, and a closed channel means it never will.
-            let _ = live.requests.send(last);
+            let _ = live.requests.send(Request::EndSession { forget, verdict });
         }
+        // The join is what proves the thread reached the request, so the verdict
+        // has either landed by here or never will.
         self.stop();
+        answered.try_recv().unwrap_or(Ok(()))
     }
 
-    /// Forgets this device: the session ends as a logout does, and then the
-    /// durable stores a logout preserves are swept
+    /// Forgets this device: the engine erases every durable seam a logout
+    /// preserves, and then the account directory that held them goes
     /// (blueprint/desktop.md "Lifecycle").
     ///
-    /// The sweep is last: the engine's stores are open files until its thread
-    /// has joined, and a directory removed under a running engine would be
+    /// The directory is removed last: the engine's stores are open files until
+    /// its thread has joined, and one removed under a running engine would be
     /// rebuilt by the next write.
     pub fn forget_device(&self) -> Result<(), String> {
         let account_dir = self
@@ -284,18 +294,21 @@ impl EngineHost {
             .map_err(|_| POISONED)?
             .as_ref()
             .map(|live| live.account_dir.clone());
-        self.end_session(Request::ForgetCredentialsAndAccount);
+        let erased = self.end_session(true);
         let Some(account_dir) = account_dir else {
             return Err(NO_SESSION.to_owned());
         };
-        match fs::remove_dir_all(&account_dir) {
+        let swept = match fs::remove_dir_all(&account_dir) {
             Ok(()) => Ok(()),
             // Nothing to forget is the state a forget was asking for.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
                 "this device's stored vault data is still here: {error}"
             )),
-        }
+        };
+        // The directory sweep runs whichever way the erase went, and the first
+        // refusal is what the caller sees.
+        erased.and(swept)
     }
 
     /// Ends the session: the engine drops (zeroizing what it holds and stopping
@@ -389,9 +402,7 @@ pub struct SessionEnv {
     /// `None` on a device that reports none, which refuses the mount and not
     /// the session (blueprint/desktop.md "Lifecycle").
     pub home_dir: Option<PathBuf>,
-    /// The app's one OS-keyring handle. Handed in rather than opened here, so
-    /// the engine's credential writes and the shell's Core Kit custody share the
-    /// worker queue that orders them.
+    /// The app's one OS-keyring handle.
     pub credentials: KeyringCredentialStore,
     /// What the session paints when its state moves.
     pub shell: Shell,
@@ -467,8 +478,7 @@ fn host_engine(
     // whole session runs inside this LocalSet.
     let local = tokio::task::LocalSet::new();
     local.block_on(&runtime, async move {
-        let (engine, events, credentials) = match start_engine(secret, &session, &account_dir).await
-        {
+        let (engine, events) = match start_engine(secret, &session, &account_dir).await {
             Ok(started) => started,
             Err(refusal) => {
                 let _ = verdict.send(Err(refusal));
@@ -480,28 +490,26 @@ fn host_engine(
         let _ = verdict.send(Ok(()));
 
         let projection = Projection::open(engine, session.home_dir.as_deref(), &account_dir);
-        serve(projection, credentials, inbox, events, session.shell).await;
+        serve(
+            projection,
+            session.credentials,
+            inbox,
+            events,
+            session.shell,
+        )
+        .await;
     });
 }
 
 /// Constructs the engine over the desktop seam set and consumes the secret. The
-/// credential store comes back out because logout deletes what the engine's
-/// login put in it, and the seam set itself is the engine's from here on.
+/// seam set is the engine's from here on.
 async fn start_engine(
     secret: Zeroizing<Vec<u8>>,
     session: &SessionEnv,
     account_dir: &std::path::Path,
-) -> Result<
-    (
-        Engine<DesktopSeamTypes>,
-        EventStream,
-        KeyringCredentialStore,
-    ),
-    String,
-> {
+) -> Result<(Engine<DesktopSeamTypes>, EventStream), String> {
     let seams = seams::seam_set(&session.config, account_dir, session.credentials.clone())
         .map_err(|error| error.to_string())?;
-    let credentials = seams.credential_store.clone();
     // After the stores have opened: the split is measured on the volume the
     // staged bytes actually land on.
     let storage_policy = session
@@ -527,7 +535,7 @@ async fn start_engine(
         .start(LoginSecret::new(secret.to_vec()))
         .await
         .map_err(|error| error.to_string())?;
-    Ok((engine, events, credentials))
+    Ok((engine, events))
 }
 
 /// What woke the session loop. One loop and one owner: the projection holds the
@@ -595,21 +603,27 @@ async fn serve(
                     }
                 }
             }
-            // The facade's own logout, not a keyring delete: it revokes this
-            // device's refresh token at the API before dropping the local copy,
-            // and a delete here would leave the token live until it expired.
-            // The refusal is reported to no one — the session is ending either
-            // way, and there is no surface left to tell. Terminal, so the mount
-            // is never served against a session the facade has ended.
-            Woke::Request(Some(Request::ForgetCredentials)) => {
-                let _ = projection.engine_mut().command(Command::Logout).await;
-                break;
-            }
-            // The last-account id is the keyring's own datum, outside the
-            // credential the facade drops.
-            Woke::Request(Some(Request::ForgetCredentialsAndAccount)) => {
-                let _ = projection.engine_mut().command(Command::Logout).await;
-                let _ = credentials.clear_last_account_id().await;
+            Woke::Request(Some(Request::EndSession { forget, verdict })) => {
+                let ending = if forget {
+                    Command::ForgetDevice
+                } else {
+                    Command::Logout
+                };
+                let ended = projection
+                    .engine_mut()
+                    .command(ending)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+                let dropped = if forget {
+                    credentials
+                        .clear_last_account_id()
+                        .await
+                        .map_err(|error| error.to_string())
+                } else {
+                    Ok(())
+                };
+                let _ = verdict.send(ended.and(dropped));
                 break;
             }
             Woke::Event(Some(event)) => {
@@ -837,8 +851,8 @@ mod tests {
         let host = EngineHost::default();
         host.stop();
         host.stop();
-        host.log_out();
-        host.log_out();
+        assert!(host.log_out().is_ok());
+        assert!(host.log_out().is_ok());
     }
 
     /// The session outlives a mount it could not make: the engine is still
@@ -903,7 +917,7 @@ mod tests {
                     .expect("a live session can be forgotten");
                 assert!(!account.exists(), "a forget leaves nothing of this account");
             } else {
-                host.log_out();
+                let _ = host.log_out();
                 assert!(acked.exists(), "a logout keeps what the next mount drains");
             }
         }
@@ -929,17 +943,13 @@ mod tests {
             if forget {
                 host.forget_device().expect("a live session is forgettable");
             } else {
-                host.log_out();
+                let _ = host.log_out();
             }
 
             let asked = inbox.try_recv().expect("the last request was sent");
             assert!(
-                match asked {
-                    Request::ForgetCredentialsAndAccount => forget,
-                    Request::ForgetCredentials => !forget,
-                    _ => false,
-                },
-                "a forget drops the account id and a logout keeps it"
+                matches!(asked, Request::EndSession { forget: asked, .. } if asked == forget),
+                "a forget erases what a logout keeps"
             );
         }
     }
@@ -1176,12 +1186,9 @@ mod tests {
             // Both held open, so only the logout can end the loop.
             let (_sink, events) = EventStream::piped();
 
+            let (verdict, ended) = oneshot::channel();
             requests
-                .send(if forget {
-                    Request::ForgetCredentialsAndAccount
-                } else {
-                    Request::ForgetCredentials
-                })
+                .send(Request::EndSession { forget, verdict })
                 .expect("the session is serving");
             let (reply, queued) = oneshot::channel();
             requests
@@ -1198,6 +1205,18 @@ mod tests {
                 queued.await.is_err(),
                 "nothing queued behind the logout is served against the ended session",
             );
+            if !forget {
+                // This engine never started, so the facade refuses — which is
+                // the point: the arm asks it and reports what it said, rather
+                // than clearing the credential behind its back.
+                assert!(
+                    ended
+                        .await
+                        .expect("the facade's verdict is reported")
+                        .is_err(),
+                    "a logout carries the facade's own answer",
+                );
+            }
         }
     }
 

@@ -25,10 +25,10 @@ pub fn account_data_dir(data_local_dir: &Path, account_id: &str) -> SeamResult<P
     Ok(data_local_dir.join("cipherbox").join(account_id))
 }
 
-/// The device's Core Kit store directory: `<data_local_dir>/cipherbox/core-kit-store/`.
-///
-/// Beside the account directories rather than under one: the login SDK's store
-/// is read before a login secret exists, so no account id can name it yet.
+/// The device's Core Kit store directory:
+/// `<data_local_dir>/cipherbox/core-kit-store/` — beside the account
+/// directories rather than under one
+/// ([`SealedCoreKitStore`](crate::SealedCoreKitStore)).
 pub fn core_kit_store_dir(data_local_dir: &Path) -> PathBuf {
     data_local_dir.join("cipherbox").join("core-kit-store")
 }

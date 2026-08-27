@@ -766,8 +766,8 @@ fn file_credential_store_passes_the_last_account_id_kit() {
 
 // ---------------------------------------------------------------------------
 // Core Kit store — the login SDK's own store, sealed at rest under a wrapping
-// key the credential store holds (blueprint/desktop.md "OS keychain"). Read
-// before a session exists, so no engine seam serves it and both kits live here.
+// key the credential store holds. No engine seam serves it, so both kits live
+// here rather than in `testkit::conformance`.
 // ---------------------------------------------------------------------------
 
 /// One entry point per kit, as the engine's own kits have. `open` must hand
@@ -884,11 +884,14 @@ where
     store.purge().await.unwrap();
 }
 
-fn file_backed_core_kit_store(dir: &Path) -> SealedCoreKitStore<FileCredentialStore> {
+/// A store over `dir`, reopened as a restart would. `seed` varies per reopen so
+/// two stores over one wrapping key never replay a nonce — production draws from
+/// the OS, and a fixture that reused one would hide a regression to a constant.
+fn file_backed_core_kit_store(dir: &Path, seed: u64) -> SealedCoreKitStore<FileCredentialStore> {
     SealedCoreKitStore::open(
         dir.join("core-kit-store"),
         FileCredentialStore::open(dir.join("credentials")).unwrap(),
-        Box::new(SeededEntropy::new(5)),
+        Box::new(SeededEntropy::new(seed)),
     )
     .unwrap()
 }
@@ -905,9 +908,99 @@ fn file_credential_store_passes_the_core_kit_wrapping_key_kit() {
 #[test]
 fn file_backed_core_kit_store_passes_the_core_kit_store_kit() {
     let dir = tempfile::tempdir().unwrap();
+    let mut reopened = 0u64;
     block_on(check_core_kit_store(async || {
-        file_backed_core_kit_store(dir.path())
+        reopened += 1;
+        file_backed_core_kit_store(dir.path(), reopened)
     }));
+}
+
+/// The envelope is durable across app versions, so its shape is pinned here:
+/// a slot is the 24-byte nonce and then the AEAD output under the held wrapping
+/// key and this exact AAD. A build that changed either would open nothing a
+/// previous one sealed, and this store drops what it cannot open.
+#[test]
+fn a_slot_is_the_nonce_and_then_the_aead_output_under_this_exact_aad() {
+    const FACTOR: &str = "a device factor";
+    let dir = tempfile::tempdir().unwrap();
+    let keys = FileCredentialStore::open(dir.path().join("credentials")).unwrap();
+    block_on(keys.store_core_kit_wrapping_key(&[0x2a; 32])).unwrap();
+
+    let store = file_backed_core_kit_store(dir.path(), 11);
+    block_on(store.set_item("corekit_store", FACTOR)).unwrap();
+
+    let slot = std::fs::read(
+        dir.path()
+            .join("core-kit-store")
+            .join(cipherbox_core::hex::lower(b"corekit_store")),
+    )
+    .unwrap();
+    let (nonce, ciphertext) = slot.split_at(24);
+    assert_eq!(
+        ciphertext.len(),
+        FACTOR.len() + 16,
+        "the AEAD output is the plaintext and its tag"
+    );
+    assert_eq!(
+        cipherbox_core::suite::aead::decrypt(
+            &[0x2a; 32],
+            nonce.try_into().unwrap(),
+            b"cipherbox/v2/core-kit-store/v1/corekit_store",
+            ciphertext,
+        )
+        .as_deref(),
+        Some(FACTOR.as_bytes()),
+    );
+}
+
+/// Two seals under one key must never share a nonce: that is a confidentiality
+/// break, and nothing downstream would report it.
+#[test]
+fn two_writes_of_one_slot_carry_different_nonces() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = file_backed_core_kit_store(dir.path(), 13);
+    let slot = dir
+        .path()
+        .join("core-kit-store")
+        .join(cipherbox_core::hex::lower(b"corekit_store"));
+
+    block_on(store.set_item("corekit_store", "a device factor")).unwrap();
+    let first = std::fs::read(&slot).unwrap();
+    block_on(store.set_item("corekit_store", "a rotated factor")).unwrap();
+    let second = std::fs::read(&slot).unwrap();
+
+    assert_ne!(first[..24], second[..24]);
+}
+
+/// A held entry this build cannot use as a key is custody it does not
+/// understand: minting over it would destroy every slot it opens, so the read
+/// refuses instead.
+#[test]
+fn a_wrong_length_wrapping_key_fails_closed_rather_than_being_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = file_backed_core_kit_store(dir.path(), 17);
+    block_on(store.set_item("corekit_store", "a device factor")).unwrap();
+
+    let keys = FileCredentialStore::open(dir.path().join("credentials")).unwrap();
+    block_on(keys.store_core_kit_wrapping_key(b"too short")).unwrap();
+
+    let store = file_backed_core_kit_store(dir.path(), 19);
+    assert!(block_on(store.get_item("corekit_store")).is_err());
+    assert!(block_on(store.set_item("corekit_store", "a rotated factor")).is_err());
+    assert_eq!(
+        block_on(keys.load_core_kit_wrapping_key())
+            .unwrap()
+            .map(|held| held.to_vec()),
+        Some(b"too short".to_vec()),
+        "nothing minted over the entry this build could not read"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("core-kit-store"))
+            .unwrap()
+            .count(),
+        1,
+        "and the slot it opens is still here to be opened once it is readable"
+    );
 }
 
 /// The law this store exists for: what the SDK hands it is a scalar that opens
@@ -917,7 +1010,7 @@ fn file_backed_core_kit_store_passes_the_core_kit_store_kit() {
 fn nothing_the_sdk_stores_reaches_the_disk_in_the_clear() {
     const FACTOR: &str = "a-device-factor-share-0123456789";
     let dir = tempfile::tempdir().unwrap();
-    let store = file_backed_core_kit_store(dir.path());
+    let store = file_backed_core_kit_store(dir.path(), 5);
     block_on(store.set_item("corekit_store", FACTOR)).unwrap();
 
     let slots = dir.path().join("core-kit-store");
@@ -933,19 +1026,79 @@ fn nothing_the_sdk_stores_reaches_the_disk_in_the_clear() {
     assert_eq!(read, 1, "the write landed in exactly one slot");
 }
 
+/// The webview reaches this store over IPC, so what it may put there is
+/// bounded: neither an oversized value nor an oversized slot name is written,
+/// and the read side refuses the same name rather than composing it.
+#[test]
+fn what_the_webview_can_put_in_a_slot_is_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = file_backed_core_kit_store(dir.path(), 5);
+
+    let oversized = "x".repeat(64 * 1024 + 1);
+    assert!(block_on(store.set_item("corekit_store", &oversized)).is_err());
+
+    for not_a_name in ["", &"k".repeat(97)] {
+        assert!(block_on(store.set_item(not_a_name, "a device factor")).is_err());
+        assert!(block_on(store.get_item(not_a_name)).is_err());
+    }
+
+    // …and the count is bounded too, so the directory does not grow a name at a
+    // time.
+    for slot in 0..8 {
+        block_on(store.set_item(&format!("slot-{slot}"), "a device factor")).unwrap();
+    }
+    assert!(block_on(store.set_item("slot-8", "a device factor")).is_err());
+    assert!(
+        block_on(store.set_item("slot-0", "a rotated factor")).is_ok(),
+        "a full store still replaces a slot it already holds"
+    );
+
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("core-kit-store"))
+            .unwrap()
+            .count(),
+        8,
+        "no refused write left a slot behind"
+    );
+}
+
+/// A device that holds no wrapping key today may hold one again tomorrow — a
+/// keyring entry a backup has not restored yet, or one another instance is
+/// re-minting — so a read reports nothing rather than destroying what it could
+/// not open.
+#[test]
+fn a_read_with_no_wrapping_key_held_keeps_the_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = file_backed_core_kit_store(dir.path(), 23);
+    block_on(store.set_item("corekit_store", "a device factor")).unwrap();
+
+    let keys = FileCredentialStore::open(dir.path().join("credentials")).unwrap();
+    block_on(keys.clear_core_kit_wrapping_key()).unwrap();
+
+    let reopened = file_backed_core_kit_store(dir.path(), 29);
+    assert_eq!(block_on(reopened.get_item("corekit_store")).unwrap(), None);
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("core-kit-store"))
+            .unwrap()
+            .count(),
+        1,
+        "the slot outlives a key this device cannot reach"
+    );
+}
+
 /// A slot opens under the key that sealed it and nothing else, so a disk copy
 /// taken without the keyring's contents yields sealed bytes only.
 #[test]
 fn a_slot_sealed_under_one_wrapping_key_does_not_open_under_another() {
     let dir = tempfile::tempdir().unwrap();
-    let store = file_backed_core_kit_store(dir.path());
+    let store = file_backed_core_kit_store(dir.path(), 5);
     block_on(store.set_item("corekit_store", "a device factor")).unwrap();
 
     // The device keeps its slots and loses its key — a restored partial backup.
     let keys = FileCredentialStore::open(dir.path().join("credentials")).unwrap();
     block_on(keys.store_core_kit_wrapping_key(&[3u8; 32])).unwrap();
 
-    let store = file_backed_core_kit_store(dir.path());
+    let store = file_backed_core_kit_store(dir.path(), 7);
     assert_eq!(
         block_on(store.get_item("corekit_store")).unwrap(),
         None,
@@ -958,12 +1111,12 @@ fn a_slot_sealed_under_one_wrapping_key_does_not_open_under_another() {
 #[test]
 fn one_slots_ciphertext_does_not_open_as_another_slots_value() {
     let dir = tempfile::tempdir().unwrap();
-    let store = file_backed_core_kit_store(dir.path());
+    let store = file_backed_core_kit_store(dir.path(), 5);
     block_on(store.set_item("corekit_store", "a device factor")).unwrap();
     block_on(store.set_item("corekit_other", "another slot")).unwrap();
 
     let slots = dir.path().join("core-kit-store");
-    let named = |key: &str| slots.join(hex(key.as_bytes()));
+    let named = |key: &str| slots.join(cipherbox_core::hex::lower(key.as_bytes()));
     std::fs::copy(named("corekit_store"), named("corekit_other")).unwrap();
 
     assert_eq!(
@@ -978,11 +1131,6 @@ fn one_slots_ciphertext_does_not_open_as_another_slots_value() {
         Some("a device factor"),
         "and the slot it was taken from still opens"
     );
-}
-
-/// The slot filename, as the store composes it.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,6 +1218,4 @@ fn real_keyring_backed_core_kit_store_passes_the_core_kit_store_kit() {
         )
         .unwrap()
     }));
-    // The kit's purge already dropped the wrapping key; nothing of this run is
-    // left under its own service name.
 }

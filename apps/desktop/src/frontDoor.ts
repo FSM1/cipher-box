@@ -181,10 +181,10 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
 const UNPROVISIONED = 'CipherBox has not created your vault yet, so nothing will publish';
 
 /**
- * Where account security is managed, and what always gets a member back in
- * (ADR 0009 D2 and consequence 5). Enrollment and device approval are the web
- * app's, so this window offers neither affordance and says so — the rule ADR
- * 0008 applies to every method on this host: the affordance and the truth agree.
+ * Enrollment and device approval are the web app's (ADR 0009 D2 and consequence
+ * 5), so this window offers neither affordance and says where they live — the
+ * rule ADR 0008 applies to every method on this host: the affordance and the
+ * truth agree.
  */
 const SECURITY_LINES = [
   'Sign-in factors and device approval are managed in CipherBox on the web.',

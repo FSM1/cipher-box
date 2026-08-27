@@ -25,7 +25,6 @@ test-support = []
 
 [dependencies]
 # The XChaCha20-Poly1305 primitive the Core Kit store seals its slots with.
-# No crypto is implemented here; core owns every primitive.
 cipherbox-core.workspace = true
 cipherbox-engine.workspace = true
 futures-channel.workspace = true

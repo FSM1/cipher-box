@@ -303,9 +303,6 @@ describe('the front door', () => {
     expect(root.querySelector('[data-vault="items"]')).toBeNull();
   });
 
-  // ADR 0009 D2 and consequence 5: enrollment and device approval are the web
-  // app's, so this window offers neither affordance and says where they live —
-  // and names the one route back that needs no second device.
   it('says where factors are managed and that the recovery phrase always works', () => {
     renderShell(root, model({ phase: 'signedIn', vault: vaultStatus() }), actions());
     const security = root.querySelector('[data-security="panel"]');

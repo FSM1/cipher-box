@@ -4,8 +4,14 @@
 //!
 //! These commands are the handover: `session_start` takes the login secret and
 //! hands it to the engine ([`crate::engine`]), which is where it stops being
-//! this shell's to hold. The webview never sees a key, a token, or a name — the
-//! only thing that comes back out is [`VaultStatus`].
+//! this shell's to hold. Nothing the engine holds comes back out — the only
+//! value it returns to the webview is [`VaultStatus`].
+//!
+//! The `core_kit_*` commands are the one exception, and are not the engine's:
+//! they hand the login SDK back its own store, which that SDK reads before a
+//! session exists and already holds in webview memory. What this side adds is
+//! custody at rest — the slots are sealed under a keyring-held key
+//! ([`SealedCoreKitStore`]), which the webview never sees.
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, SealedCoreKitStore, core_kit_store_dir};
 use tauri::ipc::{InvokeBody, Request};
@@ -26,19 +32,11 @@ type CoreKitStore = SealedCoreKitStore<KeyringCredentialStore>;
 
 /// Opens the app's one keyring handle and the Core Kit store it seals, and
 /// hands both to Tauri to hold.
-///
-/// One keyring handle for the whole app: its worker queue is what orders a
-/// credential write against the logout delete issued after it, and two handles
-/// would be two queues.
 pub fn open_key_custody(app: &AppHandle) -> Result<(), String> {
     let credentials = KeyringCredentialStore::new(app.config().identifier.clone())
         .map_err(|error| error.to_string())?;
-    let data_local_dir = app
-        .path()
-        .local_data_dir()
-        .map_err(|error| format!("this device has no local data directory: {error}"))?;
     let core_kit = CoreKitStore::open(
-        core_kit_store_dir(&data_local_dir),
+        core_kit_store_dir(&local_data_dir(app)?),
         credentials.clone(),
         Box::new(OsEntropy),
     )
@@ -46,6 +44,12 @@ pub fn open_key_custody(app: &AppHandle) -> Result<(), String> {
     app.manage(credentials);
     app.manage(core_kit);
     Ok(())
+}
+
+fn local_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .local_data_dir()
+        .map_err(|error| format!("this device has no local data directory: {error}"))
 }
 
 /// The login secret an invoke body carries, or why it is not one.
@@ -69,10 +73,7 @@ fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
     let repainting = app.clone();
     Ok(SessionEnv {
         config: EngineConfig::compiled()?,
-        data_local_dir: app
-            .path()
-            .local_data_dir()
-            .map_err(|error| format!("this device has no local data directory: {error}"))?,
+        data_local_dir: local_data_dir(app)?,
         home_dir: app.path().home_dir().ok(),
         credentials: app.state::<KeyringCredentialStore>().inner().clone(),
         shell: Shell {
@@ -95,41 +96,42 @@ pub async fn session_start(
     engine.start(secret, session_env(&app)?).await
 }
 
-/// Ends the session: the engine stops and drops, and this device's stored
-/// refresh token goes with it.
+/// Ends the session: the engine revokes this device's credential and stops.
 ///
-/// `async` so a sync body runs on the thread pool rather than inline on the
-/// IPC thread: this waits on the engine thread, and the keyring delete inside
-/// it is a blocking OS call.
-#[tauri::command(async)]
-pub fn session_logout(engine: State<'_, EngineHost>) {
-    engine.log_out();
+/// The join runs off the async runtime: it waits on the engine thread, whose
+/// last request reaches the network and the keyring.
+#[tauri::command]
+pub async fn session_logout(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<EngineHost>().log_out())
+        .await
+        .unwrap_or_else(|error| Err(format!("signing out did not finish: {error}")))
 }
 
 /// Forgets this device: everything a logout does, then the durable stores a
 /// logout keeps, then the Core Kit store. Nothing of this account is left on
-/// this machine, in the keyring included.
+/// this machine, in the keyring included — and the Core Kit store is the
+/// device's rather than the account's, so what every account on it held goes
+/// too.
 ///
-/// The engine leg runs on a blocking thread — it waits on the engine thread and
-/// then on the filesystem — and the Core Kit purge runs whichever way it went:
-/// a sweep that stopped at the first refusal would report a forget that did not
-/// land.
+/// The engine leg waits on the engine thread and then on the filesystem, so it
+/// runs off the async runtime. The two legs run together: they share no
+/// directory and no keyring account, and neither refusal spares the other.
 #[tauri::command]
 pub async fn session_forget_device(
     app: AppHandle,
     core_kit: State<'_, CoreKitStore>,
 ) -> Result<(), String> {
-    let forgotten =
-        tauri::async_runtime::spawn_blocking(move || app.state::<EngineHost>().forget_device())
-            .await
-            .map_err(|error| format!("forgetting this device did not finish: {error}"))?;
-    let purged = core_kit.purge().await.map_err(|error| error.to_string());
-    forgotten.and(purged)
+    let (forgotten, purged) = tokio::join!(
+        tauri::async_runtime::spawn_blocking(move || app.state::<EngineHost>().forget_device()),
+        core_kit.purge(),
+    );
+    let forgotten = forgotten
+        .unwrap_or_else(|error| Err(format!("forgetting this device did not finish: {error}")));
+    forgotten.and(purged.map_err(|error| error.to_string()))
 }
 
 /// One Core Kit store slot, or `None` when this device holds nothing openable
-/// for it. The login SDK reads this before a session exists, so the engine
-/// cannot serve it (blueprint/desktop.md, "Tauri shell").
+/// for it.
 #[tauri::command]
 pub async fn core_kit_get_item(
     core_kit: State<'_, CoreKitStore>,

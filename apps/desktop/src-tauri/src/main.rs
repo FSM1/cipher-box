@@ -40,8 +40,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            session::open_key_custody(app.handle())?;
+            // After the tray: this opens a directory with an fsync barrier, and
+            // nothing before the menu-bar icon should wait on a disk.
             tray::build(app.handle())?;
+            session::open_key_custody(app.handle())?;
             Ok(())
         })
         .on_window_event(|window, event| {
