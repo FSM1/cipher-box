@@ -2902,6 +2902,17 @@ where
         if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
+        // The owner-write blob is opened at the re-point's *own* claimed epoch,
+        // not at the durable floor, so this is the one path the floor's
+        // monotonicity does not already fail-safe. An epoch below the floor is a
+        // rollback past a re-key, never staleness (rule 6).
+        if floor::write_epoch_regression(self.floors, &self.scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .is_some()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
         let seed = self
             .write_scope_seed_at(&gated.envelope, &gated.section, repoint.write_epoch)
             .ok_or(ResolveFailure::Rejected)?;
@@ -7701,6 +7712,58 @@ mod tests {
                 .expect("the recovery reads published state")
                 .is_none(),
             "a re-point off another predecessor is not this wave's to resume"
+        );
+    }
+
+    #[test]
+    fn a_re_point_below_the_write_epoch_floor_is_refused_not_resumed() {
+        // The re-point's own claimed epoch opens the owner-write blob here, so
+        // the floor's monotonicity does not fail-safe this path: an epoch under
+        // the durable floor is a rollback past a re-key (rule 6).
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let outcome = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(65);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes")
+        };
+
+        let resumed = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        assert!(
+            block_on(resumed.recover_wave())
+                .expect("the recovery reads published state")
+                .is_some(),
+            "at the floor the wave itself left, the re-point still resumes"
+        );
+
+        // A later rotation raised the floor past this re-point.
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            outcome.new_write_epoch + 1,
+        ))
+        .expect("the floor raises");
+        assert_eq!(
+            block_on(resumed.recover_wave()).err(),
+            Some(ResolveFailure::Rejected),
+            "a re-point under the durable write-epoch floor is a trust verdict"
         );
     }
 
