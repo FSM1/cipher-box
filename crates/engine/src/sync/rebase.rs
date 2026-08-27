@@ -592,15 +592,14 @@ fn rebase_relink(
         },
         // Still under the source we moved from: the normal dest-first + remove.
         Some(current) if current == from_parent => {
-            working.link_next(new_parent, op.target);
-            working.unlink(from_parent, op.target);
+            working.relocate(op.target, new_parent, None);
             OpResolution::applied(exit.applied)
         }
         // A concurrent move relocated the child elsewhere: we are the race loser.
         Some(_) => OpResolution::dropped(DropReason::MoveRaceLost),
         // No current parent (was at root / unlinked): dest-first still links it.
         None => {
-            working.link_next(new_parent, op.target);
+            working.relocate(op.target, new_parent, None);
             OpResolution::applied(exit.applied)
         }
     }
@@ -633,6 +632,10 @@ fn relocation_guards(
 /// replace land under the entered name instead of auto-suffixing off the node
 /// it is replacing. The replaced node drops under the conditional-delete rule,
 /// so a concurrent edit to it still wins.
+///
+/// The vacate takes the replaced node's subtree ([`Snapshot::relocate`]), so a
+/// later op in the same pass under that folder dead-letters as `TargetGone`,
+/// exactly as [`rebase_delete`] states for the delete direction.
 fn rebase_move(
     working: &mut Snapshot,
     op: &Op,
@@ -696,15 +699,11 @@ fn rebase_move(
         None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
     };
 
-    if let Some(replaced) = vacating {
-        working.remove_node(replaced.node);
-    }
-    if current_parent != Some(new_parent) {
-        if let Some(current) = current_parent {
-            working.unlink(current, op.target);
-        }
-        working.link_next(new_parent, op.target);
-    }
+    working.relocate(
+        op.target,
+        new_parent,
+        vacating.map(|replaced| replaced.node),
+    );
     if let Some(node) = working.node_mut(op.target) {
         node.rename(effective.clone());
     }
@@ -1581,6 +1580,174 @@ mod tests {
         assert_eq!(base.parent_of(id(2)), Some(id(1)));
         assert_eq!(base.node(id(2)).unwrap().name(), "target.txt");
         assert!(base.children(id(0)).iter().all(|c| c.id != id(2)));
+    }
+
+    /// The vacate is a delete, so it owes the delete's cascade: a descendant of
+    /// the replaced folder still answering is a node no walk reaches.
+    /// `replace_tree`'s destination node is a file, and a file holds no
+    /// children: the vacate cascade only has something to take when the
+    /// replaced node is a folder.
+    fn replaced_folder_tree() -> Snapshot {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "target.txt", NodeKind::Folder);
+        base
+    }
+
+    #[test]
+    fn a_move_that_replaces_a_folder_takes_its_subtree() {
+        let mut base = replaced_folder_tree();
+        with_node(&mut base, id(3), id(4), "inner", NodeKind::Folder);
+        with_node(&mut base, id(4), id(5), "deep.bin", NodeKind::File);
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(!base.contains(id(3)), "the replaced folder is gone");
+        assert!(
+            !base.contains(id(4)),
+            "and no descendant is left parentless"
+        );
+        assert!(!base.contains(id(5)));
+        assert_eq!(base.parent_of(id(2)), Some(id(1)));
+    }
+
+    /// The rebase decision for a later op under a vacated folder, stated the
+    /// same way the delete direction states it: the node is gone from the
+    /// working base, so the op has nothing to rebase onto.
+    #[test]
+    fn an_op_under_a_vacated_folder_dead_letters_as_target_gone() {
+        let base = {
+            let mut base = replaced_folder_tree();
+            with_node(&mut base, id(3), id(4), "deep.bin", NodeKind::File);
+            base
+        };
+        let local = base.clone();
+
+        let report = replay(
+            &base,
+            &local,
+            &[
+                (
+                    OpId(1),
+                    Op::move_node(
+                        id(2),
+                        id(0),
+                        id(1),
+                        "target.txt",
+                        replacing(1),
+                        1,
+                        AT,
+                        ScopeCrossing::Intra,
+                    ),
+                ),
+                (OpId(2), Op::rename(id(4), "renamed.bin", 1, AT)),
+            ],
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(report.applied.len(), 1, "the move applies");
+        assert_eq!(
+            report.dead_letters,
+            vec![(OpId(2), DeadLetterReason::TargetGone)],
+            "the op under the vacated folder has nothing left to rebase onto"
+        );
+    }
+
+    /// A move publishes dest-first, so the destination ref shares the wire with
+    /// the source ref until the source-remove lands. The dest link must out-rank
+    /// it, or the dual-link tiebreak falls to the lowest parent id and a reader
+    /// can pick the parent this move left.
+    #[test]
+    fn a_cross_folder_move_links_above_the_source_it_has_not_removed_yet() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        base.link(id(0), id(2), 7);
+        let local = base.clone();
+
+        rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "g.txt",
+                None,
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(
+            base.winning_link(id(2)).map(|l| l.link_counter),
+            Some(8),
+            "the dest link supersedes the source counter it replaces"
+        );
+    }
+
+    /// The ordering hazard: the replaced node is the moved target's own
+    /// ancestor, so a cascade taken before the re-link would sweep the target.
+    #[test]
+    fn a_move_out_of_the_folder_it_replaces_keeps_its_target() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "target.txt", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "keep", NodeKind::Folder);
+        with_node(&mut base, id(1), id(3), "sweep.bin", NodeKind::File);
+        with_node(&mut base, id(2), id(4), "kept.bin", NodeKind::File);
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(1),
+                id(0),
+                "target.txt",
+                Some(Replaced {
+                    node: id(1),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some(Zeroizing::new("target.txt".to_owned())),
+                suffixed: false,
+                scope_exit_trigger: None,
+            },
+            "the target takes the name its own ancestor held"
+        );
+        assert_eq!(base.parent_of(id(2)), Some(id(0)), "the target survives");
+        assert!(base.contains(id(4)), "and so does what it carries");
+        assert!(!base.contains(id(1)), "the replaced ancestor is gone");
+        assert!(!base.contains(id(3)), "and so is what it alone reached");
     }
 
     #[test]

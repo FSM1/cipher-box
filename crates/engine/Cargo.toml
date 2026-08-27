@@ -16,6 +16,7 @@ test-kit = []
 
 [dependencies]
 base64.workspace = true
+caseless.workspace = true
 cipherbox-core.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true

@@ -32,6 +32,11 @@ cipherbox-desktop-seams = { path = "crates/desktop-seams" }
 cipherbox-engine = { path = "crates/engine" }
 cipherbox-fuse = { path = "crates/fuse" }
 base64 = "0.22"
+# The strict comparator's full Unicode case fold, exact-pinned for the same
+# reason unicode-normalization below is: a table revision moves which names
+# collide, which is merge-visible law. Ships CaseFolding.txt at UCD 16.0.0, one
+# revision behind unicode-normalization's 17.0.0 — bump the two together.
+caseless = "=0.2.2"
 # The dispatch-tier profiling harness only. default-features are stripped to
 # keep plotters/rayon out of the dev graph — the numbers are read from
 # criterion's own estimates, never from generated HTML.

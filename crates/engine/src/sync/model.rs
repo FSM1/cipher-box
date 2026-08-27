@@ -16,6 +16,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+use caseless::Caseless;
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -225,6 +226,9 @@ impl Snapshot {
     }
 
     /// Removes a node and every link that references it (as parent or child).
+    ///
+    /// Shallow: a node going away for good wants
+    /// [`remove_deleted`](Self::remove_deleted), which takes the subtree too.
     pub fn remove_node(&mut self, id: NodeId) {
         self.nodes.remove(&id);
         self.links.retain(|l| l.parent != id && l.child != id);
@@ -263,6 +267,33 @@ impl Snapshot {
     pub fn remove_deleted(&mut self, id: NodeId) {
         self.links.retain(|l| l.child != id);
         self.remove_unreachable(id);
+    }
+
+    /// Moves `target` under `new_parent` and vacates the node it replaces, in
+    /// the one order both are safe in. The model owns the order so no caller
+    /// can get it wrong: a vacate is a delete
+    /// ([`remove_deleted`](Self::remove_deleted)), and the replaced node may be
+    /// the target's own ancestor, so a cascade taken first would sweep the
+    /// target out with it.
+    ///
+    /// The dest link is established before the source link departs, which is
+    /// what [`link_next`](Self::link_next) needs to see the counter it must
+    /// beat — a source-remove that has not published yet then loses the
+    /// dual-link tiebreak instead of drawing with the winner.
+    ///
+    /// `vacating` must already be a child of `new_parent`; the callers prove it
+    /// (`crate::sync::rebase::rebase_move`).
+    pub fn relocate(&mut self, target: NodeId, new_parent: NodeId, vacating: Option<NodeId>) {
+        let current = self.parent_of(target);
+        if current != Some(new_parent) {
+            self.link_next(new_parent, target);
+            if let Some(current) = current {
+                self.unlink(current, target);
+            }
+        }
+        if let Some(replaced) = vacating {
+            self.remove_deleted(replaced);
+        }
     }
 
     /// Every link naming `child` as the child. One entry in a well-formed
@@ -388,19 +419,30 @@ impl Snapshot {
 /// decomposed key the same, and **again after** it, because the case map is not
 /// closed under canonical equivalence: `J` + U+030C folds to a decomposed `ǰ`
 /// whose precomposed twin U+01F0 folds to itself, and the two would key apart
-/// while rendering identically. Compatibility equivalence is deliberately not
-/// folded — `ﬁle` and `file` are names a user can tell apart. The stored name
-/// is never mutated.
+/// while rendering identically. NFKC is deliberately not applied — `①` and `1`
+/// are names a user can tell apart. The stored name is never mutated.
 ///
 /// Zeroizing because the key is a near-verbatim copy of the name, built per
 /// sibling on every lookup. Sized exactly: a growth realloc would free an
 /// intermediate holding the name that zeroizing the result cannot reach
 /// ([`suffix_name`] pre-sizes for the same reason).
 pub fn collation_key(name: &str) -> Zeroizing<String> {
-    let folded = || name.nfc().flat_map(char::to_lowercase).nfc();
+    let folded = || case_fold(name.nfc()).nfc();
     let mut key = Zeroizing::new(String::with_capacity(folded().map(char::len_utf8).sum()));
     key.extend(folded());
     key
+}
+
+/// The comparator's fold alone, without either normalization pass — Unicode
+/// *full* case folding (`CaseFolding.txt` status `C` and `F`), not a lowercase
+/// mapping. The two differ on names users really type: `Σ`, `σ` and final `ς`
+/// are one letter to a fold and up to three to a lowercase mapping, and `ſ`
+/// folds to `s` where lowercasing leaves it alone.
+///
+/// Public so `crates/fuse`'s junk filter folds by calling the comparator rather
+/// than by re-deriving it — a table revision then moves both at once.
+pub fn case_fold<I: Iterator<Item = char>>(chars: I) -> impl Iterator<Item = char> {
+    chars.default_case_fold()
 }
 
 /// The auto-suffix for an add/add collision loser: ` (n)` inserted before the
@@ -616,10 +658,74 @@ mod tests {
             );
         }
 
-        // Compatibility equivalence is *not* folded: NFKC would collapse these,
-        // and a comparator that did would refuse names users can tell apart.
-        assert_ne!(collation_key("\u{fb01}le"), collation_key("file"));
+        // NFKC is *not* applied: a comparator that folded compatibility
+        // equivalence would refuse names users can tell apart.
         assert_ne!(collation_key("\u{2460}"), collation_key("1"));
+        assert_ne!(collation_key("\u{ff41}"), collation_key("a"));
+    }
+
+    /// The comparator's frozen case-fold vectors, beside the NFC ones above:
+    /// each family is one name a user can type several ways, and the vault
+    /// holds one entry for all of them. A lowercase mapping splits every family
+    /// here (blueprint/engine.md rebase table: "NFC-normalized + case-folded").
+    #[test]
+    fn collation_key_applies_full_case_folding() {
+        for (case, family) in [
+            // Capital, medial and final sigma are one letter to a fold. A
+            // lowercased Greek word ends in the final form, so this is the pair
+            // real names hit.
+            (
+                "greek sigma",
+                &["\u{39f}\u{3a3}", "\u{3bf}\u{3c2}", "\u{3bf}\u{3c3}"][..],
+            ),
+            ("latin long s", &[".d\u{17f}_store", ".ds_store"][..]),
+            // Folds that expand one character into two, the `F` mappings a
+            // lowercase table has no room to express.
+            (
+                "latin sharp s",
+                &["stra\u{df}e", "STRA\u{1e9e}E", "strasse"][..],
+            ),
+            // A ligature's case mapping is its two letters, so the case law
+            // reaches it. NFKC plays no part: `①` has no case mapping at all,
+            // which is what keeps it apart from `1` above.
+            ("latin fi ligature", &["\u{fb01}le", "file"][..]),
+        ] {
+            for pair in family.windows(2) {
+                assert_ne!(pair[0], pair[1], "{case}: the inputs differ as bytes");
+                assert_eq!(
+                    collation_key(pair[0]),
+                    collation_key(pair[1]),
+                    "{case}: one name, however it was typed"
+                );
+            }
+        }
+    }
+
+    /// The exact pre-size is a zeroization invariant, not a micro-optimization:
+    /// a growth realloc frees an intermediate holding the name that zeroizing
+    /// the returned key cannot reach. The property rests on `String::extend`
+    /// reserving the iterator's *lower* size hint, which no test would
+    /// otherwise catch changing under a toolchain or table bump.
+    #[test]
+    fn collation_key_sizes_its_buffer_exactly() {
+        for name in [
+            "",
+            "report.txt",
+            "STRA\u{1e9e}E",
+            "spi\u{fb03}est",
+            "\u{390}",
+            "des\u{212a}top.ini",
+            "J\u{30c}",
+            "\u{3bf}\u{3c2}",
+            &"\u{1e9e}".repeat(500),
+        ] {
+            let key = collation_key(name);
+            assert_eq!(
+                key.capacity(),
+                key.len(),
+                "{name:?}: extend grew the buffer past its pre-size"
+            );
+        }
     }
 
     /// Normalization runs before the fold, so a decomposed name still collides
