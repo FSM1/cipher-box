@@ -15,7 +15,6 @@ export interface AuthMethodsRead {
   error: string | null;
   /** Issues the single-use nonce a link message embeds. */
   challenge(): Promise<string>;
-  /** Links a signed EIP-4361 message to this account, then re-reads. */
   link(message: string, signature: string): Promise<void>;
   unlink(methodId: string): void;
 }

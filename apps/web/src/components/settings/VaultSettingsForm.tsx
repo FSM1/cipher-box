@@ -9,8 +9,12 @@ import {
 } from '../../settings/vaultSettings';
 
 interface VaultSettingsFormProps {
-  /** What the vault published, or `null` before the storage read lands. */
-  summary?: VaultSettingsSummaryDescriptor | null;
+  /**
+   * What the storage read reported. Required: a save replaces the whole record,
+   * so the refusals below are only guards while the origin and the stored-bearer
+   * flag are the engine's answer rather than a stand-in for an absent read.
+   */
+  summary: VaultSettingsSummaryDescriptor;
   /** Re-reads the vault after a save, so the form shows what it now carries. */
   onSaved?: () => void;
 }
@@ -46,17 +50,14 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
   const [loadAcknowledged, setLoadAcknowledged] = useState(false);
   const { busy, error, run } = useCommandRunner<'saveVaultSettings'>();
   const message = problem ?? error;
-  // Before the first read lands there is nothing to warn about, so an absent
-  // summary reads as the unremarkable origin rather than as a failed load.
-  const origin = summary?.origin ?? 'resolved';
+  const origin = summary.origin;
   const notice = originNotice(origin);
-  const credentialStored = summary?.byoCredentialStored ?? false;
+  const credentialStored = summary.byoCredentialStored;
 
   // Each read the route lands refills the form, so a confirmed save shows what
   // the vault now carries rather than what was typed at it. The credential is
   // blanked rather than prefilled: no read can carry one.
   useEffect(() => {
-    if (summary == null) return;
     const { pinMode, byoEndpoint, byoKind, keepLatestVersions } = prefillFromSummary(summary);
     setFields({ pinMode, byoEndpoint, byoKind, keepLatestVersions, byoAccessToken: '' });
     setClearCredential(false);

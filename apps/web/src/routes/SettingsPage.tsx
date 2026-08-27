@@ -75,7 +75,17 @@ export function SettingsPage() {
             </p>
           )}
           <QuotaChrome storage={storage} />
-          <VaultSettingsForm summary={storage?.settings ?? null} onSaved={reload} />
+          {/* A save replaces the whole record, so the form waits for the read
+              that says what the record holds. Publishing defaults over an
+              unresolved record is the member's call to take on, and only a
+              landed read can offer it. */}
+          {storage === null ? (
+            <p className="sharing-note" data-testid="settings-storage-pending">
+              {'// settings not read yet — nothing can be published until they are.'}
+            </p>
+          ) : (
+            <VaultSettingsForm summary={storage.settings} onSaved={reload} />
+          )}
         </section>
 
         <section

@@ -50,6 +50,10 @@ export function WalletSignature({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const picker = useRef<HTMLDivElement>(null);
   const wasPicking = useRef(false);
+  // Cancel withdraws consent, but the wallet promise it interrupts keeps
+  // running. Without this the signature it later returns still signs the member
+  // in, or links a wallet they declined to link.
+  const cancelled = useRef(false);
 
   // Opening the picker unmounts the trigger, so keyboard focus has to move with
   // it and come back when the picker closes.
@@ -68,6 +72,7 @@ export function WalletSignature({
 
   const sign = async (connector: (typeof connectors)[number]) => {
     onRejected(null);
+    cancelled.current = false;
     // Past the handoff the caller owns the outcome and renders it; this
     // component only reports what went wrong on the wallet's side of it.
     let handedOff = false;
@@ -76,6 +81,8 @@ export function WalletSignature({
       const { accounts } = await connectAsync({ connector });
       const [account] = accounts;
       if (!account) throw new Error('the wallet returned no account');
+      // Checked before the nonce so a cancel during connect spends none.
+      if (cancelled.current) return;
 
       // The nonce first, then the phase: the label promises a wallet prompt
       // that only appears once the message exists.
@@ -93,6 +100,7 @@ export function WalletSignature({
       // Pin the account the message names: a mid-flow account switch would
       // otherwise sign with one address over a message naming another.
       const signature = await signMessageAsync({ account, message });
+      if (cancelled.current) return;
 
       setPhase('handoff');
       handedOff = true;
@@ -159,7 +167,10 @@ export function WalletSignature({
       <button
         type="button"
         className="wallet-connector-cancel"
-        onClick={() => setPicking(false)}
+        onClick={() => {
+          cancelled.current = true;
+          setPicking(false);
+        }}
         disabled={phase === 'handoff'}
         aria-label="Cancel wallet connection"
       >

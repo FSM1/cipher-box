@@ -373,8 +373,6 @@ impl EngineHandle {
         })
     }
 
-    /// Reads the storage pane's whole view. Resolves with the view; rejects
-    /// with the engine error.
     #[wasm_bindgen(js_name = vaultStorage)]
     pub fn vault_storage(&self) -> Promise {
         let engine = self.engine.clone();
@@ -389,8 +387,6 @@ impl EngineHandle {
         })
     }
 
-    /// Reads this account's login methods for the account settings pane.
-    /// Resolves with the rows; rejects with the engine error.
     #[wasm_bindgen(js_name = authMethods)]
     pub fn auth_methods(&self) -> Promise {
         let engine = self.engine.clone();

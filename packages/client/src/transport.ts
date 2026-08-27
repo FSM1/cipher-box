@@ -68,7 +68,6 @@ export interface EngineTransport {
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor>;
   /** Reads the login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]>;

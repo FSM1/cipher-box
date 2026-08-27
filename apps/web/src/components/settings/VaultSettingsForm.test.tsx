@@ -34,7 +34,7 @@ const WITH_CREDENTIAL = summary({
   byoCredentialStored: true,
 });
 
-function renderForm(taking = engineTaking(), stored: VaultSettingsSummaryDescriptor | null = null) {
+function renderForm(taking = engineTaking(), stored: VaultSettingsSummaryDescriptor = summary()) {
   const Providers = pageWrapper(
     taking.engine.client,
     fakeCoreKitSession({ loggedIn: true }).session

@@ -125,4 +125,33 @@ describe('the login methods pane', () => {
     // CipherBox needs the wallet for one signature, never a standing session.
     expect(disconnect).toHaveBeenCalled();
   });
+
+  it('links nothing with a signature the member cancelled before giving', async () => {
+    // The wallet answers only after the cancel, which is the whole race: a
+    // signature that lands late must not link a wallet the member declined.
+    let release: (signature: string) => void = () => {};
+    signMessageAsync.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        release = resolve;
+      })
+    );
+    const engine = await renderPane([IDENTITY]);
+
+    await act(async () => void fireEvent.click(screen.getByTestId('settings-link-wallet')));
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /connect with metamask/i })[0]!);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /cancel wallet connection/i }));
+    await act(async () => release(`0x${'ab'.repeat(65)}`));
+
+    expect(engine.calls.siweLinks).toEqual([]);
+  });
+
+  it('reads a last-used stamp as a date rather than as the wire string', async () => {
+    await renderPane([IDENTITY, WALLET]);
+
+    const pane = screen.getByTestId('settings-auth-methods');
+    expect(pane.textContent).not.toContain(WALLET.lastUsedAt);
+    expect(pane.textContent).toContain('never used');
+  });
 });

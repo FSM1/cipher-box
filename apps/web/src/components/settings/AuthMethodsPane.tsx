@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AuthMethodKind } from '@cipherbox/client';
 import { useAuthMethods } from '../../hooks/useAuthMethods';
+import { formatDate } from '../../utils/format';
 import { WalletSignature } from '../auth/WalletSignature';
 
 const KIND_LABEL: Record<AuthMethodKind, string> = {
@@ -26,6 +27,17 @@ const KIND_REFUSAL: Record<AuthMethodKind, string | null> = {
   wallet: null,
   unknown: null,
 };
+
+/**
+ * When the method last opened the account. `Intl` throws on a timestamp it
+ * cannot format, so an unparseable one reads back verbatim rather than taking
+ * the pane down.
+ */
+function lastUsedLabel(lastUsedAt: string | null): string {
+  if (lastUsedAt === null) return 'never used';
+  const millis = Date.parse(lastUsedAt);
+  return Number.isNaN(millis) ? `last used ${lastUsedAt}` : `last used ${formatDate(millis)}`;
+}
 
 /**
  * The login methods on this account: what opens it, and the one exchange that
@@ -56,9 +68,7 @@ export function AuthMethodsPane() {
             <li key={method.id} className="settings-method">
               <span className="settings-method-kind">{KIND_LABEL[method.kind]}</span>
               <span className="settings-method-id">{method.identifierDisplay ?? '—'}</span>
-              <span className="settings-method-used">
-                {method.lastUsedAt === null ? 'never used' : `last used ${method.lastUsedAt}`}
-              </span>
+              <span className="settings-method-used">{lastUsedLabel(method.lastUsedAt)}</span>
               <button
                 type="button"
                 className="terminal-btn terminal-btn--danger"
