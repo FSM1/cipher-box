@@ -184,9 +184,9 @@ pub enum NodeKind {
     Folder,
 }
 
-/// Which SIWE surface a nonce is minted for. The API keeps one pool per
-/// intent and refuses a cross-intent spend, so the host states the intent and
-/// no signature it collects can serve the other operation.
+/// Which SIWE surface a nonce is minted for. The API keeps one pool per intent
+/// and refuses a cross-intent spend, so a signature the host collects under one
+/// prompt can never serve the other operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SiweIntent {
     /// A wallet sign-in.
@@ -5922,9 +5922,7 @@ where {
     /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
     /// method (blueprint/engine.md "API client").
     ///
-    /// The intent picks the pool: the API refuses a sign-in nonce at
-    /// `POST /auth/siwe/link` and a link nonce at every sign-in route, so a
-    /// signature phished under one prompt cannot be replayed as the other.
+    /// The intent picks the pool ([`SiweIntent`]).
     pub async fn siwe_challenge(&self, intent: SiweIntent) -> Result<String, EngineError> {
         self.live_session()?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -7747,6 +7745,7 @@ mod tests {
         assert_eq!(sent[0].url, "/auth/challenge/step-up");
         let challenge_body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
         assert_eq!(challenge_body["operation"], "unlink");
+        assert_eq!(challenge_body["methodId"], "method-1");
         assert!(
             challenge_body.get("publicKey").is_none(),
             "the mint reads the key off the token, never the body"

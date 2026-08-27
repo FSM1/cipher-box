@@ -34,6 +34,15 @@ export class StepUpChallengeRequestDto {
   })
   @IsIn([...STEP_UP_OPERATIONS])
   operation!: StepUpOperation;
+
+  @ApiPropertyOptional({
+    description:
+      "The auth-method row an 'unlink' challenge may remove; refused for any other operation",
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID()
+  methodId?: string;
 }
 
 export class LoginRequestDto {

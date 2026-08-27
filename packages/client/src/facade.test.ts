@@ -531,8 +531,6 @@ describe('EngineFacade', () => {
 
     await expect(facade.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
     expect(transport.siweChallenges).toBe(1);
-    // The facade forwards the intent verbatim: the pool the API mints from is
-    // the caller's statement of what the signature will authorise.
     expect(transport.siweChallengeIntents).toEqual(['link']);
   });
 

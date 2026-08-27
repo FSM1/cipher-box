@@ -120,8 +120,6 @@ describe('the login methods pane', () => {
     await act(async () => void fireEvent.click(wallets[0]!));
 
     expect(engine.calls.siweChallenges).toBe(1);
-    // The link pool, never the open sign-in pool: a nonce from the wrong pool
-    // is refused at the link route however the prompt read.
     expect(engine.calls.siweChallengeIntents).toEqual(['link']);
     expect(engine.calls.siweLinks).toHaveLength(1);
     expect(engine.calls.siweLinks[0]!.message).toContain('Link wallet to CipherBox account');

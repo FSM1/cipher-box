@@ -5,11 +5,9 @@ import { getAddress, verifyMessage } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
 
 /**
- * The EIP-4361 `statement` each SIWE surface binds. One nonce pool serves
- * signing in and linking, so the statement is the only thing separating the two
- * intents: without it a signature phished under a sign-in prompt replays as a
- * link onto the attacker's account, and the unique `(kind, identifier_hash)`
- * index makes that permanent.
+ * The EIP-4361 `statement` each SIWE surface binds. The nonce pools already
+ * refuse a cross-intent spend; the statement is what the member reads in the
+ * wallet prompt, so it names the same intent the server enforces.
  */
 export const SIWE_LOGIN_STATEMENT = 'Sign in to CipherBox encrypted storage';
 export const SIWE_LINK_STATEMENT = 'Link wallet to CipherBox account';

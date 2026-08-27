@@ -655,8 +655,6 @@ describe('broadcast transport ↔ leader relay', () => {
 
     await expect(follower.siweChallenge('link')).resolves.toBe('leaderNonce12345');
     expect(engine.siweChallenges).toBe(1);
-    // The relay carries the intent to the leader's engine, so a follower's
-    // link cannot be served a nonce from the sign-in pool.
     expect(engine.siweChallengeIntents).toEqual(['link']);
   });
 

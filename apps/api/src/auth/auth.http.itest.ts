@@ -121,24 +121,31 @@ describe('auth HTTP flows (real Postgres)', () => {
   }
 
   /** A step-up challenge, minted against the caller's own session. */
-  function stepUpRequest(accessToken: string, operation: string) {
+  function stepUpRequest(accessToken: string, body: Record<string, string>) {
     return request(http())
       .post('/auth/challenge/step-up')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ operation });
+      .send(body);
   }
 
-  async function stepUpChallenge(accessToken: string, operation: StepUpOperation): Promise<string> {
-    return (await stepUpRequest(accessToken, operation).expect(200)).body.challenge;
+  async function stepUpChallenge(
+    accessToken: string,
+    operation: StepUpOperation,
+    methodId?: string
+  ): Promise<string> {
+    const body: Record<string, string> = { operation };
+    if (methodId !== undefined) body.methodId = methodId;
+    return (await stepUpRequest(accessToken, body).expect(200)).body.challenge;
   }
 
   /** The account key's answer to a fresh step-up challenge, as link and unlink demand. */
   async function identityReproof(
     identity: ReturnType<typeof newIdentity>,
     accessToken: string,
-    operation: StepUpOperation = 'link'
+    operation: StepUpOperation = 'link',
+    methodId?: string
   ): Promise<{ challenge: string; challengeSignature: string }> {
-    const challenge = await stepUpChallenge(accessToken, operation);
+    const challenge = await stepUpChallenge(accessToken, operation, methodId);
     return { challenge, challengeSignature: signChallenge(challenge, identity.privateKey) };
   }
 
@@ -418,10 +425,11 @@ describe('auth HTTP flows (real Postgres)', () => {
     account: ReturnType<typeof privateKeyToAccount>,
     statement: string = SIWE_LINK_STATEMENT
   ) {
-    return {
-      ...(await siweSign(account, statement, account, accessToken)),
-      ...(await identityReproof(identity, accessToken)),
-    };
+    const [siwe, reproof] = await Promise.all([
+      siweSign(account, statement, account, accessToken),
+      identityReproof(identity, accessToken),
+    ]);
+    return { ...siwe, ...reproof };
   }
 
   function link(accessToken: string, body: Record<string, string>) {
@@ -451,7 +459,21 @@ describe('auth HTTP flows (real Postgres)', () => {
 
     it('refuses an operation it mints no pool for', async () => {
       const { loginRes } = await identityLogin();
-      await stepUpRequest(loginRes.body.accessToken, 'login').expect(400);
+      await stepUpRequest(loginRes.body.accessToken, { operation: 'login' }).expect(400);
+    });
+
+    /**
+     * The signed bytes name the operation, never the row. An unlink therefore
+     * names its row at the mint, and no other operation may name one.
+     */
+    it('refuses an unlink mint with no row, and a link mint that names one', async () => {
+      const { loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      await stepUpRequest(accessToken, { operation: 'unlink' }).expect(400);
+      await stepUpRequest(accessToken, {
+        operation: 'link',
+        methodId: '11111111-1111-4111-8111-111111111111',
+      }).expect(400);
     });
 
     it('refuses a scoped token that carries no account key', async () => {
@@ -461,16 +483,20 @@ describe('auth HTTP flows (real Postgres)', () => {
         publicKey: identity.publicKeyCompressed,
         scope: 'device-approval',
       });
-      const refused = await stepUpRequest(scoped, 'unlink').expect(403);
+      const refused = await stepUpRequest(scoped, {
+        operation: 'unlink',
+        methodId: '11111111-1111-4111-8111-111111111111',
+      }).expect(403);
       expect(refused.body.message).toBe('Insufficient token scope');
     });
 
     it('mints a distinct domain tag per operation, and never the login tag', async () => {
       const { loginRes } = await identityLogin();
       const accessToken = loginRes.body.accessToken as string;
-      const tags = await Promise.all(
-        (['link', 'unlink'] as const).map((operation) => stepUpChallenge(accessToken, operation))
-      );
+      const tags = await Promise.all([
+        stepUpChallenge(accessToken, 'link'),
+        stepUpChallenge(accessToken, 'unlink', '11111111-1111-4111-8111-111111111111'),
+      ]);
       expect(new Set(tags.map((tag) => tag.split(':')[0])).size).toBe(2);
       for (const tag of tags) {
         expect(tag.startsWith('cipherbox-login:')).toBe(false);
@@ -479,7 +505,11 @@ describe('auth HTTP flows (real Postgres)', () => {
 
     it('refuses a step-up challenge at the login route', async () => {
       const { identity, loginRes } = await identityLogin();
-      const challenge = await stepUpChallenge(loginRes.body.accessToken, 'unlink');
+      const challenge = await stepUpChallenge(
+        loginRes.body.accessToken,
+        'unlink',
+        '11111111-1111-4111-8111-111111111111'
+      );
       await request(http())
         .post('/auth/login')
         .send({
@@ -652,22 +682,6 @@ describe('auth HTTP flows (real Postgres)', () => {
       ).toBe(0);
     });
 
-    it('refuses a link re-proved with an unlink challenge, and links nothing', async () => {
-      const { identity, loginRes } = await identityLogin();
-      const accessToken = loginRes.body.accessToken as string;
-      const account = privateKeyToAccount(generatePrivateKey());
-      const userId = jwtPayload(accessToken).sub;
-
-      await link(accessToken, {
-        ...(await siweSign(account, SIWE_LINK_STATEMENT, account, accessToken)),
-        ...(await identityReproof(identity, accessToken, 'unlink')),
-      }).expect(401);
-
-      expect(
-        await db.dataSource.getRepository(AuthMethod).count({ where: { userId, kind: 'wallet' } })
-      ).toBe(0);
-    });
-
     it('refuses a scoped token on the link route', async () => {
       const { identity, loginRes } = await identityLogin();
       const account = privateKeyToAccount(generatePrivateKey());
@@ -797,7 +811,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       accessToken: string,
       methodId: string
     ): Promise<Record<string, string>> {
-      const challenge = await stepUpChallenge(accessToken, 'unlink');
+      const challenge = await stepUpChallenge(accessToken, 'unlink', methodId);
       return { methodId, challenge, signature: signChallenge(challenge, identity.privateKey) };
     }
 
@@ -876,6 +890,24 @@ describe('auth HTTP flows (real Postgres)', () => {
         expect(await authMethods().count({ where: { userId } })).toBe(2);
       }
     );
+
+    /**
+     * A stolen bearer plus one captured proof must not choose a different row:
+     * the mint names the row, so the proof buys that removal and no other.
+     */
+    it('refuses an unlink redirected onto another row, and keeps both', async () => {
+      const { identity, accessToken, userId } = await accountWithWalletsOnly(2);
+      const rows = await authMethods().find({ where: { userId } });
+      const challenge = await stepUpChallenge(accessToken, 'unlink', rows[0].id);
+
+      await unlink(accessToken, {
+        methodId: rows[1].id,
+        challenge,
+        signature: signChallenge(challenge, identity.privateKey),
+      }).expect(401);
+
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
+    });
 
     it('refuses to unlink the last remaining method and keeps the row', async () => {
       const { identity, accessToken, userId } = await accountWithWalletsOnly(1);

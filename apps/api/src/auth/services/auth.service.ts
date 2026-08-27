@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -20,7 +21,8 @@ import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity'
 import { User } from '../entities/user.entity';
 import {
   ChallengeService,
-  STEP_UP_CHALLENGE_KINDS,
+  stepUpChallengeKind,
+  type SiweChallengeKind,
   type StepUpOperation,
 } from './challenge.service';
 import { IdentityService } from './identity.service';
@@ -83,23 +85,31 @@ export class AuthService {
 
   issueIdentityChallenge(publicKey: string): { challenge: string; expiresAt: Date } {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    return this.challengeService.issueIdentityChallenge('identity-login', canonicalKey);
+    return this.challengeService.issueIdentityChallenge('identity-login', {
+      publicKey: canonicalKey,
+    });
   }
 
   /**
    * Issue the re-proof challenge for one account-management operation. The key
    * comes from the caller's session, never from the request body, so a mint
-   * cannot be aimed at another account's identity key.
+   * cannot be aimed at another account's identity key. An unlink also names the
+   * row it may remove: the signed bytes carry only the operation, so a captured
+   * proof would otherwise authorise the removal of any method on the account.
    */
   issueStepUpChallenge(
     publicKey: string,
-    operation: StepUpOperation
+    operation: StepUpOperation,
+    subject: string | undefined
   ): { challenge: string; expiresAt: Date } {
+    if ((operation === 'unlink') !== (subject !== undefined)) {
+      throw new BadRequestException(`methodId is required for an unlink, and for nothing else`);
+    }
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    return this.challengeService.issueIdentityChallenge(
-      STEP_UP_CHALLENGE_KINDS[operation],
-      canonicalKey
-    );
+    return this.challengeService.issueIdentityChallenge(stepUpChallengeKind(operation), {
+      publicKey: canonicalKey,
+      subject,
+    });
   }
 
   async identityLogin(
@@ -108,7 +118,7 @@ export class AuthService {
     signature: string
   ): Promise<LoginResult> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity-login', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-login', { publicKey: canonicalKey });
     this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
 
     let user = await this.userRepository.findOne({ where: { publicKey: canonicalKey } });
@@ -127,13 +137,15 @@ export class AuthService {
     return { pair, isNewUser };
   }
 
-  issueSiweNonce(): { nonce: string; expiresAt: Date } {
-    return this.challengeService.issueSiweNonce('siwe-login');
-  }
-
-  /** Issue the nonce a wallet-link message must embed (owner-authenticated). */
-  issueSiweLinkNonce(): { nonce: string; expiresAt: Date } {
-    return this.challengeService.issueSiweNonce('siwe-link');
+  /**
+   * Issue a SIWE nonce. The link pool binds the minting account, so a nonce a
+   * member's own session issued cannot be spent under another member's bearer;
+   * the sign-in pool is unauthenticated and has no account to bind.
+   */
+  issueSiweNonce(kind: SiweChallengeKind, publicKey?: string): { nonce: string; expiresAt: Date } {
+    const canonicalKey =
+      publicKey === undefined ? undefined : this.identityService.normalizePublicKey(publicKey);
+    return this.challengeService.issueSiweNonce(kind, { publicKey: canonicalKey });
   }
 
   async siweLogin(message: string, signature: `0x${string}`): Promise<LoginResult> {
@@ -186,14 +198,14 @@ export class AuthService {
     challengeSignature: string
   ): Promise<void> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity-link', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-link', { publicKey: canonicalKey });
     this.identityService.verifyChallengeSignature(challenge, challengeSignature, canonicalKey);
 
     const nonce = parseSiweMessage(message).nonce;
     if (!nonce) {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
-    this.challengeService.consume(nonce, 'siwe-link');
+    this.challengeService.consume(nonce, 'siwe-link', { publicKey: canonicalKey });
     const address = await this.siweService.verifySiweMessage(
       message,
       signature,
@@ -249,7 +261,10 @@ export class AuthService {
     signature: string
   ): Promise<void> {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
-    this.challengeService.consume(challenge, 'identity-unlink', canonicalKey);
+    this.challengeService.consume(challenge, 'identity-unlink', {
+      publicKey: canonicalKey,
+      subject: methodId,
+    });
     this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
 
     await runLockGuardedTransaction(this.dataSource, async (manager) => {

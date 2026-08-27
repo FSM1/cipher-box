@@ -448,9 +448,9 @@ export type EventDescriptor =
     };
 
 /**
- * Which SIWE surface a nonce is minted for. The API keeps one challenge pool
- * per intent and refuses a cross-intent spend, so the caller names the
- * operation the wallet signature will authorise.
+ * Which SIWE surface a nonce is minted for. The API keeps one challenge pool per
+ * intent and refuses a cross-intent spend, so the caller names the operation the
+ * wallet signature will authorise.
  */
 export type SiweIntent = 'login' | 'link';
 

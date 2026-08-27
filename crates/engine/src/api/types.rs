@@ -20,10 +20,23 @@ pub(crate) struct ChallengeRequest<'a> {
     pub public_key: &'a str,
 }
 
+/// An account-management operation that re-proves the identity key. The API
+/// mints one challenge pool per operation and refuses a cross-operation spend.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum StepUpOperation {
+    Link,
+    Unlink,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StepUpChallengeRequest<'a> {
-    pub operation: &'a str,
+    pub operation: StepUpOperation,
+    /// The row an unlink challenge may remove; omitted for every other
+    /// operation, which the API refuses to bind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method_id: Option<&'a str>,
 }
 
 #[derive(Serialize)]

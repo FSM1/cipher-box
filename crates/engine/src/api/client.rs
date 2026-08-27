@@ -22,8 +22,8 @@ use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
     MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
     RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
-    StepUpChallengeRequest, TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse,
-    UnlinkMethodRequest, UploadResult,
+    StepUpChallengeRequest, StepUpOperation, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
+    TokenResponse, UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
@@ -174,10 +174,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         siwe_nonce(ok_or_err(self.http.send(request).await?)?)
     }
 
-    /// Issue the single-use SIWE nonce a wallet-link message must embed. Its
-    /// own pool, from an owner-authenticated route: a nonce minted here is
-    /// refused at every sign-in route, and a sign-in nonce is refused at
-    /// `POST /auth/siwe/link`.
+    /// Issue the single-use SIWE nonce a wallet-link message must embed, from
+    /// the link pool's own owner-authenticated route.
     pub async fn siwe_link_challenge(&self) -> Result<SiweNonce, ApiError> {
         let response = self
             .request_authed(HttpMethod::Post, "/auth/siwe/link-challenge")
@@ -218,15 +216,21 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     }
 
     /// Fetch the re-proof challenge for one account-management operation. The
-    /// key is the session's, so the request names only the operation; the
-    /// answer must carry that operation's tag before the identity key sees it.
-    async fn step_up_challenge(&self, operation: StepUpOperation) -> Result<String, ApiError> {
+    /// key is the session's, so the request names the operation and, for an
+    /// unlink, the row it may remove; the answer must carry that operation's
+    /// tag before the identity key sees it.
+    async fn step_up_challenge(
+        &self,
+        operation: StepUpOperation,
+        method_id: Option<&str>,
+    ) -> Result<String, ApiError> {
         let response = self
             .json_authed(
                 HttpMethod::Post,
                 "/auth/challenge/step-up",
                 &StepUpChallengeRequest {
-                    operation: operation.wire(),
+                    operation,
+                    method_id,
                 },
             )
             .await?;
@@ -254,7 +258,9 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         method_id: &str,
         signer: &impl ChallengeSigner,
     ) -> Result<(), ApiError> {
-        let challenge = self.step_up_challenge(StepUpOperation::Unlink).await?;
+        let challenge = self
+            .step_up_challenge(StepUpOperation::Unlink, Some(method_id))
+            .await?;
         let signature = signer.sign_challenge(&challenge);
         let response = self
             .json_authed(
@@ -280,7 +286,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         signature: &str,
         signer: &impl ChallengeSigner,
     ) -> Result<(), ApiError> {
-        let challenge = self.step_up_challenge(StepUpOperation::Link).await?;
+        let challenge = self.step_up_challenge(StepUpOperation::Link, None).await?;
         let challenge_signature = signer.sign_challenge(&challenge);
         let response = self
             .json_authed(
@@ -761,27 +767,10 @@ const IDENTITY_CHALLENGE_PREFIX: &str = "cipherbox-login:v2:";
 /// The challenge's random tail: 32 bytes rendered lowercase hex.
 const IDENTITY_CHALLENGE_NONCE_LEN: usize = 64;
 
-/// An account-management operation that re-proves the identity key. The API
-/// mints one challenge pool per operation and refuses a cross-operation spend,
-/// so the engine names the operation at the mint and holds the answer to that
-/// operation's tag.
-#[derive(Clone, Copy)]
-enum StepUpOperation {
-    Link,
-    Unlink,
-}
-
 impl StepUpOperation {
-    /// The `operation` field `POST /auth/challenge/step-up` takes.
-    fn wire(self) -> &'static str {
-        match self {
-            Self::Link => "link",
-            Self::Unlink => "unlink",
-        }
-    }
-
-    /// The domain tag the API stamps on this operation's challenge.
-    fn challenge_prefix(self) -> &'static str {
+    /// The domain tag the API stamps on this operation's challenge
+    /// (`apps/api/src/auth/services/challenge.service.ts`).
+    const fn challenge_prefix(self) -> &'static str {
         match self {
             Self::Link => "cipherbox-link:v2:",
             Self::Unlink => "cipherbox-unlink:v2:",
@@ -1024,13 +1013,9 @@ mod tests {
     /// matrix by being added here.
     const ALL_CHALLENGE_PREFIXES: [&str; 3] = [
         IDENTITY_CHALLENGE_PREFIX,
-        "cipherbox-link:v2:",
-        "cipherbox-unlink:v2:",
+        StepUpOperation::Link.challenge_prefix(),
+        StepUpOperation::Unlink.challenge_prefix(),
     ];
-
-    fn hostile_challenges() -> Vec<String> {
-        hostile_challenges_for(IDENTITY_CHALLENGE_PREFIX)
-    }
 
     /// The accept side of the pin: every tail the API's hex renderer can emit
     /// is admitted, so a tightening that would break a real login fails here
@@ -1059,7 +1044,7 @@ mod tests {
             }
         }
 
-        for challenge in hostile_challenges() {
+        for challenge in hostile_challenges_for(IDENTITY_CHALLENGE_PREFIX) {
             let (http, _creds, client) = fakes();
             http.enqueue_response(json_response(
                 200,
@@ -1905,6 +1890,11 @@ mod tests {
         assert_eq!(sent.len(), 2, "one challenge, then one unlink");
         assert_eq!(sent[0].url, "http://api.test/auth/challenge/step-up");
         assert_eq!(body_json(&sent[0])["operation"], "unlink");
+        assert_eq!(
+            body_json(&sent[0])["methodId"],
+            "method-1",
+            "the mint names the row the proof may remove"
+        );
         assert!(
             has_bearer(&sent[0]),
             "the step-up mint is owner-authenticated"
@@ -1947,6 +1937,10 @@ mod tests {
         let sent = &requests[sent_after_login..];
         assert_eq!(sent[0].url, "http://api.test/auth/challenge/step-up");
         assert_eq!(body_json(&sent[0])["operation"], "link");
+        assert!(
+            body_json(&sent[0]).get("methodId").is_none(),
+            "a link names no row, and the API refuses one that does"
+        );
         assert_eq!(sent[1].url, "http://api.test/auth/siwe/link");
         assert_eq!(body_json(&sent[1])["challenge"], link_challenge);
     }
@@ -1986,36 +1980,41 @@ mod tests {
             }
         }
 
-        for (operation, refuse) in [
-            (
-                StepUpOperation::Unlink,
-                &(|client: &ApiClient<ScriptedHttp, InMemoryCredentialStore>| {
-                    block_on(client.unlink_auth_method("method-1", &PanickingSigner))
-                })
-                    as &dyn Fn(&ApiClient<ScriptedHttp, InMemoryCredentialStore>) -> _,
-            ),
-            (StepUpOperation::Link, &|client: &ApiClient<
-                ScriptedHttp,
-                InMemoryCredentialStore,
-            >| {
-                block_on(client.siwe_link("siwe-message", "0xsig", &PanickingSigner))
-            }),
-        ] {
-            for challenge in hostile_challenges_for(operation.challenge_prefix()) {
-                let (http, _creds, client) = fakes();
-                http.enqueue_response(json_response(
-                    200,
-                    json!({ "challenge": challenge.clone() }),
-                ));
-                assert_eq!(
-                    refuse(&client).unwrap_err(),
-                    ApiError::Decode("unusable step-up challenge".into()),
-                    "challenge {challenge:?} must be refused"
-                );
-                let requests = http.requests();
-                assert_eq!(requests.len(), 1, "only the mint for {challenge:?}");
-                assert_eq!(requests[0].url, "http://api.test/auth/challenge/step-up");
-            }
+        for challenge in hostile_challenges_for(StepUpOperation::Unlink.challenge_prefix()) {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": challenge.clone() }),
+            ));
+            assert_step_up_refused(
+                &http,
+                block_on(client.unlink_auth_method("method-1", &PanickingSigner)),
+                &challenge,
+            );
         }
+        for challenge in hostile_challenges_for(StepUpOperation::Link.challenge_prefix()) {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": challenge.clone() }),
+            ));
+            assert_step_up_refused(
+                &http,
+                block_on(client.siwe_link("siwe-message", "0xsig", &PanickingSigner)),
+                &challenge,
+            );
+        }
+    }
+
+    /// The mint was the only request, and the refusal named the step-up pin.
+    fn assert_step_up_refused(http: &ScriptedHttp, result: Result<(), ApiError>, challenge: &str) {
+        assert_eq!(
+            result.unwrap_err(),
+            ApiError::Decode("unusable step-up challenge".into()),
+            "challenge {challenge:?} must be refused"
+        );
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1, "only the mint for {challenge:?}");
+        assert_eq!(requests[0].url, "http://api.test/auth/challenge/step-up");
     }
 }

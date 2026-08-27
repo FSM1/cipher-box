@@ -12,6 +12,7 @@ import { User } from '../entities/user.entity';
 import { AuthService } from './auth.service';
 import {
   ChallengeService,
+  IDENTITY_CHALLENGE_PREFIXES,
   type IdentityChallengeKind,
   type SiweChallengeKind,
 } from './challenge.service';
@@ -36,6 +37,8 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
 }
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
+/** A second account's identity key, for the cross-account refusals. */
+const OTHER_KEY = '02'.padEnd(66, 'c');
 
 describe('AuthService auth-method surface', () => {
   let authMethods: FakeRepository<AuthMethod>;
@@ -74,11 +77,11 @@ describe('AuthService auth-method surface', () => {
   });
 
   /** The account key's answer to a fresh challenge of one operation's kind. */
-  function reproof(kind: IdentityChallengeKind): {
-    challenge: string;
-    challengeSignature: string;
-  } {
-    const { challenge } = challenges.issueIdentityChallenge(kind, publicKey);
+  function reproof(
+    kind: IdentityChallengeKind,
+    subject?: string
+  ): { challenge: string; challengeSignature: string } {
+    const { challenge } = challenges.issueIdentityChallenge(kind, { publicKey, subject });
     const hash = createHash('sha256').update(challenge, 'utf8').digest();
     return { challenge, challengeSignature: secp256k1.sign(hash, privateKey).toCompactHex() };
   }
@@ -95,9 +98,10 @@ describe('AuthService auth-method surface', () => {
 
   function unlink(
     methodId: string,
-    kind: IdentityChallengeKind = 'identity-unlink'
+    kind: IdentityChallengeKind = 'identity-unlink',
+    subject: string = methodId
   ): Promise<void> {
-    const { challenge, challengeSignature } = reproof(kind);
+    const { challenge, challengeSignature } = reproof(kind, subject);
     return service.unlinkAuthMethod(USER_ID, publicKey, methodId, challenge, challengeSignature);
   }
 
@@ -127,12 +131,17 @@ describe('AuthService auth-method surface', () => {
     }
   );
 
+  /**
+   * A SIWE message over a nonce from the named pool. The link pool binds the
+   * minting account, so `mintedFor` names whose session issued the nonce.
+   */
   function siweMessage(
     account: ReturnType<typeof privateKeyToAccount>,
     statement: string,
-    nonceKind: SiweChallengeKind
+    nonceKind: SiweChallengeKind,
+    mintedFor: string | undefined = nonceKind === 'siwe-link' ? publicKey : undefined
   ) {
-    const { nonce } = challenges.issueSiweNonce(nonceKind);
+    const { nonce } = challenges.issueSiweNonce(nonceKind, { publicKey: mintedFor });
     return createSiweMessage({
       address: account.address,
       chainId: 1,
@@ -146,16 +155,13 @@ describe('AuthService auth-method surface', () => {
 
   async function linkWith(
     statement: string,
-    challengeKind: IdentityChallengeKind | null,
-    nonceKind: SiweChallengeKind = 'siwe-link'
+    proof: { challenge: string; challengeSignature: string },
+    nonceKind: SiweChallengeKind = 'siwe-link',
+    mintedFor?: string
   ) {
     const account = privateKeyToAccount(generatePrivateKey());
-    const message = siweMessage(account, statement, nonceKind);
+    const message = siweMessage(account, statement, nonceKind, mintedFor);
     const signature = await account.signMessage({ message });
-    const proof =
-      challengeKind === null
-        ? { challenge: 'cipherbox-link:v2:'.padEnd(82, 'f'), challengeSignature: '0'.repeat(128) }
-        : reproof(challengeKind);
     return service.siweLink(
       USER_ID,
       publicKey,
@@ -166,18 +172,24 @@ describe('AuthService auth-method surface', () => {
     );
   }
 
+  /** A re-proof the account key never made. */
+  const forgedProof = {
+    challenge: IDENTITY_CHALLENGE_PREFIXES['identity-link'].padEnd(82, 'f'),
+    challengeSignature: '0'.repeat(128),
+  };
+
   it('links a wallet once the account identity key is re-proved', async () => {
-    await linkWith(SIWE_LINK_STATEMENT, 'identity-link');
+    await linkWith(SIWE_LINK_STATEMENT, reproof('identity-link'));
     expect(await authMethods.count({ where: { userId: USER_ID, kind: 'wallet' } })).toBe(1);
   });
 
   it('refuses a link carrying no valid identity re-proof, and links nothing', async () => {
-    await expect(linkWith(SIWE_LINK_STATEMENT, null)).rejects.toThrow(UnauthorizedException);
+    await expect(linkWith(SIWE_LINK_STATEMENT, forgedProof)).rejects.toThrow(UnauthorizedException);
     expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(0);
   });
 
   it('refuses a phished sign-in signature replayed as a link, and links nothing', async () => {
-    await expect(linkWith(SIWE_LOGIN_STATEMENT, 'identity-link')).rejects.toThrow(
+    await expect(linkWith(SIWE_LOGIN_STATEMENT, reproof('identity-link'))).rejects.toThrow(
       UnauthorizedException
     );
     expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(0);
@@ -189,19 +201,33 @@ describe('AuthService auth-method surface', () => {
    * the nonce's own kind can refuse this message.
    */
   it('refuses a sign-in nonce spent as a link, statement notwithstanding', async () => {
-    await expect(linkWith(SIWE_LINK_STATEMENT, 'identity-link', 'siwe-login')).rejects.toThrow(
-      UnauthorizedException
-    );
+    await expect(
+      linkWith(SIWE_LINK_STATEMENT, reproof('identity-link'), 'siwe-login')
+    ).rejects.toThrow(UnauthorizedException);
     expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(0);
   });
 
   it.each(['identity-login', 'identity-unlink'] as const)(
     'refuses a link re-proved with a %s challenge, and links nothing',
     async (kind) => {
-      await expect(linkWith(SIWE_LINK_STATEMENT, kind)).rejects.toThrow(UnauthorizedException);
+      await expect(linkWith(SIWE_LINK_STATEMENT, reproof(kind))).rejects.toThrow(
+        UnauthorizedException
+      );
       expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(0);
     }
   );
+
+  /**
+   * The link pool binds the minting account, so one member's session cannot
+   * spend a nonce another member's session issued — a wallet a victim signed
+   * for their own account cannot be redirected onto the attacker's.
+   */
+  it('refuses a link nonce another account minted, and links nothing', async () => {
+    await expect(
+      linkWith(SIWE_LINK_STATEMENT, reproof('identity-link'), 'siwe-link', OTHER_KEY)
+    ).rejects.toThrow(UnauthorizedException);
+    expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(0);
+  });
 
   it.each(['identity-login', 'identity-link'] as const)(
     'refuses an unlink re-proved with a %s challenge, and keeps the row',
@@ -209,10 +235,24 @@ describe('AuthService auth-method surface', () => {
       await seedMethod('identity');
       const wallet = await seedMethod('wallet');
 
-      await expect(unlink(wallet, kind)).rejects.toThrow(UnauthorizedException);
+      await expect(unlink(wallet, kind, undefined)).rejects.toThrow(UnauthorizedException);
       expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(2);
     }
   );
+
+  /**
+   * The signed bytes name the operation, not the row. The mint names the row,
+   * so a captured proof cannot be redirected onto a method the member never
+   * chose — which is the whole point of re-proving against a stolen bearer.
+   */
+  it('refuses an unlink redirected onto another row, and keeps both', async () => {
+    await seedMethod('identity');
+    const first = await seedMethod('wallet');
+    const second = await seedMethod('wallet');
+
+    await expect(unlink(second, 'identity-unlink', first)).rejects.toThrow(UnauthorizedException);
+    expect(await authMethods.count({ where: { userId: USER_ID } })).toBe(3);
+  });
 
   it.each(['identity-link', 'identity-unlink'] as const)(
     'refuses a login signed against a %s challenge',

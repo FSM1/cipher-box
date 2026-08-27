@@ -333,11 +333,7 @@ export class EngineFacade {
     return this.command({ kind: 'saveVaultSettings', settings });
   }
 
-  /**
-   * Issues the single-use nonce an EIP-4361 message must embed. The intent
-   * picks the API's pool, so a nonce this call returns is spendable at that
-   * operation and refused at the other.
-   */
+  /** Issues the single-use nonce an EIP-4361 message must embed, for `intent`. */
   siweChallenge(intent: SiweIntent): Promise<string> {
     return this.transport.siweChallenge(intent);
   }

@@ -6,9 +6,8 @@ import { fakeConfig } from '../../testing/fakes';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
 
 /**
- * One nonce pool serves signing in and linking, and `POST /auth/siwe/challenge`
- * is unauthenticated — so the statement is the only field that tells a verifier
- * which intent the member was shown.
+ * The statement is the field that tells a verifier which intent the member was
+ * shown in the wallet prompt. The nonce pools bind the same intent structurally.
  */
 describe('SiweService intent binding', () => {
   const NONCE = 'nonce12345678';

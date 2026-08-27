@@ -15,9 +15,25 @@ export type ChallengeKind = IdentityChallengeKind | SiweChallengeKind;
 
 interface PendingChallenge {
   kind: ChallengeKind;
-  /** Compressed identity publicKey the challenge is bound to (identity only). */
+  /**
+   * Compressed identity publicKey the challenge is bound to, when the mint knew
+   * the account. Absent on the open sign-in pools, whose mints are
+   * unauthenticated and so have no account to bind.
+   */
   publicKey?: string;
+  /**
+   * The row the operation may touch, when the operation names one. The signed
+   * bytes carry only the operation, so without this a captured unlink proof
+   * would authorise the removal of any method the account holds.
+   */
+  subject?: string;
   expiresAt: Date;
+}
+
+/** What a challenge is bound to besides its kind. */
+export interface ChallengeBinding {
+  publicKey?: string;
+  subject?: string;
 }
 
 /**
@@ -36,13 +52,15 @@ export const IDENTITY_CHALLENGE_PREFIXES: Readonly<Record<IdentityChallengeKind,
 export const STEP_UP_OPERATIONS = ['link', 'unlink'] as const;
 export type StepUpOperation = (typeof STEP_UP_OPERATIONS)[number];
 
-export const STEP_UP_CHALLENGE_KINDS: Readonly<Record<StepUpOperation, IdentityChallengeKind>> = {
-  link: 'identity-link',
-  unlink: 'identity-unlink',
-};
+/**
+ * The kinds a step-up mint may issue. Excluding the login kind is what makes
+ * the mapping below fail closed: an operation added to `STEP_UP_OPERATIONS`
+ * that would aim the mint at the login pool stops compiling.
+ */
+type StepUpChallengeKind = Exclude<IdentityChallengeKind, 'identity-login'>;
 
-export function isIdentityChallengeKind(kind: ChallengeKind): kind is IdentityChallengeKind {
-  return Object.hasOwn(IDENTITY_CHALLENGE_PREFIXES, kind);
+export function stepUpChallengeKind(operation: StepUpOperation): StepUpChallengeKind {
+  return `identity-${operation}`;
 }
 
 /**
@@ -67,43 +85,52 @@ export class ChallengeService {
     this.ttlMs = Number(configService.get('CHALLENGE_TTL_SECONDS') ?? 300) * 1000;
   }
 
-  /** Issue an identity challenge for one operation, bound to a publicKey. */
+  /** Issue an identity challenge for one operation, under the given binding. */
   issueIdentityChallenge(
     kind: IdentityChallengeKind,
-    publicKey: string
+    binding: ChallengeBinding
   ): { challenge: string; expiresAt: Date } {
     this.evictExpired();
     const challenge =
       IDENTITY_CHALLENGE_PREFIXES[kind] + this.entropy.randomBytes(32).toString('hex');
     const expiresAt = new Date(this.clock.now().getTime() + this.ttlMs);
-    this.pending.set(challenge, { kind, publicKey, expiresAt });
+    this.pending.set(challenge, { kind, ...binding, expiresAt });
     return { challenge, expiresAt };
   }
 
   /** Issue a SIWE nonce (16 random bytes, hex — exceeds the EIP-4361 minimum). */
-  issueSiweNonce(kind: SiweChallengeKind): { nonce: string; expiresAt: Date } {
+  issueSiweNonce(
+    kind: SiweChallengeKind,
+    binding: ChallengeBinding = {}
+  ): { nonce: string; expiresAt: Date } {
     this.evictExpired();
     const nonce = this.entropy.randomBytes(16).toString('hex');
     const expiresAt = new Date(this.clock.now().getTime() + this.ttlMs);
-    this.pending.set(nonce, { kind, expiresAt });
+    this.pending.set(nonce, { kind, ...binding, expiresAt });
     return { nonce, expiresAt };
   }
 
   /**
-   * Consume a challenge: it must exist, match the kind (and bound publicKey
-   * for identity), and be unexpired. Single-use — consuming removes it.
+   * Consume a challenge: it must exist, match the kind and the binding it was
+   * issued under, and be unexpired. Single-use — consuming removes it.
    */
-  consume(value: string, kind: ChallengeKind, publicKey?: string): void {
+  consume(value: string, kind: ChallengeKind, binding: ChallengeBinding = {}): void {
     const entry = this.pending.get(value);
     if (!entry || entry.kind !== kind) {
       throw new UnauthorizedException('Unknown or already-used challenge');
     }
+    // A caller who does not match the binding never spends the entry, so a
+    // wrong-account or wrong-operation attempt cannot destroy a live challenge
+    // the rightful account is still about to use.
+    if (entry.publicKey !== binding.publicKey) {
+      throw new UnauthorizedException('Challenge was issued for a different publicKey');
+    }
+    if (entry.subject !== binding.subject) {
+      throw new UnauthorizedException('Challenge was issued for a different subject');
+    }
     this.pending.delete(value);
     if (entry.expiresAt.getTime() <= this.clock.now().getTime()) {
       throw new UnauthorizedException('Challenge expired');
-    }
-    if (isIdentityChallengeKind(kind) && entry.publicKey !== publicKey) {
-      throw new UnauthorizedException('Challenge was issued for a different publicKey');
     }
   }
 

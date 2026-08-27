@@ -411,8 +411,8 @@ impl EngineHandle {
 
     /// Issues the single-use nonce an EIP-4361 message must embed, for the
     /// named intent (`"login"` or `"link"`). Resolves with the nonce as a
-    /// string; rejects with the engine error, or with a decode refusal when
-    /// the intent is not one the API mints a pool for.
+    /// string; rejects with the engine error, or with a refusal when the intent
+    /// names no pool.
     #[wasm_bindgen(js_name = siweChallenge)]
     pub fn siwe_challenge(&self, intent: String) -> Promise {
         let engine = self.engine.clone();
@@ -540,8 +540,6 @@ impl EngineHandle {
 }
 
 /// Maps the host's intent string onto the pool the nonce is minted from.
-/// Fail-closed: an unknown intent never reaches a mint, so a typo cannot fall
-/// back to the sign-in pool and hand the link route a replayable nonce.
 fn siwe_intent(intent: &str) -> Result<SiweIntent, JsValue> {
     match intent {
         "login" => Ok(SiweIntent::Login),

@@ -46,8 +46,8 @@ export interface EngineCalls {
   siwe: { message: string; signature: Uint8Array }[];
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
-  /** The intent each nonce mint named; a link must never mint from the sign-in pool. */
   siweChallenges: number;
+  /** The intent each nonce mint named; a link must never mint from the sign-in pool. */
   siweChallengeIntents: SiweIntent[];
   logouts: number;
   /** How many times this tab announced the session end to the origin. */

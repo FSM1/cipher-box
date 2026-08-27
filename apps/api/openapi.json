@@ -1590,6 +1590,11 @@
               "unlink"
             ],
             "description": "The account-management operation the challenge will authorise"
+          },
+          "methodId": {
+            "type": "string",
+            "description": "The auth-method row an 'unlink' challenge may remove; refused for any other operation",
+            "format": "uuid"
           }
         },
         "required": [
