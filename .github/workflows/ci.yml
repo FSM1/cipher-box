@@ -1082,6 +1082,13 @@ jobs:
       - uses: ./.github/actions/setup-fuse-t
         if: runner.os == 'macOS'
 
+      # And the Windows one, whose `winfsp-sys` generates its bindings against
+      # the headers and import library the MSI installs — the shell links the
+      # adapter and states WinFsp's `/DELAYLOAD` arg itself, so this leg needs
+      # the driver as much as the leg that checks the adapter does.
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
