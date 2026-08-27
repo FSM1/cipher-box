@@ -7,7 +7,6 @@ const ORIGIN = 'https://vault.example';
 
 const source = (byte: number): MediaSource => ({
   node: new Uint8Array([byte, byte, byte]),
-  size: 1024,
   mimeType: 'video/mp4',
 });
 

@@ -42,6 +42,7 @@ import type {
   AuthMethodDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -457,6 +458,7 @@ export class LeaderRelay {
       | ArrayBuffer
       | string
       | bigint
+      | OpenedStream
       | undefined
     >
   ): Promise<void> {
@@ -541,15 +543,11 @@ export class LeaderRelay {
     write: WireWrite
   ): void {
     if (write.kind === 'beginWrite') {
-      void this.answerPort(entry, requestId, () =>
-        this.bind(
-          'write',
-          entry,
-          clientId,
-          this.transport.beginWrite(write.target, write.size),
-          (handle) => this.transport.abortWrite(handle)
-        )
-      );
+      void this.answerPort(entry, requestId, async () => {
+        const handle = await this.transport.beginWrite(write.target, write.size);
+        this.bind('write', entry, clientId, handle, (minted) => this.transport.abortWrite(minted));
+        return handle;
+      });
       return;
     }
 
@@ -597,15 +595,13 @@ export class LeaderRelay {
     entry: PortEntry,
     clientId: string,
     stream: WireStream
-  ): Promise<StreamHandle | ArrayBuffer | undefined> {
+  ): Promise<OpenedStream | ArrayBuffer | undefined> {
     if (stream.kind === 'openContentStream') {
-      return this.bind(
-        'stream',
-        entry,
-        clientId,
-        this.transport.openContentStream(stream.node),
-        (handle) => this.transport.closeStream(handle)
+      const opened = await this.transport.openContentStream(stream.node);
+      this.bind('stream', entry, clientId, opened.handle, (minted) =>
+        this.transport.closeStream(minted)
       );
+      return opened;
     }
 
     const handle = stream.handle;
@@ -632,20 +628,18 @@ export class LeaderRelay {
    * that re-brokered mid-mint all retire it — and a handle its owner will never
    * receive is a handle nothing will ever release.
    */
-  private async bind(
+  private bind(
     kind: HandleKind,
     entry: PortEntry,
     clientId: string,
-    minting: Promise<bigint>,
+    handle: bigint,
     close: (handle: bigint) => Promise<unknown>
-  ): Promise<bigint> {
-    const handle = await minting;
+  ): void {
     if (!this.ports.has(entry)) {
       void close(handle).catch(() => undefined);
       throw unknownHandle(kind);
     }
     this.owners(kind).set(handle, clientId);
-    return handle;
   }
 
   private owners(kind: HandleKind): Map<bigint, string> {

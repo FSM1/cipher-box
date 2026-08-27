@@ -156,7 +156,7 @@ describe('EngineClient leadership + transport swap', () => {
     await startTab(leader);
     await startTab(follower, [9]);
 
-    const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
+    const { handle: stale } = await follower.openContentStream(new Uint8Array(16).fill(1));
 
     await leader.dispose();
     await tick();
@@ -165,7 +165,7 @@ describe('EngineClient leadership + transport swap', () => {
 
     // The promoted tab's engine mints from 1 too, so a carried-over handle would
     // alias the next stream it opens (`EngineClient.streams`).
-    const reopened = await follower.openContentStream(new Uint8Array(16).fill(2));
+    const { handle: reopened } = await follower.openContentStream(new Uint8Array(16).fill(2));
     expect(reopened).not.toBe(stale);
     await follower.readStream(reopened, 0, 8);
     const promoted = workers[workers.length - 1];
@@ -711,7 +711,7 @@ describe('EngineClient leadership + transport swap', () => {
     });
     await tick();
 
-    const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
+    const { handle: stale } = await follower.openContentStream(new Uint8Array(16).fill(1));
     relayA.close();
     await tick();
 
@@ -722,7 +722,7 @@ describe('EngineClient leadership + transport swap', () => {
 
     // The fence has to fire on a leadership this tab merely observed, not only
     // on one it was promoted through (`EngineClient.streams`).
-    const fresh = await follower.openContentStream(new Uint8Array(16).fill(2));
+    const { handle: fresh } = await follower.openContentStream(new Uint8Array(16).fill(2));
     const window_ = await follower.readStream(fresh, 0, 8);
     expect(window_.byteLength).toBe(8);
     expect(engineB.reads).toEqual([{ handle: 1n, offset: 0, length: 8 }]);
@@ -732,6 +732,109 @@ describe('EngineClient leadership + transport swap', () => {
     });
     // The refused stale read never reached the replacement engine.
     expect(engineB.reads).toHaveLength(1);
+
+    await follower.dispose();
+    relayB.close();
+  });
+});
+
+describe('EngineClient stream sizes off the follower wire', () => {
+  it('refuses an opened stream whose size no read could address, giving the handle back', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    engine.streamHandle = 5n;
+    // What a same-origin context posing as the leader can put on the port: the
+    // wasm host's ceiling does not run on this wire.
+    engine.streamSize = Number.MAX_SAFE_INTEGER + 2;
+    const relay = new LeaderRelay(bus.channel(), engine, ports.courier('leader'), bus.locks);
+    relay.serves(TEST_ACCOUNT_ID);
+    const follower = new EngineClient({
+      locks: pinnedFollower(bus.locks),
+      createChannel: () => bus.channel(),
+      spawnWorker: () => {
+        throw new Error('follower never spawns');
+      },
+      courier: ports.courier('f'),
+      clientId: 'f',
+    });
+    await tick();
+    await startTab(follower);
+
+    await expect(follower.openContentStream(new Uint8Array(16))).rejects.toThrow('unaddressable');
+    // The refusal releases the stream it refused, rather than pinning a content
+    // version nothing will ever close.
+    await tick();
+    expect(engine.closedStreams).toEqual([5n]);
+
+    await follower.dispose();
+    relay.close();
+  });
+});
+
+describe('EngineClient session over an engine that cannot serve it', () => {
+  const OTHER_ACCOUNT_ID = 'acct04';
+
+  it('reports no session once the origin engine turns out to hold another account', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engineA = new FakeEngineTransport();
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'), bus.locks);
+    relayA.serves(TEST_ACCOUNT_ID);
+    const follower = new EngineClient({
+      locks: pinnedFollower(bus.locks),
+      createChannel: () => bus.channel(),
+      spawnWorker: () => {
+        throw new Error('follower never spawns');
+      },
+      courier: ports.courier('f'),
+      clientId: 'f',
+    });
+    await tick();
+    await startTab(follower);
+    expect(follower.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+    // The origin's one engine is replaced by one holding somebody else, which
+    // no further leadership change can undo for this tab.
+    relayA.close();
+    await tick();
+    const engineB = new FakeEngineTransport();
+    const relayB = new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'), bus.locks);
+    relayB.serves(OTHER_ACCOUNT_ID);
+    for (let i = 0; i < 6; i += 1) await tick();
+
+    expect(follower.signedInAccount()).toBeNull();
+
+    await follower.dispose();
+    relayB.close();
+  });
+
+  it('keeps the session while the replacement leadership holds the same account', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engineA = new FakeEngineTransport();
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'), bus.locks);
+    relayA.serves(TEST_ACCOUNT_ID);
+    const follower = new EngineClient({
+      locks: pinnedFollower(bus.locks),
+      createChannel: () => bus.channel(),
+      spawnWorker: () => {
+        throw new Error('follower never spawns');
+      },
+      courier: ports.courier('f'),
+      clientId: 'f',
+    });
+    await tick();
+    await startTab(follower);
+
+    relayA.close();
+    await tick();
+    const engineB = new FakeEngineTransport();
+    const relayB = new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'), bus.locks);
+    relayB.serves(TEST_ACCOUNT_ID);
+    for (let i = 0; i < 6; i += 1) await tick();
+
+    expect(follower.signedInAccount()).toBe(TEST_ACCOUNT_ID);
 
     await follower.dispose();
     relayB.close();

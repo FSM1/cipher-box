@@ -279,6 +279,27 @@ describe('MediaPipe.respond', () => {
     expect((await pending).status).toBe(503);
   });
 
+  it('keeps a port that refused an open, asking its engine nothing twice', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // The tab reached its engine and its engine refused — opening the stream is
+    // what frames the head, so this arrives instead of one.
+    const refusing = new FakePort((message, self) => {
+      if (message.type !== 'cb:media:open') return;
+      self.deliver({
+        type: 'cb:media:error',
+        requestId: message.requestId,
+        message: 'too many read streams are already open',
+      });
+    });
+    pipe.adoptPort(refusing);
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.status).toBe(503);
+    expect(refusing.countOf('cb:media:open')).toBe(1);
+    expect(refusing.closed).toBe(false);
+  });
+
   it('answers 404 for a stream path carrying no ticket', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const port = streamingPort([]);
@@ -437,6 +458,9 @@ describe('MediaPipe idle bodies', () => {
     expect(response.status).toBe(206);
     expect(silent.countOf('cb:media:open')).toBe(1);
     expect(live.countOf('cb:media:open')).toBe(1);
+    // The replaced port hosts a cursor and the engine stream behind it; the
+    // release has to reach it before the port is closed.
+    expect(silent.countOf('cb:media:close')).toBe(1);
   });
 });
 

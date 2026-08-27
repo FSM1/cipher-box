@@ -7,10 +7,13 @@
 import type { MediaPresentation } from './range.js';
 import { STREAM_PATH_PREFIX, ticketFromUrl } from './protocol.js';
 
-/** What a ticket resolves to: the content node plus what the head must declare. */
+/**
+ * What a ticket resolves to: the content node plus what the head must declare.
+ * No length — the broker frames one from the version its engine stream pins, and
+ * a size recorded at mint time can already name a version it will not serve.
+ */
 export interface MediaSource extends MediaPresentation {
   readonly node: Uint8Array;
-  readonly size: number;
 }
 
 export class StreamRegistry {

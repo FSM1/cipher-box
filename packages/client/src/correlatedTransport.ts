@@ -18,6 +18,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -147,7 +148,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract authMethods(): Promise<AuthMethodDescriptor[]>;
   abstract siweChallenge(): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
-  abstract openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  abstract openContentStream(node: Uint8Array): Promise<OpenedStream>;
   abstract readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
   abstract closeStream(handle: StreamHandle): Promise<void>;
   abstract close(): void;

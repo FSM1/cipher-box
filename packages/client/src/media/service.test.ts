@@ -78,7 +78,7 @@ class FakeContainer implements ServiceWorkerContainerLike {
 const ORIGIN = 'https://vault.example';
 
 const reader: MediaReader = {
-  openContentStream: () => Promise.resolve(1n),
+  openContentStream: () => Promise.resolve({ handle: 1n, size: 8 }),
   readStream: (_handle, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
   closeStream: () => Promise.resolve(),
 };
@@ -148,7 +148,7 @@ describe('MediaService', () => {
     await service.start();
 
     expect(() =>
-      service.createStreamUrl({ node: new Uint8Array(1), size: 1, mimeType: 'video/mp4' })
+      service.createStreamUrl({ node: new Uint8Array(1), mimeType: 'video/mp4' })
     ).toThrow(/controlling Service Worker/);
   });
 
@@ -159,7 +159,7 @@ describe('MediaService', () => {
 
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     const ticket = url.slice('/stream/'.length);
@@ -168,6 +168,7 @@ describe('MediaService', () => {
       answers.push(event.data as MediaResponse)
     );
     channels[0].port2.postMessage({ type: 'cb:media:open', requestId: 1, ticket, range: null });
+    await settled();
 
     expect(answers[0]).toMatchObject({ type: 'cb:media:head', status: 200 });
 
@@ -176,6 +177,7 @@ describe('MediaService', () => {
     // from the next request.
     expect(answers[1]).toMatchObject({ type: 'cb:media:error', requestId: 1 });
     channels[0].port2.postMessage({ type: 'cb:media:open', requestId: 2, ticket, range: null });
+    await settled();
     expect(answers[2]).toMatchObject({ type: 'cb:media:head', status: 404 });
   });
 
@@ -185,7 +187,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
 
@@ -200,7 +202,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     service.revokeStreamUrl(url);
@@ -235,7 +237,7 @@ describe('MediaService', () => {
     const { container, worker, service, channels } = setup({
       openContentStream: () => {
         opens += 1;
-        return Promise.resolve(7n);
+        return Promise.resolve({ handle: 7n, size: 8 });
       },
       readStream: (_handle, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
       closeStream: (handle) => {
@@ -247,7 +249,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     const ticket = url.slice('/stream/'.length);
@@ -286,7 +288,7 @@ describe('MediaService', () => {
     const read = async (requestId: number): Promise<string> => {
       const url = service.createStreamUrl({
         node: new Uint8Array([9]),
-        size: 8,
+
         mimeType: 'audio/o',
       });
       const port = channels[0].port2;
@@ -360,7 +362,7 @@ describe('MediaService', () => {
     expect(worker.offers).toEqual([]);
     expect(service.streaming).toBe(false);
     expect(() =>
-      service.createStreamUrl({ node: new Uint8Array(1), size: 1, mimeType: 'video/mp4' })
+      service.createStreamUrl({ node: new Uint8Array(1), mimeType: 'video/mp4' })
     ).toThrow(/controlling Service Worker/);
   });
 

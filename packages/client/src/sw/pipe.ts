@@ -29,13 +29,24 @@ export interface MediaPipeOptions {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
-/** A pull drives a real ranged engine read over the network, so it gets a far longer leash. */
-const DEFAULT_PULL_TIMEOUT_MS = 30000;
+/**
+ * A pull drives a real ranged engine read over the network, and an open drives
+ * the resolve, the adoption gate and the root-manifest fetch the head is framed
+ * from. Both get a far longer leash than brokering a port does.
+ */
+const DEFAULT_ENGINE_TIMEOUT_MS = 30000;
 
 /** One entry for every offer and request without a client identity; a real client id is never empty. */
 const ANONYMOUS_CLIENT = '';
 
 type MediaHeadResponse = Extract<MediaResponse, { type: 'cb:media:head' }>;
+
+/**
+ * How an open ended without a head: `'refused'` is the tab answering that its
+ * engine could not open the stream the head frames from, `'silent'` a port that
+ * said nothing at all. Only the second is evidence about the port itself.
+ */
+type OpenFailure = 'refused' | 'silent';
 
 /** A client's end of the pipe, with the listener bound to it. */
 interface PortEntry {
@@ -81,8 +92,8 @@ export class MediaPipe {
     options: MediaPipeOptions = {}
   ) {
     this.brokerTimeoutMs = options.brokerTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.pullTimeoutMs = options.pullTimeoutMs ?? DEFAULT_PULL_TIMEOUT_MS;
+    this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_ENGINE_TIMEOUT_MS;
+    this.pullTimeoutMs = options.pullTimeoutMs ?? DEFAULT_ENGINE_TIMEOUT_MS;
   }
 
   /** The whole prefix is the pipe's: a malformed ticket is its 404, not the network's. */
@@ -150,11 +161,18 @@ export class MediaPipe {
     const requestId = this.nextRequestId;
     this.nextRequestId += 1;
     const head = await this.open(port, requestId, ticket, range);
-    if (!head) {
-      this.post(port, { type: 'cb:media:close', requestId });
+    if (head === 'silent') {
+      // `detachPort` releases an open of its own before it closes the port, so a
+      // detached port has already had this release and delivers nothing more.
+      if (this.clientIdOf(port) !== null) {
+        this.post(port, { type: 'cb:media:close', requestId });
+      }
       this.discardPort(port);
       return null;
     }
+    // The port is alive and answered, so re-brokering and retrying would only
+    // ask the same engine the same question again.
+    if (head === 'refused') return sealed(503);
     // Only these two carry a body; `Response` throws on a body under a
     // null-body status, and the port that named the status is untrusted.
     if (head.status !== 200 && head.status !== 206) {
@@ -204,21 +222,25 @@ export class MediaPipe {
     requestId: number,
     ticket: string,
     range: string | null
-  ): Promise<MediaHeadResponse | null> {
+  ): Promise<MediaHeadResponse | OpenFailure> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.sinks.delete(requestId);
-        resolve(null);
+        resolve('silent');
       }, this.responseTimeoutMs);
       this.sinks.set(requestId, {
         port,
         deliver: (response) => {
-          // An error answers the open as unusable — a dead port fails it now
-          // rather than at the response deadline, so the retry re-brokers at once.
           if (response.type !== 'cb:media:head' && response.type !== 'cb:media:error') return;
           clearTimeout(timer);
           this.sinks.delete(requestId);
-          resolve(response.type === 'cb:media:head' ? response : null);
+          if (response.type === 'cb:media:head') {
+            resolve(response);
+            return;
+          }
+          // A port already detached is `detachPort` settling this open, not the
+          // tab answering it: its replacement is the one to ask.
+          resolve(this.clientIdOf(port) === null ? 'silent' : 'refused');
         },
       });
       this.post(port, { type: 'cb:media:open', requestId, ticket, range });
@@ -359,12 +381,15 @@ export class MediaPipe {
     port.postMessage(message);
   }
 
+  /** The client this port is adopted for, or `null` once it is detached. */
+  private clientIdOf(port: MessagePortLike): string | null {
+    for (const [clientId, entry] of this.ports) if (entry.port === port) return clientId;
+    return null;
+  }
+
   private discardPort(port: MessagePortLike): void {
-    for (const [clientId, entry] of this.ports) {
-      if (entry.port !== port) continue;
-      this.detachPort(clientId);
-      return;
-    }
+    const clientId = this.clientIdOf(port);
+    if (clientId !== null) this.detachPort(clientId);
   }
 
   private detachPort(clientId: string): void {
@@ -378,15 +403,18 @@ export class MediaPipe {
     for (const [requestId, body] of [...this.bodies]) {
       if (body.port === entry.port) this.failBody(requestId, replaced);
     }
-    entry.port.removeEventListener('message', entry.listener);
-    entry.port.close();
     // Failing an `open` still waiting on this port re-brokers its retry instead
-    // of waiting out the response deadline.
+    // of waiting out the response deadline. An open in flight already holds a
+    // cursor and the engine stream behind it, so the release rides the same
+    // still-open port as the bodies' — after the close it would never leave.
     for (const [requestId, sink] of [...this.sinks]) {
       if (sink.port !== entry.port) continue;
       this.sinks.delete(requestId);
+      this.post(entry.port, { type: 'cb:media:close', requestId });
       sink.deliver({ type: 'cb:media:error', requestId, message: replaced });
     }
+    entry.port.removeEventListener('message', entry.listener);
+    entry.port.close();
   }
 }
 

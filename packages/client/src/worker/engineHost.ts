@@ -11,6 +11,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -65,8 +66,11 @@ export interface EngineHostLike {
   authMethods(): Promise<AuthMethodDescriptor[]>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
-  /** Opens a read stream pinned to the node's current head content version. */
-  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  /**
+   * Opens a read stream pinned to the node's current head content version,
+   * reporting that version's plaintext size with the handle.
+   */
+  openContentStream(node: Uint8Array): Promise<OpenedStream>;
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
   closeStream(handle: StreamHandle): Promise<void>;
   nextEvent(): Promise<EventDescriptor | null>;
@@ -284,8 +288,13 @@ export class EngineHost implements EngineHostLike {
     return ownedBuffer(await this.handle.download(nodeId(this.wasm, node, 'node')));
   }
 
-  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
-    return this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
+  async openContentStream(node: Uint8Array): Promise<OpenedStream> {
+    const opened = await this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
+    try {
+      return { handle: opened.handle, size: opened.size };
+    } finally {
+      opened.free();
+    }
   }
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {

@@ -13,6 +13,13 @@ export const SECOND_TAB_SEED = 83;
 /** Bytes produced only inside the leader's engine worker. */
 export const LEADER_SEED = 199;
 
+/**
+ * The length the leader's engine worker pins. The fixture answers any offset, so
+ * a pinned version needs a stated length, and the worker reports this one when
+ * it opens the stream.
+ */
+export const LEADER_CONTENT_BYTES = 96 * 1024;
+
 export function fixtureBuffer(offset: number, length: number, seed: number): ArrayBuffer {
   const buffer = new ArrayBuffer(length);
   const bytes = new Uint8Array(buffer);

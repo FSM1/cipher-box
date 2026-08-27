@@ -413,6 +413,17 @@ export type WriteHandle = bigint;
  */
 export type StreamHandle = bigint;
 
+/**
+ * A freshly opened read stream and the plaintext size of the version it pinned.
+ * The size travels with the handle because a ranged reader must frame its
+ * response head against the version the stream serves, not one it measured
+ * before the pin.
+ */
+export interface OpenedStream {
+  readonly handle: StreamHandle;
+  readonly size: number;
+}
+
 /** One event the engine emitted, as data (mirrors the facade `Event`). */
 export type EventDescriptor =
   | { kind: 'snapshotUpdated' }
@@ -465,7 +476,7 @@ export type WorkerMessage =
    * the rows for `receivedShares`, the storage read for `vaultStorage`, the
    * rows for `authMethods`, the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
-   * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
+   * for `siweChallenge`, the write handle for `beginWrite`, the `OpenedStream`
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
    * for `command`.
    */
@@ -482,7 +493,8 @@ export type WorkerMessage =
         | CommandOutcomeDescriptor
         | ArrayBuffer
         | bigint
-        | string;
+        | string
+        | OpenedStream;
     }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the

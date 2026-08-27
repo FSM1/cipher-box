@@ -19,6 +19,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   NodeKind,
+  OpenedStream,
   Permission,
   ReceivedShareDescriptor,
   SharingDescriptor,
@@ -149,7 +150,7 @@ export class EngineFacade {
    * Opens a read stream over one file node, pinned to the head content version
    * for the handle's life. Released with `closeStream`.
    */
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
     return this.transport.openContentStream(node);
   }
 

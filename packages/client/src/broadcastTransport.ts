@@ -48,6 +48,7 @@ import type {
   AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -74,6 +75,15 @@ export class EngineHeldElsewhereError extends EngineRequestError {
   }
 }
 
+/**
+ * The account a refusal is final for, or `null` when it is merely a wait: an
+ * engine-less leadership steps aside for a tab that has a session, so only a
+ * refusal naming another account is a verdict no leadership change can undo.
+ */
+export function refusedForAccount(error: unknown): string | null {
+  return error instanceof EngineHeldElsewhereError ? error.heldBy : null;
+}
+
 export interface BroadcastTransportOptions {
   portTimeoutMs?: number;
   /**
@@ -95,6 +105,12 @@ export interface BroadcastTransportOptions {
    * so the owner learns its session is live however it was reached.
    */
   onAdopted?: (accountId: string) => void;
+  /**
+   * Fires when a brokerage is refused by a leadership whose engine holds
+   * `heldBy` instead. The origin hosts one engine, so nothing here will serve
+   * this tab under the account it greets with, however leadership moves next.
+   */
+  onHeldElsewhere?: (heldBy: string) => void;
 }
 
 export class BroadcastTransport extends CorrelatedTransport {
@@ -124,6 +140,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
   private readonly onAdopted: (accountId: string) => void;
+  private readonly onHeldElsewhere: (heldBy: string) => void;
 
   // The account this tab is signed in as; `null` until `start` (or the session a
   // replaced transport was already serving). Rides every port greeting, where
@@ -150,6 +167,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.portTimeoutMs = options.portTimeoutMs ?? DEFAULT_PORT_TIMEOUT_MS;
     this.onLeadershipChange = options.onLeadershipChange ?? ((): void => undefined);
     this.onAdopted = options.onAdopted ?? ((): void => undefined);
+    this.onHeldElsewhere = options.onHeldElsewhere ?? ((): void => undefined);
     this.accountId = options.accountId ?? null;
     this.presenceHeld = this.holdPresence(locks);
     this.armLeaderReady();
@@ -256,8 +274,8 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<ArrayBuffer>({ kind: 'download', node });
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
-    return this.stream<StreamHandle>({ kind: 'openContentStream', node });
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
+    return this.stream<OpenedStream>({ kind: 'openContentStream', node });
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -293,9 +311,11 @@ export class BroadcastTransport extends CorrelatedTransport {
     if (this.portPromise) return this.portPromise;
     const attempt = this.brokerPort();
     this.portPromise = attempt;
-    // A failed broker must not latch: the next read asks the leader again.
-    attempt.catch(() => {
+    attempt.catch((error: unknown) => {
+      // A failed broker must not latch: the next read asks the leader again.
       if (this.portPromise === attempt) this.portPromise = null;
+      const heldBy = refusedForAccount(error);
+      if (heldBy !== null) this.onHeldElsewhere(heldBy);
     });
     return attempt;
   }
@@ -311,7 +331,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     // greeting it would send names an account and a leadership already left.
     const accountId = this.accountId;
     const generation = this.portGeneration;
-    await this.leaderReady;
+    await this.awaitLeader();
     if (this.closed) throw retryError();
     // Before the greeting, never after: a leader watching a presence name this
     // tab does not hold is granted at once and reclaims a live tab.
@@ -391,15 +411,30 @@ export class BroadcastTransport extends CorrelatedTransport {
     };
   }
 
-  /** This tab's presence, under the brokerage timeout like every other step. */
+  /**
+   * A leadership to broker with. An origin every tab has retired from leading
+   * never elects one, and an unbounded wait here parks every read of the tab
+   * forever.
+   */
+  private awaitLeader(): Promise<void> {
+    return this.awaitHeld(this.leaderReady, 'no tab of this origin leads it');
+  }
+
+  /** This tab's presence. */
   private awaitPresence(): Promise<void> {
     // A presence that was held and then lost must not latch resolved: greeting
     // on a name this tab no longer holds invites the leader to reclaim it live.
     if (this.presenceLost) return Promise.reject(this.presenceLost);
-    return this.awaitBrokerage<void>('this tab holds no presence lock', (settle) => {
-      void this.presenceHeld.then(settle, (error: unknown) =>
-        this.abortBrokerage?.(asError(error))
-      );
+    return this.awaitHeld(this.presenceHeld, 'this tab holds no presence lock');
+  }
+
+  /**
+   * A brokerage step already settled by a lock rather than by the wire, put
+   * under the brokerage timeout like every other step.
+   */
+  private awaitHeld(held: Promise<void>, timeoutMessage: string): Promise<void> {
+    return this.awaitBrokerage<void>(timeoutMessage, (settle) => {
+      void held.then(settle, (error: unknown) => this.abortBrokerage?.(asError(error)));
     });
   }
 

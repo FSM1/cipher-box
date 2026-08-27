@@ -16,6 +16,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -79,7 +80,7 @@ export interface EngineTransport {
    * Opens a read stream over one file node, pinned to the head content version
    * for the handle's life so no window can come from a different one.
    */
-  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  openContentStream(node: Uint8Array): Promise<OpenedStream>;
   /** One byte window of a pinned stream; only the leaves it covers are fetched. */
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
   /** Releases the stream; an unknown handle is already gone. */
@@ -231,8 +232,8 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
-    return this.request<StreamHandle>(this.ready, (id) =>
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
+    return this.request<OpenedStream>(this.ready, (id) =>
       this.worker.postMessage({ type: 'openContentStream', id, node }, [])
     );
   }

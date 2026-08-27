@@ -22,7 +22,12 @@ import {
   TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
-import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  OpenedStream,
+  SnapshotDescriptor,
+} from './worker/protocol.js';
 
 const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = (): Promise<void> => after(0);
@@ -185,7 +190,7 @@ describe('one engine per origin is one account per origin', () => {
     engine.writeHandle = 7n;
     engine.streamHandle = 9n;
     const write = await follower.beginWrite({ node: new Uint8Array(16).fill(1) }, 4);
-    const stream = await follower.openContentStream(new Uint8Array(16).fill(2));
+    const { handle: stream } = await follower.openContentStream(new Uint8Array(16).fill(2));
 
     relay.serves(OTHER_ACCOUNT_ID);
     await tick();
@@ -208,6 +213,66 @@ describe('one engine per origin is one account per origin', () => {
     // a same-origin context that merely opened the channel learns neither.
     expect(collect(bystander).text).not.toContain(TEST_ACCOUNT_ID);
     expect(collect(ports.messages).text).toContain(TEST_ACCOUNT_ID);
+  });
+});
+
+describe('a follower no leadership serves', () => {
+  const OTHER_ACCOUNT_ID = 'acct03';
+
+  it('fails a read at the brokerage deadline when no tab of the origin leads it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const follower = followerOn(bus, 'follower-1', ports.courier('follower-1'), {
+      portTimeoutMs: 20,
+    });
+
+    // No relay ever beacons: an origin every tab has retired from leading. The
+    // read must fail rather than park the tab for the rest of its life.
+    await expect(follower.snapshot(null)).rejects.toThrow('no tab of this origin leads it');
+    follower.close();
+  });
+
+  it('reports a refusal naming another account, so its owner can end the session', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    const relay = relayOn(bus, engine, ports.courier('leader'));
+    const heldElsewhere: string[] = [];
+    const follower = followerOn(bus, 'follower-1', ports.courier('follower-1'), {
+      onHeldElsewhere: (heldBy) => heldElsewhere.push(heldBy),
+    });
+    await startFollower(relay, follower);
+
+    relay.serves(OTHER_ACCOUNT_ID);
+    await tick();
+    await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
+
+    // Every re-brokerage reports it, so the owner sees the same verdict once or
+    // many times — never a different account.
+    expect([...new Set(heldElsewhere)]).toEqual([OTHER_ACCOUNT_ID]);
+    follower.close();
+    relay.close();
+  });
+
+  it('reports nothing when the leadership merely hosts no engine yet', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    const relay = relayOn(bus, engine, ports.courier('leader'));
+    const heldElsewhere: string[] = [];
+    const follower = followerOn(bus, 'follower-1', ports.courier('follower-1'), {
+      onHeldElsewhere: (heldBy) => heldElsewhere.push(heldBy),
+    });
+
+    // An engine-less leader steps aside for a tab with a session, so this
+    // refusal is a wait, not a verdict on the account.
+    await expect(follower.start(new ArrayBuffer(0), TEST_ACCOUNT_ID)).rejects.toBeInstanceOf(
+      EngineHeldElsewhereError
+    );
+
+    expect(heldElsewhere).toEqual([]);
+    follower.close();
+    relay.close();
   });
 });
 
@@ -599,7 +664,7 @@ describe('broadcast transport ↔ leader relay', () => {
       Promise.resolve(file.slice(offset, offset + length).buffer);
 
     const node = new Uint8Array(16).fill(6);
-    const handle = await follower.openContentStream(node);
+    const { handle } = await follower.openContentStream(node);
     const window = await follower.readStream(handle, 64, 32);
     await follower.closeStream(handle);
 
@@ -621,7 +686,7 @@ describe('broadcast transport ↔ leader relay', () => {
     await startFollower(relay, owner);
     await startFollower(relay, other);
 
-    const handle = await owner.openContentStream(new Uint8Array(16));
+    const { handle } = await owner.openContentStream(new Uint8Array(16));
     // A handle is a capability: the relay binds it to the tab that opened it.
     await expect(other.readStream(handle, 0, 8)).rejects.toMatchObject({
       code: 'unknownStreamHandle',
@@ -638,7 +703,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await startFollower(relayA, follower);
 
-    const handle = await follower.openContentStream(new Uint8Array(16));
+    const { handle } = await follower.openContentStream(new Uint8Array(16));
     const inFlight = follower.readStream(handle, 0, 8);
     await tick();
     relayA.close();
@@ -648,7 +713,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const engineB = new FakeEngineTransport();
     engineB.respondReadStream = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
     relayOn(bus, engineB, ports.courier('leaderB')).serves(TEST_ACCOUNT_ID);
-    const reopened = await follower.openContentStream(new Uint8Array(16));
+    const { handle: reopened } = await follower.openContentStream(new Uint8Array(16));
     const retried = await follower.readStream(reopened, 0, 2);
     expect([...new Uint8Array(retried)]).toEqual([1, 2]);
   });
@@ -687,7 +752,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await follower.snapshot(new Uint8Array(16));
-    const handle = await follower.openContentStream(new Uint8Array(16).fill(6));
+    const { handle } = await follower.openContentStream(new Uint8Array(16).fill(6));
     for (let offset = 0; offset < 96; offset += 32) {
       await follower.readStream(handle, offset, 32);
     }
@@ -1366,7 +1431,7 @@ describe('leader relay write handles', () => {
   it('releases both planes of a handle minted for a follower that re-brokered mid-mint', async () => {
     const { engine, ports, leaderPort } = await portBench();
     let mintWrite!: (handle: bigint) => void;
-    let mintStream!: (handle: bigint) => void;
+    let mintStream!: (opened: OpenedStream) => void;
     engine.beginWrite = () => new Promise((resolve) => (mintWrite = resolve));
     engine.openContentStream = () => new Promise((resolve) => (mintStream = resolve));
 
@@ -1387,7 +1452,7 @@ describe('leader relay write handles', () => {
     const rebrokered = await dialLeader(ports, 'f1');
     await tick();
     mintWrite(7n);
-    mintStream(8n);
+    mintStream({ handle: 8n, size: 0 });
     await tick();
 
     // The staging reservation and the pinned content version, with the key
@@ -1397,7 +1462,7 @@ describe('leader relay write handles', () => {
     expect(replies(leaderPort, 'cb:portResult')).toEqual([]);
 
     // The tab is still served on the port it now holds.
-    engine.openContentStream = () => Promise.resolve(9n);
+    engine.openContentStream = () => Promise.resolve({ handle: 9n, size: 0 });
     rebrokered.receive({
       type: 'cb:portStream',
       requestId: 1,
@@ -1405,7 +1470,7 @@ describe('leader relay write handles', () => {
     });
     await tick();
     expect(replies(rebrokered, 'cb:portResult')).toContainEqual(
-      expect.objectContaining({ requestId: 1, ok: true, result: 9n })
+      expect.objectContaining({ requestId: 1, ok: true, result: { handle: 9n, size: 0 } })
     );
   });
 

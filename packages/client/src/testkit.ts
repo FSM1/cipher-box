@@ -18,6 +18,7 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -197,7 +198,7 @@ export class StubEngineHost implements EngineHostLike {
     return notStubbed('download');
   }
 
-  openContentStream(_node: Uint8Array): Promise<StreamHandle> {
+  openContentStream(_node: Uint8Array): Promise<OpenedStream> {
     return notStubbed('openContentStream');
   }
 
@@ -515,6 +516,8 @@ export class FakeEngineTransport implements EngineTransport {
   writeHandle: WriteHandle = 1n;
   /** What `openContentStream` hands back. */
   streamHandle: StreamHandle = 1n;
+  /** The pinned version's size `openContentStream` reports with the handle. */
+  streamSize = 0;
   commitOpId = 42n;
   respond: (command: CommandDescriptor) => Promise<CommandOutcomeDescriptor> = () =>
     Promise.resolve({ kind: 'done' });
@@ -610,9 +613,9 @@ export class FakeEngineTransport implements EngineTransport {
     return this.respondDownload(node);
   }
 
-  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opened.push(node);
-    return Promise.resolve(this.streamHandle);
+    return Promise.resolve({ handle: this.streamHandle, size: this.streamSize });
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
@@ -647,6 +650,8 @@ export class FakeEngineWorker implements EngineWorkerLike {
 
   /** What the handle-minting requests answer with — every engine's counters start at 1. */
   streamHandle: StreamHandle = 1n;
+  /** The pinned version's size the opened stream reports with its handle. */
+  streamSize = 0;
   writeHandle: WriteHandle = 1n;
 
   postMessage(message: { id?: number; type?: string }, transfer: Transferable[] = []): void {
@@ -659,8 +664,8 @@ export class FakeEngineWorker implements EngineWorkerLike {
     queueMicrotask(() => this.emit({ type: 'response', id, ok: true, result }));
   }
 
-  private mint(type: string | undefined): bigint | undefined {
-    if (type === 'openContentStream') return this.streamHandle;
+  private mint(type: string | undefined): bigint | OpenedStream | undefined {
+    if (type === 'openContentStream') return { handle: this.streamHandle, size: this.streamSize };
     if (type === 'beginWrite') return this.writeHandle;
     return undefined;
   }
