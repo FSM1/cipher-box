@@ -1,0 +1,53 @@
+[
+  {
+    "title": "Gateway Verify Refusal Rate High",
+    "ruleGroup": "CipherBox Security",
+    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
+    "noDataState": "OK",
+    "execErrState": "OK",
+    "for": "10m",
+    "condition": "B",
+    "annotations": {
+      "summary": "forward_auth refuses more than 25% of gateway verify calls",
+      "description": "Caddy calls GET /auth/gateway/verify before every request on the two fronted vhosts, and it denies the request on any non-204 answer. A sustained refusal share points to expired or malformed member tokens, a clock skew, or a broken verify path. The two vhosts log nothing on a deny, so this metric is the only signal. The ratio only evaluates above 20 verify calls in the window."
+    },
+    "labels": {
+      "severity": "warning",
+      "service": "cipherbox",
+      "operation": "gateway-verify"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 1200, "to": 0 },
+        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
+        "model": {
+          "expr": "(sum(rate(gateway_verify_total{outcome=\"refused\"}[10m])) / clamp_min(sum(rate(gateway_verify_total[10m])), 0.001)) and on() (sum(increase(gateway_verify_total[10m])) >= 20)",
+          "intervalMs": 30000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 1200, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [
+            {
+              "evaluator": { "type": "gt", "params": [0.25] },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "type": "last" }
+            }
+          ],
+          "refId": "B"
+        }
+      }
+    ]
+  }
+]

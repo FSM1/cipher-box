@@ -53,14 +53,32 @@
 	header_up -Forwarded
 }
 
+# The ranges above are Cloudflare's, not this zone's: any tenant can point a
+# proxied record at the origin address and arrive from inside a trusted range.
+# The zone's own origin-pull certificate is what closes that; the shared
+# Cloudflare origin-pull CA is the same hole, since every tenant presents it.
+# Caddy routes on Host and not on SNI, so a vhost left unauthenticated admits
+# them all under a forged one — the gate is uniform (blueprint/deploy.md).
+(origin_tls) {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem {
+		client_auth {
+			# `verify_if_given` would admit a caller that simply presents none.
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/caddy/certs/cloudflare-zone-origin-pull-ca.pem
+			}
+		}
+	}
+}
+
 api-staging.cipherbox.cc {
-	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	import origin_tls
 	respond /metrics 403
 	reverse_proxy api:3000
 }
 
 app-staging.cipherbox.cc {
-	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	import origin_tls
 	root * /srv/web
 
 	import /etc/caddy/csp.caddy
@@ -80,7 +98,7 @@ app-staging.cipherbox.cc {
 # Read-accelerator front. Args: {args[0]} upstream, {args[1]} CORS methods.
 # Obligations per blueprint/api.md (Egress).
 (accelerator_front) {
-	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	import origin_tls
 
 	# The raw pseudonym in an access log is a gateway credential at rest, and a
 	# client IP recorded beside a read re-links the account.
@@ -194,6 +212,14 @@ routing-staging.cipherbox.cc {
 	}
 
 	import accelerator_front someguy:8190 "GET, HEAD, PUT, OPTIONS"
+}
+
+# Without a catch-all site Caddy appends a matcher-less connection policy of its
+# own, and that one carries no `client_auth` — an unmatched SNI would then reach
+# Host-based routing with no certificate presented.
+https:// {
+	import origin_tls
+	abort
 }
 
 :80 {

@@ -34,6 +34,7 @@
   "liveNow": false,
   "panels": [
     {
+      "id": 1,
       "type": "row",
       "title": "Overview",
       "gridPos": {
@@ -46,8 +47,9 @@
       "panels": []
     },
     {
+      "id": 2,
       "type": "stat",
-      "title": "Total Users",
+      "title": "API up",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -60,26 +62,49 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          }
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto",
@@ -87,15 +112,19 @@
       },
       "targets": [
         {
-          "expr": "cipherbox_users_total",
-          "legendFormat": "Users",
-          "refId": "A"
+          "refId": "A",
+          "expr": "up{job=\"api\"}",
+          "legendFormat": "api",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 3,
       "type": "stat",
-      "title": "Total Files Stored",
+      "title": "Kubo up",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -108,42 +137,69 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          }
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "value",
-        "graphMode": "area",
+        "colorMode": "background",
+        "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
       },
       "targets": [
         {
-          "expr": "cipherbox_files_total",
-          "legendFormat": "Files",
-          "refId": "A"
+          "refId": "A",
+          "expr": "up{job=\"kubo\"}",
+          "legendFormat": "kubo",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 4,
       "type": "stat",
-      "title": "Total Storage Used",
+      "title": "someguy up",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -156,54 +212,72 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 268435456
-              },
-              {
-                "color": "red",
-                "value": 524288000
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          }
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "value",
-        "graphMode": "area",
+        "colorMode": "background",
+        "graphMode": "none",
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
       },
       "targets": [
         {
-          "expr": "cipherbox_storage_bytes_total",
-          "legendFormat": "Storage",
-          "refId": "A"
+          "refId": "A",
+          "expr": "up{job=\"someguy\"}",
+          "legendFormat": "someguy",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 5,
       "type": "stat",
-      "title": "Total IPNS Entries",
+      "title": "Mailbox pending depth",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 6,
         "x": 12,
         "y": 1
       },
@@ -213,24 +287,34 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "purple",
+                "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
               }
             ]
-          },
-          "color": {
-            "mode": "thresholds"
           }
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
         "colorMode": "value",
         "graphMode": "area",
@@ -240,19 +324,23 @@
       },
       "targets": [
         {
-          "expr": "max(cipherbox_ipns_entries_total)",
-          "legendFormat": "IPNS Entries",
-          "refId": "A"
+          "refId": "A",
+          "expr": "mailbox_pending_messages",
+          "legendFormat": "Pending",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 6,
       "type": "stat",
-      "title": "File Uploads (24h)",
+      "title": "API request rate",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 6,
+        "x": 18,
         "y": 1
       },
       "datasource": {
@@ -261,42 +349,49 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
           },
-          "color": {
-            "mode": "thresholds"
-          }
+          "unit": "reqps"
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
         "colorMode": "value",
-        "graphMode": "none",
+        "graphMode": "area",
         "justifyMode": "auto",
         "textMode": "auto",
         "wideLayout": true
       },
       "targets": [
         {
-          "expr": "increase(cipherbox_file_uploads_total[24h])",
-          "legendFormat": "Uploads",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total[5m]))",
+          "legendFormat": "Requests",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 7,
       "type": "row",
-      "title": "File Operations",
+      "title": "API HTTP",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -307,11 +402,12 @@
       "panels": []
     },
     {
+      "id": 8,
       "type": "timeseries",
-      "title": "File Uploads Over Time",
+      "title": "Request rate by route",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 6
       },
@@ -325,1284 +421,14 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "axisBorderShow": false,
             "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(cipherbox_file_uploads_total[5m]) * 300",
-          "legendFormat": "Uploads / 5m",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "File Downloads Over Time",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(cipherbox_file_downloads_total[5m]) * 300",
-          "legendFormat": "Downloads / 5m",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(cipherbox_file_unpins_total[5m]) * 300",
-          "legendFormat": "Unpins / 5m",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Storage Growth",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 30,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto",
-            "gradientMode": "scheme"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_storage_bytes_total",
-          "legendFormat": "Total storage",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(cipherbox_file_upload_bytes_total[1h]) * 3600",
-          "legendFormat": "Upload rate (bytes/hr)",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPFS Pin/Cat Duration (p50/p95/p99)",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
             "lineWidth": 2,
             "fillOpacity": 10,
             "spanNulls": false,
-            "drawStyle": "line",
             "pointSize": 5,
             "showPoints": "auto"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p50/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
           },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p95/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p99/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p50 {{ operation }}",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p95 {{ operation }}",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p99 {{ operation }}",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPFS Operation Error Rate",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 14
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(cipherbox_ipfs_ipns_duration_seconds_count{operation=~\"pin|cat\", result=\"error\"}[$__rate_interval])) / sum(rate(cipherbox_ipfs_ipns_duration_seconds_count{operation=~\"pin|cat\"}[$__rate_interval]))",
-          "legendFormat": "Error rate",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "IPNS Operations",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "IPNS Publishes Over Time",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 23
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(cipherbox_ipns_publishes_total{type=\"single\"}[5m]) * 300",
-          "legendFormat": "Single publishes / 5m",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(cipherbox_ipns_publishes_total{type=\"batch\"}[5m]) * 300",
-          "legendFormat": "Batch publishes / 5m",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPNS Resolves Over Time",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 23
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(cipherbox_ipns_resolves_total{source=\"network\"}[5m]) * 300",
-          "legendFormat": "Network resolves / 5m",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(cipherbox_ipns_resolves_total{source=\"db_cache\"}[5m]) * 300",
-          "legendFormat": "DB cache fallbacks / 5m",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPNS Entry Growth",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 23
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "max(cipherbox_ipns_entries_total)",
-          "legendFormat": "IPNS entries",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPNS Resolve/Publish Duration (p50/p95/p99)",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 31
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p50/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p95/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p99/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p50 {{ operation }}",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p95 {{ operation }}",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
-          "legendFormat": "p99 {{ operation }}",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "IPNS Resolve Duration by Source",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 31
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/db/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/network/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "orange",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"resolve\", source=\"db\"}[$__rate_interval])) by (le))",
-          "legendFormat": "p95 db",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=\"resolve\", source=\"network\"}[$__rate_interval])) by (le))",
-          "legendFormat": "p95 network",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "TEE Republishing",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 39
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "stat",
-      "title": "Active Republish Entries",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 40
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_republish_schedule_total{status=\"active\"}",
-          "legendFormat": "Active",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Retrying Entries",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 40
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "orange",
-                "value": 5
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_republish_schedule_total{status=\"retrying\"}",
-          "legendFormat": "Retrying",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Stale Entries",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 40
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_republish_schedule_total{status=\"stale\"}",
-          "legendFormat": "Stale",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Republish Results Over Time",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 40
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "bars",
-            "pointSize": 5,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Succeeded"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Failed"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "increase(cipherbox_republish_entries_processed_total{result=\"succeeded\"}[6h])",
-          "legendFormat": "Succeeded",
-          "refId": "A"
-        },
-        {
-          "expr": "increase(cipherbox_republish_entries_processed_total{result=\"failed\"}[6h])",
-          "legendFormat": "Failed",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Republish Schedule Status Over Time",
-      "gridPos": {
-        "h": 4,
-        "w": 12,
-        "x": 0,
-        "y": 44
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 30,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto",
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "active"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "retrying"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "stale"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_republish_schedule_total",
-          "legendFormat": "{{ status }}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "TEE Republish Batch Duration (p50/p95/p99)",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 48
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p50/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p95/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/p99/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
-          "legendFormat": "p50 {{ tee_provider }}",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
-          "legendFormat": "p95 {{ tee_provider }}",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
-          "legendFormat": "p99 {{ tee_provider }}",
-          "refId": "C"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "Authentication",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 56
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Login Attempts Over Time",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 57
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "bars",
-            "pointSize": 5,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "increase(cipherbox_auth_logins_total{method=\"web3auth\"}[1h])",
-          "legendFormat": "Web3Auth logins / hr",
-          "refId": "A"
-        },
-        {
-          "expr": "increase(cipherbox_auth_logins_total{method=\"test\"}[1h])",
-          "legendFormat": "Test logins / hr",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "New vs Returning Users",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 57
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
-            "drawStyle": "bars",
-            "pointSize": 5,
-            "showPoints": "never"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "New users / hr"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "blue",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Returning users / hr"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      },
-      "targets": [
-        {
-          "expr": "increase(cipherbox_auth_logins_total{new_user=\"true\"}[1h])",
-          "legendFormat": "New users / hr",
-          "refId": "A"
-        },
-        {
-          "expr": "increase(cipherbox_auth_logins_total{new_user=\"false\"}[1h])",
-          "legendFormat": "Returning users / hr",
-          "refId": "B"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "HTTP Performance",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 65
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Request Rate by Route",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 66
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "spanNulls": false,
-            "drawStyle": "line",
-            "pointSize": 5,
-            "showPoints": "auto"
-          }
+          "unit": "reqps"
         },
         "overrides": []
       },
@@ -1614,25 +440,30 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
+          "showLegend": true,
           "calcs": ["mean", "max"]
         }
       },
       "targets": [
         {
-          "expr": "sum by (route) (rate(cipherbox_http_request_duration_seconds_count[5m]))",
-          "legendFormat": "{{ route }}",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (route) (rate(http_requests_total[5m]))",
+          "legendFormat": "{{route}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 9,
       "type": "timeseries",
-      "title": "Response Time (p50 / p95 / p99)",
+      "title": "Error rate 4xx / 5xx",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 66
+        "y": 6
       },
       "datasource": {
         "type": "prometheus",
@@ -1640,18 +471,110 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "4xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{status=~\"4..\"}[5m]))",
+          "legendFormat": "4xx",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "5xx",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Request latency p50 / p95 / p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
             "lineWidth": 2,
             "fillOpacity": 10,
             "spanNulls": false,
-            "drawStyle": "line",
             "pointSize": 5,
             "showPoints": "auto"
-          }
+          },
+          "unit": "s"
         },
         "overrides": [
           {
@@ -1708,35 +631,46 @@
         },
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         }
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(cipherbox_http_request_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p50",
-          "refId": "A"
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(cipherbox_http_request_duration_seconds_bucket[5m])))",
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p95",
-          "refId": "B"
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(cipherbox_http_request_duration_seconds_bucket[5m])))",
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p99",
-          "refId": "C"
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 11,
       "type": "timeseries",
-      "title": "Error Rate (4xx / 5xx)",
+      "title": "Request latency by route p95",
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 74
+        "x": 12,
+        "y": 14
       },
       "datasource": {
         "type": "prometheus",
@@ -1744,24 +678,106 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{route!=\"/metrics\"}[5m])))",
+          "legendFormat": "{{route}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Authentication and throttling",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Auth attempts by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
             "lineWidth": 2,
             "fillOpacity": 20,
             "spanNulls": false,
-            "drawStyle": "line",
             "pointSize": 5,
             "showPoints": "auto"
-          }
+          },
+          "unit": "reqps"
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "4xx errors"
+              "options": "success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rejected"
             },
             "properties": [
               {
@@ -1776,7 +792,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "5xx errors"
+              "options": "error"
             },
             "properties": [
               {
@@ -1797,30 +813,30 @@
         },
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         }
       },
       "targets": [
         {
-          "expr": "sum(rate(cipherbox_http_request_duration_seconds_count{status_code=~\"4..\"}[5m]))",
-          "legendFormat": "4xx errors",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(rate(cipherbox_http_request_duration_seconds_count{status_code=~\"5..\"}[5m]))",
-          "legendFormat": "5xx errors",
-          "refId": "B"
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(auth_attempts_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 14,
       "type": "timeseries",
-      "title": "Response Time by Route (p95)",
+      "title": "Auth rejections by route",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 74
+        "w": 8,
+        "x": 8,
+        "y": 23
       },
       "datasource": {
         "type": "prometheus",
@@ -1828,18 +844,18 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
+            "drawStyle": "line",
             "lineWidth": 2,
             "fillOpacity": 10,
             "spanNulls": false,
-            "drawStyle": "line",
             "pointSize": 5,
             "showPoints": "auto"
-          }
+          },
+          "unit": "reqps"
         },
         "overrides": []
       },
@@ -1851,37 +867,30 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
+          "showLegend": true,
           "calcs": ["mean", "max"]
         }
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(cipherbox_http_request_duration_seconds_bucket{route!=\"/metrics\"}[5m])))",
-          "legendFormat": "{{ route }}",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (route) (rate(auth_attempts_total{outcome=\"rejected\"}[5m]))",
+          "legendFormat": "{{route}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
-      "type": "row",
-      "title": "Kubo Health",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 82
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
+      "id": 15,
       "type": "timeseries",
-      "title": "Kubo Peer Connections",
+      "title": "Throttle rejections by route",
       "gridPos": {
-        "h": 6,
+        "h": 8,
         "w": 8,
-        "x": 0,
-        "y": 83
+        "x": 16,
+        "y": 23
       },
       "datasource": {
         "type": "prometheus",
@@ -1893,13 +902,14 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "spanNulls": false,
             "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
             "pointSize": 5,
             "showPoints": "auto"
-          }
+          },
+          "unit": "reqps"
         },
         "overrides": []
       },
@@ -1909,31 +919,45 @@
           "sort": "desc"
         },
         "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": ["mean", "max"]
         }
       },
       "targets": [
         {
-          "expr": "libp2p_swarm_connections_opened_total - libp2p_swarm_connections_closed_total",
-          "legendFormat": "Active connections",
-          "refId": "A"
-        },
-        {
-          "expr": "go_goroutines{job=\"kubo\"}",
-          "legendFormat": "Goroutines (proxy)",
-          "refId": "B"
+          "refId": "A",
+          "expr": "sum by (route) (rate(throttle_rejections_total[5m]))",
+          "legendFormat": "{{route}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
-      "type": "timeseries",
-      "title": "Kubo Network Bandwidth",
+      "id": 16,
+      "type": "row",
+      "title": "Read-accelerator front",
       "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 83
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Gateway verify accept ratio",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 32
       },
       "datasource": {
         "type": "prometheus",
@@ -1941,30 +965,94 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "unit": "percentunit",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(gateway_verify_total{outcome=\"accepted\"}[5m])) / sum(rate(gateway_verify_total[5m]))",
+          "legendFormat": "Accepted",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Gateway verify rate by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
+            "drawStyle": "line",
             "lineWidth": 2,
             "fillOpacity": 20,
             "spanNulls": false,
-            "drawStyle": "line",
             "pointSize": 5,
             "showPoints": "auto"
-          }
+          },
+          "unit": "reqps"
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "Outbound"
+              "options": "accepted"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "blue",
+                  "fixedColor": "green",
                   "mode": "fixed"
                 }
               }
@@ -1973,13 +1061,13 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Inbound"
+              "options": "refused"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "green",
+                  "fixedColor": "red",
                   "mode": "fixed"
                 }
               }
@@ -1994,30 +1082,30 @@
         },
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
         }
       },
       "targets": [
         {
-          "expr": "rate(libp2p_network_out_bytes_total[$__rate_interval])",
-          "legendFormat": "Outbound",
-          "refId": "A"
-        },
-        {
-          "expr": "rate(libp2p_network_in_bytes_total[$__rate_interval])",
-          "legendFormat": "Inbound",
-          "refId": "B"
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(gateway_verify_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
-      "type": "stat",
-      "title": "Kubo Heap Memory",
+      "id": 19,
+      "type": "timeseries",
+      "title": "Kubo gateway upstream by code",
       "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
-        "y": 83
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 32
       },
       "datasource": {
         "type": "prometheus",
@@ -2025,33 +1113,146 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code) (rate(ipfs_http_requests_total{job=\"kubo\",handler=\"gateway\"}[5m]))",
+          "legendFormat": "{{code}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Upstream liveness",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=~\"kubo|someguy\"}",
+          "legendFormat": "{{job}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Republisher",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Last walk: names seen",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 536870912
-              },
-              {
-                "color": "red",
-                "value": 1073741824
               }
             ]
-          },
-          "color": {
-            "mode": "thresholds"
           }
         },
         "overrides": []
       },
       "options": {
         "reduceOptions": {
-          "calcs": ["lastNotNull"]
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
         },
         "colorMode": "value",
         "graphMode": "area",
@@ -2061,32 +1262,678 @@
       },
       "targets": [
         {
-          "expr": "go_memstats_alloc_bytes{job=\"kubo\"}",
-          "legendFormat": "Heap alloc",
-          "refId": "A"
+          "refId": "A",
+          "expr": "republisher_last_walk_names",
+          "legendFormat": "Names",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
         }
       ]
     },
     {
+      "id": 23,
+      "type": "stat",
+      "title": "Last walk: names republished",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "republisher_last_walk_republished",
+          "legendFormat": "Republished",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Republisher failures and stale names",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Resolve failures"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Stale names"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(republisher_resolve_failures_total[15m])",
+          "legendFormat": "Resolve failures",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        },
+        {
+          "refId": "B",
+          "expr": "rate(republisher_stale_names_total[15m])",
+          "legendFormat": "Stale names",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Republisher walks skipped",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Walks skipped"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(republisher_walks_skipped_total[15m])",
+          "legendFormat": "Walks skipped",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "Mailbox",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Mailbox pending messages",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mailbox_pending_messages",
+          "legendFormat": "Pending",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Mailbox pending-cap rejections",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cap rejections"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(mailbox_pending_cap_rejections_total[5m])",
+          "legendFormat": "Cap rejections",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "row",
+      "title": "Node health",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Live connections by node",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job, dir) (libp2p_rcmgr_connections{scope=\"system\"})",
+          "legendFormat": "{{job}} {{dir}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Connection churn by node",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (rate(libp2p_swarm_connections_opened_total[5m]))",
+          "legendFormat": "{{job}} opened",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (job) (rate(libp2p_swarm_connections_closed_total[5m]))",
+          "legendFormat": "{{job}} closed",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Process bandwidth by node",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (rate(process_network_receive_bytes_total[5m]))",
+          "legendFormat": "{{job}} rx",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (job) (rate(process_network_transmit_bytes_total[5m]))",
+          "legendFormat": "{{job}} tx",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Goroutines by node",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (go_goroutines)",
+          "legendFormat": "{{job}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Heap alloc by node",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": false,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (go_memstats_alloc_bytes)",
+          "legendFormat": "{{job}}",
+          "editorMode": "code",
+          "range": true,
+          "interval": ""
+        }
+      ]
+    },
+    {
+      "id": 35,
       "type": "row",
       "title": "Logs",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 75
       },
       "collapsed": false,
       "panels": []
     },
     {
+      "id": 36,
       "type": "logs",
       "title": "Recent API Errors",
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 76
       },
       "datasource": {
         "type": "loki",
@@ -2104,20 +1951,22 @@
       },
       "targets": [
         {
+          "refId": "A",
           "expr": "{service=\"api\"} |~ \"(?i)(error|exception|failed|ERR)\" | line_format \"{{ .message }}\"",
-          "legendFormat": "",
-          "refId": "A"
+          "queryType": "range",
+          "legendFormat": ""
         }
       ]
     },
     {
+      "id": 37,
       "type": "logs",
-      "title": "TEE Republish Logs",
+      "title": "Republisher Logs",
       "gridPos": {
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 84
       },
       "datasource": {
         "type": "loki",
@@ -2135,9 +1984,10 @@
       },
       "targets": [
         {
+          "refId": "A",
           "expr": "{service=\"api\"} |~ \"(?i)republish\"",
-          "legendFormat": "",
-          "refId": "A"
+          "queryType": "range",
+          "legendFormat": ""
         }
       ]
     }

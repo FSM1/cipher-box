@@ -200,12 +200,21 @@ writes and overwrites `CF-Connecting-IP` itself, so it has no prepend surface;
 strict still refuses both headers from an untrusted peer, so a direct-to-origin
 request cannot forge either.
 
-Two residual assumptions, neither closed here. The trust is _Cloudflare-wide_,
-not zone-specific: any Cloudflare tenant can route to the origin address, so the
-front believes a proxy it has not authenticated. And the range list is a
-hand-mirrored snapshot — the Lint gate pins the set against edits but cannot see
-Cloudflare changing it, where a departed range would make its new owner a trusted
-proxy.
+The ranges alone are _Cloudflare-wide_, not zone-specific: any Cloudflare tenant
+can point a proxied record at the origin address and arrive from inside a
+trusted range. So the origin also demands a client certificate —
+`client_auth { mode require_and_verify }` against **this zone's own**
+origin-pull CA, which per-hostname Authenticated Origin Pulls presents. The
+shared Cloudflare origin-pull CA binds nothing, because every tenant presents
+it. Caddy routes on the `Host` header rather than on SNI, so the gate covers
+every vhost _and_ the matcher-less fallback policy: a partial one is walked
+around with a forged `Host`, and Caddy writes that fallback itself when a config
+leaves it out. The **Lint** gate holds every adapted connection policy to the
+mode and to that one CA path.
+
+One residual assumption stays open: the range list is a hand-mirrored snapshot —
+the Lint gate pins the set against edits but cannot see Cloudflare changing it,
+where a departed range would make its new owner a trusted proxy.
 
 The open `/routing/v1` **PUT** publish leg (api.md, Egress) carries no token, so
 a size cap and a per-caller rate are its whole abuse budget; both are asserted in
