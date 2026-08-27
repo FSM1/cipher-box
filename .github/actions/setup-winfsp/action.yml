@@ -43,20 +43,21 @@ runs:
           $path = Join-Path $installDir $required
           if (!(Test-Path $path)) { throw "WinFsp $required directory not found at $path" }
         }
-        # The delay-loaded DLL is resolved from the install directory at
-        # `winfsp_init`; on PATH as well so a test binary that loads it early
-        # finds it too.
-        Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $installDir 'bin') -Encoding utf8
 
-    # `winfsp-sys` generates its bindings with bindgen, which needs libclang.
-    # The runner image ships LLVM but does not export this.
-    - name: Point bindgen at the runner's libclang
-      shell: powershell
-      run: |
-        $ErrorActionPreference = 'Stop'
-        $llvm = 'C:\Program Files\LLVM\bin'
-        if (Test-Path (Join-Path $llvm 'libclang.dll')) {
-          Add-Content -Path $env:GITHUB_ENV -Value "LIBCLANG_PATH=$llvm" -Encoding utf8
-        } else {
-          Write-Host "no libclang at $llvm; leaving bindgen to its own search"
-        }
+# This action writes no environment files, and needs none.
+#
+# WinFsp is never on `PATH`: it is delay-loaded, and `winfsp_init` resolves the
+# DLL out of `InstallDir` above, exactly as it does on a member's machine —
+# which is the arrangement worth testing anyway. Linking resolves the import
+# library from the same key, through `winfsp-sys`'s own `rustc-link-search`.
+#
+# `winfsp-sys` generates its bindings with bindgen, and `clang-sys` finds
+# libclang on `PATH` and under `C:\Program Files\LLVM\bin`, which is where the
+# runner image puts it. If that ever stops being true the build script says so
+# in as many words; a `LIBCLANG_PATH` export here would only be a second place
+# for the answer to go stale.
+#
+# Both were once written to `GITHUB_PATH` / `GITHUB_ENV`. A composite action
+# carries no trigger of its own, so an environment-file write in one has to be
+# assumed to run under an attacker-triggered caller — which is what zizmor's
+# `github-env` audit says, and the reason not to reach for a suppression here.
