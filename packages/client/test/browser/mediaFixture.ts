@@ -15,8 +15,8 @@ export const LEADER_SEED = 199;
 
 /**
  * The length the leader's engine worker pins. The fixture answers any offset, so
- * a pinned version needs a stated length — and the head is framed from it, so
- * the spec must mint its ticket for exactly this many bytes.
+ * a pinned version needs a stated length, and the worker reports this one when
+ * it opens the stream.
  */
 export const LEADER_CONTENT_BYTES = 96 * 1024;
 

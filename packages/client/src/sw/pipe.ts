@@ -162,7 +162,11 @@ export class MediaPipe {
     this.nextRequestId += 1;
     const head = await this.open(port, requestId, ticket, range);
     if (head === 'silent') {
-      this.post(port, { type: 'cb:media:close', requestId });
+      // `detachPort` releases an open of its own before it closes the port, so a
+      // detached port has already had this release and delivers nothing more.
+      if (this.clientIdOf(port) !== null) {
+        this.post(port, { type: 'cb:media:close', requestId });
+      }
       this.discardPort(port);
       return null;
     }
