@@ -16,10 +16,10 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
-  OpenedStream,
   StreamHandle,
   VaultStorageDescriptor,
   WorkerMessage,
@@ -78,9 +78,7 @@ export interface EngineTransport {
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /**
    * Opens a read stream over one file node, pinned to the head content version
-   * for the handle's life so no window can come from a different one. That
-   * version's plaintext size rides back with the handle: it is the only length
-   * a ranged reader can frame a response head from without over-framing.
+   * for the handle's life so no window can come from a different one.
    */
   openContentStream(node: Uint8Array): Promise<OpenedStream>;
   /** One byte window of a pinned stream; only the leaves it covers are fetched. */

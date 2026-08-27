@@ -148,7 +148,7 @@ describe('MediaService', () => {
     await service.start();
 
     expect(() =>
-      service.createStreamUrl({ node: new Uint8Array(1), size: 1, mimeType: 'video/mp4' })
+      service.createStreamUrl({ node: new Uint8Array(1), mimeType: 'video/mp4' })
     ).toThrow(/controlling Service Worker/);
   });
 
@@ -159,7 +159,7 @@ describe('MediaService', () => {
 
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     const ticket = url.slice('/stream/'.length);
@@ -187,7 +187,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
 
@@ -202,7 +202,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     service.revokeStreamUrl(url);
@@ -249,7 +249,7 @@ describe('MediaService', () => {
     await service.start();
     const url = service.createStreamUrl({
       node: new Uint8Array([9]),
-      size: 8,
+
       mimeType: 'audio/o',
     });
     const ticket = url.slice('/stream/'.length);
@@ -288,7 +288,7 @@ describe('MediaService', () => {
     const read = async (requestId: number): Promise<string> => {
       const url = service.createStreamUrl({
         node: new Uint8Array([9]),
-        size: 8,
+
         mimeType: 'audio/o',
       });
       const port = channels[0].port2;
@@ -362,7 +362,7 @@ describe('MediaService', () => {
     expect(worker.offers).toEqual([]);
     expect(service.streaming).toBe(false);
     expect(() =>
-      service.createStreamUrl({ node: new Uint8Array(1), size: 1, mimeType: 'video/mp4' })
+      service.createStreamUrl({ node: new Uint8Array(1), mimeType: 'video/mp4' })
     ).toThrow(/controlling Service Worker/);
   });
 

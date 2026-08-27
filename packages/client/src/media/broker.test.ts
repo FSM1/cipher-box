@@ -38,6 +38,8 @@ class FakeReader implements MediaReader {
   pinnedSize: number | null = null;
   /** The engine's open-stream ceiling; opening past it refuses like the real one. */
   ceiling = Number.POSITIVE_INFINITY;
+  /** Set to hold every open until it resolves, so a head can be caught in flight. */
+  openGate: Promise<void> | null = null;
   /** Fires inside `closeStream`, to land a broker call mid-reclaim. */
   onClose: (() => void) | null = null;
   private nextHandle = 1n;
@@ -53,7 +55,7 @@ class FakeReader implements MediaReader {
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opens.push(node);
     // A real open resolves, gates, and fetches the root manifest; it suspends.
-    await flush();
+    await (this.openGate ?? flush());
     if (this.live.size >= this.ceiling) {
       throw new EngineRequestError('too many read streams are already open', 'tooManyStreams');
     }
@@ -115,7 +117,7 @@ function harness(size: number, options: MediaBrokerOptions = {}): Harness {
   const reader = new FakeReader(plaintext(size));
   let minted = 0;
   const registry = new StreamRegistry('https://vault.example', () => `ticket-${++minted}`);
-  registry.register({ node: NODE, size, mimeType: 'video/mp4' });
+  registry.register({ node: NODE, mimeType: 'video/mp4' });
   const broker = new MediaBroker(registry, reader, {
     windowBytes: WINDOW,
     lingerMs: 0,
@@ -374,7 +376,7 @@ describe('MediaBroker', () => {
     h.send({ type: 'cb:media:close', requestId: 1 });
     await flush();
 
-    h.registry.register({ node: OTHER_NODE, size: 20, mimeType: 'video/mp4' });
+    h.registry.register({ node: OTHER_NODE, mimeType: 'video/mp4' });
     h.reader.ceiling = 1;
     h.send({ type: 'cb:media:open', requestId: 2, ticket: 'ticket-2', range: null });
     h.send({ type: 'cb:media:pull', requestId: 2 });
@@ -397,7 +399,7 @@ describe('MediaBroker', () => {
     h.send({ type: 'cb:media:close', requestId: 1 });
     await flush();
 
-    h.registry.register({ node: OTHER_NODE, size: 20, mimeType: 'video/mp4' });
+    h.registry.register({ node: OTHER_NODE, mimeType: 'video/mp4' });
     h.reader.ceiling = 1;
     // The revoke lands between giving the idle stream back and retrying the open.
     h.reader.onClose = () => h.broker.revoke('ticket-2');
@@ -535,7 +537,6 @@ describe('MediaBroker', () => {
     const h = harness(20);
     // The file shrank between the mint and the read: the ticket still says 20.
     h.reader.pinnedSize = 6;
-    h.reader.liveSize = 6;
 
     h.send({ type: 'cb:media:open', requestId: 11, ticket: h.ticket, range: null });
     await waitFor(() => h.received.length === 1, 'head');
@@ -559,7 +560,6 @@ describe('MediaBroker', () => {
   it('frames a range head against the pinned version', async () => {
     const h = harness(20);
     h.reader.pinnedSize = 6;
-    h.reader.liveSize = 6;
 
     h.send({ type: 'cb:media:open', requestId: 12, ticket: h.ticket, range: 'bytes=2-' });
     await waitFor(() => h.received.length === 1, 'head');
@@ -575,7 +575,6 @@ describe('MediaBroker', () => {
   it('refuses a range the pinned version no longer holds', async () => {
     const h = harness(20);
     h.reader.pinnedSize = 6;
-    h.reader.liveSize = 6;
 
     // Inside the mint-time size, past the end of the version the stream pinned.
     h.send({ type: 'cb:media:open', requestId: 13, ticket: h.ticket, range: 'bytes=10-15' });
@@ -642,6 +641,37 @@ describe('MediaBroker.whenIdle', () => {
     h.send({ type: 'cb:media:pull', requestId: 1 });
     await waitFor(() => h.received.length === 2, 'chunk');
   };
+
+  it('reports a range the pinned version refuses as a failed read, not an unread ticket', async () => {
+    const h = harness(20);
+    h.reader.pinnedSize = 6;
+    const idle = watch(h.broker.whenIdle(h.ticket, 10_000));
+
+    // Inside the mint-time size, past the end of the version the stream pinned.
+    h.send({ type: 'cb:media:open', requestId: 4, ticket: h.ticket, range: 'bytes=10-15' });
+    await waitFor(() => h.received.length === 1, 'head');
+    await waitFor(() => idle() !== null, 'idle');
+
+    // A holder that read `{ read: false }` would treat this as a ticket nothing
+    // ever fetched, which is how a multi-file save decides it was refused.
+    expect(idle()).toEqual({ read: true, failure: expect.any(String) as unknown as string });
+  });
+
+  it('claims the ticket while the open is still resolving, before any head', async () => {
+    const h = harness(20);
+    let openResolved!: () => void;
+    h.reader.openGate = new Promise<void>((resolve) => (openResolved = resolve));
+    const idle = watch(h.broker.whenIdle(h.ticket, 5));
+
+    h.send({ type: 'cb:media:open', requestId: 5, ticket: h.ticket, range: null });
+    await waitFor(() => h.reader.opens.length === 1, 'the open in flight');
+    // Past the deadline, with the head still unframed: the engine open is the
+    // longest step of a read, and a holder must not call the ticket unread here.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(idle()).toBeNull();
+    openResolved();
+  });
 
   it('never expires a ticket a body has claimed, however long it goes unread', async () => {
     const h = harness(20, { lingerMs: 10_000 });

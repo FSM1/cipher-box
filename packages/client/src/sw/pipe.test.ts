@@ -458,6 +458,9 @@ describe('MediaPipe idle bodies', () => {
     expect(response.status).toBe(206);
     expect(silent.countOf('cb:media:open')).toBe(1);
     expect(live.countOf('cb:media:open')).toBe(1);
+    // The replaced port hosts a cursor and the engine stream behind it; the
+    // release has to reach it before the port is closed.
+    expect(silent.countOf('cb:media:close')).toBe(1);
   });
 });
 

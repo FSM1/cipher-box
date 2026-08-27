@@ -21,6 +21,9 @@ export interface MediaReader {
  */
 const DEFAULT_PIN_LINGER_MS = 5000;
 
+/** What a 416 tells a holder that waited its ticket out. */
+const UNSATISFIABLE = 'the range addresses no bytes of this version';
+
 /** A read this broker gave up on, classified by the engine's code. */
 export interface MediaFailure {
   readonly ticket: string;
@@ -89,7 +92,10 @@ interface Cursor {
   /** The end of the window the head framed. */
   end: number;
   offset: number;
-  /** Reads chain onto this so two pulls can never straddle one cursor. */
+  /**
+   * The head and every read chain onto this, so a pull can neither straddle
+   * another nor overtake the framing that gave the cursor its window.
+   */
   pump: Promise<void>;
 }
 
@@ -213,6 +219,14 @@ export class MediaBroker {
     void this.discard(pin);
   }
 
+  /**
+   * Records why a ticket's last body carried nothing, for the holders waiting it
+   * out. Recorded before the drop, which is what settles them.
+   */
+  private record(ticket: string, failure: string): void {
+    for (const waiter of this.idleWaiters.get(ticket) ?? []) waiter.failure = failure;
+  }
+
   /** Forgets a cursor and gives up its share of the ticket's engine stream. */
   private drop(requestId: number): void {
     const cursor = this.cursors.get(requestId);
@@ -225,6 +239,10 @@ export class MediaBroker {
   }
 
   private acquire(ticket: string): Pin {
+    // A request that named a live ticket has claimed it, whatever the head it
+    // ends up framing: a holder waiting the ticket out must not be told nobody
+    // read it while an open is still resolving.
+    for (const waiter of this.idleWaiters.get(ticket) ?? []) waiter.read = true;
     const held = this.pins.get(ticket);
     if (held === undefined) {
       const pin: Pin = { stream: null, cursors: 1, linger: null };
@@ -338,7 +356,7 @@ export class MediaBroker {
 
     const source = this.registry.lookup(ticket);
     if (source === undefined) {
-      post(port, { type: 'cb:media:head', requestId, status: 404, headers: [] });
+      postHead(port, requestId, 404, []);
       return;
     }
 
@@ -383,16 +401,17 @@ export class MediaBroker {
 
     const head = resolveMediaRequest(range, pinned.opened.size, source);
     if (head.status === 416) {
+      // A body that carries no bytes is a failed read, not a whole one: a holder
+      // that dropped the ticket on it would cut nothing short but would believe
+      // the transfer happened.
+      this.record(cursor.ticket, UNSATISFIABLE);
       this.drop(requestId);
-      post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
+      postHead(port, requestId, head.status, head.headers);
       return;
     }
     cursor.offset = head.window.offset;
     cursor.end = head.window.offset + head.window.length;
-    // Only a framed head means a body claims the ticket; a 404 or a 416 carries
-    // none.
-    for (const waiter of this.idleWaiters.get(cursor.ticket) ?? []) waiter.read = true;
-    post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
+    postHead(port, requestId, head.status, head.headers);
   }
 
   private pull(port: MessagePortLike, requestId: number): void {
@@ -479,8 +498,7 @@ export class MediaBroker {
   private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {
     if (!this.isCurrent(requestId, cursor)) return;
     const message = errorMessage(error);
-    // Recorded before the drop, which is what settles the waiters.
-    for (const waiter of this.idleWaiters.get(cursor.ticket) ?? []) waiter.failure = message;
+    this.record(cursor.ticket, message);
     this.drop(requestId);
     post(port, { type: 'cb:media:error', requestId, message });
     this.onFailure?.({
@@ -497,6 +515,15 @@ function settle(waiter: IdleWaiter): void {
 
 function post(port: MessagePortLike, response: MediaResponse): void {
   port.postMessage(response);
+}
+
+function postHead(
+  port: MessagePortLike,
+  requestId: number,
+  status: number,
+  headers: Array<[string, string]>
+): void {
+  post(port, { type: 'cb:media:head', requestId, status, headers });
 }
 
 /** A same-origin port is still untrusted input: anything off-shape is dropped. */

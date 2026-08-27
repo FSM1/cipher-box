@@ -23,8 +23,8 @@ import {
   SESSION_ENDED,
   type BroadcastChannelLike,
 } from './broadcast.js';
-import { BroadcastTransport, EngineHeldElsewhereError } from './broadcastTransport.js';
-import { fanOut, unknownHandle } from './correlatedTransport.js';
+import { BroadcastTransport, refusedForAccount } from './broadcastTransport.js';
+import { EngineRequestError, fanOut, unknownHandle } from './correlatedTransport.js';
 import { asError } from './errorMessage.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
@@ -38,9 +38,9 @@ import type {
   AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
-  OpenedStream,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -306,7 +306,7 @@ export class EngineClient implements EngineTransport {
    */
   private startOnNextEngine(error: unknown, accountId: string, asFollower: boolean): Promise<void> {
     const refusal = asError(error);
-    const heldByOther = error instanceof EngineHeldElsewhereError && error.heldBy !== null;
+    const heldByOther = refusedForAccount(error) !== null;
     const settled =
       !asFollower || heldByOther || this.election.role === 'closed'
         ? Promise.reject(refusal)
@@ -365,8 +365,11 @@ export class EngineClient implements EngineTransport {
    * nothing behind it and no leadership change can give it one. Publishing the
    * sign-out is what stops the host rendering a vault it can never read.
    */
-  private engineHeldElsewhere(): void {
-    if (this.role !== 'follower' || this.accountId === null) return;
+  private engineHeldElsewhere(heldBy: string): void {
+    // A refusal naming this tab's own account claims nothing a genuine leader
+    // can say, so it ends no session: same origin is not the same account, and
+    // the port a refusal rides is only as authenticated as the beacon.
+    if (this.role !== 'follower' || this.accountId === null || heldBy === this.accountId) return;
     this.holdsAccount(null);
     // Nothing here holds that account now, so greeting under it only asks the
     // leader to refuse this tab again.
@@ -484,6 +487,13 @@ export class EngineClient implements EngineTransport {
     const opened = await this.current.openContentStream(node);
     // The engine that minted this went away mid-open; its stream went with it.
     if (generation !== this.generation) throw unknownHandle('stream');
+    // A follower reads this off a port, where same origin is the only trust
+    // boundary, so the wasm host's ceiling does not run: a size no read can
+    // address must frame no response head.
+    if (!Number.isSafeInteger(opened.size) || opened.size < 0) {
+      void this.current.closeStream(opened.handle).catch(() => undefined);
+      throw new EngineRequestError('the engine reported an unaddressable stream size');
+    }
     return { handle: this.streams.open(opened.handle), size: opened.size };
   }
 
@@ -580,7 +590,7 @@ export class EngineClient implements EngineTransport {
         accountId: this.accountId ?? this.pendingLogin ?? undefined,
         onLeadershipChange: () => this.retireHandles(),
         onAdopted: (accountId) => this.reachedEngine(accountId),
-        onHeldElsewhere: () => this.engineHeldElsewhere(),
+        onHeldElsewhere: (heldBy) => this.engineHeldElsewhere(heldBy),
       }
     );
     this.swapCurrent(follower);

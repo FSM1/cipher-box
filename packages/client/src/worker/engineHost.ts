@@ -11,10 +11,10 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
-  OpenedStream,
   StreamHandle,
   VaultStorageDescriptor,
   WriteHandle,
@@ -289,10 +289,12 @@ export class EngineHost implements EngineHostLike {
   }
 
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {
-    // A wasm-bindgen class instance is not structured-cloneable, so the getters
-    // are read into a plain record before it can reach `postMessage`.
     const opened = await this.handle.openContentStream(nodeId(this.wasm, node, 'node'));
-    return { handle: opened.handle, size: opened.size };
+    try {
+      return { handle: opened.handle, size: opened.size };
+    } finally {
+      opened.free();
+    }
   }
 
   async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {

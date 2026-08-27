@@ -236,7 +236,7 @@ export class MediaPipe {
           }
           // A port already detached is `detachPort` settling this open, not the
           // tab answering it: its replacement is the one to ask.
-          resolve(this.holds(port) ? 'refused' : 'silent');
+          resolve(this.clientIdOf(port) === null ? 'silent' : 'refused');
         },
       });
       this.post(port, { type: 'cb:media:open', requestId, ticket, range });
@@ -377,18 +377,15 @@ export class MediaPipe {
     port.postMessage(message);
   }
 
-  /** Whether this port is still one of the adopted ends. */
-  private holds(port: MessagePortLike): boolean {
-    for (const entry of this.ports.values()) if (entry.port === port) return true;
-    return false;
+  /** The client this port is adopted for, or `null` once it is detached. */
+  private clientIdOf(port: MessagePortLike): string | null {
+    for (const [clientId, entry] of this.ports) if (entry.port === port) return clientId;
+    return null;
   }
 
   private discardPort(port: MessagePortLike): void {
-    for (const [clientId, entry] of this.ports) {
-      if (entry.port !== port) continue;
-      this.detachPort(clientId);
-      return;
-    }
+    const clientId = this.clientIdOf(port);
+    if (clientId !== null) this.detachPort(clientId);
   }
 
   private detachPort(clientId: string): void {
@@ -402,15 +399,18 @@ export class MediaPipe {
     for (const [requestId, body] of [...this.bodies]) {
       if (body.port === entry.port) this.failBody(requestId, replaced);
     }
-    entry.port.removeEventListener('message', entry.listener);
-    entry.port.close();
     // Failing an `open` still waiting on this port re-brokers its retry instead
-    // of waiting out the response deadline.
+    // of waiting out the response deadline. An open in flight already holds a
+    // cursor and the engine stream behind it, so the release rides the same
+    // still-open port as the bodies' — after the close it would never leave.
     for (const [requestId, sink] of [...this.sinks]) {
       if (sink.port !== entry.port) continue;
       this.sinks.delete(requestId);
+      this.post(entry.port, { type: 'cb:media:close', requestId });
       sink.deliver({ type: 'cb:media:error', requestId, message: replaced });
     }
+    entry.port.removeEventListener('message', entry.listener);
+    entry.port.close();
   }
 }
 

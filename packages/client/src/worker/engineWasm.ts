@@ -90,10 +90,15 @@ export interface WasmBlockedOp {
   readonly neededBytes: bigint;
 }
 
-/** wasm-bindgen `OpenedStream` — a read stream and the size of its pinned version. */
+/**
+ * wasm-bindgen `OpenedStream` — a read stream and the size of its pinned
+ * version. Like `WasmCommandOutcome` it is an exported class holding a pointer
+ * into WASM memory, so the caller owns it: read the getters, then `free()`.
+ */
 export interface WasmOpenedStream {
   readonly handle: bigint;
   readonly size: number;
+  free(): void;
 }
 
 /** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */

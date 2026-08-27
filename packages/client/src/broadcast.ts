@@ -30,10 +30,10 @@ import type {
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
+  OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
-  OpenedStream,
   StreamHandle,
   VaultStorageDescriptor,
   WriteHandle,
@@ -103,9 +103,10 @@ export type PortRequest =
  * `readStream` result is the plaintext buffer itself, transferred rather than
  * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string;
  * `beginWrite` the handle it minted, `openContentStream` that handle and the
- * size of the version it pinned; `commitWrite` the durable op id. Nothing here carries the leadership token but the adoption
- * itself: the port is private to one leadership, so holding the far end *is* the
- * proof the token stands in for on the channel.
+ * size of the version it pinned; `commitWrite` the durable op id. Nothing here
+ * carries the leadership token but the adoption itself: the port is private to
+ * one leadership, so holding the far end *is* the proof the token stands in for
+ * on the channel.
  */
 export type PortResponse =
   /** The leader adopted this port, naming the leadership that answers on it. */

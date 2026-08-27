@@ -459,14 +459,21 @@ impl EngineHandle {
                 .open_content_stream(node)
                 .await
                 .map_err(engine_error)?;
-            let size = engine
-                .stream_size(handle)
-                .ok_or_else(|| engine_error(EngineError::UnknownStreamHandle))?;
+            // Every refusal past the mint releases the pin itself: the handle
+            // reaches no caller, so nothing else could ever close the content
+            // key and the ceiling slot behind it.
+            let refuse = |error: JsValue| {
+                engine.close_stream(handle);
+                Err(error)
+            };
+            let Some(size) = engine.stream_size(handle) else {
+                return refuse(engine_error(EngineError::UnknownStreamHandle));
+            };
             // `readStream` addresses windows with whole JS numbers, and
             // `resolveMediaRequest` refuses an offset past `MAX_SAFE_INTEGER`:
             // a size no read could ever reach must not frame a response head.
             if size > MAX_SAFE_SIZE {
-                return Err(
+                return refuse(
                     JsError::new("the pinned version is larger than a read can address").into(),
                 );
             }

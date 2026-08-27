@@ -743,11 +743,7 @@ impl SettingsHold {
 }
 
 /// A freshly opened read stream and the plaintext size of the version it
-/// pinned.
-///
-/// The size crosses with the handle because the only correct length for a
-/// ranged response head is the one the stream will actually serve; a size read
-/// before the pin can already name a superseded version.
+/// pinned (`Engine::stream_size`).
 #[wasm_bindgen]
 pub struct OpenedStream {
     handle: u64,
@@ -771,7 +767,7 @@ impl OpenedStream {
 }
 
 impl OpenedStream {
-    /// For the engine handle and the boundary tests; never exported to JS.
+    /// Pairs a minted handle with its pinned version's size.
     pub fn new(handle: u64, size: f64) -> Self {
         Self { handle, size }
     }

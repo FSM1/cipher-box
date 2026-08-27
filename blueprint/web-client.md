@@ -71,7 +71,11 @@ What dies relative to v1 — with the design that killed it:
   v1 twin-type drift class has no home to grow in.
 - **Boundary hygiene**: IPNS sequence numbers and sizes cross as `bigint`;
   binary payloads cross as transferred `ArrayBuffer`s (UI→worker) or `Blob`
-  handles (cross-tab). The WASM KAT run in CI covers the `u64`/BigInt and
+  handles (cross-tab). The ranged-read surface is the one exception: window
+  offsets, lengths and a stream's pinned size cross as whole JS numbers, so a
+  range and the size it is framed against are one arithmetic. The producer
+  refuses a size past `Number.MAX_SAFE_INTEGER` rather than crossing one no read
+  could address. The WASM KAT run in CI covers the `u64`/BigInt and
   getrandom boundary risks (core.md); `getrandom`'s JS backend wires to
   `crypto.getRandomValues` in the worker scope.
 - **Memory hygiene**: key material lives in WASM linear memory inside core's

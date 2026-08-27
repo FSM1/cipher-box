@@ -125,7 +125,7 @@ window.cbMediaAwaitControl = (): Promise<boolean> => awaitServiceWorkerControl()
 
 window.cbMediaTicket = (size: number, mimeType: string): string => {
   mintedSize = size;
-  return service!.createStreamUrl({ node: new Uint8Array(16).fill(3), size, mimeType });
+  return service!.createStreamUrl({ node: new Uint8Array(16).fill(3), mimeType });
 };
 
 window.cbMediaReaderCalls = (): number => readerCalls;
