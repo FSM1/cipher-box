@@ -27,8 +27,8 @@
 //!
 //! The one owner-identity-signed re-point object flips the scope pointer record,
 //! and at the vault anchor the indexed vault pointer too (see [`RepointChannel`]).
-//! Both channels carry the same sealed block, and neither is best-effort: an
-//! outcome is proof every channel this rotation owed landed.
+//! One gated object, sealed once per channel, and neither channel is
+//! best-effort: an outcome is proof every channel this rotation owed landed.
 //! `writeEpoch` advances here; `minReadEpoch` is carried unchanged, so each plane's
 //! clock stays authored by its owning authority (#38 D1).
 //!
@@ -91,7 +91,9 @@ pub struct WriteScopeNode {
 
 /// The two re-point channels the wave publishes to (blueprint/engine.md
 /// "rotateScopeWrite"). Each names one pointer plane, and both are canonical for
-/// the plane they name — there is no best-effort channel.
+/// the plane they name — there is no best-effort channel. The gate runs on the
+/// re-point object, so every channel carries the same vouched fact under its own
+/// seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepointChannel {
     /// The scope's stable pointer record — the re-point every rotation flips.
@@ -263,8 +265,7 @@ pub trait WriteWavePublisher {
 
 /// Why one write-plane op did not durably land. Only [`Self::Rejected`] is a
 /// trust verdict a retry cannot clear (rule 6: a fail-closed rejection is never
-/// laundered into an availability stall); every variant aborts the stage that
-/// raised it, and the wave is resumable from published state either way.
+/// laundered into an availability stall).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WritePublishError {
     /// The register / PUT did not land; nothing durable. Retryable.
@@ -277,8 +278,10 @@ pub enum WritePublishError {
     RegistryFull,
     /// The publisher's own fail-closed verdict on the bytes it was about to sign
     /// or the effect it was about to make irreversible — a gate rejection on the
-    /// re-resolve, a read body whose children disagree with the wave, or a retire
-    /// batch naming the lingering root. Re-running reaches the same verdict.
+    /// re-resolve, a read body whose children disagree with the wave, a retire
+    /// batch naming the lingering root, or a re-point channel the caller asked
+    /// for and gave no capability to publish on. Re-running reaches the same
+    /// verdict.
     Rejected,
 }
 
@@ -318,9 +321,7 @@ pub struct RotateScopeWritePlan<'a> {
     /// The scope root's current `ipnsName` — becomes `prevRootName` and lingers.
     pub current_root_name: &'a IpnsName,
     /// Whether this scope is the vault anchor — the scope the session's indexed
-    /// vault pointer names. Only the anchor's rotation flips that plane
-    /// ([`RepointChannel::VaultPointer`]); every other scope is named by a scope
-    /// pointer alone, and `false` there publishes one channel.
+    /// vault pointer names ([`RepointChannel::VaultPointer`]).
     pub is_vault_anchor: bool,
 }
 
@@ -652,8 +653,8 @@ where
     )
     .await?;
 
-    // 7) Seal the owner-signed re-point object; flip the canonical pointer, then
-    //    the accelerators.
+    // 7) Seal the owner-signed re-point object and flip every plane this
+    //    rotation owes.
     let repoint = build_repoint_object(
         scope_id,
         new_root_name.clone(),
@@ -671,18 +672,20 @@ where
             error,
         })?;
     let pointer_read_key = kdf::pointer_read_key(plan.owner_pointer_seed, &scope_id);
-    let block = seal_repoint(
-        SessionRole::Owner,
-        entropy,
-        pointer_read_key.as_bytes(),
-        plan.payload_version,
-        plan.owner_identity_signer,
-        &repoint,
-    )
-    .map_err(WriteRotateError::Repoint)?;
-    // Scope pointer first: it is the plane a live reader consults, so it is the
-    // one whose lag is measured in a poll interval rather than in a boot.
     for channel in repoint_channels(plan.is_vault_anchor) {
+        // Sealed per channel, not once and copied. A fresh nonce makes each block
+        // globally unique, so identical bytes at two names would be a
+        // zero-false-positive join between the account-level vault-pointer name
+        // and a scope-pointer name every grantee of that scope holds.
+        let block = seal_repoint(
+            SessionRole::Owner,
+            entropy,
+            pointer_read_key.as_bytes(),
+            plan.payload_version,
+            plan.owner_identity_signer,
+            &repoint,
+        )
+        .map_err(WriteRotateError::Repoint)?;
         publisher
             .publish_repoint(*channel, &block)
             .await
@@ -713,7 +716,9 @@ where
     })
 }
 
-/// The channels one rotation owes, in publish order.
+/// The channels one rotation owes, in publish order: the scope pointer first,
+/// because a lag there costs a live reader a poll interval and a lag at the
+/// anchor costs a cold start its whole boot.
 fn repoint_channels(is_vault_anchor: bool) -> &'static [RepointChannel] {
     if is_vault_anchor {
         &[RepointChannel::ScopePointer, RepointChannel::VaultPointer]
@@ -1460,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_vault_pointer_flip_aborts_the_wave() {
+    fn an_unlanded_vault_pointer_flip_aborts_the_wave() {
         // No channel is best-effort: an anchor left naming a root the scope has
         // moved off is the cold-start defect the second channel exists to close,
         // so the wave stays resumable rather than reporting itself complete.

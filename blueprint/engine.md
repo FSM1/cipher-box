@@ -508,9 +508,12 @@ either: a concurrent read rotation lifting the read floor mid-wave would
 otherwise leave the subtree gate-rejected at its new names and retired at its old
 ones.
 
-The re-point publishes to **two** channels, both carrying the one owner-signed
-re-point block (FSM1/cipher-box-next#38 D3): the scope pointer record, and — when the rotated
-scope is the vault anchor — the indexed vault pointer. Neither channel is
+The re-point publishes to **two** channels, each carrying the one owner-signed
+re-point object under its own seal (FSM1/cipher-box-next#38 D3): the scope pointer record, and
+— when the rotated scope is the vault anchor — the indexed vault pointer. The
+seal is drawn per channel rather than copied: a fresh nonce makes each block
+unique, so identical bytes at two names would join the account-level
+vault-pointer name to a scope-pointer name every grantee of that scope holds. Neither channel is
 best-effort: the scope pointer flips first, the vault pointer second, and a wave
 that does not land both stays incomplete and resumable rather than leaving the
 cold-start anchor naming a root the scope has moved off. Inventory swap rides the

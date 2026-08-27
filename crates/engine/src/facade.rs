@@ -2656,11 +2656,10 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
-    /// The vault-pointer index this session adopted at cold start, or minted.
-    /// `None` until one of the two answers, and on a vault that has neither —
-    /// there is then no vault pointer for a root write rotation to move. The
-    /// walk adopts the highest valid index, so a rotation must re-point that one
-    /// and never the genesis index the mint used.
+    /// The vault-pointer index this session adopted at cold start, or minted —
+    /// the index a root write rotation must re-point
+    /// ([`resolve_vault_pointer`](crate::sync::pointer::resolve_vault_pointer)
+    /// adopts the highest valid one). `None` on a vault with neither.
     vault_pointer_index: Cell<Option<u64>>,
     /// The open focus window ([`Command::SetFocus`]): the folder the host has
     /// open, whose record and whole ancestor chain every resolve tick refreshes.
@@ -3002,9 +3001,9 @@ impl<T: SeamTypes> Engine<T> {
         mut outcome: ColdStartOutcome,
         root_scope_id: [u8; 16],
     ) -> Option<IpnsName> {
-        let vouched = outcome.vault_pointer.as_ref().map(|vp| &vp.repoint);
-        self.vault_pointer_index
-            .set(outcome.vault_pointer.as_ref().map(|vp| vp.index));
+        let anchor = outcome.vault_pointer.as_ref();
+        let vouched = anchor.map(|vp| &vp.repoint);
+        self.vault_pointer_index.set(anchor.map(|vp| vp.index));
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
@@ -3120,6 +3119,9 @@ impl<T: SeamTypes> Engine<T> {
                 seeds.clear();
             }
         }
+        // Session-scoped, and a failed start would otherwise leave the prior
+        // account's index resident.
+        self.vault_pointer_index.set(None);
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }

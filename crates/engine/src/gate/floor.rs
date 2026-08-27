@@ -329,12 +329,8 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// owner-authored `minReadEpoch`, so the identical comparison would
 /// false-positive into a self-inflicted bricked boot.
 ///
-/// The write-epoch stage is narrowed on the other axis: the scope pointer is the
-/// only plane that authors the write-epoch clock. The vault anchor's rotation
-/// flips [`PointerPlane::VaultPointer`] second and not atomically, so a run that
-/// stops between the two flips leaves that plane one epoch behind a floor the
-/// scope pointer has already raised. Measuring the two against one floor turns
-/// that honest lag into a bricked boot.
+/// The write-epoch stage is narrowed on the other axis: only the scope pointer
+/// authors that clock ([`PointerPlane::VaultPointer`]).
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
@@ -767,25 +763,33 @@ mod tests {
         });
     }
 
-    /// [`PointerPlane::VaultPointer`]'s write-stage skip rests on exactly one
-    /// channel writing that plane. This match is exhaustive on purpose: a third
-    /// re-point channel stops it compiling until the law says which plane the
-    /// new channel advances the clock of.
+    /// Exactly one re-point channel escapes the write-epoch floor, and the match
+    /// below is exhaustive on purpose: a third channel stops this compiling until
+    /// the law says which plane the new channel advances the clock of.
     #[test]
-    fn only_the_vault_pointer_channel_writes_the_vault_pointer_plane() {
+    fn only_the_vault_pointer_channel_escapes_the_write_epoch_floor() {
         use crate::rotation::RepointChannel;
 
-        for channel in [RepointChannel::ScopePointer, RepointChannel::VaultPointer] {
-            let plane = match channel {
-                RepointChannel::ScopePointer => PointerPlane::ScopePointer,
-                RepointChannel::VaultPointer => PointerPlane::VaultPointer,
-            };
-            assert_eq!(
-                plane == PointerPlane::VaultPointer,
-                channel == RepointChannel::VaultPointer,
-                "the vault-pointer plane has one writer, and it is not the scope pointer"
-            );
-        }
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            advance_write_epoch_on_sight(&floors, &SCOPE, 6)
+                .await
+                .unwrap();
+            for channel in [RepointChannel::ScopePointer, RepointChannel::VaultPointer] {
+                let plane = match channel {
+                    RepointChannel::ScopePointer => PointerPlane::ScopePointer,
+                    RepointChannel::VaultPointer => PointerPlane::VaultPointer,
+                };
+                let regression = repoint_regression(&floors, &repoint(SCOPE, 5, 1), &SCOPE, plane)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    regression.is_none(),
+                    channel == RepointChannel::VaultPointer,
+                    "the write-epoch floor holds every channel but the anchor's"
+                );
+            }
+        });
     }
 
     /// Measuring the two planes against one bar bricks the boot whenever a root
