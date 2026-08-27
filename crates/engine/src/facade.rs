@@ -2707,6 +2707,11 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
+    /// The vault-pointer index this session adopted at cold start, or minted —
+    /// the index a root write rotation must re-point
+    /// ([`resolve_vault_pointer`](crate::sync::pointer::resolve_vault_pointer)
+    /// adopts the highest valid one). `None` on a vault with neither.
+    vault_pointer_index: Cell<Option<u64>>,
     /// The open focus window ([`Command::SetFocus`]): the folder the host has
     /// open, whose record and whole ancestor chain every resolve tick refreshes.
     /// Shared with the tick loop, which reads it on each pass.
@@ -2859,6 +2864,7 @@ impl<T: SeamTypes> Engine<T> {
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                vault_pointer_index: Cell::new(None),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3052,7 +3058,9 @@ impl<T: SeamTypes> Engine<T> {
         mut outcome: ColdStartOutcome,
         root_scope_id: [u8; 16],
     ) -> Option<IpnsName> {
-        let vouched = outcome.vault_pointer.as_ref().map(|vp| &vp.repoint);
+        let anchor = outcome.vault_pointer.as_ref();
+        let vouched = anchor.map(|vp| &vp.repoint);
+        self.vault_pointer_index.set(anchor.map(|vp| vp.index));
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
@@ -3087,6 +3095,8 @@ impl<T: SeamTypes> Engine<T> {
     /// them — so they are stamped at the epochs its own re-point vouches and
     /// the floors it seeded from them.
     fn install_mint(&self, vault: ProvisionedVault) -> IpnsName {
+        self.vault_pointer_index
+            .set(Some(GENESIS_VAULT_POINTER_INDEX));
         deposit_seed(
             &self.scope_read_seeds,
             vault.repoint.scope_id,
@@ -3169,6 +3179,9 @@ impl<T: SeamTypes> Engine<T> {
                 seeds.clear();
             }
         }
+        // Session-scoped, and a failed start would otherwise leave the prior
+        // account's index resident.
+        self.vault_pointer_index.set(None);
         if let Ok(mut consulted) = self.pointer_consulted.try_borrow_mut() {
             consulted.clear();
         }
@@ -4576,6 +4589,10 @@ where {
         }
         .map_err(EngineError::from_revoke)?;
 
+        let vault_pointer_signer = self
+            .vault_pointer_index
+            .get()
+            .map(|index| session.vault_pointer_signer(index));
         let rotator = OwnerCutNet {
             transport: &self.seams.record_transport,
             api: api.as_ref(),
@@ -4588,6 +4605,7 @@ where {
             keys: owner_keys(),
             owner_signer: session.identity(),
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
+            vault_pointer_signer: vault_pointer_signer.as_ref(),
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
             scope_id: target.scope.scope_id,
@@ -9499,6 +9517,31 @@ mod tests {
                     op_id: OpId(1),
                     reason: DeadLetterReason::Undecodable
                 })
+            );
+        }
+
+        /// The anchor name is what the cold start measures a recovered write
+        /// scope seed against, so a vault pointer left at the pre-rotation root
+        /// declines the seed the same boot just recovered. The write wave's
+        /// vault-pointer channel is what keeps the two in step.
+        #[test]
+        fn a_recovered_write_seed_is_kept_only_at_the_root_the_anchor_names() {
+            let seed = Zeroizing::new([0x4d; 32]);
+            let moved = derive_write_name(&seed, &ROOT_SCOPE);
+            let stale = derive_write_name(&[0x9e; 32], &ROOT_SCOPE);
+
+            let kept = RefCell::new(ScopeSeeds::new());
+            deposit_write_seed(&kept, ROOT_SCOPE, seed.clone(), Some(&moved), Some(3));
+            assert!(
+                kept.borrow().contains_key(&ROOT_SCOPE),
+                "the anchor names the root this seed derives"
+            );
+
+            let dropped = RefCell::new(ScopeSeeds::new());
+            deposit_write_seed(&dropped, ROOT_SCOPE, seed, Some(&stale), Some(3));
+            assert!(
+                !dropped.borrow().contains_key(&ROOT_SCOPE),
+                "an anchor left at the pre-rotation root declines the seed"
             );
         }
     }

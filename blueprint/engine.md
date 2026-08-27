@@ -508,13 +508,18 @@ either: a concurrent read rotation lifting the read floor mid-wave would
 otherwise leave the subtree gate-rejected at its new names and retired at its old
 ones.
 
-The re-point publishes to three channels (FSM1/cipher-box-next#38 D3): the scope pointer record
-(canonical), the mailbox
-(accelerator, verifiable), and the old root name's final tombstone
-(accelerator, feeding FSM1/cipher-box-next#33's silent depth-guarded `movedTo` chase). Inventory
-swap rides the normal paths: wave publishes enroll new names via
-register-first; interior old names batch-retire at completion; the old root
-lingers until the migration window closes (FSM1/cipher-box-next#34 D4).
+The re-point publishes to **two** channels, each carrying the one owner-signed
+re-point object under its own seal (FSM1/cipher-box-next#38 D3): the scope pointer record, and
+— when the rotated scope is the vault anchor — the indexed vault pointer. The
+seal is drawn per channel rather than copied: a fresh nonce makes each block
+unique, so identical bytes at two names would join the account-level
+vault-pointer name to a scope-pointer name every grantee of that scope holds. Neither channel is
+best-effort: the scope pointer flips first, the vault pointer second, and a wave
+that does not land both stays incomplete and resumable rather than leaving the
+cold-start anchor naming a root the scope has moved off. Inventory swap rides the
+normal paths: wave publishes enroll new names via register-first; interior old
+names batch-retire at completion; the old root lingers until the migration window
+closes (FSM1/cipher-box-next#34 D4).
 
 ### Triggers
 
@@ -569,7 +574,15 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   highest known, adopt the highest index bearing a valid owner-signed payload,
   and stop at the first unresolvable index — which only the owner can extend;
   an owner-side index bump is the pointer-key-compromise recovery. Cost: one
-  extra resolve on cold start and per tick (FSM1/cipher-box-next#39 D5).
+  extra resolve on cold start and per tick (FSM1/cipher-box-next#39 D5). The
+  first-run mint writes it, and every later write rotation of the anchor scope
+  re-points it at the index that session adopted — so the plane the cold start
+  reads first names the root the scope currently sits at.
+- **The write-epoch clock belongs to the scope pointer alone.** The two planes
+  flip in sequence and not atomically, so a rotation that stops between them
+  leaves the vault pointer one epoch behind. That lag is honest state, and
+  measuring the vault pointer against the write-epoch floor would turn it into a
+  refused boot, so only the scope pointer is held to that floor.
 - Pointer names ride pin registration into the republisher inventory and get
   the same 90-day EOL + lease renewal as every name (FSM1/cipher-box-next#24 as amended by FSM1/cipher-box-next#38).
 
@@ -652,21 +665,18 @@ the republish it already does.
 
 ## Mailbox logic
 
-The mailbox carries discovery and courtesy traffic only — share pointers,
-write-rotation re-point accelerators, invite claims, courtesy notifications.
-Nothing on it is load-bearing for safety: root migration has the pointer
-plane, revocation is discovered in metadata (FSM1/cipher-box-next#34 D5, FSM1/cipher-box-next#38 D3).
+The mailbox carries discovery and courtesy traffic only — share pointers, invite
+claims, courtesy notifications. Nothing on it is load-bearing for safety: root
+migration has the pointer plane, revocation is discovered in metadata
+(FSM1/cipher-box-next#34 D5, FSM1/cipher-box-next#38 D3).
 
 - **Sender authentication** (FSM1/cipher-box-next#39 D9): every payload carries a sender-identity
   signature inside the HPKE seal, verified against the contact-code-anchored
   key; unauthenticated items are dropped before a wasted resolve.
 - **Lifecycle**: post via the API client with a sender-supplied idempotency
   key (≤ ~8 KB); poll rides the sync tick; ack = delete. The engine acks only
-  after the pointed-at fact is durably recorded (share appended to the vault
-  list, re-point applied) — an engineering judgment consistent with
-  until-acked retention. Re-point mailbox items are verifiable accelerators:
-  the same owner-signed re-point object as the pointer record, applied through
-  the same floor law.
+  after the pointed-at fact is durably recorded (the share appended to the vault
+  list) — an engineering judgment consistent with until-acked retention.
 - Server-side caps, the 90-day unacked TTL, and rate limits are API territory
   (api.md); the engine surfaces a reject-new mailbox as a sender-visible
   failure.

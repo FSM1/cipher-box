@@ -25,8 +25,10 @@
 //!
 //! # Re-point channels (#38 D3)
 //!
-//! The owner-identity-signed re-point object flips the canonical scope pointer
-//! record, then goes out on the two accelerator channels (see [`RepointChannel`]).
+//! The one owner-identity-signed re-point object flips the scope pointer record,
+//! and at the vault anchor the indexed vault pointer too (see [`RepointChannel`]).
+//! One gated object, sealed once per channel, and neither channel is
+//! best-effort: an outcome is proof every channel this rotation owed landed.
 //! `writeEpoch` advances here; `minReadEpoch` is carried unchanged, so each plane's
 //! clock stays authored by its owning authority (#38 D1).
 //!
@@ -87,24 +89,20 @@ pub struct WriteScopeNode {
     pub child_node_ids: Vec<[u8; 16]>,
 }
 
-/// The three re-point channels the wave publishes to (#38 D3). The scope pointer
-/// is canonical; the mailbox and the old-root tombstone are verifiable
-/// accelerators — nothing on them is load-bearing for safety.
+/// The two re-point channels the wave publishes to (blueprint/engine.md
+/// "rotateScopeWrite"). Each names one pointer plane, and both are canonical for
+/// the plane they name — there is no best-effort channel. The gate runs on the
+/// re-point object, so every channel carries the same vouched fact under its own
+/// seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepointChannel {
-    /// The stable scope pointer record — the canonical re-point.
+    /// The scope's stable pointer record — the re-point every rotation flips.
     ScopePointer,
-    /// The recipient mailbox — an accelerator for surviving grantees.
-    Mailbox,
-    /// The old root name's final tombstone — an accelerator for the `movedTo`
-    /// chase.
-    Tombstone,
+    /// The vault anchor's indexed vault pointer — the cold-start anchor, flipped
+    /// only when the rotated scope is the one that pointer names
+    /// ([`RotateScopeWritePlan::is_vault_anchor`]).
+    VaultPointer,
 }
-
-/// The two accelerator channels, published after the canonical
-/// [`RepointChannel::ScopePointer`] flip.
-const REPOINT_ACCELERATORS: [RepointChannel; 2] =
-    [RepointChannel::Mailbox, RepointChannel::Tombstone];
 
 /// The order to republish one node at its freshly derived name. It carries
 /// routing identity and the narrowest key material the publish needs — never the
@@ -257,7 +255,7 @@ pub trait WriteWavePublisher {
         repoint: &RepointObject,
     ) -> Result<(), WritePublishError>;
 
-    /// Publish the owner-signed re-point `block` on one of the three channels.
+    /// Publish the owner-signed re-point `block` on one [`RepointChannel`].
     async fn publish_repoint(
         &self,
         channel: RepointChannel,
@@ -267,8 +265,7 @@ pub trait WriteWavePublisher {
 
 /// Why one write-plane op did not durably land. Only [`Self::Rejected`] is a
 /// trust verdict a retry cannot clear (rule 6: a fail-closed rejection is never
-/// laundered into an availability stall), and it aborts the wave on every
-/// channel; the rest abort every stage except an accelerator re-point.
+/// laundered into an availability stall).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WritePublishError {
     /// The register / PUT did not land; nothing durable. Retryable.
@@ -281,8 +278,10 @@ pub enum WritePublishError {
     RegistryFull,
     /// The publisher's own fail-closed verdict on the bytes it was about to sign
     /// or the effect it was about to make irreversible — a gate rejection on the
-    /// re-resolve, a read body whose children disagree with the wave, or a retire
-    /// batch naming the lingering root. Re-running reaches the same verdict.
+    /// re-resolve, a read body whose children disagree with the wave, a retire
+    /// batch naming the lingering root, or a re-point channel the caller asked
+    /// for and gave no capability to publish on. Re-running reaches the same
+    /// verdict.
     Rejected,
 }
 
@@ -321,22 +320,20 @@ pub struct RotateScopeWritePlan<'a> {
     pub min_read_epoch: u64,
     /// The scope root's current `ipnsName` — becomes `prevRootName` and lingers.
     pub current_root_name: &'a IpnsName,
+    /// Whether this scope is the vault anchor — the scope the session's indexed
+    /// vault pointer names ([`RepointChannel::VaultPointer`]).
+    pub is_vault_anchor: bool,
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
-/// republished, the **canonical** re-point landed, and interior old names retired
-/// — an incomplete wave returns [`WriteRotateError`] instead.
+/// republished, every re-point channel this rotation owed landed, and interior
+/// old names retired — an incomplete wave returns [`WriteRotateError`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRotationOutcome {
     /// The new write epoch the scope was cut to (`current_write_epoch + 1`).
     pub new_write_epoch: u64,
     /// The scope root's new `ipnsName` (`currentRootName` in the re-point object).
     pub new_root_name: IpnsName,
-    /// Which accelerator channels the re-point actually reached, in publish
-    /// order. Nothing on them is load-bearing (see [`RepointChannel`]), so a
-    /// refused accelerator leaves the wave complete and is reported rather than
-    /// aborting a rotation whose canonical re-point already flipped the pointer.
-    pub repoint_accelerators: Vec<RepointChannel>,
     /// The number of interior (non-root) nodes in the scope's subtree — the wave
     /// covers all of them, though a resumed wave may have republished some in a
     /// prior run (skipped via `is_republished`).
@@ -531,9 +528,10 @@ pub fn build_repoint_object(
 /// Owner-checks the caller, recovers or mints the fresh write scope seed,
 /// bumps `writeEpoch`, then runs the child-first name wave: descendants
 /// register-first + republish at their freshly derived names, the root **last**,
-/// then the owner-signed re-point publishes to all three channels, and finally the
-/// interior old names batch-retire (the old root lingers). Every effect is
-/// idempotent, so a crashed wave re-runs to the same terminal state (module docs).
+/// then the owner-signed re-point publishes to every channel this rotation owes
+/// ([`RepointChannel`]), and finally the interior old names batch-retire (the old
+/// root lingers). Every effect is idempotent, so a crashed wave re-runs to the
+/// same terminal state (module docs).
 pub async fn rotate_scope_write<E, R, P>(
     entropy: &mut E,
     resolver: &R,
@@ -655,8 +653,8 @@ where
     )
     .await?;
 
-    // 7) Seal the owner-signed re-point object; flip the canonical pointer, then
-    //    the accelerators.
+    // 7) Seal the owner-signed re-point object and flip every plane this
+    //    rotation owes.
     let repoint = build_repoint_object(
         scope_id,
         new_root_name.clone(),
@@ -674,39 +672,28 @@ where
             error,
         })?;
     let pointer_read_key = kdf::pointer_read_key(plan.owner_pointer_seed, &scope_id);
-    let block = seal_repoint(
-        SessionRole::Owner,
-        entropy,
-        pointer_read_key.as_bytes(),
-        plan.payload_version,
-        plan.owner_identity_signer,
-        &repoint,
-    )
-    .map_err(WriteRotateError::Repoint)?;
-    publisher
-        .publish_repoint(RepointChannel::ScopePointer, &block)
-        .await
-        .map_err(|error| WriteRotateError::Publish {
-            stage: repoint_stage(RepointChannel::ScopePointer),
-            node_id: scope_id,
-            error,
-        })?;
-    let mut repoint_accelerators = Vec::with_capacity(REPOINT_ACCELERATORS.len());
-    for channel in REPOINT_ACCELERATORS {
-        match publisher.publish_repoint(channel, &block).await {
-            Ok(()) => repoint_accelerators.push(channel),
-            // An accelerator carries nothing load-bearing, so an availability
-            // failure is reported, not fatal. A `Rejected` is not availability:
-            // the publisher refused to sign, and rule 6 forbids absorbing that.
-            Err(WritePublishError::Rejected) => {
-                return Err(WriteRotateError::Publish {
-                    stage: repoint_stage(channel),
-                    node_id: scope_id,
-                    error: WritePublishError::Rejected,
-                });
-            }
-            Err(_) => {}
-        }
+    for channel in repoint_channels(plan.is_vault_anchor) {
+        // Sealed per channel, not once and copied. A fresh nonce makes each block
+        // globally unique, so identical bytes at two names would be a
+        // zero-false-positive join between the account-level vault-pointer name
+        // and a scope-pointer name every grantee of that scope holds.
+        let block = seal_repoint(
+            SessionRole::Owner,
+            entropy,
+            pointer_read_key.as_bytes(),
+            plan.payload_version,
+            plan.owner_identity_signer,
+            &repoint,
+        )
+        .map_err(WriteRotateError::Repoint)?;
+        publisher
+            .publish_repoint(*channel, &block)
+            .await
+            .map_err(|error| WriteRotateError::Publish {
+                stage: repoint_stage(*channel),
+                node_id: scope_id,
+                error,
+            })?;
     }
 
     // 8) Batch-retire the interior old names — only now, after the re-point flipped
@@ -725,9 +712,19 @@ where
     Ok(WriteRotationOutcome {
         new_write_epoch,
         new_root_name,
-        repoint_accelerators,
         interior_node_count: descendants.len(),
     })
+}
+
+/// The channels one rotation owes, in publish order: the scope pointer first,
+/// because a lag there costs a live reader a poll interval and a lag at the
+/// anchor costs a cold start its whole boot.
+fn repoint_channels(is_vault_anchor: bool) -> &'static [RepointChannel] {
+    if is_vault_anchor {
+        &[RepointChannel::ScopePointer, RepointChannel::VaultPointer]
+    } else {
+        &[RepointChannel::ScopePointer]
+    }
 }
 
 /// CAS-republish one node at `new_name`, skipping the republish when published
@@ -790,8 +787,7 @@ async fn republish_node<P: WriteWavePublisher>(
 fn repoint_stage(channel: RepointChannel) -> &'static str {
     match channel {
         RepointChannel::ScopePointer => "repoint-scope-pointer",
-        RepointChannel::Mailbox => "repoint-mailbox",
-        RepointChannel::Tombstone => "repoint-tombstone",
+        RepointChannel::VaultPointer => "repoint-vault-pointer",
     }
 }
 
@@ -1186,6 +1182,7 @@ mod tests {
             current_write_epoch: 4,
             min_read_epoch: 7,
             current_root_name: current_root,
+            is_vault_anchor: true,
         }
     }
 
@@ -1224,7 +1221,8 @@ mod tests {
     fn a_refused_repoint_check_signs_and_publishes_nothing() {
         // The gate runs before `seal_repoint`, so a re-point this build's own
         // cold-seed gate would reject is never owner-signed — and the wave stops
-        // short of the retire, leaving every old name live.
+        // short of the retire, leaving every old name live. One gate covers both
+        // channels: they publish the one block it cleared.
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let resolver = tree();
@@ -1260,7 +1258,7 @@ mod tests {
             !events
                 .iter()
                 .any(|ev| matches!(ev, Event::Repoint(_) | Event::Retire(_))),
-            "nothing is re-pointed and nothing is tombstoned",
+            "neither plane is re-pointed and nothing is tombstoned",
         );
     }
 
@@ -1326,7 +1324,7 @@ mod tests {
             "grandchild before its parent"
         );
 
-        // Three-channel re-point, in canonical order, AFTER every republish.
+        // Both channels re-pointed, scope pointer first, AFTER every republish.
         let first_repoint = events
             .iter()
             .position(|ev| matches!(ev, Event::Repoint(_)))
@@ -1341,16 +1339,8 @@ mod tests {
         );
         assert_eq!(
             *state.repoint_channels.borrow(),
-            vec![
-                RepointChannel::ScopePointer,
-                RepointChannel::Mailbox,
-                RepointChannel::Tombstone
-            ],
-            "all three channels, pointer first"
-        );
-        assert_eq!(
-            outcome.repoint_accelerators,
-            vec![RepointChannel::Mailbox, RepointChannel::Tombstone]
+            vec![RepointChannel::ScopePointer, RepointChannel::VaultPointer],
+            "both channels, scope pointer first"
         );
 
         // Retire is LAST, after the re-point, and the old ROOT name is never retired.
@@ -1475,18 +1465,18 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_accelerator_leaves_the_wave_complete() {
-        // The mailbox and the tombstone carry nothing load-bearing, so a wave whose
-        // canonical pointer flip landed must not be re-run for them — it reports
-        // which accelerators it reached instead.
+    fn an_unlanded_vault_pointer_flip_aborts_the_wave() {
+        // No channel is best-effort: an anchor left naming a root the scope has
+        // moved off is the cold-start defect the second channel exists to close,
+        // so the wave stays resumable rather than reporting itself complete.
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let resolver = tree();
         let state = WaveState::default();
-        let publisher = FakePublisher::refusing(state.clone(), RepointChannel::Mailbox);
+        let publisher = FakePublisher::refusing(state.clone(), RepointChannel::VaultPointer);
         let current_root = old_name_of(&SCOPE);
 
-        let outcome = block_on(async {
+        let err = block_on(async {
             let mut e = SeededEntropy::new(21);
             rotate_scope_write(
                 &mut e,
@@ -1496,20 +1486,55 @@ mod tests {
             )
             .await
         })
-        .expect("a refused accelerator does not abort the wave");
+        .expect_err("the anchor flip is not optional");
 
         assert_eq!(
-            outcome.repoint_accelerators,
-            vec![RepointChannel::Tombstone]
+            err,
+            WriteRotateError::Publish {
+                stage: "repoint-vault-pointer",
+                node_id: SCOPE,
+                error: WritePublishError::NotLanded,
+            }
         );
+        assert!(
+            err.is_retryable(),
+            "the transport did not land — availability"
+        );
+        assert!(
+            state.retired.borrow().is_empty(),
+            "nothing retires while a plane still names the old root"
+        );
+    }
+
+    #[test]
+    fn a_scope_below_the_anchor_publishes_the_scope_pointer_alone() {
+        // Only the vault anchor is named by a vault pointer; a rotation elsewhere
+        // has no second plane to move.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        block_on(async {
+            let mut e = SeededEntropy::new(21);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &RotateScopeWritePlan {
+                    is_vault_anchor: false,
+                    ..plan(&owner, &c, &sig, &current_root)
+                },
+            )
+            .await
+        })
+        .expect("the wave completes on one channel");
+
         assert_eq!(
             *state.repoint_channels.borrow(),
-            vec![RepointChannel::ScopePointer, RepointChannel::Tombstone]
-        );
-        assert_eq!(
-            state.retired.borrow().len(),
-            4,
-            "the wave still completes its retirement"
+            vec![RepointChannel::ScopePointer]
         );
     }
 
@@ -1647,11 +1672,11 @@ mod tests {
         }
         drop(orders);
 
-        // The wave completed: pointer flipped on all three channels. Every name
-        // the resume enumerated is a live one, so what it tombstones comes from
-        // the pre-wave seed alone — exactly the interior names the first run
+        // The wave completed: both planes flipped. Every name the resume
+        // enumerated is a live one, so what it tombstones comes from the
+        // pre-wave seed alone — exactly the interior names the first run
         // superseded, and never the lingering root.
-        assert_eq!(state.repoint_channels.borrow().len(), 3);
+        assert_eq!(state.repoint_channels.borrow().len(), 2);
         let retired = state.retired.borrow().clone();
         let superseded: HashSet<String> = [nid(0x02), nid(0x03), nid(0x04), nid(0x05)]
             .iter()
@@ -1892,8 +1917,8 @@ mod tests {
         assert!(!err.is_retryable(), "a fail-closed refusal is not a stall");
         assert_eq!(
             state.repoint_channels.borrow().len(),
-            3,
-            "the pointer flipped before the retire refused"
+            2,
+            "both planes flipped before the retire refused"
         );
 
         // The read rotation's cut is now durable: the pre-wave records sit below

@@ -39,8 +39,8 @@ pub(crate) fn idempotency_key_is_legal(key: &str) -> bool {
 
 /// An opened, sender-authenticated mailbox item: the transport id needed to
 /// [`ack`], the verified sender identity to anchor against a contact, and the
-/// opaque application payload (a share pointer, a re-point accelerator, an
-/// invite claim — the [`grants`](crate::grants) layer frames its meaning).
+/// opaque application payload (a share pointer, an invite claim — the
+/// [`grants`](crate::grants) layer frames its meaning).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedMailboxItem {
     /// The transport-assigned id, used to [`ack`] once the fact is durable.

@@ -40,7 +40,7 @@ pub struct MailboxItem {
 /// Post/poll/ack of sealed blobs to/from a recipient public key.
 ///
 /// An integrity-untrusted transport for discovery and courtesy traffic only
-/// (share pointers, re-point accelerators, invite claims) — nothing on it is
+/// (share pointers, invite claims) — nothing on it is
 /// load-bearing for safety. One instance is bound to one account's inbox:
 /// [`Mailbox::poll`] reads the caller's own items. Contract, enforced by the
 /// conformance kit:

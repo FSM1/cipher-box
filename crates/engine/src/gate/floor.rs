@@ -97,9 +97,10 @@ impl std::error::Error for FloorRegression {}
 /// only one of them is a clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerPlane {
-    /// The indexed vault pointer — the cold-start anchor. Each index is
-    /// published exactly once, at first-run mint, and no re-point channel
-    /// writes it, so its `writeEpoch` is a genesis seed rather than a clock.
+    /// The indexed vault pointer — the cold-start anchor. The vault anchor's
+    /// write rotation re-points it too, but after the scope pointer and not
+    /// atomically with it, so this plane legitimately trails that one until the
+    /// wave's next resume. Its `writeEpoch` is therefore never a clock.
     VaultPointer,
     /// The scope pointer — re-pointed by every write rotation, and the
     /// write-epoch floor's only owner-vouched clock (#38 D4).
@@ -328,11 +329,8 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// owner-authored `minReadEpoch`, so the identical comparison would
 /// false-positive into a self-inflicted bricked boot.
 ///
-/// The write-epoch stage is narrowed on the other axis: the scope pointer is the
-/// only plane that advances a write epoch, so a re-point read off the write-once
-/// [`PointerPlane::VaultPointer`] carries a genesis seed that the scope-pointer
-/// plane has legitimately outrun. Measuring the two against one floor refuses a
-/// vault's own honest state on the boot after its first root write rotation.
+/// The write-epoch stage is narrowed on the other axis: only the scope pointer
+/// authors that clock ([`PointerPlane::VaultPointer`]).
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
@@ -765,30 +763,38 @@ mod tests {
         });
     }
 
-    /// [`PointerPlane::VaultPointer`]'s write-stage skip rests on nothing
-    /// re-pointing that plane. This match is exhaustive on purpose: a
-    /// vault-pointer re-point channel stops it compiling, at the law that
-    /// assumes no such channel exists.
+    /// Exactly one re-point channel escapes the write-epoch floor, and the match
+    /// below is exhaustive on purpose: a third channel stops this compiling until
+    /// the law says which plane the new channel advances the clock of.
     #[test]
-    fn no_repoint_channel_writes_the_vault_pointer_plane() {
+    fn only_the_vault_pointer_channel_escapes_the_write_epoch_floor() {
         use crate::rotation::RepointChannel;
 
-        for channel in [
-            RepointChannel::ScopePointer,
-            RepointChannel::Mailbox,
-            RepointChannel::Tombstone,
-        ] {
-            let plane = match channel {
-                RepointChannel::ScopePointer
-                | RepointChannel::Mailbox
-                | RepointChannel::Tombstone => PointerPlane::ScopePointer,
-            };
-            assert_eq!(plane, PointerPlane::ScopePointer);
-        }
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            advance_write_epoch_on_sight(&floors, &SCOPE, 6)
+                .await
+                .unwrap();
+            for channel in [RepointChannel::ScopePointer, RepointChannel::VaultPointer] {
+                let plane = match channel {
+                    RepointChannel::ScopePointer => PointerPlane::ScopePointer,
+                    RepointChannel::VaultPointer => PointerPlane::VaultPointer,
+                };
+                let regression = repoint_regression(&floors, &repoint(SCOPE, 5, 1), &SCOPE, plane)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    regression.is_none(),
+                    channel == RepointChannel::VaultPointer,
+                    "the write-epoch floor holds every channel but the anchor's"
+                );
+            }
+        });
     }
 
-    /// Measuring the two planes against one bar fails the boot after a vault's
-    /// first root write rotation, on entirely honest state ([`PointerPlane`]).
+    /// Measuring the two planes against one bar bricks the boot whenever a root
+    /// write rotation stopped between its two flips, on honest state
+    /// ([`PointerPlane`]).
     #[test]
     fn cold_seed_never_bars_the_vault_pointer_on_a_raised_write_floor() {
         let floors = InMemoryFloorStore::default();
