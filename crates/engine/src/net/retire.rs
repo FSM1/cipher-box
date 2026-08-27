@@ -98,7 +98,7 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             | PublishError::FloorRead(_)
             | PublishError::RecordTooLarge { .. } => true,
             // Nothing was ever addressed, so there is no CID to retire.
-            PublishError::EmptyHeadCid => false,
+            PublishError::EmptyHeadCid | PublishError::EmptyInlineValue => false,
             // No ack is not proof nothing stored: unpinning a head a live
             // record may still name is loss, where the row is only a leak.
             PublishError::AllEndpointsFailed => false,

@@ -39,6 +39,7 @@ use super::author::{
     author_scope_root_with_section,
 };
 use super::child::ChildAdopter;
+use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{PointerConsult, PointerConsultError, RecordPointerFetch};
 use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_inline};
 use super::record_publish::{
@@ -1958,6 +1959,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// the [`RepointChannel::VaultPointer`] flip needs, and the one home for
     /// this rationale.
     pub vault_pointer_signer: Option<&'a Ed25519Signer>,
+    /// The session's held set, so a confirmed pointer flip enrols the pointer
+    /// for renewal (`WriteWaveNet::publish_repoint`).
+    pub held: &'a RefCell<HeldRecords>,
     /// The pointer-payload envelope version the scope pointer is read under
     /// (`RotateScopeWritePlan::payload_version`).
     pub payload_version: u64,
@@ -2813,12 +2817,15 @@ where
     /// the pipeline. Nothing gates a pointer record, so no adopt ever raises its
     /// sequence floor: the freshest record on the network is the lower bound a
     /// second rotation must clear, and a confirmed flip raises the floor itself.
+    ///
+    /// Returns the signed bytes the flip PUT, which the caller enrols for
+    /// liveness verbatim.
     async fn publish_pointer_record(
         &self,
         name: &IpnsName,
         signer: &Ed25519Signer,
         block: &[u8],
-    ) -> Result<(), WritePublishError> {
+    ) -> Result<Vec<u8>, WritePublishError> {
         let observed = fanout_get_verify(self.transport, name)
             .await
             .map_or(0, |(record, _)| record.sequence);
@@ -2838,16 +2845,17 @@ where
         .await
         .map_err(|error| match error {
             PublishError::Register(_) => WritePublishError::RegistryFull,
-            PublishError::EmptyHeadCid | PublishError::RecordTooLarge { .. } => {
-                WritePublishError::Rejected
-            }
+            PublishError::EmptyHeadCid
+            | PublishError::EmptyInlineValue
+            | PublishError::RecordTooLarge { .. } => WritePublishError::Rejected,
             _ => WritePublishError::NotLanded,
         })?;
         match receipt.outcome {
             PublishOutcome::Published { sequence } => {
                 floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
                     .await
-                    .map_err(|_| WritePublishError::NotLanded)
+                    .map_err(|_| WritePublishError::NotLanded)?;
+                Ok(receipt.record_bytes)
             }
             PublishOutcome::LostRace { .. } => Err(WritePublishError::LostRace),
             PublishOutcome::Unconfirmed { .. } => Err(WritePublishError::NotLanded),
@@ -3088,7 +3096,24 @@ where
             RepointChannel::ScopePointer => {
                 let name = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
                 let signer = scope_pointer_signer(self.owner_pointer_seed, &self.scope_id);
-                self.publish_pointer_record(&name, &signer, block).await
+                let record_bytes = self.publish_pointer_record(&name, &signer, block).await?;
+                // The scope pointer is the only landed re-point channel and its
+                // EOL is client-signed, so an unenrolled pointer lapses and a
+                // read-only survivor never finds the moved root again.
+                // The pointer plane keys it: a scope root's node id is its scope
+                // id, so the node plane already holds the root's own record
+                // under these same bytes.
+                self.held.borrow_mut().insert(
+                    HeldKey::scope_pointer(self.scope_id),
+                    HeldRecord {
+                        routing_key: name.as_str().to_owned(),
+                        record_bytes,
+                        signer,
+                        value: HeldValue::Inline(block.to_vec()),
+                        content_cids: Vec::new(),
+                    },
+                );
+                Ok(())
             }
             // Rule 8: the cold-start walk opens this plane under the root scope's
             // own key and AAD, and aborts the whole chain on a record it cannot
@@ -3103,7 +3128,9 @@ where
                     .vault_pointer_signer
                     .ok_or(WritePublishError::Rejected)?;
                 let name = IpnsName::from_public_key(&signer.verifying_key());
-                self.publish_pointer_record(&name, signer, block).await
+                self.publish_pointer_record(&name, signer, block)
+                    .await
+                    .map(|_| ())
             }
         }
     }
@@ -3339,6 +3366,7 @@ mod tests {
         /// The record signer for the fixtures' adopted vault-pointer index — the
         /// wave's [`RepointChannel::VaultPointer`] capability.
         vault_pointer: Ed25519Signer,
+        held: RefCell<HeldRecords>,
     }
 
     impl<T: RecordTransport + Clone> Harness<T> {
@@ -3374,6 +3402,7 @@ mod tests {
                     &VAULT_POINTER_SECRET,
                     ADOPTED_VAULT_POINTER_INDEX,
                 ),
+                held: RefCell::new(HeldRecords::new()),
             }
         }
 
@@ -5551,6 +5580,7 @@ mod tests {
             subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
             vault_pointer_signer: Some(&harness.vault_pointer),
+            held: &harness.held,
             payload_version: 1,
             current_root_name: current_root,
             // The fixtures rotate the vault anchor itself, so the re-point's
@@ -7086,6 +7116,95 @@ mod tests {
             .and_then(|record| record.verify(&name))
             .expect("verifies");
         assert_eq!(verified.sequence, 2);
+    }
+
+    #[test]
+    fn a_confirmed_pointer_flip_enrols_the_pointer_beside_the_scope_root_record() {
+        // A scope root's node id IS its scope id, so both records claim the same
+        // 16 bytes. The plane discriminator is what stops the pointer's
+        // enrolment from evicting the root's own held record.
+        let harness = Harness::plain();
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+
+        let root_held = HeldRecord {
+            routing_key: current_root.as_str().to_owned(),
+            record_bytes: b"the-scope-root-record".to_vec(),
+            signer: Ed25519Signer::from_seed([0x11; 32]),
+            value: HeldValue::Head("bafyrootheadblock".to_owned()),
+            content_cids: Vec::new(),
+        };
+        harness
+            .held
+            .borrow_mut()
+            .insert(HeldKey::node(SCOPE), root_held.clone());
+
+        let block = b"a-sealed-repoint-object".to_vec();
+        block_on(net.publish_repoint(RepointChannel::ScopePointer, &block))
+            .expect("the pointer flips");
+
+        let held = harness.held.borrow();
+        assert_eq!(
+            held.len(),
+            2,
+            "both planes hold a record under the scope id"
+        );
+        let root = held
+            .get(&HeldKey::node(SCOPE))
+            .expect("the scope root's own record survives the pointer enrolment");
+        assert_eq!(root.record_bytes, root_held.record_bytes);
+        assert_eq!(root.head_cid(), Some("bafyrootheadblock"));
+
+        let pointer_name = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
+        let pointer = held
+            .get(&HeldKey::scope_pointer(SCOPE))
+            .expect("the pointer enrols for renewal");
+        assert_eq!(pointer.routing_key, pointer_name.as_str());
+        assert_eq!(
+            pointer.value,
+            HeldValue::Inline(block),
+            "the pointer renews its own sealed block, not an /ipfs/ head"
+        );
+        assert_eq!(
+            pointer.record_bytes,
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], pointer_name.as_str())
+                .expect("a record at the scope pointer"),
+            "the enrolled bytes are the bytes the flip PUT (keyless re-PUT reads them verbatim)"
+        );
+    }
+
+    #[test]
+    fn a_pointer_flip_that_loses_the_race_enrols_nothing() {
+        // Renewal re-signs at a higher sequence, so enrolling a flip that lost
+        // the CAS race would let the liveness loop mint this session's own
+        // superseded block over the winner (fail-closed).
+        let name = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
+        let winner = IpnsRecord::create_v2(
+            &scope_pointer_signer(&OWNER_POINTER_SEED, &SCOPE),
+            b"the-winners-repoint",
+            9,
+            1,
+            &crate::net::eol::eol_from(crate::seams::UnixMillis(0)),
+        )
+        .marshal();
+        let harness = Harness::racing(name.as_str(), winner);
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+
+        assert_eq!(
+            block_on(net.publish_repoint(RepointChannel::ScopePointer, b"ours")),
+            Err(WritePublishError::LostRace),
+        );
+        assert!(
+            harness.held.borrow().is_empty(),
+            "nothing enrols for a flip that did not land"
+        );
     }
 
     #[test]

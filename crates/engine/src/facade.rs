@@ -67,12 +67,12 @@ use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate,
-    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold,
-    resolve_child, run_liveness_loop,
+    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet,
+    assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -2099,6 +2099,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
             Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
             Err(PublishError::EmptyHeadCid) => "empty head CID (never published)".to_owned(),
+            Err(PublishError::EmptyInlineValue) => {
+                "empty inline value (never published)".to_owned()
+            }
             Err(PublishError::RecordTooLarge { size, limit }) => {
                 format!("record of {size} bytes over the {limit}-byte cap (never published)")
             }
@@ -2241,7 +2244,7 @@ fn steady_state_hold(
         return None;
     }
     let held = held.borrow();
-    let record = held.get(&scope_root)?;
+    let record = held.get(&HeldKey::node(scope_root))?;
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
@@ -2480,7 +2483,7 @@ async fn live_settings_record<R: RecordTransport>(
         return None;
     };
     match fanout_get_verify(transport, &name).await {
-        Some((live, _)) if live.value != format!("/ipfs/{}", held.head_cid).into_bytes() => {
+        Some((live, _)) if live.value != held.value.record_value() => {
             // The verdict names the record this pass read, not whatever the slot
             // holds now: a save that landed across the resolve installed its own
             // confirmed record, and clearing that one drops it from the renewal.
@@ -2494,6 +2497,47 @@ async fn live_settings_record<R: RecordTransport>(
             None
         }
         _ => Some(held),
+    }
+}
+
+/// Drop every held scope pointer the record plane no longer serves.
+///
+/// The resolve tick replaces each node-plane record in place; the pointer plane
+/// has no such refresher, and only a local rotation ever writes it. So a
+/// re-point another device landed leaves this session's entry stale, and both
+/// liveness layers would keep it alive: the keyless re-PUT would re-seed a
+/// retired re-point block hourly, and a sub-EOL renewal would re-sign it at a
+/// higher sequence and roll the scope back to a root name that no longer holds.
+///
+/// Only a positively observed *different* record supersedes, on the same terms
+/// as [`live_settings_record`]: a plane this pass cannot read is availability.
+async fn drop_superseded_pointers<R: RecordTransport>(transport: &R, held: &RefCell<HeldRecords>) {
+    let pointers: Vec<(HeldKey, HeldRecord)> = held
+        .borrow()
+        .iter()
+        .filter(|(key, _)| key.plane == RecordPlane::ScopePointer)
+        .map(|(key, record)| (*key, record.clone()))
+        .collect();
+    for (key, record) in pointers {
+        let Ok(name) = IpnsName::parse(&record.routing_key) else {
+            continue;
+        };
+        let Some((live, _)) = fanout_get_verify(transport, &name).await else {
+            continue;
+        };
+        if live.value == record.value.record_value() {
+            continue;
+        }
+        // The verdict names the record this pass read: a flip that landed across
+        // the fetch installed its own confirmed entry, and dropping that one
+        // would take the fresh pointer out of the renewal.
+        let mut held = held.borrow_mut();
+        if held
+            .get(&key)
+            .is_some_and(|current| current.record_bytes == record.record_bytes)
+        {
+            held.remove(&key);
+        }
     }
 }
 
@@ -3595,6 +3639,7 @@ where {
                     return LivenessControl::Stop;
                 }
                 let settings = live_settings_record(&transport, &settings_record).await;
+                drop_superseded_pointers(&transport, &held).await;
                 let records: Vec<HeldRecord> =
                     held.borrow().values().cloned().chain(settings).collect();
                 keyless_re_put(&transport, &records).await;
@@ -4606,6 +4651,7 @@ where {
             owner_signer: session.identity(),
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
             vault_pointer_signer: vault_pointer_signer.as_ref(),
+            held: &self.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
             scope_id: target.scope.scope_id,
@@ -6892,6 +6938,9 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+    use crate::net::HeldValue;
     use serde_json::{Value, json};
 
     use cipherbox_core::ipns::IpnsRecord;
@@ -7019,7 +7068,7 @@ mod tests {
             )
             .marshal(),
             signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
-            head_cid: head.to_owned(),
+            value: HeldValue::Head(head.to_owned()),
             content_cids: Vec::new(),
         }
     }
@@ -7075,6 +7124,64 @@ mod tests {
             Some(saved.record_bytes),
             "a save sharing the inspected head CID is still a different record"
         );
+    }
+
+    const POINTER_SCOPE: [u8; 16] = [0x77; 16];
+
+    /// A held scope pointer whose record serves `served` at `sequence`, while
+    /// the held entry renews `ours`.
+    fn pointer_held(
+        ours: &[u8],
+        served: &[u8],
+        sequence: u64,
+    ) -> (InMemoryRecordStore, HeldRecord) {
+        const TTL_NANOS: u64 = 2_000_000_000;
+        const EOL: &str = "2099-01-01T00:00:00Z";
+        let signer = Ed25519Signer::from_seed([0x21; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        let live = IpnsRecord::create_v2(&signer, served, sequence, TTL_NANOS, EOL).marshal();
+        for endpoint in store.endpoints() {
+            store.seed_record(&endpoint, name.as_str(), live.clone());
+        }
+        let held = HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes: IpnsRecord::create_v2(&signer, ours, 1, TTL_NANOS, EOL).marshal(),
+            signer,
+            value: HeldValue::Inline(ours.to_vec()),
+            content_cids: Vec::new(),
+        };
+        (store, held)
+    }
+
+    fn after_the_pointer_sweep(store: InMemoryRecordStore, held: HeldRecord) -> usize {
+        let map = RefCell::new(HeldRecords::new());
+        map.borrow_mut()
+            .insert(HeldKey::scope_pointer(POINTER_SCOPE), held);
+        block_on(drop_superseded_pointers(&store, &map));
+        map.borrow().len()
+    }
+
+    #[test]
+    fn a_scope_pointer_the_plane_superseded_leaves_the_held_set() {
+        // Only a local rotation writes this plane, so a re-point from another
+        // device leaves this session re-PUTting a retired block hourly.
+        let (store, held) = pointer_held(b"our-repoint", b"a-newer-repoint", 2);
+        assert_eq!(after_the_pointer_sweep(store, held), 0);
+    }
+
+    #[test]
+    fn a_scope_pointer_the_plane_still_serves_stays_in_the_renewal() {
+        let (store, held) = pointer_held(b"our-repoint", b"our-repoint", 1);
+        assert_eq!(after_the_pointer_sweep(store, held), 1);
+    }
+
+    #[test]
+    fn a_scope_pointer_no_endpoint_serves_stays_in_the_renewal() {
+        // A plane this pass cannot read is availability, never supersession.
+        let (_store, held) = pointer_held(b"our-repoint", b"our-repoint", 1);
+        let empty = InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]);
+        assert_eq!(after_the_pointer_sweep(empty, held), 1);
     }
 
     /// Shaped as the API issues one; the engine signs nothing else.
@@ -9851,7 +9958,9 @@ mod tests {
 
             let held = engine.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
-            let record = held.get(&ROOT.0).expect("held under the root node id");
+            let record = held
+                .get(&HeldKey::node(ROOT.0))
+                .expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
             assert_eq!(
                 engine
@@ -9998,13 +10107,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&ROOT.0)
+                .get_mut(&HeldKey::node(ROOT.0))
                 .expect("held under the root node id")
                 .content_cids = vec!["bafystamp".to_owned()];
 
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&ROOT.0].content_cids,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].content_cids,
                 vec!["bafystamp".to_owned()],
                 "the next poll left the hold alone"
             );
@@ -10032,7 +10141,9 @@ mod tests {
             let published = vec!["bafypublished".to_owned()];
             let before = {
                 let mut held = engine.held_records.borrow_mut();
-                let record = held.get_mut(&ROOT.0).expect("held under the root node id");
+                let record = held
+                    .get_mut(&HeldKey::node(ROOT.0))
+                    .expect("held under the root node id");
                 record.content_cids.clone_from(&published);
                 record.record_bytes.clone()
             };
@@ -10052,11 +10163,13 @@ mod tests {
             tick(&world, &device, &mut tasks);
             let held = engine.held_records.borrow();
             assert_ne!(
-                held[&ROOT.0].record_bytes, before,
+                held[&HeldKey::node(ROOT.0)].record_bytes,
+                before,
                 "the poll really did re-hold, so the assertion below is not vacuous"
             );
             assert_eq!(
-                held[&ROOT.0].content_cids, published,
+                held[&HeldKey::node(ROOT.0)].content_cids,
+                published,
                 "the re-hold carried the published set forward"
             );
             drop(held);
@@ -10066,13 +10179,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&ROOT.0)
+                .get_mut(&HeldKey::node(ROOT.0))
                 .expect("held under the root node id")
-                .head_cid = "bafyotherhead".to_owned();
+                .value = HeldValue::Head("bafyotherhead".to_owned());
             reseed(3);
             tick(&world, &device, &mut tasks);
             assert!(
-                engine.held_records.borrow()[&ROOT.0]
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)]
                     .content_cids
                     .is_empty(),
                 "CIDs held for a different head are dropped, not carried over"
@@ -10262,7 +10375,7 @@ mod tests {
             let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&ROOT.0].routing_key,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
                 root_name.as_str(),
                 "cold start opened at the name the vault pointer gave it"
             );
@@ -10296,7 +10409,7 @@ mod tests {
                 abuse[0]
             );
             assert_ne!(
-                engine.held_records.borrow()[&ROOT.0].routing_key,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
                 moved.as_str(),
                 "and a gate refusal holds nothing (fail-closed)"
             );
