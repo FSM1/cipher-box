@@ -12,6 +12,7 @@ use core::cell::RefCell;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ChildScopeRef;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 
 use crate::api::ApiClient;
@@ -55,6 +56,11 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub owner_signer: &'a EcdsaSigner,
     /// Derives the scope pointer's name and its record signer (owner-only).
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
+    /// The record signer for the session's adopted vault-pointer index, or
+    /// `None` when this session adopted no vault pointer (nothing names a root
+    /// to move). Only a cut at [`session_root_scope_id`](Self::session_root_scope_id)
+    /// hands it to the write wave.
+    pub vault_pointer_signer: Option<&'a Ed25519Signer>,
     /// The pointer-payload envelope version.
     pub payload_version: u64,
     /// The scope root's `ipnsName` as the cut was authorized against it.
@@ -242,6 +248,11 @@ where
                 .map_err(|_| resolve_failed(ResolveFailure::Unavailable))?
                 .unwrap_or(current.current_read_epoch);
 
+            // The vault pointer names the session's root scope, so only a cut
+            // anchored there moves it.
+            let vault_pointer_signer = (scope_root.0 == self.session_root_scope_id)
+                .then_some(self.vault_pointer_signer)
+                .flatten();
             let net = WriteWaveNet {
                 transport: self.transport,
                 api: self.api,
@@ -259,6 +270,7 @@ where
                 scope_keys: self.keys.scope_keys,
                 authorized_commitment: &cut.commitment,
                 owner_pointer_seed: self.owner_pointer_seed,
+                vault_pointer_signer,
                 payload_version: self.payload_version,
                 current_root_name: self.scope_root_name,
                 session_root_scope_id: self.session_root_scope_id,
@@ -279,6 +291,7 @@ where
                     current_write_epoch: current.write_epoch,
                     min_read_epoch,
                     current_root_name: self.scope_root_name,
+                    is_vault_anchor: vault_pointer_signer.is_some(),
                 },
             )
             .await

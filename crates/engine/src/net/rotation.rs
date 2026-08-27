@@ -1952,6 +1952,11 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub authorized_commitment: &'a GrantSetCommitment,
     /// Derives the scope pointer's name and its record signer (owner-only).
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
+    /// The record signer for the session's adopted vault-pointer index, present
+    /// only when this rotation moves the vault anchor. It derives that plane's
+    /// name too, so the wave carries no login secret — the narrowest capability
+    /// the [`RepointChannel::VaultPointer`] flip needs.
+    pub vault_pointer_signer: Option<&'a Ed25519Signer>,
     /// The pointer-payload envelope version the scope pointer is read under
     /// (`RotateScopeWritePlan::payload_version`).
     pub payload_version: u64,
@@ -2799,7 +2804,7 @@ where
         }
     }
 
-    /// Flip the canonical scope pointer to the sealed re-point `block`.
+    /// Flip one pointer plane to the sealed re-point `block`.
     ///
     /// The record's `Value` is the block itself rather than an `/ipfs/` head
     /// ([`RecordPointerFetch`](super::pointer_fetch::RecordPointerFetch) reads it
@@ -2807,10 +2812,13 @@ where
     /// the pipeline. Nothing gates a pointer record, so no adopt ever raises its
     /// sequence floor: the freshest record on the network is the lower bound a
     /// second rotation must clear, and a confirmed flip raises the floor itself.
-    async fn publish_scope_pointer(&self, block: &[u8]) -> Result<(), WritePublishError> {
-        let name = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
-        let signer = scope_pointer_signer(self.owner_pointer_seed, &self.scope_id);
-        let observed = fanout_get_verify(self.transport, &name)
+    async fn publish_pointer_record(
+        &self,
+        name: &IpnsName,
+        signer: &Ed25519Signer,
+        block: &[u8],
+    ) -> Result<(), WritePublishError> {
+        let observed = fanout_get_verify(self.transport, name)
             .await
             .map_or(0, |(record, _)| record.sequence);
         let receipt = publish_inline(
@@ -2820,8 +2828,8 @@ where
             self.scheduler,
             self.profile,
             &InlineRecordRequest {
-                name: &name,
-                signer: &signer,
+                name,
+                signer,
                 value: block,
                 min_current_sequence: Some(observed),
             },
@@ -3076,13 +3084,21 @@ where
         block: &[u8],
     ) -> Result<(), WritePublishError> {
         match channel {
-            RepointChannel::ScopePointer => self.publish_scope_pointer(block).await,
-            // Neither accelerator has a wire shape yet — the mailbox re-point
-            // payload is unspecified and no tombstone record exists — and this
-            // build never signs bytes it cannot decode (security rule 8). Both
-            // carry nothing load-bearing, so the wave completes without them.
-            RepointChannel::Mailbox | RepointChannel::Tombstone => {
-                Err(WritePublishError::NotLanded)
+            RepointChannel::ScopePointer => {
+                let name = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
+                let signer = scope_pointer_signer(self.owner_pointer_seed, &self.scope_id);
+                self.publish_pointer_record(&name, &signer, block).await
+            }
+            // The wave asks for this channel only at the vault anchor
+            // (`RotateScopeWritePlan::is_vault_anchor`); wiring that claims the
+            // anchor and hands over no signer would leave that plane naming a
+            // root the scope no longer sits at, so it refuses release-active.
+            RepointChannel::VaultPointer => {
+                let signer = self
+                    .vault_pointer_signer
+                    .ok_or(WritePublishError::Rejected)?;
+                let name = IpnsName::from_public_key(&signer.verifying_key());
+                self.publish_pointer_record(&name, signer, block).await
             }
         }
     }
@@ -3128,7 +3144,8 @@ mod tests {
         rotate_scope, rotate_scope_write, sweep_pass,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
-    use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint};
+    use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint, vault_pointer_name};
+    use crate::sync::provision::GENESIS_VAULT_POINTER_INDEX;
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
         VirtualScheduler,
@@ -3146,6 +3163,10 @@ mod tests {
     const POINTER_READ_KEY: [u8; 32] = [0x5a; 32];
     const OWNER_ROOT_SECRET: [u8; 32] = [0x6b; 32];
     const OWNER_POINTER_SEED: [u8; 32] = [0x7c; 32];
+    /// The login secret the fixtures' vault-pointer chain derives from.
+    const VAULT_POINTER_SECRET: [u8; 32] = [0x8d; 32];
+    /// A non-genesis index, so a test that hard-codes the mint's index fails.
+    const ADOPTED_VAULT_POINTER_INDEX: u64 = 3;
     /// The pointer-payload envelope version every re-point in this suite is
     /// sealed and read under.
     const PAYLOAD_VERSION: u64 = 1;
@@ -3310,6 +3331,9 @@ mod tests {
         enc_secret: X25519Secret,
         identity: EcdsaVerifier,
         blocks: Blocks,
+        /// The record signer for the fixtures' adopted vault-pointer index — the
+        /// wave's [`RepointChannel::VaultPointer`] capability.
+        vault_pointer: Ed25519Signer,
     }
 
     impl<T: RecordTransport + Clone> Harness<T> {
@@ -3341,6 +3365,10 @@ mod tests {
                 enc_secret: owner_enc(),
                 identity: owner_identity().verifying_key(),
                 blocks,
+                vault_pointer: kdf::vault_pointer_index(
+                    &VAULT_POINTER_SECRET,
+                    ADOPTED_VAULT_POINTER_INDEX,
+                ),
             }
         }
 
@@ -5517,6 +5545,7 @@ mod tests {
             gated_root: GatedWaveRoot::default(),
             subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
+            vault_pointer_signer: Some(&harness.vault_pointer),
             payload_version: 1,
             current_root_name: current_root,
             // The fixtures rotate the vault anchor itself, so the re-point's
@@ -7055,21 +7084,55 @@ mod tests {
     }
 
     #[test]
-    fn the_accelerator_channels_report_that_they_did_not_land() {
-        // No mailbox re-point payload and no tombstone record shape exist, and this
-        // build never signs bytes it cannot decode — so both refuse rather than
-        // claiming a delivery the wave would then report as complete.
+    fn the_anchor_repoint_lands_at_the_adopted_vault_pointer_index() {
         let harness = Harness::plain();
         let owner = owner_identity();
         let current_root = old_root_name();
         let plan = no_root_plan();
         let net = wave(&harness, &owner, &current_root, &plan);
-        for channel in [RepointChannel::Mailbox, RepointChannel::Tombstone] {
-            assert_eq!(
-                block_on(net.publish_repoint(channel, b"block")),
-                Err(WritePublishError::NotLanded)
-            );
-        }
+        let block = b"a-sealed-repoint-object".to_vec();
+
+        block_on(net.publish_repoint(RepointChannel::VaultPointer, &block))
+            .expect("the anchor flips");
+
+        let name = vault_pointer_name(&VAULT_POINTER_SECRET, ADOPTED_VAULT_POINTER_INDEX);
+        let record = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], name.as_str())
+            .expect("a record at the adopted index");
+        let verified = IpnsRecord::unmarshal(&record)
+            .and_then(|record| record.verify(&name))
+            .expect("the pointer record verifies under its own name");
+        assert_eq!(
+            verified.value, block,
+            "both planes carry the very same sealed block"
+        );
+        assert!(
+            !published_at(
+                &harness,
+                &vault_pointer_name(&VAULT_POINTER_SECRET, GENESIS_VAULT_POINTER_INDEX)
+            ),
+            "the mint's index is not the one the walk adopts"
+        );
+    }
+
+    #[test]
+    fn an_anchor_repoint_without_a_signer_refuses_rather_than_skipping() {
+        // A wiring that claims the anchor and hands over no signer would leave
+        // that plane naming the old root while the wave reported itself complete.
+        let harness = Harness::plain();
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = Wave {
+            vault_pointer_signer: None,
+            ..wave(&harness, &owner, &current_root, &plan)
+        };
+
+        assert_eq!(
+            block_on(net.publish_repoint(RepointChannel::VaultPointer, b"block")),
+            Err(WritePublishError::Rejected)
+        );
     }
 
     #[test]
@@ -7242,6 +7305,7 @@ mod tests {
             current_write_epoch: OWNER_ROOT_EPOCH,
             min_read_epoch: OWNER_ROOT_EPOCH,
             current_root_name: &root.name,
+            is_vault_anchor: true,
         }
     }
 
@@ -7511,12 +7575,7 @@ mod tests {
             outcome.interior_node_count, 2,
             "MID and LEAF, and not the descendant scope root"
         );
-        assert!(
-            outcome.repoint_accelerators.is_empty(),
-            "neither accelerator has a wire shape to publish on"
-        );
-
-        // The canonical flip carries the owner-signed re-point object.
+        // The scope-pointer flip carries the owner-signed re-point object.
         let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
         let block = harness
             .store
@@ -7534,6 +7593,26 @@ mod tests {
         .expect("the re-point object opens under the owner's pointer key");
         assert_eq!(repoint.current_root, outcome.new_root_name);
         assert_eq!(repoint.prev_root, Some(staged.root.name.clone()));
+
+        // The anchor moved with it: the cold start reads this plane first, and a
+        // vault pointer left at the old root declines the write seed it just
+        // recovered.
+        let anchor = vault_pointer_name(&VAULT_POINTER_SECRET, ADOPTED_VAULT_POINTER_INDEX);
+        let anchor_block = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], anchor.as_str())
+            .and_then(|bytes| IpnsRecord::unmarshal(&bytes).ok()?.verify(&anchor).ok())
+            .expect("the vault pointer record verifies under its own name")
+            .value;
+        assert_eq!(
+            anchor_block, block,
+            "one owner-signed block on both planes, so one pre-sign gate covers both"
+        );
+        assert_eq!(
+            anchor_repoint_of(&harness, &owner).current_root,
+            outcome.new_root_name,
+            "the vault pointer names the root the wave moved to"
+        );
 
         // A read-only holder descends by child refs alone — the proof every
         // interior node moved and every parent was rewritten.
@@ -7559,6 +7638,29 @@ mod tests {
                 .contains(&staged.descendant.name.as_str().as_bytes().to_vec()),
             "the descendant scope root keeps the name its own wave will move"
         );
+    }
+
+    /// The re-point object published at the adopted vault-pointer index, opened
+    /// exactly as the cold-start walk opens it.
+    fn anchor_repoint_of<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        owner: &EcdsaSigner,
+    ) -> RepointObject {
+        let name = vault_pointer_name(&VAULT_POINTER_SECRET, ADOPTED_VAULT_POINTER_INDEX);
+        let block = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], name.as_str())
+            .and_then(|bytes| IpnsRecord::unmarshal(&bytes).ok()?.verify(&name).ok())
+            .expect("the vault pointer record verifies under its own name")
+            .value;
+        open_repoint(
+            kdf::pointer_read_key(&OWNER_POINTER_SEED, &SCOPE).as_bytes(),
+            PAYLOAD_VERSION,
+            &SCOPE,
+            &owner.verifying_key(),
+            &block,
+        )
+        .expect("the anchor's re-point opens under the owner's pointer key")
     }
 
     #[test]
