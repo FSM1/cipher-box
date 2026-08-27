@@ -17,6 +17,15 @@ tauri-build = { version = "2", features = [] }
 # Reads FUSE-T's libdir back out of `fuse-t.pc` for the macOS rpath.
 pkg-config = "0.3"
 
+[target.'cfg(windows)'.build-dependencies]
+# Emits the `/DELAYLOAD` link arg for the WinFsp the host adapter links; the
+# feature set matches `crates/fuse`'s so `winfsp-sys` is built once.
+winfsp = { version = "0.12", default-features = false, features = [
+  "notify",
+  "delayload",
+  "system",
+] }
+
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 # Minisign-verified updates over the one GitHub release stream; the key it
