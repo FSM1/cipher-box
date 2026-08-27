@@ -89,6 +89,10 @@ futures-channel.workspace = true
 futures-core.workspace = true
 # WinFsp speaks UTF-16 at every name-bearing edge; the engine stores UTF-8.
 widestring = "1"
+# The two FFI shapes this crate cannot express, because it forbids `unsafe`:
+# the mounting user's SID, and the copy into WinFsp's descriptor out-buffer.
+# The descriptor itself is assembled here, in safe Rust.
+cipherbox-win-security = { path = "../win-security" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The pure-Rust mount path is `fusermount3`, Linux only, so macOS links a

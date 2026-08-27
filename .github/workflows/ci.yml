@@ -854,7 +854,7 @@ jobs:
       # authoritative for — widening it is a separate change, because the rest
       # of the workspace has never been linted on this platform.
       - name: Cargo clippy (the Windows host adapter)
-        run: cargo clippy -p cipherbox-fuse --all-targets -- -D warnings
+        run: cargo clippy -p cipherbox-fuse -p cipherbox-win-security --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser

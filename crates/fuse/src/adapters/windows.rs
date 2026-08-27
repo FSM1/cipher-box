@@ -35,6 +35,13 @@
 //!   is bounded — the operation core's served/listed shadow maps, and this
 //!   adapter's [`PathBook`] — stays bounded and corrects the kernel on
 //!   eviction.
+//! * **A path is not an identity.** Anything above a node can move while a
+//!   handle is open — locally, or absorbed from a peer, which fires no callback
+//!   at all — so a delete is checked against the node id the handle was opened
+//!   on before it removes what a path names.
+//!
+//! Access control is this backend's own, which is the other thing the FUSE
+//! wire gets for free: see [`crate::adapters::descriptor`].
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
@@ -42,11 +49,12 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
 use cipherbox_engine::seams::SeamTypes;
-use cipherbox_engine::{NodeKind, StatFs, SyncTimingProfile};
+use cipherbox_engine::{NodeId, NodeKind, SyncTimingProfile};
 use futures_channel::mpsc;
 use futures_core::Stream;
 use widestring::U16CStr;
@@ -60,6 +68,7 @@ use winfsp::notify::{Notifier, NotifyInfo, NotifyingFileSystemContext};
 use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+use crate::adapters::descriptor::OwnerOnlyDescriptor;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
 use crate::inode::ROOT_INO;
@@ -125,10 +134,17 @@ const DOT_NAMES: [&str; 2] = [".", ".."];
 
 const DOT_ENTRIES: usize = DOT_NAMES.len();
 
-/// The widest name a `DirInfo` or `NotifyInfo` buffer has to hold, in UTF-16
-/// units: [`MAX_NAME_BYTES`] of UTF-8 is at most that many UTF-16 units, plus
-/// the NUL `set_name` appends.
+/// The widest name a `DirInfo` buffer has to hold, in UTF-16 units:
+/// [`MAX_NAME_BYTES`] of UTF-8 is at most that many UTF-16 units, plus the NUL
+/// `set_name` appends. One entry is one path component.
 const NAME_UNITS: usize = MAX_NAME_BYTES + 1;
+
+/// The widest path a `NotifyInfo` buffer has to hold. A notification names a
+/// whole path, not a component, so sizing it like a name would silence
+/// invalidation for anything nested — and push is the *only* thing that
+/// corrects this backend's caches. WinFsp's own ceiling for a path in a
+/// transaction is `FSP_FSCTL_TRANSACT_PATH_SIZEMAX`, 1024 UTF-16 units.
+const NOTIFY_PATH_UNITS: usize = 1024;
 
 // The NT status space, for the three refusals this adapter decides on its own
 // rather than reading out of the shared `VfsError` table. Named here for the
@@ -266,15 +282,18 @@ fn info_of(attrs: &Attributes) -> FileInfo {
     file_info(attrs.kind, attrs.size, attrs.mtime_millis)
 }
 
-/// The file attributes `get_security_by_name` answers with.
-fn security_of(attrs: &Attributes) -> FileSecurity {
+/// The attributes and descriptor size `get_security_by_name` answers with.
+///
+/// The size is never zero. WinFsp's `FspAccessCheckEx` runs its check only when
+/// the filesystem reports a descriptor; report none and it grants the caller
+/// exactly the access it asked for, which — with bypass-traverse-checking
+/// granted to Everyone — lets a second local account open a full path under
+/// another user's profile and read the vault's plaintext. See
+/// [`crate::adapters::descriptor`].
+fn security_of(attrs: &Attributes, descriptor: &OwnerOnlyDescriptor) -> FileSecurity {
     FileSecurity {
         reparse: false,
-        // No security descriptor: this projection enforces no ACLs, and WinFsp
-        // grants a caller exactly the access it asked for when a file system
-        // reports none (`FspAccessCheckEx`). The mount admits only the user who
-        // made it, which is the access control there is.
-        sz_security_descriptor: 0,
+        sz_security_descriptor: descriptor.len(),
         attributes: match attrs.kind {
             NodeKind::Folder => FILE_ATTRIBUTE_DIRECTORY,
             NodeKind::File => FILE_ATTRIBUTE_NORMAL,
@@ -441,9 +460,11 @@ enum WinFspOp {
         kind: NodeKind,
         reply: Answer<()>,
     },
+    /// Remove the node the closing handle was opened on, named by the path
+    /// WinFsp gave and checked against the identity the handle holds.
     Delete {
         path: VaultPath,
-        kind: NodeKind,
+        node: NodeId,
         reply: Answer<()>,
     },
     Rename {
@@ -451,9 +472,6 @@ enum WinFspOp {
         to: VaultPath,
         replace: bool,
         reply: Answer<()>,
-    },
-    StatFs {
-        reply: Answer<StatFs>,
     },
 }
 
@@ -500,6 +518,17 @@ impl PathBook {
     fn path(&self, ino: u64) -> Option<&str> {
         self.by_ino.get(&ino).map(String::as_str)
     }
+
+    /// Drop every binding at or under `prefix` — what a rename or a delete
+    /// makes wrong. A binding kept past its path would name a node that has
+    /// moved, and, once something new is created there, notify about the wrong
+    /// one.
+    fn forget_subtree(&mut self, prefix: &str) {
+        let under = format!("{}\\", prefix.trim_end_matches('\\'));
+        self.by_ino
+            .retain(|_, path| path != prefix && !path.starts_with(&under));
+        self.order.retain(|ino| self.by_ino.contains_key(ino));
+    }
 }
 
 /// What the invalidator and the notify timer share: the paths one can name and
@@ -508,17 +537,36 @@ impl PathBook {
 struct NotifyPlane {
     book: Mutex<PathBook>,
     queue: Mutex<VecDeque<Notification>>,
+    /// Invalidations this mount could not turn into a notification. Counted
+    /// rather than swallowed: push is the only thing that corrects this
+    /// backend's caches, so a drop is a node stale until its lifetime expires,
+    /// and a mount that drops them silently looks exactly like one that has
+    /// nothing to say.
+    dropped: AtomicU64,
 }
 
 impl NotifyPlane {
     fn push(&self, notification: Notification) {
+        // A path WinFsp's own transaction cannot carry would be refused by
+        // `set_name` on the timer thread, where there is nothing left to
+        // report; it is counted here, where there still is.
+        if notification.path.encode_utf16().count() >= NOTIFY_PATH_UNITS {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let Ok(mut queue) = self.queue.lock() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         };
         if queue.len() >= NOTIFY_QUEUE_DEPTH {
             queue.pop_front();
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
         queue.push_back(notification);
+    }
+
+    fn drop_one(&self) {
+        self.dropped.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The path for `ino`, or `None` for a node this mount never named to
@@ -562,8 +610,9 @@ impl HostAdapter for WinFspInvalidator {
                 })
             }
         };
-        if let Some(notification) = notification {
-            self.plane.push(notification);
+        match notification {
+            Some(notification) => self.plane.push(notification),
+            None => self.plane.drop_one(),
         }
     }
 }
@@ -573,6 +622,11 @@ impl HostAdapter for WinFspInvalidator {
 struct VaultFs {
     ops: mpsc::UnboundedSender<WinFspOp>,
     plane: Arc<NotifyPlane>,
+    /// The volume's owner-only descriptor, built once at mount: every node
+    /// reports the same one, because the projection stores no per-node
+    /// ownership.
+    descriptor: OwnerOnlyDescriptor,
+    resumes: Resumes,
 }
 
 /// What one open WinFsp handle addresses. WinFsp hands it back by shared
@@ -580,6 +634,10 @@ struct VaultFs {
 /// rename moves — is behind a lock.
 pub struct OpenNode {
     ino: u64,
+    /// The engine's stable node id, which a rename anywhere above this node
+    /// cannot change. What a delete is checked against — see
+    /// [`WinFspMount::delete`].
+    node: NodeId,
     kind: NodeKind,
     held: Held,
     path: Mutex<VaultPath>,
@@ -605,6 +663,13 @@ impl VaultFs {
         self.ops
             .unbounded_send(op(Answer(sender)))
             .map_err(|_| dismounted())?;
+        // A quiesce that landed between the send and here has already drained
+        // what it could see, so this operation may be sitting in a queue
+        // nothing will read again. Refusing now is what keeps a dispatcher
+        // thread out of a wait that cannot end.
+        if self.ops.is_closed() {
+            return Err(dismounted());
+        }
         match answers.recv() {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(refusal)) => Err(FspError::NTSTATUS(ntstatus_of(&refusal))),
@@ -625,14 +690,15 @@ impl FileSystemContext for VaultFs {
     fn get_security_by_name(
         &self,
         file_name: &U16CStr,
-        _security_descriptor: Option<&mut [c_void]>,
+        security_descriptor: Option<&mut [c_void]>,
         _reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
     ) -> winfsp::Result<FileSecurity> {
         // No reparse points in the projection, so the resolver is never called:
         // a path is a path all the way down.
         let path = self.path_of(file_name)?;
         let attrs = self.ask(|reply| WinFspOp::Stat { path, reply })?;
-        Ok(security_of(&attrs))
+        cipherbox_win_security::write_descriptor(security_descriptor, self.descriptor.as_bytes());
+        Ok(security_of(&attrs, &self.descriptor))
     }
 
     fn open(
@@ -652,6 +718,7 @@ impl FileSystemContext for VaultFs {
         *file_info.as_mut() = info_of(&opened.attrs);
         Ok(OpenNode {
             ino: opened.attrs.ino,
+            node: opened.attrs.node,
             kind: opened.attrs.kind,
             held: opened.held,
             path: Mutex::new(path),
@@ -696,6 +763,7 @@ impl FileSystemContext for VaultFs {
         *file_info.as_mut() = info_of(&opened.attrs);
         Ok(OpenNode {
             ino: opened.attrs.ino,
+            node: opened.attrs.node,
             kind: opened.attrs.kind,
             held: opened.held,
             path: Mutex::new(path),
@@ -706,17 +774,25 @@ impl FileSystemContext for VaultFs {
     /// set by [`set_delete`](Self::set_delete) is carried out here, which is
     /// WinFsp's contract: nothing may be deleted while a handle can still
     /// reach it.
-    fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
+    fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {
         if flags & FSP_CLEANUP_DELETE == 0 {
             return;
         }
-        let Ok(path) = context.path.lock().map(|path| path.clone()) else {
-            return;
+        // WinFsp's own name for the node, which is current as of this request;
+        // the one captured at open is stale the moment anything above the node
+        // is renamed. The captured path is only the fallback for a request that
+        // carried none.
+        let path = match file_name.and_then(components) {
+            Some(path) => path,
+            None => match context.path.lock() {
+                Ok(path) => path.clone(),
+                Err(_) => return,
+            },
         };
-        let kind = context.kind;
+        let node = context.node;
         // Nothing to answer: `cleanup` returns no status, and the removability
         // check already ran at `set_delete`.
-        let _ = self.ask(|reply| WinFspOp::Delete { path, kind, reply });
+        let _ = self.ask(|reply| WinFspOp::Delete { path, node, reply });
     }
 
     fn flush(
@@ -751,27 +827,25 @@ impl FileSystemContext for VaultFs {
         Ok(())
     }
 
-    /// The projection enforces no ACLs, so there is no descriptor to hand back
-    /// — see [`security_of`].
+    /// The volume's one descriptor, on the same terms as
+    /// [`get_security_by_name`](Self::get_security_by_name): the projection
+    /// stores no per-node ownership, and the mount belongs to one account.
     fn get_security(
         &self,
         _context: &Self::FileContext,
-        _security_descriptor: Option<&mut [c_void]>,
+        security_descriptor: Option<&mut [c_void]>,
     ) -> winfsp::Result<u64> {
-        Ok(0)
+        Ok(cipherbox_win_security::write_descriptor(
+            security_descriptor,
+            self.descriptor.as_bytes(),
+        ))
     }
 
-    /// Accepted and ignored, the way the FUSE wire accepts a `chmod` it cannot
-    /// act on: the projection carries no ACL of its own, and refusing here
-    /// fails an ordinary copy outright.
-    fn set_security(
-        &self,
-        _context: &Self::FileContext,
-        _security_information: u32,
-        _modification_descriptor: winfsp::filesystem::ModificationDescriptor,
-    ) -> winfsp::Result<()> {
-        Ok(())
-    }
+    // `set_security` is deliberately not implemented: the vault stores no ACL,
+    // so there is nowhere to put one, and the trait's default refusal
+    // (`STATUS_INVALID_DEVICE_REQUEST`) is the honest answer. Accepting the
+    // descriptor and discarding it would report success for a permission change
+    // that never happened.
 
     /// `CREATE_ALWAYS` / `TRUNCATE_EXISTING` on a file that already exists. The
     /// new length rides into the one `updateContent` op this handle's release
@@ -818,7 +892,8 @@ impl FileSystemContext for VaultFs {
 
         let mut cursor = 0u32;
         let mut whole = true;
-        for (name, info, _) in listing.page() {
+        let mut emitted: Option<Resume> = None;
+        for (name, info, resume_at) in listing.page() {
             let mut entry = DirInfo::<NAME_UNITS>::new();
             *entry.file_info_mut() = info;
             // A name no `DirInfo` buffer could hold is one the projection could
@@ -831,6 +906,15 @@ impl FileSystemContext for VaultFs {
                 whole = false;
                 break;
             }
+            emitted = Some(Resume {
+                last: name.to_owned(),
+                offset: resume_at,
+            });
+        }
+        // Recorded against what actually reached the client, so the next
+        // marker WinFsp sends is the one this walk can resume from.
+        if let (Ok(mut resumes), Some(emitted)) = (self.resumes.lock(), emitted) {
+            resumes.insert(walk, emitted);
         }
         if whole {
             // Only a page that emitted everything it was given is the end of
@@ -980,9 +1064,12 @@ impl FileSystemContext for VaultFs {
         Ok(taken)
     }
 
+    /// Advisory capacity, without asking the engine anything: the facade
+    /// counts nodes, and a Windows volume has nowhere to report a node count.
+    /// A client that reads free space before writing refuses the write on a
+    /// zero, and a write over a real budget is still refused where it belongs,
+    /// by the engine.
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> winfsp::Result<()> {
-        let stats = self.ask(|reply| WinFspOp::StatFs { reply })?;
-        let _ = stats;
         out_volume_info.total_size = ADVISORY_CAPACITY_BYTES;
         out_volume_info.free_size = ADVISORY_CAPACITY_BYTES;
         out_volume_info.set_volume_label(FILESYSTEM_NAME);
@@ -1018,8 +1105,11 @@ impl NotifyingFileSystemContext<()> for VaultFs {
         let pending: Vec<Notification> = queue.drain(..).collect();
         drop(queue);
         for notification in pending {
-            let mut info = NotifyInfo::<NAME_UNITS>::new();
+            let mut info = NotifyInfo::<NOTIFY_PATH_UNITS>::new();
             if info.set_name(&notification.path).is_err() {
+                // `push` refuses an over-long path, so reaching here means the
+                // buffer and that check disagree; counted rather than lost.
+                self.plane.drop_one();
                 continue;
             }
             info.filter = notification.filter;
@@ -1039,12 +1129,46 @@ pub struct WinFspMount {
     /// Held for its `Drop`, which unmounts and stops the dispatcher.
     _host: FileSystemHost<VaultFs>,
     invalidator: WinFspInvalidator,
-    plane: Arc<NotifyPlane>,
     ops: mpsc::UnboundedReceiver<WinFspOp>,
-    /// Per open directory, the offset each name it emitted resumes at — the
-    /// translation between WinFsp's name markers and the core's cursor.
-    resumes: HashMap<DirHandleId, HashMap<String, usize>>,
+    pump: Pump,
 }
+
+/// The mount's answering half: everything [`WinFspMount::answer`] needs that is
+/// not the WinFsp host itself.
+///
+/// Held apart from the host so the operation logic — path resolution, the
+/// identity a delete is checked against, the collision a rename refuses — can
+/// be driven without a live volume, which is the only way any of it is testable
+/// off a mounted machine.
+struct Pump {
+    plane: Arc<NotifyPlane>,
+    resumes: Resumes,
+    /// Close-time commits that did not land. `close` returns no status to
+    /// WinFsp, so this counter is the only place a host could ever learn that a
+    /// handle's last writes were never journaled.
+    close_failures: u64,
+}
+
+/// Where one open directory's enumeration continues.
+///
+/// The last name *emitted*, and nothing else. WinFsp's marker is defined as the
+/// last name the filesystem transferred, so one entry answers every
+/// continuation — and one entry per open directory is what keeps this bounded.
+/// A whole page's worth would be sized by what a peer committed, which is the
+/// same unbounded growth the operation core's shadow maps exist to refuse.
+///
+/// Written by the dispatcher rather than the pump, because only the dispatcher
+/// knows how much of a page fitted in WinFsp's buffer. A pump that recorded the
+/// page it handed over would set a marker for an entry the client never saw,
+/// and every continuation would restart the enumeration forever.
+struct Resume {
+    last: String,
+    offset: usize,
+}
+
+/// The open directories' resume markers, shared between the dispatcher that
+/// writes them and the pump that reads and retires them.
+type Resumes = Arc<Mutex<HashMap<DirHandleId, Resume>>>;
 
 /// Mount the vault at `mountpoint`, which is prepared first.
 pub fn mount(mountpoint: &Path) -> io::Result<WinFspMount> {
@@ -1059,12 +1183,20 @@ impl WinFspMount {
         winfsp::winfsp_init().map_err(|error| {
             io::Error::other(format!("WinFsp is not installed on this device: {error:?}"))
         })?;
+        // Built before the volume exists: a mount that could not name the
+        // account it belongs to would have to serve every node without an
+        // access check, and WinFsp reads that as "grant whatever was asked
+        // for" (`crate::adapters::descriptor`).
+        let descriptor = OwnerOnlyDescriptor::for_this_user()?;
 
         let (sender, ops) = mpsc::unbounded();
         let plane = Arc::new(NotifyPlane::default());
+        let resumes: Resumes = Arc::new(Mutex::new(HashMap::new()));
         let context = VaultFs {
             ops: sender,
             plane: Arc::clone(&plane),
+            descriptor,
+            resumes: Arc::clone(&resumes),
         };
         let params = FileSystemParams::default_params(volume_params());
         let mut host =
@@ -1080,15 +1212,39 @@ impl WinFspMount {
             invalidator: WinFspInvalidator {
                 plane: Arc::clone(&plane),
             },
-            plane,
             ops,
-            resumes: HashMap::new(),
+            pump: Pump {
+                plane,
+                resumes,
+                close_failures: 0,
+            },
         })
     }
 
     /// The invalidator to mount the operation core behind.
     pub fn invalidator(&self) -> WinFspInvalidator {
         self.invalidator.clone()
+    }
+
+    /// Handles this mount closed while they still owed an `updateContent` op
+    /// that would not journal.
+    ///
+    /// `close` returns no status on this protocol, so nothing else in the
+    /// session ever learns of one — the FUSE backends answer the same failure
+    /// out of `close(2)`.
+    pub fn close_failures(&self) -> u64 {
+        self.pump.close_failures
+    }
+
+    /// Invalidations this mount could not push at the kernel: a node it could
+    /// not name a path for, a path WinFsp's own transaction could not carry, or
+    /// a notify queue at its ceiling.
+    ///
+    /// Never zero-cost to a member: push is the only thing that corrects this
+    /// backend's caches, so each of these is a node stale until its lifetime
+    /// runs out.
+    pub fn dropped_notifications(&self) -> u64 {
+        self.pump.plane.dropped.load(Ordering::Relaxed)
     }
 
     /// The next WinFsp operation, or `None` once the dispatcher has stopped.
@@ -1124,6 +1280,17 @@ impl WinFspMount {
         core: &mut OperationCore<T, WinFspInvalidator>,
         op: KernelOp,
     ) {
+        self.pump.answer(core, op).await;
+    }
+}
+
+impl Pump {
+    /// Answer one operation from `core`.
+    async fn answer<T: SeamTypes>(
+        &mut self,
+        core: &mut OperationCore<T, WinFspInvalidator>,
+        op: KernelOp,
+    ) {
         match op.0 {
             WinFspOp::Stat { path, reply } => {
                 reply.give(self.resolve(core, &path).await);
@@ -1146,12 +1313,23 @@ impl WinFspMount {
             WinFspOp::Close { held, reply } => {
                 if let Some(walk) = held.walk {
                     core.releasedir(walk);
-                    self.resumes.remove(&walk);
+                    if let Ok(mut resumes) = self.resumes.lock() {
+                        resumes.remove(&walk);
+                    }
                 }
                 let released = match held.handle {
                     Some(handle) => core.release(handle).await,
                     None => Ok(()),
                 };
+                // WinFsp's `Close` returns no status, so a commit that failed
+                // here reaches nobody through the kernel. Counted so the host
+                // can see that this mount closed a handle owing writes it never
+                // journaled — the no-false-ack discipline's last mile is a
+                // refusal `close(2)` carries on the FUSE backends and this one
+                // cannot.
+                if released.is_err() {
+                    self.close_failures += 1;
+                }
                 reply.give(released);
             }
             WinFspOp::GetAttr { ino, reply } => reply.give(core.getattr(ino).await),
@@ -1198,8 +1376,8 @@ impl WinFspMount {
             WinFspOp::Removable { ino, kind, reply } => {
                 reply.give(removable(core, ino, kind).await);
             }
-            WinFspOp::Delete { path, kind, reply } => {
-                reply.give(self.delete(core, &path, kind).await);
+            WinFspOp::Delete { path, node, reply } => {
+                reply.give(self.delete(core, &path, node).await);
             }
             WinFspOp::Rename {
                 from,
@@ -1209,7 +1387,6 @@ impl WinFspMount {
             } => {
                 reply.give(self.rename(core, &from, &to, replace).await);
             }
-            WinFspOp::StatFs { reply } => reply.give(core.statfs().await),
         }
     }
 
@@ -1329,14 +1506,15 @@ impl WinFspMount {
             Marker::Start => 0,
             Marker::Current => 1,
             Marker::Parent => DOT_ENTRIES,
-            Marker::After(name) => self
-                .resumes
-                .get(&walk)
-                .and_then(|emitted| emitted.get(&name))
-                .copied()
-                // A marker this walk never emitted restarts the enumeration
-                // rather than skipping to a guess.
-                .unwrap_or(0),
+            // A marker that is not the last name this walk emitted restarts the
+            // enumeration rather than skipping to a guess: a repeated entry is
+            // a client's problem, a skipped one is a missing file.
+            Marker::After(name) => self.resumes.lock().ok().map_or(0, |resumes| {
+                resumes
+                    .get(&walk)
+                    .filter(|resume| resume.last == name)
+                    .map_or(0, |resume| resume.offset)
+            }),
         };
         let dir = core.getattr(ino).await?;
         let entries = core
@@ -1348,24 +1526,35 @@ impl WinFspMount {
             base: offset.max(DOT_ENTRIES),
             entries: entries.to_vec(),
         };
-        let emitted = self.resumes.entry(walk).or_default();
-        for (name, _, resume_at) in listing.page() {
-            emitted.insert(name.to_owned(), resume_at);
-        }
         Ok(listing)
     }
 
+    /// Remove `node`, which must still be what `path` names.
+    ///
+    /// The identity check is the whole point. A delete disposition is set when
+    /// a handle is opened and carried out when it closes, and in between an
+    /// ancestor can move — locally, or absorbed from a peer, which fires no
+    /// callback at all. Removing whatever the path names by then would remove
+    /// a node this handle was never opened on.
     async fn delete<T: SeamTypes>(
         &mut self,
         core: &mut OperationCore<T, WinFspInvalidator>,
         path: &[String],
-        kind: NodeKind,
+        node: NodeId,
     ) -> Result<(), VfsError> {
         let (parent, name) = self.parent_of(core, path).await?;
-        match kind {
+        let found = core.lookup(parent.ino, name).await?;
+        if found.node != node {
+            return Err(VfsError::NotFound);
+        }
+        let removed = match found.kind {
             NodeKind::Folder => core.rmdir(parent.ino, name).await,
             NodeKind::File => core.unlink(parent.ino, name).await,
+        };
+        if removed.is_ok() {
+            self.forget_paths(path);
         }
+        removed
     }
 
     async fn rename<T: SeamTypes>(
@@ -1375,21 +1564,42 @@ impl WinFspMount {
         to: &[String],
         replace: bool,
     ) -> Result<(), VfsError> {
-        let (source, name) = self.parent_of(core, from).await?;
+        let (parent, name) = self.parent_of(core, from).await?;
+        let source = core.lookup(parent.ino, name).await?;
         let (destination, new_name) = self.parent_of(core, to).await?;
         // POSIX rename replaces unconditionally; Windows asks first, and a
         // caller that did not ask must get the collision rather than a silent
-        // replacement.
-        if !replace
-            && core
-                .lookup(destination.ino, new_name)
-                .await
-                .is_ok_and(|found| found.node != source.node)
-        {
-            return Err(VfsError::AlreadyExists);
+        // replacement. Compared against the node being moved, not its parent:
+        // a case-only respell folds onto the source itself and is a rename, not
+        // a collision.
+        if !replace {
+            match core.lookup(destination.ino, new_name).await {
+                Ok(found) if found.node != source.node => return Err(VfsError::AlreadyExists),
+                Ok(_) => {}
+                // Only absence is "nothing in the way". Every other refusal
+                // means the destination could not be read, and a rename that
+                // replaced on an unread destination would destroy it.
+                Err(VfsError::NotFound) => {}
+                Err(refusal) => return Err(refusal),
+            }
         }
-        core.rename(source.ino, name, destination.ino, new_name)
-            .await
+        core.rename(parent.ino, name, destination.ino, new_name)
+            .await?;
+        // The moved node — and everything under it — answers to a different
+        // path now, and a path is what a notification names. Nothing rebinds
+        // these on its own: the core keys inodes on the engine's node id
+        // precisely so a rename costs it nothing.
+        self.forget_paths(from);
+        self.remember(source.ino, to);
+        Ok(())
+    }
+
+    /// Drop the bindings for `path` and everything under it, so no later
+    /// notification names a path the vault no longer has.
+    fn forget_paths(&mut self, path: &[String]) {
+        if let Ok(mut book) = self.plane.book.lock() {
+            book.forget_subtree(&rendered(path));
+        }
     }
 }
 
@@ -1403,6 +1613,12 @@ impl Drop for WinFspMount {
 }
 
 /// One write, against the length WinFsp's own flags are relative to.
+///
+/// That length is [`OperationCore::append_offset`]'s, never `getattr`'s: a file
+/// whose content plane has not projected a size yet reports `None`, and reading
+/// that as zero would land an append on the head of the file and a constrained
+/// write nowhere at all. Both are silent — the version still publishes the
+/// right total length.
 async fn write<T: SeamTypes>(
     core: &mut OperationCore<T, WinFspInvalidator>,
     ino: u64,
@@ -1412,16 +1628,20 @@ async fn write<T: SeamTypes>(
     at_end: bool,
     constrained: bool,
 ) -> Result<(u32, Attributes), VfsError> {
-    let len = core.getattr(ino).await?.size.unwrap_or(0);
-    let offset = if at_end { len } else { offset };
-    // Constrained I/O is the cache manager writing back pages it already owns:
-    // it must never extend the file, and a window wholly past the end writes
-    // nothing at all.
-    let data = if constrained {
-        let room = len.saturating_sub(offset);
-        &data[..(data.len() as u64).min(room) as usize]
+    let (offset, data) = if at_end || constrained {
+        let len = core.append_offset(handle).await?;
+        // Constrained I/O is the cache manager writing back pages it already
+        // owns: it must never extend the file, and a window wholly past the end
+        // writes nothing at all.
+        let offset = if at_end { len } else { offset };
+        let room = if constrained {
+            len.saturating_sub(offset)
+        } else {
+            data.len() as u64
+        };
+        (offset, &data[..(data.len() as u64).min(room) as usize])
     } else {
-        data
+        (offset, data)
     };
     if data.is_empty() {
         return Ok((0, core.getattr(ino).await?));
@@ -1468,8 +1688,9 @@ fn volume_params() -> VolumeParams {
         .case_sensitive_search(false)
         .case_preserved_names(true)
         .unicode_on_disk(true)
-        // The projection enforces no ACLs — see `security_of`.
-        .persistent_acls(false)
+        // The volume enforces one owner-only ACL on every node, which is what
+        // this advertises; it is not settable, and `set_security` refuses.
+        .persistent_acls(true)
         .reparse_points(false)
         .named_streams(false)
         .extended_attributes(false)
@@ -1770,6 +1991,58 @@ mod tests {
         );
     }
 
+    /// Push is the only thing that corrects this backend's caches, so a node
+    /// deep enough to outgrow a name buffer must still be notifiable — a
+    /// silent drop there would leave it stale for a whole cache lifetime with
+    /// nothing to say so.
+    #[test]
+    fn a_deeply_nested_node_is_still_notified() {
+        let plane = Arc::new(NotifyPlane::default());
+        let invalidator = WinFspInvalidator {
+            plane: Arc::clone(&plane),
+        };
+        // Well past the 255-unit ceiling a single name is held to, and well
+        // inside WinFsp's own ceiling for a path.
+        let deep: VaultPath = (0..40).map(|step| format!("folder-{step:04}")).collect();
+        assert!(rendered(&deep).len() > MAX_NAME_BYTES);
+        plane.book.lock().expect("the book").remember(9, &deep);
+
+        invalidator.invalidate(Invalidation::Data { ino: 9 });
+        assert_eq!(
+            plane.queue.lock().expect("the queue")[0].path,
+            rendered(&deep)
+        );
+        assert_eq!(plane.dropped.load(Ordering::Relaxed), 0);
+    }
+
+    /// A drop is a node left stale until its lifetime runs out, so it is
+    /// counted rather than swallowed: a mount that drops silently looks exactly
+    /// like one with nothing to say.
+    #[test]
+    fn an_unnameable_invalidation_is_counted_rather_than_swallowed() {
+        let plane = Arc::new(NotifyPlane::default());
+        let invalidator = WinFspInvalidator {
+            plane: Arc::clone(&plane),
+        };
+
+        invalidator.invalidate(Invalidation::Data { ino: 9 });
+        assert_eq!(
+            plane.dropped.load(Ordering::Relaxed),
+            1,
+            "a node this mount cannot name"
+        );
+
+        let sprawling: VaultPath = (0..NOTIFY_PATH_UNITS).map(|_| "x".to_owned()).collect();
+        plane.book.lock().expect("the book").remember(9, &sprawling);
+        invalidator.invalidate(Invalidation::Data { ino: 9 });
+        assert!(plane.queue.lock().expect("the queue").is_empty());
+        assert_eq!(
+            plane.dropped.load(Ordering::Relaxed),
+            2,
+            "a path WinFsp's transaction could not carry"
+        );
+    }
+
     /// What a peer commits decides how many paths this map is asked to hold, so
     /// it holds a bounded number of them — a dropped notification is corrected
     /// by the cache lifetime, an unbounded map is not corrected at all.
@@ -1797,6 +2070,43 @@ mod tests {
         let queue = plane.queue.lock().expect("the queue");
         assert_eq!(queue.len(), NOTIFY_QUEUE_DEPTH);
         assert_eq!(queue[0].path, "\\5", "the oldest is the one dropped");
+    }
+
+    /// A rename moves a whole subtree's paths, and a path is what a
+    /// notification names. A binding kept past its path names a node that has
+    /// moved — and notifies about the wrong one once something is created
+    /// where it used to be.
+    #[test]
+    fn a_rename_rebinds_the_moved_path_and_drops_what_moved_under_it() {
+        let mut book = PathBook::default();
+        book.remember(2, &["Archive".to_owned()]);
+        book.remember(3, &["Archive".to_owned(), "report.txt".to_owned()]);
+        book.remember(4, &["Elsewhere".to_owned()]);
+
+        book.forget_subtree(&rendered(&["Archive".to_owned()]));
+        assert_eq!(book.path(2), None, "the moved node's old path is gone");
+        assert_eq!(book.path(3), None, "and so is everything under it");
+        assert_eq!(
+            book.path(4),
+            Some("\\Elsewhere"),
+            "a sibling that only shares a prefix's first letters is untouched"
+        );
+
+        book.remember(2, &["Moved".to_owned()]);
+        assert_eq!(book.path(2), Some("\\Moved"));
+    }
+
+    /// A prefix match on the rendered string alone would take `\Archived` for a
+    /// child of `\Archive`.
+    #[test]
+    fn forgetting_a_subtree_stops_at_the_path_separator() {
+        let mut book = PathBook::default();
+        book.remember(2, &["Archive".to_owned()]);
+        book.remember(3, &["Archived".to_owned()]);
+
+        book.forget_subtree("\\Archive");
+        assert_eq!(book.path(2), None);
+        assert_eq!(book.path(3), Some("\\Archived"));
     }
 
     /// v1 emptied the mount point, and a member who put files there lost them.
@@ -1842,6 +2152,315 @@ mod tests {
         fs::write(&at, b"not a directory").expect("a file in the way");
 
         assert!(prepare(&at).is_err());
+    }
+
+    /// The one thing standing between a second local account and the vault's
+    /// plaintext: WinFsp runs its access check only when the filesystem reports
+    /// a descriptor, and grants whatever was asked for when it reports none.
+    #[test]
+    fn every_node_reports_a_descriptor_scoped_to_the_mounting_user() {
+        let descriptor = OwnerOnlyDescriptor::for_this_user().expect("this process has a user");
+        assert!(descriptor.len() > 0, "a zero-length descriptor is no check");
+
+        for kind in [NodeKind::File, NodeKind::Folder] {
+            let reported = security_of(&node(kind, None), &descriptor);
+            assert_eq!(reported.sz_security_descriptor, descriptor.len());
+            assert!(!reported.reparse);
+        }
+    }
+
+    // --- the pump, driven over a real engine on the in-memory seams ---
+
+    use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+    use cipherbox_engine::{
+        ApiBaseUrl, Command, ContentProfile, Engine, GatewayConfig, LoginSecret, StoragePolicy,
+    };
+
+    use crate::cache::CacheBudget;
+    use crate::spill::SpillArea;
+
+    type TestCore = OperationCore<FakeSeamTypes, WinFspInvalidator>;
+
+    fn pumped() -> (Pump, TestCore) {
+        let plane = Arc::new(NotifyPlane::default());
+        let world = FakeWorld::new();
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the engine starts");
+        let spill = SpillArea::seeded(
+            tempfile::tempdir().expect("a spill dir").keep(),
+            Box::new(SeededEntropy::new(11)),
+        )
+        .expect("the spill area opens");
+        let core = OperationCore::new(
+            engine,
+            WinFspInvalidator {
+                plane: Arc::clone(&plane),
+            },
+            CacheBudget::CI,
+            spill,
+        );
+        let pump = Pump {
+            plane,
+            resumes: Arc::new(Mutex::new(HashMap::new())),
+            close_failures: 0,
+        };
+        (pump, core)
+    }
+
+    fn path(parts: &[&str]) -> VaultPath {
+        parts.iter().map(|part| (*part).to_owned()).collect()
+    }
+
+    /// Seed a child the way another client would commit one, straight through
+    /// the facade.
+    fn seed(core: &mut TestCore, parent: &[&str], name: &str, kind: NodeKind) {
+        let parent = if parent.is_empty() {
+            block_on(core.getattr(ROOT_INO)).expect("the root").node
+        } else {
+            let mut here = block_on(core.getattr(ROOT_INO)).expect("the root");
+            for step in parent {
+                here = block_on(core.lookup(here.ino, step)).expect("an ancestor");
+            }
+            here.node
+        };
+        block_on(core.engine_mut().command(Command::Create {
+            parent,
+            name: name.to_owned(),
+            kind,
+        }))
+        .expect("the seeded create");
+    }
+
+    fn names_under(core: &mut TestCore, parent: &[&str]) -> Vec<String> {
+        let mut here = block_on(core.getattr(ROOT_INO)).expect("the root");
+        for step in parent {
+            here = block_on(core.lookup(here.ino, step)).expect("an ancestor");
+        }
+        let walk = block_on(core.opendir(here.ino)).expect("opendir");
+        let listed = block_on(core.readdir(walk, 0))
+            .expect("readdir")
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect();
+        core.releasedir(walk);
+        listed
+    }
+
+    /// The one respelling Windows resolves and POSIX does not: a rename onto a
+    /// fold of the source's own name. Comparing the destination against the
+    /// source's *parent* would call that a collision and refuse every attempt
+    /// to fix a file's capitalisation.
+    #[test]
+    fn a_case_only_rename_is_a_rename_and_not_a_collision() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "Report.txt", NodeKind::File);
+
+        block_on(pump.rename(
+            &mut core,
+            &path(&["Report.txt"]),
+            &path(&["REPORT.TXT"]),
+            false,
+        ))
+        .expect("a respell of a node's own name is a rename");
+        assert_eq!(names_under(&mut core, &[]), vec!["REPORT.TXT".to_owned()]);
+    }
+
+    /// A destination that genuinely holds another node is still a collision,
+    /// and a caller that did not ask to replace must get one.
+    #[test]
+    fn a_rename_onto_another_node_is_refused_unless_replacement_was_asked_for() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "draft.txt", NodeKind::File);
+        seed(&mut core, &[], "report.txt", NodeKind::File);
+
+        assert_eq!(
+            block_on(pump.rename(
+                &mut core,
+                &path(&["draft.txt"]),
+                &path(&["report.txt"]),
+                false,
+            )),
+            Err(VfsError::AlreadyExists)
+        );
+        assert_eq!(names_under(&mut core, &[]).len(), 2, "nothing was replaced");
+
+        block_on(pump.rename(
+            &mut core,
+            &path(&["draft.txt"]),
+            &path(&["report.txt"]),
+            true,
+        ))
+        .expect("a caller that asked to replace, replaces");
+        assert_eq!(names_under(&mut core, &[]), vec!["report.txt".to_owned()]);
+    }
+
+    /// A destination the mount could not read is not a destination it may
+    /// overwrite. Only absence means "nothing in the way": collapsing every
+    /// refusal into that would let one transient failure destroy a file the
+    /// caller never asked to replace.
+    #[test]
+    fn a_rename_that_could_not_probe_the_destination_refuses_rather_than_replacing() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "draft.txt", NodeKind::File);
+        seed(&mut core, &[], "Archive", NodeKind::Folder);
+
+        // A destination *inside a file* is the probe refusing for a reason
+        // that is not absence — the parent cannot be walked at all.
+        assert_eq!(
+            block_on(pump.rename(
+                &mut core,
+                &path(&["Archive"]),
+                &path(&["draft.txt", "moved"]),
+                false,
+            )),
+            Err(VfsError::NotADirectory),
+            "the probe's own refusal is the rename's"
+        );
+        assert_eq!(
+            names_under(&mut core, &[]).len(),
+            2,
+            "and nothing moved or was replaced"
+        );
+    }
+
+    /// A rename moves the paths a notification names, and nothing else in the
+    /// projection tracks them: the inode map is keyed on the engine's node id
+    /// precisely so a rename costs it nothing.
+    #[test]
+    fn a_rename_rebinds_the_paths_a_notification_would_name() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "Archive", NodeKind::Folder);
+        seed(&mut core, &["Archive"], "report.txt", NodeKind::File);
+
+        let moved = block_on(pump.resolve(&mut core, &path(&["Archive"]))).expect("the folder");
+        let child = block_on(pump.resolve(&mut core, &path(&["Archive", "report.txt"])))
+            .expect("the child");
+        assert_eq!(pump.plane.path(moved.ino).as_deref(), Some("\\Archive"));
+
+        block_on(pump.rename(&mut core, &path(&["Archive"]), &path(&["Boxes"]), false))
+            .expect("the rename");
+
+        assert_eq!(
+            pump.plane.path(moved.ino).as_deref(),
+            Some("\\Boxes"),
+            "the moved node answers to its new path"
+        );
+        assert_eq!(
+            pump.plane.path(child.ino),
+            None,
+            "and nothing under it still answers to the old one"
+        );
+    }
+
+    /// A delete disposition is set when a handle opens and carried out when it
+    /// closes. In between an ancestor can move — locally, or absorbed from a
+    /// peer, which fires no callback at all — and something else can be created
+    /// at the path the handle remembers. Removing that would remove a node this
+    /// handle was never opened on.
+    #[test]
+    fn a_delete_never_removes_a_node_recreated_at_the_old_path() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "Archive", NodeKind::Folder);
+        seed(&mut core, &["Archive"], "report.txt", NodeKind::File);
+        let doomed = block_on(pump.resolve(&mut core, &path(&["Archive", "report.txt"])))
+            .expect("the node the handle was opened on");
+
+        // The ancestor moves, and a peer's `Archive` takes its place with a
+        // `report.txt` of its own.
+        block_on(pump.rename(&mut core, &path(&["Archive"]), &path(&["Boxes"]), false))
+            .expect("the ancestor moves");
+        seed(&mut core, &[], "Archive", NodeKind::Folder);
+        seed(&mut core, &["Archive"], "report.txt", NodeKind::File);
+
+        assert_eq!(
+            block_on(pump.delete(&mut core, &path(&["Archive", "report.txt"]), doomed.node)),
+            Err(VfsError::NotFound),
+            "the name binds a different node now"
+        );
+        assert_eq!(
+            names_under(&mut core, &["Archive"]),
+            vec!["report.txt".to_owned()],
+            "the impostor survives"
+        );
+
+        // The node the handle was actually opened on is still removable, under
+        // the path it moved to.
+        block_on(pump.delete(&mut core, &path(&["Boxes", "report.txt"]), doomed.node))
+            .expect("the node this handle owned");
+        assert!(names_under(&mut core, &["Boxes"]).is_empty());
+    }
+
+    /// A removed node's path must stop being notifiable, or a node later
+    /// created there inherits its invalidations.
+    #[test]
+    fn a_delete_drops_the_path_it_removed() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "report.txt", NodeKind::File);
+        let doomed = block_on(pump.resolve(&mut core, &path(&["report.txt"]))).expect("the file");
+        assert_eq!(pump.plane.path(doomed.ino).as_deref(), Some("\\report.txt"));
+
+        block_on(pump.delete(&mut core, &path(&["report.txt"]), doomed.node)).expect("the delete");
+        assert_eq!(pump.plane.path(doomed.ino), None);
+    }
+
+    /// One marker per open directory, whatever a peer committed inside it: the
+    /// map the enumeration resumes through is the one structure this adapter
+    /// adds, and it is sized by the kernel's open handles, never by a listing.
+    #[test]
+    fn the_directory_resume_map_holds_one_marker_per_open_directory() {
+        let (mut pump, mut core) = pumped();
+        seed(&mut core, &[], "Archive", NodeKind::Folder);
+        for step in 0..64 {
+            seed(
+                &mut core,
+                &["Archive"],
+                &format!("file-{step:03}.txt"),
+                NodeKind::File,
+            );
+        }
+        let dir = block_on(pump.resolve(&mut core, &path(&["Archive"]))).expect("the folder");
+        let walk = block_on(core.opendir(dir.ino)).expect("opendir");
+
+        // Page the whole listing the way WinFsp does: emit, record the last
+        // name emitted (the dispatcher's job), resume from it.
+        let mut marker = Marker::Start;
+        let mut seen = 0;
+        loop {
+            let listing =
+                block_on(pump.read_dir(&mut core, dir.ino, walk, marker)).expect("a page");
+            let Some((last, _, resume_at)) = listing.page().last() else {
+                break;
+            };
+            seen += listing.entries.len();
+            let last = last.to_owned();
+            pump.resumes.lock().expect("the map").insert(
+                walk,
+                Resume {
+                    last: last.clone(),
+                    offset: resume_at,
+                },
+            );
+            if listing.entries.is_empty() {
+                break;
+            }
+            marker = Marker::After(last);
+        }
+
+        assert_eq!(seen, 64, "the whole listing was walked");
+        assert_eq!(
+            pump.resumes.lock().expect("the map").len(),
+            1,
+            "one open directory is one marker, however long its listing"
+        );
     }
 
     /// Everything the decoder refuses before the core sees it is an error

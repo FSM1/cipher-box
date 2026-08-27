@@ -26,6 +26,13 @@ shell carries it and the project address on every screen
 
 CipherBox bundles no proprietary software alongside WinFsp.
 
+The mount's access control is this backend's own work rather than the kernel's:
+WinFsp asks the filesystem for a security descriptor and grants a caller
+whatever it requested when none is reported, so `crates/fuse` serves an
+owner-only descriptor for every node. The two Windows calls that cannot be made
+in safe Rust live in `crates/win-security`, apart from the projection, which
+forbids `unsafe`.
+
 The pinned WinFsp release CI provisions, and the digest it is verified against,
 live in [`.github/actions/setup-winfsp/action.yml`](../.github/actions/setup-winfsp/action.yml).
 

@@ -993,6 +993,31 @@ fn the_winfsp_profile_presents_names_the_windows_way() {
     assert!(names(&mut core, ROOT_INO).is_empty());
 }
 
+/// An append is relative to the end of the file, and the size a read-path
+/// reply carries is provisional — `None` until the content plane projects one.
+/// A host that read that as zero would land the append on the file's head and
+/// say nothing, because the version it publishes still carries the right total
+/// length. `append_offset` resolves the head instead, and refuses when it
+/// cannot: a length nobody can state is not a length to append at.
+#[test]
+fn an_append_offset_refuses_a_length_it_cannot_resolve() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, "unresolved.txt", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    let found = block_on(core.lookup(ROOT_INO, "unresolved.txt")).expect("the seeded file");
+    assert_eq!(found.size, None, "nothing has projected a length");
+
+    let handle = block_on(core.open(found.ino, Access::ReadWrite)).expect("the file opens");
+    assert!(
+        matches!(
+            block_on(core.append_offset(handle)),
+            Err(VfsError::Unavailable { .. })
+        ),
+        "an unresolvable length refuses rather than reading as zero"
+    );
+}
+
 /// Case-sensitive presentation is the unix convention, and it has to hold for
 /// every operation that names an existing node — a mount whose `lookup` says a
 /// respelling does not exist must not delete through it.
@@ -2322,6 +2347,48 @@ mod published {
 
     fn opened(mount: &mut Mount) -> HandleId {
         block_on(mount.core.open(mount.ino, Access::Read)).expect("the file opens")
+    }
+
+    /// An append lands after every byte the file already has, and reading the
+    /// file back is what proves it — a version published at the right total
+    /// length can still have had its head overwritten.
+    #[test]
+    fn an_append_lands_after_every_published_byte() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        let at = block_on(mount.core.append_offset(handle)).expect("the head resolves");
+        assert_eq!(at, plaintext.len() as u64);
+
+        let tail = b"appended";
+        block_on(mount.core.write(handle, at, tail)).expect("the append lands");
+        block_on(mount.core.release(handle)).expect("the append journals");
+        advance_and_pump(&mut mount);
+
+        let reader = opened(&mut mount);
+        let whole = block_on(mount.core.read(reader, 0, 4096)).expect("the file reads back");
+        let mut expected = plaintext.clone();
+        expected.extend_from_slice(tail);
+        assert_eq!(whole, expected, "the published bytes survive the append");
+    }
+
+    /// A writable handle is what an append is relative to; nothing else can be.
+    #[test]
+    fn an_append_offset_is_refused_on_a_handle_that_cannot_write() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let reader = opened(&mut mount);
+
+        assert_eq!(
+            block_on(mount.core.append_offset(reader)),
+            Err(VfsError::BadHandle)
+        );
+        assert_eq!(
+            block_on(mount.core.append_offset(HandleId(9999))),
+            Err(VfsError::BadHandle)
+        );
     }
 
     #[test]

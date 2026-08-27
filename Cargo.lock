@@ -805,6 +805,7 @@ dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
  "cipherbox-fuse",
+ "cipherbox-win-security",
  "fs4",
  "fuser",
  "futures-channel",
@@ -847,6 +848,13 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "zeroize",
+]
+
+[[package]]
+name = "cipherbox-win-security"
+version = "0.0.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

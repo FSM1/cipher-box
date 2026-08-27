@@ -732,6 +732,23 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(took)
     }
 
+    /// The length an append on `handle` lands at.
+    ///
+    /// Not [`getattr`](Self::getattr)'s size, which is provisional until the
+    /// content plane projects one: a host that took an unprojected `None` for
+    /// the end of the file would append at offset zero and overwrite its head,
+    /// silently, because the length the version publishes would still be right.
+    /// Resolving the head is what projects the length, and this is the call
+    /// that forces it.
+    pub async fn append_offset(&mut self, handle: HandleId) -> Result<u64, VfsError> {
+        let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
+        if !open.access.writable() {
+            return Err(VfsError::BadHandle);
+        }
+        self.begin_pending(handle, open.node).await?;
+        Ok(self.pending.get(&handle).ok_or(VfsError::BadHandle)?.len)
+    }
+
     /// Set a file's length.
     ///
     /// On an open writable handle this is a spill-file operation: the new
