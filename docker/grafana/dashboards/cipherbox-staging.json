@@ -1005,7 +1005,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(gateway_verify_total{outcome=\"accepted\"}[5m])) / sum(rate(gateway_verify_total[5m]))",
+          "expr": "(sum(rate(gateway_verify_total{outcome=\"accepted\"}[5m])) or vector(0)) / sum(rate(gateway_verify_total[5m]))",
           "legendFormat": "Accepted",
           "editorMode": "code",
           "range": true,
@@ -1952,7 +1952,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service=\"api\"} |~ \"(?i)(error|exception|failed|ERR)\" | line_format \"{{ .message }}\"",
+          "expr": "{service=\"api\"} |~ \"(?i)(error|exception|failed|ERR)\"",
           "queryType": "range",
           "legendFormat": ""
         }

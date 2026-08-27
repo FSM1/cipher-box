@@ -209,6 +209,12 @@ Better Stack (formerly Better Uptime) free tier provides 10 monitors with 3-minu
 
 Use these in the **Explore** panel in Grafana Cloud.
 
+`loki.source.docker` forwards each container line as it stands, and the pipeline
+holds no parser stage, so only `service`, `container`, and `project` exist as
+labels. A `line_format` template that names any other field renders an empty
+line rather than an error. Add a parser such as `| json` before you reference
+one.
+
 ### By service
 
 ```logql
@@ -291,8 +297,12 @@ sum by (outcome) (rate(auth_attempts_total{route="/auth/login"}[5m]))
 
 ### Gateway verify refusal share
 
+A labelled series exists only once that outcome has been counted, so the
+numerator falls back to zero: without it the healthy all-accepted case reads as
+no data rather than as a zero share.
+
 ```promql
-sum(rate(gateway_verify_total{outcome="refused"}[10m]))
+(sum(rate(gateway_verify_total{outcome="refused"}[10m])) or vector(0))
 / clamp_min(sum(rate(gateway_verify_total[10m])), 0.001)
 ```
 
