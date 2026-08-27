@@ -592,15 +592,14 @@ fn rebase_relink(
         },
         // Still under the source we moved from: the normal dest-first + remove.
         Some(current) if current == from_parent => {
-            working.link_next(new_parent, op.target);
-            working.unlink(from_parent, op.target);
+            working.relocate(op.target, new_parent, None);
             OpResolution::applied(exit.applied)
         }
         // A concurrent move relocated the child elsewhere: we are the race loser.
         Some(_) => OpResolution::dropped(DropReason::MoveRaceLost),
         // No current parent (was at root / unlinked): dest-first still links it.
         None => {
-            working.link_next(new_parent, op.target);
+            working.relocate(op.target, new_parent, None);
             OpResolution::applied(exit.applied)
         }
     }
@@ -634,10 +633,9 @@ fn relocation_guards(
 /// it is replacing. The replaced node drops under the conditional-delete rule,
 /// so a concurrent edit to it still wins.
 ///
-/// A vacate is a delete, so it takes the replaced node's whole subtree with it
-/// ([`Snapshot::remove_deleted`]) and a later op in the same pass that targets
-/// a descendant dead-letters as `TargetGone` — the same law
-/// [`rebase_delete`] states for the delete direction.
+/// The vacate takes the replaced node's subtree ([`Snapshot::relocate`]), so a
+/// later op in the same pass under that folder dead-letters as `TargetGone`,
+/// exactly as [`rebase_delete`] states for the delete direction.
 fn rebase_move(
     working: &mut Snapshot,
     op: &Op,
@@ -701,18 +699,11 @@ fn rebase_move(
         None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
     };
 
-    if current_parent != Some(new_parent) {
-        if let Some(current) = current_parent {
-            working.unlink(current, op.target);
-        }
-        working.link_next(new_parent, op.target);
-    }
-    // After the re-link, never before: the replaced node may be the target's
-    // own ancestor, and cascading first would sweep the target this op moves
-    // out of that subtree.
-    if let Some(replaced) = vacating {
-        working.remove_deleted(replaced.node);
-    }
+    working.relocate(
+        op.target,
+        new_parent,
+        vacating.map(|replaced| replaced.node),
+    );
     if let Some(node) = working.node_mut(op.target) {
         node.rename(effective.clone());
     }
@@ -1593,9 +1584,20 @@ mod tests {
 
     /// The vacate is a delete, so it owes the delete's cascade: a descendant of
     /// the replaced folder still answering is a node no walk reaches.
+    /// `replace_tree`'s destination node is a file, and a file holds no
+    /// children: the vacate cascade only has something to take when the
+    /// replaced node is a folder.
+    fn replaced_folder_tree() -> Snapshot {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "target.txt", NodeKind::Folder);
+        base
+    }
+
     #[test]
     fn a_move_that_replaces_a_folder_takes_its_subtree() {
-        let mut base = replace_tree(1);
+        let mut base = replaced_folder_tree();
         with_node(&mut base, id(3), id(4), "inner", NodeKind::Folder);
         with_node(&mut base, id(4), id(5), "deep.bin", NodeKind::File);
         let local = base.clone();
@@ -1631,8 +1633,11 @@ mod tests {
     /// working base, so the op has nothing to rebase onto.
     #[test]
     fn an_op_under_a_vacated_folder_dead_letters_as_target_gone() {
-        let mut base = replace_tree(1);
-        with_node(&mut base, id(3), id(4), "deep.bin", NodeKind::File);
+        let base = {
+            let mut base = replaced_folder_tree();
+            with_node(&mut base, id(3), id(4), "deep.bin", NodeKind::File);
+            base
+        };
         let local = base.clone();
 
         let report = replay(
@@ -1662,6 +1667,41 @@ mod tests {
             report.dead_letters,
             vec![(OpId(2), DeadLetterReason::TargetGone)],
             "the op under the vacated folder has nothing left to rebase onto"
+        );
+    }
+
+    /// A move publishes dest-first, so the destination ref shares the wire with
+    /// the source ref until the source-remove lands. The dest link must out-rank
+    /// it, or the dual-link tiebreak falls to the lowest parent id and a reader
+    /// can pick the parent this move left.
+    #[test]
+    fn a_cross_folder_move_links_above_the_source_it_has_not_removed_yet() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        base.link(id(0), id(2), 7);
+        let local = base.clone();
+
+        rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "g.txt",
+                None,
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(
+            base.winning_link(id(2)).map(|l| l.link_counter),
+            Some(8),
+            "the dest link supersedes the source counter it replaces"
         );
     }
 

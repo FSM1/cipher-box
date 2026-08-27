@@ -78,8 +78,8 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
     }
 }
 
-/// Render a relink or a move: re-link under the destination when the parent
-/// actually changes, vacate the node the op replaces, and take the new name.
+/// Render a relink or a move: relocate under the destination, vacate the node
+/// the op replaces, and take the new name.
 fn relocate(
     view: &mut Snapshot,
     op: &Op,
@@ -87,22 +87,13 @@ fn relocate(
     new_name: Option<&str>,
     replacing: Option<crate::facade::NodeId>,
 ) {
-    // A node never replaces itself — vacating the target would erase the very
-    // node this op moves (`crate::sync::rebase` refuses it the same way).
-    let vacating = replacing.filter(|node| *node != op.target);
-    let current = view.parent_of(op.target);
-    if current != Some(new_parent) {
-        if let Some(current) = current {
-            view.unlink(current, op.target);
-        }
-        view.link_next(new_parent, op.target);
-    }
-    // After the re-link, never before: a vacate destroys the replaced node, so
-    // it takes the subtree with it, and the replaced node may be the target's
-    // own ancestor. Cascading first would sweep the target this op moves out.
-    if let Some(replaced) = vacating {
-        view.remove_deleted(replaced);
-    }
+    // A node never replaces itself, and it vacates only from the destination
+    // it contests. `replacing` arrives unvalidated from the host, and the
+    // vacate cascades, so the render narrows it to what the rebase proves
+    // (`crate::sync::rebase::rebase_move`) rather than trusting the id.
+    let vacating =
+        replacing.filter(|node| *node != op.target && view.parent_of(*node) == Some(new_parent));
+    view.relocate(op.target, new_parent, vacating);
     if let Some(node) = view.node_mut(op.target) {
         if let Some(new_name) = new_name {
             node.rename(new_name);
@@ -126,6 +117,11 @@ mod tests {
 
     fn base() -> Snapshot {
         Snapshot::new(id(0))
+    }
+
+    fn with_node(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
+        snap.upsert_node(NodeMeta::new(node, name, kind));
+        snap.link(parent, node, 1);
     }
 
     fn staged() -> StagedContent {
@@ -252,16 +248,11 @@ mod tests {
     #[test]
     fn overlay_move_replacing_a_folder_renders_its_subtree_gone() {
         let mut base = base();
-        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(2), "f.txt", NodeKind::File));
-        base.upsert_node(NodeMeta::new(id(3), "target", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(4), "inner", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(5), "deep.bin", NodeKind::File));
-        base.link(id(0), id(1), 1);
-        base.link(id(0), id(2), 1);
-        base.link(id(1), id(3), 1);
-        base.link(id(3), id(4), 1);
-        base.link(id(4), id(5), 1);
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "target", NodeKind::Folder);
+        with_node(&mut base, id(3), id(4), "inner", NodeKind::Folder);
+        with_node(&mut base, id(4), id(5), "deep.bin", NodeKind::File);
 
         let view = apply_overlay(
             &base,
@@ -296,14 +287,10 @@ mod tests {
     #[test]
     fn overlay_move_out_of_the_folder_it_replaces_keeps_the_target() {
         let mut base = base();
-        base.upsert_node(NodeMeta::new(id(1), "target", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(2), "keep", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(3), "sweep.txt", NodeKind::File));
-        base.upsert_node(NodeMeta::new(id(4), "kept.bin", NodeKind::File));
-        base.link(id(0), id(1), 1);
-        base.link(id(1), id(2), 1);
-        base.link(id(1), id(3), 1);
-        base.link(id(2), id(4), 1);
+        with_node(&mut base, id(0), id(1), "target", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "keep", NodeKind::Folder);
+        with_node(&mut base, id(1), id(3), "sweep.txt", NodeKind::File);
+        with_node(&mut base, id(2), id(4), "kept.bin", NodeKind::File);
 
         let view = apply_overlay(
             &base,
@@ -336,18 +323,12 @@ mod tests {
     #[test]
     fn overlay_move_replacing_a_folder_under_a_pending_delete() {
         let mut base = base();
-        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(2), "f.txt", NodeKind::File));
-        base.upsert_node(NodeMeta::new(id(3), "target", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(4), "doomed", NodeKind::Folder));
-        base.upsert_node(NodeMeta::new(id(5), "sibling.bin", NodeKind::File));
-        base.upsert_node(NodeMeta::new(id(6), "under-doomed.bin", NodeKind::File));
-        base.link(id(0), id(1), 1);
-        base.link(id(0), id(2), 1);
-        base.link(id(1), id(3), 1);
-        base.link(id(3), id(4), 1);
-        base.link(id(3), id(5), 1);
-        base.link(id(4), id(6), 1);
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "target", NodeKind::Folder);
+        with_node(&mut base, id(3), id(4), "doomed", NodeKind::Folder);
+        with_node(&mut base, id(3), id(5), "sibling.bin", NodeKind::File);
+        with_node(&mut base, id(4), id(6), "under-doomed.bin", NodeKind::File);
 
         let view = apply_overlay(
             &base,

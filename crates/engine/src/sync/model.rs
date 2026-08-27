@@ -227,9 +227,8 @@ impl Snapshot {
 
     /// Removes a node and every link that references it (as parent or child).
     ///
-    /// Shallow: whatever `id` alone reached is left behind, present but
-    /// unreachable. A node that is going away for good wants
-    /// [`remove_deleted`](Self::remove_deleted) instead.
+    /// Shallow: a node going away for good wants
+    /// [`remove_deleted`](Self::remove_deleted), which takes the subtree too.
     pub fn remove_node(&mut self, id: NodeId) {
         self.nodes.remove(&id);
         self.links.retain(|l| l.parent != id && l.child != id);
@@ -268,6 +267,33 @@ impl Snapshot {
     pub fn remove_deleted(&mut self, id: NodeId) {
         self.links.retain(|l| l.child != id);
         self.remove_unreachable(id);
+    }
+
+    /// Moves `target` under `new_parent` and vacates the node it replaces, in
+    /// the one order both are safe in. The model owns the order so no caller
+    /// can get it wrong: a vacate is a delete
+    /// ([`remove_deleted`](Self::remove_deleted)), and the replaced node may be
+    /// the target's own ancestor, so a cascade taken first would sweep the
+    /// target out with it.
+    ///
+    /// The dest link is established before the source link departs, which is
+    /// what [`link_next`](Self::link_next) needs to see the counter it must
+    /// beat — a source-remove that has not published yet then loses the
+    /// dual-link tiebreak instead of drawing with the winner.
+    ///
+    /// `vacating` must already be a child of `new_parent`; the callers prove it
+    /// (`crate::sync::rebase::rebase_move`).
+    pub fn relocate(&mut self, target: NodeId, new_parent: NodeId, vacating: Option<NodeId>) {
+        let current = self.parent_of(target);
+        if current != Some(new_parent) {
+            self.link_next(new_parent, target);
+            if let Some(current) = current {
+                self.unlink(current, target);
+            }
+        }
+        if let Some(replaced) = vacating {
+            self.remove_deleted(replaced);
+        }
     }
 
     /// Every link naming `child` as the child. One entry in a well-formed
@@ -641,33 +667,27 @@ mod tests {
     /// The comparator's frozen case-fold vectors, beside the NFC ones above:
     /// each family is one name a user can type several ways, and the vault
     /// holds one entry for all of them. A lowercase mapping splits every family
-    /// here, which is why the comparator folds instead
-    /// (blueprint/engine.md rebase table: "NFC-normalized + case-folded").
-    /// Written as escapes so the file's own encoding cannot silently normalize
-    /// a case away.
+    /// here (blueprint/engine.md rebase table: "NFC-normalized + case-folded").
     #[test]
     fn collation_key_applies_full_case_folding() {
         for (case, family) in [
-            // Greek sigma: capital, medial and final are one letter to a fold.
-            // The final form is what a lowercased Greek word actually ends in,
-            // so this is the common pair, not the exotic one.
+            // Capital, medial and final sigma are one letter to a fold. A
+            // lowercased Greek word ends in the final form, so this is the pair
+            // real names hit.
             (
                 "greek sigma",
                 &["\u{39f}\u{3a3}", "\u{3bf}\u{3c2}", "\u{3bf}\u{3c3}"][..],
             ),
-            // Latin long s: a fold maps it to `s`, a lowercase mapping does not.
-            (
-                "latin long s",
-                &[".d\u{17f}_store", ".ds_store", ".DS_Store"][..],
-            ),
-            // A fold that expands one character into two.
+            ("latin long s", &[".d\u{17f}_store", ".ds_store"][..]),
+            // Folds that expand one character into two, the `F` mappings a
+            // lowercase table has no room to express.
             (
                 "latin sharp s",
                 &["stra\u{df}e", "STRA\u{1e9e}E", "strasse"][..],
             ),
-            // The same expansion rule reaches the Latin ligatures, whose case
-            // mapping is two letters. This is the case law, not NFKC: `①` and
-            // `1` still key apart, because `①` has no case mapping at all.
+            // A ligature's case mapping is its two letters, so the case law
+            // reaches it. NFKC plays no part: `①` has no case mapping at all,
+            // which is what keeps it apart from `1` above.
             ("latin fi ligature", &["\u{fb01}le", "file"][..]),
         ] {
             for pair in family.windows(2) {
@@ -678,6 +698,33 @@ mod tests {
                     "{case}: one name, however it was typed"
                 );
             }
+        }
+    }
+
+    /// The exact pre-size is a zeroization invariant, not a micro-optimization:
+    /// a growth realloc frees an intermediate holding the name that zeroizing
+    /// the returned key cannot reach. The property rests on `String::extend`
+    /// reserving the iterator's *lower* size hint, which no test would
+    /// otherwise catch changing under a toolchain or table bump.
+    #[test]
+    fn collation_key_sizes_its_buffer_exactly() {
+        for name in [
+            "",
+            "report.txt",
+            "STRA\u{1e9e}E",
+            "spi\u{fb03}est",
+            "\u{390}",
+            "des\u{212a}top.ini",
+            "J\u{30c}",
+            "\u{3bf}\u{3c2}",
+            &"\u{1e9e}".repeat(500),
+        ] {
+            let key = collation_key(name);
+            assert_eq!(
+                key.capacity(),
+                key.len(),
+                "{name:?}: extend grew the buffer past its pre-size"
+            );
         }
     }
 

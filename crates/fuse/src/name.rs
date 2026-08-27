@@ -110,8 +110,8 @@ const JUNK_PREFIXES: &[&str] = &["._", ".trash-"];
 /// the engine's comparator fold rather than re-deriving one — U+212A KELVIN
 /// SIGN folds to `k`, so `des\u{212A}top.ini` is `desktop.ini` to the engine's
 /// comparator and must be to the junk filter too. It skips the comparator's NFC
-/// step, which every entry in the lists below being ASCII is what makes safe: no
-/// composition reaches an ASCII string from a name that is not already one.
+/// step, which is safe because no junk literal holds `;` or `` ` `` — the only
+/// two ASCII characters NFC reaches from a non-ASCII one (U+037E and U+1FEF).
 /// Folds lazily so a listing allocates nothing.
 fn folds_to(name: &str, folded: &str) -> bool {
     case_fold(name.chars()).eq(folded.chars())
@@ -331,6 +331,24 @@ mod tests {
         for name in [".DS_Store", "re:port", "COM1", "report.", "a\u{202E}b"] {
             assert!(is_emittable(name), "{name:?} must stay reachable");
             assert!(validate_name(name).is_err(), "{name:?} is not creatable");
+        }
+    }
+
+    /// Both lists claim to be "already folded", and `folds_to` skips NFC on the
+    /// strength of them being ASCII. Neither claim is checked anywhere else, so
+    /// a non-ASCII or unfolded literal would silently never match.
+    #[test]
+    fn every_junk_literal_is_ascii_and_already_folded() {
+        for literal in JUNK_NAMES.iter().chain(JUNK_PREFIXES) {
+            assert!(literal.is_ascii(), "{literal:?} must be ASCII");
+            assert!(
+                folds_to(literal, literal),
+                "{literal:?} must be its own fold"
+            );
+            assert!(
+                !literal.contains([';', '`']),
+                "{literal:?} holds an ASCII character NFC can reach"
+            );
         }
     }
 
