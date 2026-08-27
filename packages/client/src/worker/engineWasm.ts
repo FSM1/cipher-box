@@ -258,5 +258,7 @@ export interface EngineWasm {
     readonly ContentUnrecoverable: number;
     readonly BaseSuperseded: number;
     readonly HeadTooLarge: number;
+    readonly PreservationRefused: number;
+    readonly AlreadyPublished: number;
   };
 }

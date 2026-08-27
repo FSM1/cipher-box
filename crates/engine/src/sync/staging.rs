@@ -189,6 +189,13 @@ pub(crate) enum Preservation {
     /// can ever map the version's blocks. Nothing is held; whatever blocks
     /// linger are referenced by nothing and orphan GC reclaims them.
     ContentGone,
+    /// The stored preserved set is not one this build reads, so nothing more
+    /// can join it. A verdict rather than an error because no retry changes it:
+    /// the caller must finish the abandonment and say so on the event stream,
+    /// where returning the op to a strict-FIFO head would freeze the whole
+    /// queue behind bytes nothing will ever explain (blueprint/engine.md
+    /// "never a silent failure").
+    Refused,
 }
 
 impl Preservation {
@@ -199,6 +206,7 @@ impl Preservation {
         match self {
             Self::Kept => reason,
             Self::ContentGone => DeadLetterReason::ContentUnrecoverable,
+            Self::Refused => DeadLetterReason::PreservationRefused,
         }
     }
 }
@@ -217,27 +225,36 @@ impl Preservation {
 /// path's. Only the count is held here, and only to keep one pass of dead
 /// letters from rewriting a list that grows with every entry it appends.
 ///
-/// Fails closed twice over: on a preserved record this build cannot read, since
-/// overwriting it would drop the dead letters it already holds, and on a root it
-/// cannot decode, since that record carries the only copy of the content key.
+/// Nothing here destroys on a refusal. A preserved record this build cannot read
+/// is never overwritten, because that would drop the dead letters it already
+/// holds; a root this build cannot decode still has its record kept, because
+/// that record carries the only copy of the content key. The first is
+/// [`Preservation::Refused`] — permanent, so the caller finishes the
+/// abandonment and reports it — and the second keeps the version unjudged.
+/// Only a seam failure is an `Err`, and only that retries.
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
     record: &[u8],
     now: UnixMillis,
 ) -> SeamResult<Preservation> {
-    // First: an unreadable preserved record freezes this path, and must do so
+    // First: an unreadable preserved record decides this path, and must do so
     // before any verdict a caller would act on.
-    let mut kept = read_preserved_dead_letters(store)
-        .await?
-        .ok_or_else(|| SeamError::new("preserve_dead_letter: unreadable preserved record"))?;
+    let Some(mut kept) = read_preserved_dead_letters(store).await? else {
+        return Ok(Preservation::Refused);
+    };
     let root = record_content_root_cid(record)
         .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
     if let Some(root) = &root {
-        let Some((manifest, _)) = open_version(store, root).await? else {
-            return Ok(Preservation::ContentGone);
-        };
-        if has_a_hole(store, root, &manifest).await? {
-            return Ok(Preservation::ContentGone);
+        match open_version(store, root).await? {
+            OpenedVersion::Gone => return Ok(Preservation::ContentGone),
+            // Holes are undecidable without the manifest, and an undecidable
+            // hole preserves.
+            OpenedVersion::Opaque => {}
+            OpenedVersion::Open(manifest, _) => {
+                if has_a_hole(store, root, &manifest).await? {
+                    return Ok(Preservation::ContentGone);
+                }
+            }
         }
     }
     if kept.iter().any(|held| held.record == record) {
@@ -288,34 +305,36 @@ async fn has_a_hole<S: StagingStore>(
         && store.staged_bytes(last).await?.is_none())
 }
 
-/// The version at `root_cid` when its root still opens: the decoded manifest and
-/// the root block's own staged length. `None` when the root is gone or fails its
-/// own CID — the manifest is the only map from a `contentCid` to the blocks under
-/// it, so without it the version is unreadable however many leaves survive.
-///
-/// A root that addresses correctly but this build cannot **decode** is neither:
-/// a newer build's format is a version this session cannot interpret, not one
-/// that is lost, and destroying its record would destroy the only carrier of its
-/// content key. That is an `Err`, so the caller freezes and the op stays queued
-/// — the same fail-closed direction [`orphan_staging_keys`] takes on a
-/// referenced root it cannot expand. A seam error propagates for the same
-/// reason.
+/// What a staged root block turned out to be.
+enum OpenedVersion {
+    /// The root is gone or fails its own CID — the manifest is the only map from
+    /// a `contentCid` to the blocks under it, so without it the version is
+    /// unreadable however many leaves survive.
+    Gone,
+    /// The root addresses correctly but this build cannot decode it: a newer
+    /// build's format is a version this session cannot interpret, not one that
+    /// is lost. Neither judged nor destroyed — the same fail-closed direction
+    /// [`orphan_staging_keys`] takes on a referenced root it cannot expand.
+    Opaque,
+    /// The decoded manifest and the root block's own staged length.
+    Open(RootManifest, usize),
+}
+
+/// The version at `root_cid`, as far as its root block establishes it. A seam
+/// error propagates: a store that cannot answer decides nothing.
 ///
 /// The leaves are [`has_a_hole`]'s question.
-async fn open_version<S: StagingStore>(
-    store: &S,
-    root_cid: &[u8],
-) -> SeamResult<Option<(RootManifest, usize)>> {
+async fn open_version<S: StagingStore>(store: &S, root_cid: &[u8]) -> SeamResult<OpenedVersion> {
     let Some(root_block) = store.staged_bytes(root_cid).await? else {
-        return Ok(None);
+        return Ok(OpenedVersion::Gone);
     };
     if verify_cid(root_cid, &root_block).is_err() {
-        return Ok(None);
+        return Ok(OpenedVersion::Gone);
     }
-    let manifest = decode_root(&root_block).map_err(|_| {
-        SeamError::new("preserved dead letter: root manifest is not one this build decodes")
-    })?;
-    Ok(Some((manifest, root_block.len())))
+    Ok(match decode_root(&root_block) {
+        Ok(manifest) => OpenedVersion::Open(manifest, root_block.len()),
+        Err(_) => OpenedVersion::Opaque,
+    })
 }
 
 /// The staged bytes one version still occupies: the root block, plus the sealed
@@ -388,8 +407,8 @@ fn trim_preserved(
 }
 
 /// The dead letters the store holds. `None` when the record is present but not
-/// one this build wrote — the fail-safe direction is to preserve, so a caller
-/// must freeze rather than treat it as empty.
+/// one this build wrote — the fail-safe direction is to preserve what is already
+/// there, so no caller may treat it as empty and overwrite it.
 async fn read_preserved_dead_letters<S: StagingStore>(
     store: &S,
 ) -> SeamResult<Option<Vec<PreservedDeadLetter>>> {
@@ -576,14 +595,15 @@ async fn reconcile_preserved_dead_letters<S: StagingStore>(
             continue;
         };
         match open_version(store, &root).await {
-            Ok(Some((manifest, root_len))) => {
+            Ok(OpenedVersion::Open(manifest, root_len)) => {
                 let bytes = version_bytes(&manifest, root_len, &staged);
                 sized.push((entry, root, bytes));
             }
-            Ok(None) => {}
-            // A store that cannot answer decides nothing: keep the entry, unsized,
-            // and let the next pass judge it.
-            Err(_) => sized.push((entry, root, 0)),
+            Ok(OpenedVersion::Gone) => {}
+            // A root this build cannot decode, or a store that cannot answer,
+            // decides nothing: keep the entry, unsized, and let the next pass
+            // judge it.
+            Ok(OpenedVersion::Opaque) | Err(_) => sized.push((entry, root, 0)),
         }
     }
     let (live, released) = trim_preserved(sized, bounds);
@@ -1170,9 +1190,9 @@ mod tests {
 
     /// A root a newer build wrote addresses correctly but does not decode here.
     /// That is a version this session cannot *interpret*, not one that is lost —
-    /// and the record is the only carrier of its content key, so destroying it
-    /// would make the `ContentUnrecoverable` it reports come true. The path
-    /// freezes instead, leaving the op queued for a build that understands it.
+    /// and the record is the only carrier of its content key, so reporting it
+    /// `ContentGone` would make that verdict come true. The record is kept
+    /// unjudged instead, for a build that understands it.
     #[test]
     fn a_root_this_build_cannot_decode_is_retained_not_destroyed() {
         let store = InMemoryStagingStore::default();
@@ -1187,20 +1207,26 @@ mod tests {
             let foreign_cid = compute_cid(DAG_ROOT_CODEC, foreign);
             store.put_staged_bytes(&foreign_cid, foreign).await.unwrap();
             assert!(
-                open_version(&store, &foreign_cid).await.is_err(),
-                "an undecodable root is refused, never answered as a lost version"
+                matches!(
+                    open_version(&store, &foreign_cid).await.unwrap(),
+                    OpenedVersion::Opaque
+                ),
+                "an undecodable root is neither open nor answered as a lost version"
             );
 
-            // And the whole preserve path freezes on it rather than reporting
-            // ContentGone, which would drop the record that holds the key.
             let held =
                 encode_op_record(seal(2), &content_op(2, foreign_staged(&foreign_cid))).unwrap();
-            assert!(preserve_dead_letter(&store, &held, NOW).await.is_err());
+            assert_eq!(
+                preserve_dead_letter(&store, &held, NOW).await.unwrap(),
+                Preservation::Kept,
+                "the record that holds the key is kept, holes undecided"
+            );
             assert_eq!(
                 preserve_dead_letter(&store, &record, NOW).await.unwrap(),
                 Preservation::Kept,
                 "a decodable version alongside it is unaffected"
             );
+            assert_eq!(kept_records(&store).await.len(), 2, "both are held");
         });
     }
 
@@ -1369,10 +1395,11 @@ mod tests {
             put_blocks(&store, &first_blocks, &first_root, &first).await;
             let first_root_cid = first.root_cid.clone();
             let staged = store.staged_keys().await.unwrap();
-            let (manifest, root_len) = open_version(&store, &first_root_cid)
-                .await
-                .unwrap()
-                .expect("the version opens");
+            let OpenedVersion::Open(manifest, root_len) =
+                open_version(&store, &first_root_cid).await.unwrap()
+            else {
+                panic!("the version opens");
+            };
             let one_version = version_bytes(
                 &manifest,
                 root_len,
@@ -1552,7 +1579,10 @@ mod tests {
     }
 
     /// The fail-safe direction here is to preserve, so a preserved record this
-    /// build cannot read must freeze the pass rather than read as empty.
+    /// build cannot read is never overwritten and never read as empty. The sweep
+    /// classes nothing an orphan, and a new dead letter takes the terminal
+    /// [`Preservation::Refused`] verdict rather than an error the caller would
+    /// retry forever.
     #[test]
     fn an_unreadable_preserved_record_makes_orphan_gc_conservative() {
         let store = InMemoryStagingStore::default();
@@ -1587,9 +1617,18 @@ mod tests {
                     .unwrap();
                 assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
                 assert!(sweep(&store, &[]).await.unwrap().is_empty());
-                assert!(
-                    preserve_dead_letter(&store, b"record", NOW).await.is_err(),
-                    "overwriting it would drop the dead letters it already holds"
+                assert_eq!(
+                    preserve_dead_letter(&store, b"record", NOW).await.unwrap(),
+                    Preservation::Refused,
+                    "a permanent refusal, not a failure the caller retries"
+                );
+                assert_eq!(
+                    store
+                        .staged_bytes(PRESERVED_DEAD_LETTERS_KEY)
+                        .await
+                        .unwrap(),
+                    Some(stored),
+                    "and the dead letters it already holds are left standing"
                 );
             }
         });

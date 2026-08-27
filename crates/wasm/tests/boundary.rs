@@ -504,6 +504,8 @@ fn every_dead_letter_reason_crosses_at_the_ordinal_typescript_decodes() {
         (facade::DeadLetterReason::ContentUnrecoverable, 7),
         (facade::DeadLetterReason::BaseSuperseded, 8),
         (facade::DeadLetterReason::HeadTooLarge, 9),
+        (facade::DeadLetterReason::PreservationRefused, 10),
+        (facade::DeadLetterReason::AlreadyPublished, 11),
     ] {
         assert_eq!(DeadLetterReason::from(reason) as u32, ordinal, "{reason:?}");
     }

@@ -57,7 +57,7 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    OrphanHeads, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+    OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
@@ -208,6 +208,11 @@ impl Attempts {
             bytes.extend_from_slice(&count.to_be_bytes());
         }
         bytes
+    }
+
+    /// What `op_id` has been charged so far.
+    fn charged_to(&self, op_id: OpId) -> u32 {
+        self.counts.get(&op_id).copied().unwrap_or(0)
     }
 
     /// Charge one attempt to `op_id` and return its new count.
@@ -432,6 +437,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Pinned bytes the retire ledger still owes, shared with the facade's read
     /// surface. Rewritten at the end of every pass from the ledger itself.
     pub(crate) pending_reclaim: &'a Cell<u64>,
+    /// Why the debts the last pass could not settle did not settle, shared with
+    /// the facade's read surface. Replaced whole on every pass that reads the
+    /// ledger, so a stall that clears stops being reported.
+    pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// The upload-cancel interlock, shared with the facade's cancel command.
@@ -642,7 +651,7 @@ where
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
         self.settle_journalled_deletes(seal, &owner, &staged).await;
-        if let Some(owed) = drain_owed_retires(
+        if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
             self.api,
@@ -653,7 +662,8 @@ where
         )
         .await
         {
-            self.pending_reclaim.set(owed);
+            self.pending_reclaim.set(pass.still_owed);
+            *self.reclaim_stalls.borrow_mut() = pass.stalls;
         }
         reconcile_staging_over(
             self.staging,
@@ -721,6 +731,7 @@ where
                 None => Preservation::Kept,
             };
             self.abandon(scope, *op_id, op).await?;
+            self.release_if_refused(preserved, op).await;
             report
                 .dead_letters
                 .push((*op_id, op.target, preserved.observed(*reason)));
@@ -799,6 +810,7 @@ where
                     Ok(())
                 };
                 if handed_back.is_ok() && self.dequeue_op(op_id).await.is_ok() {
+                    self.release_if_refused(preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -813,6 +825,26 @@ where
                     return;
                 };
                 if self.dequeue_op(op_id).await.is_ok() {
+                    self.release_if_refused(preserved, op).await;
+                    report
+                        .dead_letters
+                        .push((op_id, op.target, preserved.observed(reason)));
+                }
+            }
+            // A replayed create keeps its staged version for the same reason and
+            // hands back the same name a spent budget does: the record standing
+            // at it is one no published parent references, so its registry row
+            // would otherwise be re-PUT for as long as the account holds it —
+            // which for a restored replay keeps the resurrection candidate alive
+            // at the owner's own expense.
+            Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
+                let Ok(preserved) = self.preserve_dead_letter(op_id).await else {
+                    return;
+                };
+                if self.retire_unreferenced_name(scope, op).await.is_ok()
+                    && self.dequeue_op(op_id).await.is_ok()
+                {
+                    self.release_if_refused(preserved, op).await;
                     report
                         .dead_letters
                         .push((op_id, op.target, preserved.observed(reason)));
@@ -1286,6 +1318,14 @@ where
     ) -> Result<(), Halt> {
         let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
         self.ensure_folder(scope, pass, parent).await?;
+        // After the parent loads, so the scope-chain refusal precedes the
+        // probe's own network read.
+        if self
+            .create_replays_a_publish(scope, applied.op_id, applied.op.target)
+            .await?
+        {
+            return Err(Halt::Permanent(DeadLetterReason::AlreadyPublished));
+        }
 
         let mut shortfall = None;
         let (body, content_cids) = match node {
@@ -2983,6 +3023,20 @@ where
             .map_err(seam)
     }
 
+    /// Drop the version a [`Preservation::Refused`] set could not hold, once the
+    /// op has left the queue. The refusal keeps nothing and the record takes the
+    /// version's only content key with it, so orphan GC — which the same
+    /// unreadable set stands down — would never collect the blocks.
+    ///
+    /// Ordered after the abandonment, never before: [`Self::registered_by`]
+    /// reads the manifest these blocks carry, and an abandonment that fails
+    /// leaves the op queued and still publishable.
+    async fn release_if_refused(&self, preserved: Preservation, op: &Op) {
+        if preserved == Preservation::Refused {
+            self.release_staged_blocks(op).await;
+        }
+    }
+
     /// Abandon one op: retire what its publish registered, then drop it from
     /// the queue.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
@@ -3017,6 +3071,75 @@ where
         retire(self.api, &[name])
             .await
             .map_err(|_| Halt::UploadAttempt)
+    }
+
+    /// Whether this create would re-author a node the record plane already
+    /// carries — the shape of a data directory restored from before its own
+    /// drain, where the queue comes back and the marks that record what already
+    /// published do not.
+    ///
+    /// The name derives from the node id this op minted, so a record that
+    /// resolves there **and passes the child gate** is one this op published:
+    /// the gate binds the record to this node id under this scope root, which
+    /// nothing jammed at the name satisfies.
+    ///
+    /// What that alone cannot say is whether this device has *forgotten*
+    /// publishing it, and two durable reads answer that before the network is
+    /// touched. An op with a charged attempt is one this device remembers
+    /// trying: an acked PUT whose confirm-by-re-resolve missed leaves exactly
+    /// this record with exactly no floor, and the retry it is owed re-mints the
+    /// same sequence. A raised sequence floor says the same for a publish that
+    /// confirmed and then lost the parent naming it — the self-adopt raises the
+    /// floor before that parent publishes, so a crash in the window re-authors
+    /// as it always has. A restore rewinds both.
+    ///
+    /// A seam failure holds the op for a later pass rather than answering. Only
+    /// an unresolvable name and a gate rejection read as "not published", and a
+    /// create the drain cannot reach is one whose own publish would not land
+    /// either.
+    async fn create_replays_a_publish(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        target: NodeId,
+    ) -> Result<bool, Halt> {
+        // The durable record, not this pass's copy: what a restore rewinds is
+        // exactly what survives a restart.
+        let attempts = Attempts::decode(
+            self.staging
+                .staged_bytes(OP_ATTEMPTS_KEY)
+                .await
+                .map_err(seam)?,
+        );
+        if attempts.charged_to(op_id) > 0 {
+            return Ok(false);
+        }
+        let name = derive_write_name(scope.write_scope_seed, &target.0);
+        if floor::sequence_floor(self.floors, name.as_str().as_bytes())
+            .await
+            .map_err(seam)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            scope.root.0,
+            scope.read_scope_seed.clone(),
+            target.0,
+        );
+        let resolved = resolve(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            &name,
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(seam)?;
+        Ok(matches!(resolved.outcome, ResolveOutcome::Adopted(_)))
     }
 
     /// The name a create derived, where nothing published references it yet: a

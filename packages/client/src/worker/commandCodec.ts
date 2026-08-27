@@ -390,6 +390,10 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
       return 'baseSuperseded';
     case wasm.DeadLetterReason.HeadTooLarge:
       return 'headTooLarge';
+    case wasm.DeadLetterReason.PreservationRefused:
+      return 'preservationRefused';
+    case wasm.DeadLetterReason.AlreadyPublished:
+      return 'alreadyPublished';
     default:
       // Fail closed: an unmapped (or absent) value means a JS/WASM version
       // mismatch, not a dead letter safe to report without its reason.

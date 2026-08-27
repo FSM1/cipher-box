@@ -60,6 +60,8 @@ export const fakeWasmEnums = {
     ContentUnrecoverable: 7,
     BaseSuperseded: 8,
     HeadTooLarge: 9,
+    PreservationRefused: 10,
+    AlreadyPublished: 11,
   },
 } as const;
 

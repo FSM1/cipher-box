@@ -13,6 +13,10 @@ const REASONS: Record<DeadLetterReason, string> = {
   baseSuperseded: 'someone else saved a newer version first, so this edit was not published',
   headTooLarge:
     "this item's record grew too large to save; it has to hold less — a folder by splitting it into subfolders, a file by keeping fewer old versions",
+  preservationRefused:
+    'this device holds parked changes another version of CipherBox wrote, so this one could not be parked beside them',
+  alreadyPublished:
+    'this device already created this item once; the queued copy is older than what is online, so it was not created again',
 };
 
 /**
