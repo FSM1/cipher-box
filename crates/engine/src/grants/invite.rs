@@ -1028,6 +1028,7 @@ mod tests {
                 commitment_sig: &sig,
                 grant_ledger: &ledger,
                 direct_child_scope_index: &[],
+                revoked_identities: &[],
             },
             &[],
         )

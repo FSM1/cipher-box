@@ -1389,6 +1389,7 @@ where
                 commitment_sig: &source.section.commitment_sig,
                 grant_ledger: &source.write_body.grant_ledger,
                 direct_child_scope_index: &source.write_body.direct_child_scope_index,
+                revoked_identities: &[],
             },
             current_override_seed: &source.read_scope_seed,
             current_read_epoch: source.read_epoch,
@@ -1875,6 +1876,7 @@ where
                 commitment_sig: &source.commitment_sig,
                 grant_ledger: &source.grant_ledger,
                 direct_child_scope_index: index,
+                revoked_identities: &[],
             },
             &source.history_links,
         )
@@ -2655,6 +2657,7 @@ where
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
                 direct_child_scope_index: &plane.write_body.direct_child_scope_index,
+                revoked_identities: &[],
             },
             &plane.section.history_links,
         )
@@ -3668,6 +3671,7 @@ mod tests {
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
+                revoked_identities: &[],
             },
             &[],
         )
@@ -4015,6 +4019,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: &[],
+                    revoked_identities: &[],
                 },
                 current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                 current_read_epoch: OWNER_ROOT_EPOCH,
@@ -4124,6 +4129,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: children,
+                revoked_identities: &[],
             },
             &[],
         )
@@ -4531,6 +4537,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: index,
+                    revoked_identities: &[],
                 },
                 current_override_seed: override_seed,
                 current_read_epoch: read_epoch,
@@ -5385,6 +5392,7 @@ mod tests {
                             commitment_sig: &world.root.grant_section.commitment_sig,
                             grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
                             direct_child_scope_index: &[],
+                            revoked_identities: &[],
                         },
                         current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                         current_read_epoch: OWNER_ROOT_EPOCH,
@@ -8377,6 +8385,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
+                revoked_identities: &[],
             },
             &[],
         )

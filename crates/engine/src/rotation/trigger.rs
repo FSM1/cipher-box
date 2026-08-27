@@ -19,7 +19,9 @@ use cipherbox_core::seal::{
     GrantLedgerEntry, GrantSetBindingError, GrantSetCommitment, Permission, sign_grant_set,
     verify_grant_set_bound,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSignature, EcdsaSigner, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
+};
 
 use super::cascade::{CascadeError, CascadeOutcome};
 use super::rotate::{RotateError, RotationOutcome};
@@ -179,6 +181,10 @@ pub struct RevokedCommittedSet {
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
     /// The grant ledger with the same cut applied.
     pub grant_ledger: Vec<GrantLedgerEntry>,
+    /// The recipient identity keys the cut removed — what a re-key refuses to
+    /// mint a blob for anywhere in the cascade
+    /// ([`CommittedSet::revoked_identities`](super::reseal::CommittedSet::revoked_identities)).
+    pub revoked_identities: Vec<[u8; IDENTITY_PUBLIC_LEN]>,
     /// Read-only — see [`planes`](Self::planes).
     planes: RotationPlanes,
 }
@@ -311,29 +317,43 @@ fn committed_permission(
 
 /// Drop `tags` from both halves of the committed set — what every cut but a
 /// downgrade does.
-fn drop_tags(
-    plan: &GrantCutPlan<'_>,
-    tags: &BTreeSet<[u8; 32]>,
-) -> (GrantSetCommitment, Vec<GrantLedgerEntry>) {
+fn drop_tags(plan: &GrantCutPlan<'_>, tags: &BTreeSet<[u8; 32]>) -> DroppedSet {
     let mut commitment = plan.commitment.clone();
     commitment.entries.retain(|e| !tags.contains(&e.tag));
-    let grant_ledger = plan
+    let (dropped, kept): (Vec<_>, Vec<_>) = plan
         .grant_ledger
         .iter()
-        .filter(|e| !tags.contains(&e.tag))
         .cloned()
-        .collect();
-    (commitment, grant_ledger)
+        .partition(|e| tags.contains(&e.tag));
+    DroppedSet {
+        commitment,
+        grant_ledger: kept,
+        revoked_identities: dropped
+            .into_iter()
+            .map(|e| e.recipient_identity_pk)
+            .collect(),
+    }
+}
+
+/// A committed set with a cut applied, and who the cut removed.
+struct DroppedSet {
+    commitment: GrantSetCommitment,
+    grant_ledger: Vec<GrantLedgerEntry>,
+    revoked_identities: Vec<[u8; IDENTITY_PUBLIC_LEN]>,
 }
 
 /// Owner-re-sign the cut set, refusing release-active to sign a commitment its
 /// own ledger contradicts ([`RevokeError::LedgerDiverges`]).
 fn resign(
-    commitment: GrantSetCommitment,
-    grant_ledger: Vec<GrantLedgerEntry>,
+    set: DroppedSet,
     planes: RotationPlanes,
     owner_signer: &EcdsaSigner,
 ) -> Result<RevokedCommittedSet, RevokeError> {
+    let DroppedSet {
+        commitment,
+        grant_ledger,
+        revoked_identities,
+    } = set;
     enforce_committed_ledger(&commitment, &grant_ledger).map_err(RevokeError::LedgerDiverges)?;
     let commitment_sig = sign_grant_set(owner_signer, &commitment)
         .map_err(RevokeError::Sign)?
@@ -342,6 +362,7 @@ fn resign(
         commitment,
         commitment_sig,
         grant_ledger,
+        revoked_identities,
         planes,
     })
 }
@@ -363,10 +384,8 @@ pub fn revoke_read_grant(
         return Err(RevokeError::WriteGranted);
     }
 
-    let (commitment, grant_ledger) = drop_tags(plan, &BTreeSet::from([*revoked_tag]));
     resign(
-        commitment,
-        grant_ledger,
+        drop_tags(plan, &BTreeSet::from([*revoked_tag])),
         RotationPlanes {
             read: true,
             write: false,
@@ -412,7 +431,7 @@ pub fn revoke_write_grant(
         return Err(RevokeError::NotWriteGranted);
     }
 
-    let (commitment, grant_ledger) = match kind {
+    let set = match kind {
         WriteRevokeKind::Full => drop_tags(plan, &BTreeSet::from([*revoked_tag])),
         WriteRevokeKind::DowngradeToRead => {
             let mut commitment = plan.commitment.clone();
@@ -427,12 +446,17 @@ pub fn revoke_write_grant(
             for entry in grant_ledger.iter_mut().filter(|e| &e.tag == revoked_tag) {
                 entry.permission = Permission::Read;
             }
-            (commitment, grant_ledger)
+            // A downgrade keeps the recipient in the set, so nothing is revoked
+            // for the re-key to skip.
+            DroppedSet {
+                commitment,
+                grant_ledger,
+                revoked_identities: Vec::new(),
+            }
         }
     };
     resign(
-        commitment,
-        grant_ledger,
+        set,
         RotationPlanes {
             read: kind == WriteRevokeKind::Full,
             write: true,
@@ -481,10 +505,8 @@ pub fn prune_expired_grants(
         return Ok(None);
     }
 
-    let (commitment, grant_ledger) = drop_tags(plan, &expired);
     resign(
-        commitment,
-        grant_ledger,
+        drop_tags(plan, &expired),
         RotationPlanes {
             read: true,
             write: pruned_write_link,
@@ -802,6 +824,23 @@ mod tests {
         assert_eq!(cut.commitment.entries.len(), 2);
         assert_eq!(cut.grant_ledger.len(), 2);
         fx.verify(&cut);
+    }
+
+    #[test]
+    fn a_cut_names_the_identity_it_removed_and_no_survivor() {
+        // The cascade carries this down every descendant, where a blinded tag
+        // cannot reach: a tag is per-scope, an identity key is vault-wide.
+        let fx = Fixture::new();
+        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
+        assert_eq!(cut.revoked_identities, vec![[0x04; 33]]);
+
+        let downgraded =
+            revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+                .expect("downgrade");
+        assert!(
+            downgraded.revoked_identities.is_empty(),
+            "a downgrade keeps the recipient committed, so nothing is revoked"
+        );
     }
 
     #[test]

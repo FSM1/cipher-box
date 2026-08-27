@@ -46,7 +46,9 @@ use cipherbox_core::seal::{
     seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
     seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -233,6 +235,18 @@ pub struct CommittedSet<'a> {
     pub grant_ledger: &'a [GrantLedgerEntry],
     /// The directly-descendant scope roots (the F-4 cascade index, #38 D6).
     pub direct_child_scope_index: &'a [cipherbox_core::seal::ChildScopeRef],
+    /// Recipient identity keys the owner's cut removed. No blob is minted for a
+    /// row naming one, whatever `commitment` says.
+    ///
+    /// A grant-set commitment is epoch-free, so a pre-cut one an owner really
+    /// did sign still verifies at every gate stage. Down a cascade that reads
+    /// each descendant's set off the record it just resolved, that is a
+    /// permanent read-revocation bypass: a current write grantee republishes a
+    /// descendant root carrying the pre-cut set, and the next ancestor rotation
+    /// wraps the fresh read override seed straight back to the revokee.
+    /// Identity keys are vault-wide where a blinded tag is per-scope, so this is
+    /// the axis the owner's cut carries down.
+    pub revoked_identities: &'a [[u8; IDENTITY_PUBLIC_LEN]],
 }
 
 /// A fail-closed re-seal failure. Every variant leaves nothing published — the
@@ -704,6 +718,16 @@ pub fn reseal_scope_root<E: Entropy>(
         let Some(recipient_pub) = recipient_pub else {
             continue;
         };
+        // The owner's cut outranks the set the record carries
+        // ([`CommittedSet::revoked_identities`]). Skipped per row rather than
+        // refused whole: a refusal would let anyone able to republish a
+        // descendant root abort the owner's cascade for good.
+        if committed
+            .revoked_identities
+            .contains(&entry.recipient_identity_pk)
+        {
+            continue;
+        }
         let mut write_seed = match entry.permission {
             Permission::Write => Some(*seeds.write_scope_seed),
             Permission::Read => None,
@@ -1230,6 +1254,7 @@ mod tests {
             commitment_sig: sig,
             grant_ledger: ledger,
             direct_child_scope_index: &[],
+            revoked_identities: &[],
         }
     }
 
@@ -2017,6 +2042,7 @@ mod tests {
             commitment_sig: &cut.commitment_sig,
             grant_ledger: &cut.grant_ledger,
             direct_child_scope_index: &[],
+            revoked_identities: &[],
         };
         let mut e = SeededEntropy::new(4);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");

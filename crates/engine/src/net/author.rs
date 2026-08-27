@@ -875,10 +875,12 @@ mod tests {
     /// A folder listing that fits the block ceiling but leaves the next
     /// re-seal's section no room beside it.
     fn folder_past_the_resealable_budget() -> ReadBody {
-        // Sized off the budget rather than a fixed count, so a change to either
-        // limit keeps this fixture on the right side of both.
-        let per_child = 128;
-        let children = (0..(MAX_RESEALABLE_ROOT_REST_BYTES / per_child) as u32 + 4_000)
+        // Aimed at the midpoint of the two ceilings off an approximate per-child
+        // cost, and the test asserts it landed between them — so a wire-cost
+        // drift fails loudly rather than testing nothing.
+        const PER_CHILD_BYTES: usize = 165;
+        let target = (MAX_RESEALABLE_ROOT_REST_BYTES + MAX_RESOLVED_RECORD_BYTES) / 2;
+        let children = (0..(target / PER_CHILD_BYTES) as u32)
             .map(|i| ChildRef {
                 id: {
                     let mut id = [0u8; 16];

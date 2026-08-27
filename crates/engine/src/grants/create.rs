@@ -501,6 +501,7 @@ where
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
             direct_child_scope_index: &grantee_child_index,
+            revoked_identities: &[],
         };
         reseal_scope_root(entropy, &identity, &seeds, &committed, &[])
             .map_err(CreateGrantError::Mint)?
@@ -571,6 +572,7 @@ where
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
             direct_child_scope_index: &canonical_index,
+            revoked_identities: &[],
         };
         let section = reseal_scope_root(
             entropy,
@@ -616,6 +618,7 @@ where
             commitment_sig: parent.commitment_sig,
             grant_ledger: parent.grant_ledger,
             direct_child_scope_index: &parent_index,
+            revoked_identities: &[],
         };
         // The owner runs this leg, so the tag binding is not the caller's to
         // disable: the same subkey that re-wraps the parent's grant blobs decides

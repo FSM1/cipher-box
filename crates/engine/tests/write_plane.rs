@@ -4192,6 +4192,7 @@ fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
             commitment_sig: &commitment_sig,
             grant_ledger: &[],
             direct_child_scope_index: &[],
+            revoked_identities: &[],
         },
         &[],
     )

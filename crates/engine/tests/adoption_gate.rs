@@ -1708,6 +1708,7 @@ impl ResealedFixture {
             commitment_sig: &commitment_sig,
             grant_ledger: &[],
             direct_child_scope_index: &[],
+            revoked_identities: &[],
         };
         let reseal = |read_epoch: u64,
                       override_seed: &[u8; 32],

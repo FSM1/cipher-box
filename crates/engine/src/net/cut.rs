@@ -198,6 +198,7 @@ where
                         commitment_sig: &cut.commitment_sig,
                         grant_ledger: &cut.grant_ledger,
                         direct_child_scope_index: &current.direct_child_scope_index,
+                        revoked_identities: &cut.revoked_identities,
                     },
                     current_override_seed: &current.override_seed,
                     current_read_epoch: current.current_read_epoch,
