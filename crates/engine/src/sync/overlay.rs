@@ -9,7 +9,7 @@
 //! suffixes, or dead-letters — it renders intent. The op queue is the only
 //! local divergence from the remote snapshot.
 
-use crate::sync::model::{NodeMeta, Snapshot};
+use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 #[cfg(test)]
 use crate::sync::op::ScopeCrossing;
 use crate::sync::op::{Op, OpKind};
@@ -87,12 +87,21 @@ fn relocate(
     new_name: Option<&str>,
     replacing: Option<crate::facade::NodeId>,
 ) {
-    // A node never replaces itself, and it vacates only from the destination
-    // it contests. `replacing` arrives unvalidated from the host, and the
-    // vacate cascades, so the render narrows it to what the rebase proves
-    // (`crate::sync::rebase::rebase_move`) rather than trusting the id.
-    let vacating =
-        replacing.filter(|node| *node != op.target && view.parent_of(*node) == Some(new_parent));
+    // A node never replaces itself, and it vacates only while it still holds
+    // the contested name under the destination. `replacing` arrives
+    // unvalidated from the host, and the vacate cascades, so the render
+    // narrows it on the same name predicate the rebase applies
+    // (`crate::sync::rebase::rebase_move`) rather than trusting the id. The
+    // rebase's conditional-delete sequence check has no counterpart here: the
+    // overlay renders intent and never resolves a concurrent edit.
+    let vacating = replacing.filter(|node| {
+        *node != op.target
+            && view.parent_of(*node) == Some(new_parent)
+            && new_name.is_some_and(|new_name| {
+                view.node(*node)
+                    .is_some_and(|node| collation_key(node.name()) == collation_key(new_name))
+            })
+    });
     view.relocate(op.target, new_parent, vacating);
     if let Some(node) = view.node_mut(op.target) {
         if let Some(new_name) = new_name {
@@ -213,6 +222,69 @@ mod tests {
         assert_eq!(view.parent_of(id(2)), Some(id(1)));
         assert_eq!(view.node(id(2)).unwrap().name(), "target.txt");
         assert!(view.children(id(0)).iter().all(|c| c.id != id(2)));
+    }
+
+    /// `replacing` is a host-supplied id. A sibling that does not hold the
+    /// contested name is a bystander the rebase keeps, so the render must keep
+    /// it too — a vacate here would show an unrelated subtree as gone.
+    #[test]
+    fn overlay_move_keeps_a_replaced_sibling_that_holds_another_name() {
+        let mut base = base();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "bystander", NodeKind::Folder);
+        with_node(&mut base, id(3), id(4), "inner.bin", NodeKind::File);
+
+        let view = apply_overlay(
+            &base,
+            &[Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                Some(Replaced {
+                    node: id(3),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            )],
+        );
+
+        assert!(view.contains(id(3)), "the misnamed sibling is not vacated");
+        assert!(view.contains(id(4)), "nor is what it reaches");
+        assert_eq!(view.parent_of(id(2)), Some(id(1)), "the move still landed");
+    }
+
+    /// The vacate keys on the comparator, so a case variant of the contested
+    /// name is still the node the move frees.
+    #[test]
+    fn overlay_move_vacates_a_replaced_node_under_a_case_variant_name() {
+        let mut base = base();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "TARGET.TXT", NodeKind::File);
+
+        let view = apply_overlay(
+            &base,
+            &[Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                Some(Replaced {
+                    node: id(3),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            )],
+        );
+
+        assert!(!view.contains(id(3)), "the case variant still vacates");
+        assert_eq!(view.parent_of(id(2)), Some(id(1)));
     }
 
     #[test]
