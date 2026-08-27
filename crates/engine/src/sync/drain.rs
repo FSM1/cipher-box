@@ -1730,6 +1730,10 @@ where
                 continue;
             }
             held.remove(&HeldKey::node(node.0));
+            // A scope root's node id is its scope id, so a reclaimed root also
+            // owns the pointer entry under those bytes; a non-root id matches
+            // nothing in that plane.
+            held.remove(&HeldKey::scope_pointer(node.0));
             base.remove_node(*node);
         }
         (!retired).then(|| Reclamation {
