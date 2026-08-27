@@ -572,6 +572,7 @@ where
             commitment_sig: &commitment_sig,
             grant_ledger: &[],
             direct_child_scope_index: &[],
+            revoked_recipients: &[],
         },
         &[],
     )

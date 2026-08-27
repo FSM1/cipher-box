@@ -30,7 +30,7 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
-use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::content::limits::{MAX_RESEALABLE_ROOT_REST_BYTES, MAX_RESOLVED_RECORD_BYTES};
 use crate::content::root_block_cid;
 use crate::gate::authenticate_section_structures;
 
@@ -79,6 +79,15 @@ pub enum AuthorError {
         /// The ceiling it met.
         limit: usize,
     },
+    /// A scope root's bytes outside its grant section met
+    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`], the budget that leaves its own next
+    /// re-seal room beside it.
+    ScopeRootNotResealable {
+        /// The bytes outside the section.
+        size: usize,
+        /// The budget they met.
+        limit: usize,
+    },
     /// The authored grant section is past the codec's frozen total bound
     /// ([`cipherbox_core::seal::MAX_GRANT_SECTION_BYTES`]) — bytes this build's
     /// own decoder always rejects. Named apart from the generic encode fold so
@@ -110,6 +119,7 @@ impl AuthorError {
             Self::SectionSignatureInvalid => "structure-signature-invalid",
             Self::Seal(e) => e.check(),
             Self::HeadTooLarge { .. } => "head-too-large",
+            Self::ScopeRootNotResealable { .. } => "scope-root-not-resealable",
             Self::GrantSectionTooLarge => "grant-section-too-large",
         }
     }
@@ -128,7 +138,10 @@ impl AuthorError {
             | Self::CommitmentNameMismatch
             | Self::CommitmentSignatureInvalid
             | Self::SectionSignatureInvalid => true,
-            Self::Seal(_) | Self::HeadTooLarge { .. } | Self::GrantSectionTooLarge => false,
+            Self::Seal(_)
+            | Self::HeadTooLarge { .. }
+            | Self::ScopeRootNotResealable { .. }
+            | Self::GrantSectionTooLarge => false,
         }
     }
 }
@@ -136,8 +149,12 @@ impl AuthorError {
 impl core::fmt::Display for AuthorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "record authoring refused [{}]", self.check())?;
-        if let Self::HeadTooLarge { field, size, limit } = self {
-            write!(f, ": {field} {size} > {limit}")?;
+        match self {
+            Self::HeadTooLarge { field, size, limit } => write!(f, ": {field} {size} > {limit}")?,
+            Self::ScopeRootNotResealable { size, limit } => {
+                write!(f, ": outside the grant section {size} > {limit}")?
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -233,7 +250,7 @@ pub fn author_scope_root_envelope(
 ) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
     check_scope_root(&envelope, name, owner_identity)?;
-    encode(envelope)
+    encode_scope_root(envelope)
 }
 
 /// Author a scope root that installs a **freshly assembled** `section` — the
@@ -253,7 +270,7 @@ pub fn author_scope_root_with_section(
         encode_grant_section(section).map_err(grant_section_encode_error)?,
     );
     check_scope_root(&envelope, name, owner_identity)?;
-    encode(envelope)
+    encode_scope_root(envelope)
 }
 
 /// The checks the gate makes on arrival, run here first so a root this build's
@@ -318,6 +335,25 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
         cid,
         cut,
     })
+}
+
+/// Encode a scope root, holding everything outside its grant section to
+/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8).
+///
+/// This binds only what this engine authors; a foreign client is held instead by
+/// the re-seal's own budget
+/// ([`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES)).
+fn encode_scope_root(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
+    let head = encode(envelope)?;
+    let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
+    let rest = head.block.len().saturating_sub(section);
+    if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
+        return Err(AuthorError::ScopeRootNotResealable {
+            size: rest,
+            limit: MAX_RESEALABLE_ROOT_REST_BYTES,
+        });
+    }
+    Ok(head)
 }
 
 /// What a newly created node is, carrying exactly the body content its kind can
@@ -752,6 +788,10 @@ mod tests {
                 },
                 false,
             ),
+            (
+                AuthorError::ScopeRootNotResealable { size: 1, limit: 0 },
+                false,
+            ),
             (AuthorError::GrantSectionTooLarge, false),
         ];
         let mut names = std::collections::BTreeSet::new();
@@ -826,6 +866,69 @@ mod tests {
             ),
             "an over-cap head must fail closed on the produce side"
         );
+    }
+
+    /// A folder listing that fits the block ceiling but leaves the next
+    /// re-seal's section no room beside it.
+    fn folder_past_the_resealable_budget() -> ReadBody {
+        // Aimed at the midpoint of the two ceilings off an approximate per-child
+        // cost, and the test asserts it landed between them — so a wire-cost
+        // drift fails loudly rather than testing nothing.
+        const PER_CHILD_BYTES: usize = 165;
+        let target = (MAX_RESEALABLE_ROOT_REST_BYTES + MAX_RESOLVED_RECORD_BYTES) / 2;
+        let children = (0..(target / PER_CHILD_BYTES) as u32)
+            .map(|i| ChildRef {
+                id: {
+                    let mut id = [0u8; 16];
+                    id[..4].copy_from_slice(&i.to_be_bytes());
+                    id
+                },
+                name: "x".repeat(96),
+                ipns_name: i.to_be_bytes().to_vec(),
+                kind: NodeKind::File,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            })
+            .collect();
+        ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children,
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    #[test]
+    fn a_scope_root_with_no_room_for_its_own_re_seal_is_never_authored() {
+        // The block ceiling alone would pass this root, and every later
+        // rotation would then refuse the section it mints — the scope becomes
+        // rotation-proof. The budget is enforced where the root is grown.
+        let fixture = owner_root();
+        let body = folder_past_the_resealable_budget();
+        let carried = carried_section(&fixture.grant_section);
+        // let-else: the `Ok` side would render megabytes.
+        let Err(AuthorError::ScopeRootNotResealable { size, limit }) =
+            author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner())
+        else {
+            panic!("a root with no re-seal headroom must be refused");
+        };
+        assert_eq!(limit, MAX_RESEALABLE_ROOT_REST_BYTES);
+        assert!(size > limit);
+        assert!(
+            size < MAX_RESOLVED_RECORD_BYTES,
+            "the block ceiling alone would have let this root through"
+        );
+    }
+
+    #[test]
+    fn a_child_record_is_held_to_the_block_ceiling_alone() {
+        // Only a scope root owes a re-seal, so reserving that headroom on every
+        // interior node would shrink an honest folder for nothing.
+        author_child_envelope(authoring(
+            &folder_past_the_resealable_budget(),
+            PreservedFields::new(),
+        ))
+        .expect("an interior node fills the block ceiling");
     }
 
     #[test]

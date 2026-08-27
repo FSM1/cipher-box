@@ -23,8 +23,9 @@ use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
     GrantSetCommitment, GrantSetEntry, Permission, PreservedFields, ReadBody,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, SignedSealed, WriteBody, decode_envelope,
-    decode_write_body, has_grant_section, open_grant_blob, open_read_body, sign_grant_set, unseal,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed,
+    WriteBody, decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
+    open_owner_history_link, open_read_body, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -1388,6 +1389,7 @@ where
                 commitment_sig: &source.section.commitment_sig,
                 grant_ledger: &source.write_body.grant_ledger,
                 direct_child_scope_index: &source.write_body.direct_child_scope_index,
+                revoked_recipients: &[],
             },
             current_override_seed: &source.read_scope_seed,
             current_read_epoch: source.read_epoch,
@@ -1874,6 +1876,7 @@ where
                 commitment_sig: &source.commitment_sig,
                 grant_ledger: &source.grant_ledger,
                 direct_child_scope_index: index,
+                revoked_recipients: &[],
             },
             &source.history_links,
         )
@@ -2178,6 +2181,9 @@ fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
 fn reseal_verdict(error: ResealError) -> WritePublishError {
     match error {
         ResealError::Entropy(_) => WritePublishError::NotLanded,
+        // Availability, not trust: the next pass re-resolves that record
+        // ([`ResealError::SectionNotResealable`]).
+        ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
         ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
@@ -2376,6 +2382,43 @@ where
     ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
         let owb = section.owner_write_blob.as_ref()?;
         open_write_scope_seed_at(self.owner_enc_secret, envelope, owb, write_epoch)
+    }
+
+    /// The **pre-wave** write scope seed the moved root's write history link
+    /// carries, and only when it derives the root name this plan is moving off.
+    ///
+    /// The link is HPKE auth-mode, owner as sender and recipient, so no
+    /// committed writer can mint one. The name check is what additionally pins
+    /// it to *this* wave rather than an earlier rotation of the same scope.
+    ///
+    /// `None` on anything unreadable: without it the resume tombstones nothing,
+    /// which leaks a registration instead of retiring a live name.
+    fn superseded_write_scope_seed(
+        &self,
+        envelope: &Envelope,
+        section: &GrantSection,
+        write_scope_seed: &[u8; SECRET_LEN],
+        write_epoch: u64,
+    ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+        let body = open_write_body(
+            envelope,
+            section,
+            &self.scope_id,
+            write_scope_seed,
+            write_epoch,
+        )
+        .ok()?;
+        let ctx = AadContext {
+            v: envelope.v,
+            id: envelope.id,
+            scope: self.scope_id,
+            epoch: write_epoch,
+            struct_tag: STRUCT_TAG_WRITE_HISTORY_LINK,
+        };
+        let payload =
+            open_owner_history_link(self.owner_enc_secret, &ctx, &body.write_history_link).ok()?;
+        let prev = Zeroizing::new(*payload.prev_seed());
+        (derive_write_name(&prev, &self.scope_id) == *self.current_root_name).then_some(prev)
     }
 
     /// The adopter every root read of this scope runs through, under the
@@ -2613,6 +2656,7 @@ where
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
                 direct_child_scope_index: &plane.write_body.direct_child_scope_index,
+                revoked_recipients: &[],
             },
             &plane.section.history_links,
         )
@@ -2886,6 +2930,17 @@ where
         if repoint.prev_root.as_ref() != Some(self.current_root_name) {
             return Ok(None);
         }
+        // The owner-write blob is opened at the re-point's *own* claimed epoch,
+        // not at the durable floor, so this is the one path the floor's
+        // monotonicity does not already fail-safe. An epoch below the floor is a
+        // rollback past a re-key, never staleness (rule 6).
+        if floor::write_epoch_regression(self.floors, &self.scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .is_some()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
         let Some((_, record_bytes)) =
             fanout_get_verify(self.transport, &repoint.current_root).await
         else {
@@ -2905,10 +2960,19 @@ where
         let seed = self
             .write_scope_seed_at(&gated.envelope, &gated.section, repoint.write_epoch)
             .ok_or(ResolveFailure::Rejected)?;
+        let prev_write_scope_seed = self
+            .superseded_write_scope_seed(
+                &gated.envelope,
+                &gated.section,
+                &seed,
+                repoint.write_epoch,
+            )
+            .map(|prev| SecretBytes::new(*prev));
         Ok(Some(ResumedWriteWave {
             write_scope_seed: SecretBytes::new(*seed),
             root_name: repoint.current_root,
             write_epoch: repoint.write_epoch,
+            prev_write_scope_seed,
         }))
     }
 }
@@ -3606,6 +3670,7 @@ mod tests {
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
+                revoked_recipients: &[],
             },
             &[],
         )
@@ -3953,6 +4018,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                 current_read_epoch: OWNER_ROOT_EPOCH,
@@ -4062,6 +4128,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: children,
+                revoked_recipients: &[],
             },
             &[],
         )
@@ -4469,6 +4536,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: index,
+                    revoked_recipients: &[],
                 },
                 current_override_seed: override_seed,
                 current_read_epoch: read_epoch,
@@ -5323,6 +5391,7 @@ mod tests {
                             commitment_sig: &world.root.grant_section.commitment_sig,
                             grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
                             direct_child_scope_index: &[],
+                            revoked_recipients: &[],
                         },
                         current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                         current_read_epoch: OWNER_ROOT_EPOCH,
@@ -7043,6 +7112,7 @@ mod tests {
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::WriteBodyTooLarge,
+            ResealError::SectionNotResealable { size: 2, limit: 1 },
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -7051,6 +7121,10 @@ mod tests {
                 ResealError::Entropy(_) => (
                     WritePublishError::NotLanded,
                     "the entropy seam being down is availability, not a verdict on the section",
+                ),
+                ResealError::SectionNotResealable { .. } => (
+                    WritePublishError::NotLanded,
+                    "a permanent size verdict would let whoever grew the root block the cascade",
                 ),
                 ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted
@@ -7705,6 +7779,58 @@ mod tests {
     }
 
     #[test]
+    fn a_re_point_below_the_write_epoch_floor_is_refused_not_resumed() {
+        // The re-point's own claimed epoch opens the owner-write blob here, so
+        // the floor's monotonicity does not fail-safe this path: an epoch under
+        // the durable floor is a rollback past a re-key (rule 6).
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let outcome = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(65);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes")
+        };
+
+        let resumed = wave(
+            &harness,
+            &owner,
+            &staged.root.name,
+            &staged.root.grant_section.commitment,
+        );
+        assert!(
+            block_on(resumed.recover_wave())
+                .expect("the recovery reads published state")
+                .is_some(),
+            "at the floor the wave itself left, the re-point still resumes"
+        );
+
+        // A later rotation raised the floor past this re-point.
+        block_on(floor::advance_write_epoch_on_sight(
+            &harness.floors,
+            &SCOPE,
+            outcome.new_write_epoch + 1,
+        ))
+        .expect("the floor raises");
+        assert_eq!(
+            block_on(resumed.recover_wave()).err(),
+            Some(ResolveFailure::Rejected),
+            "a re-point under the durable write-epoch floor is a trust verdict"
+        );
+    }
+
+    #[test]
     fn a_resumed_wave_re_resolves_the_subtree_from_published_records_alone() {
         // A crash leaves the durable floors raised, so the resumed pass reads its
         // own un-re-pointed root back with no in-memory carry from the pass that
@@ -8258,6 +8384,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
+                revoked_recipients: &[],
             },
             &[],
         )

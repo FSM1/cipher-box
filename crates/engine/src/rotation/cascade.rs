@@ -337,7 +337,13 @@ impl CascadeError {
                 reason,
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
-            CascadeError::Reseal { error, .. } => matches!(error, ResealError::Entropy(_)),
+            // A size refusal judges the record the next pass re-resolves, not
+            // its trust: a permanent verdict there would let whoever grew a
+            // descendant root block the owner's revocation for good.
+            CascadeError::Reseal { error, .. } => matches!(
+                error,
+                ResealError::Entropy(_) | ResealError::SectionNotResealable { .. }
+            ),
             // A publish that did not land is availability; one the publisher
             // refused is its own fail-closed verdict on the bytes, and retrying
             // it forever would launder a trust violation into a stall (rule 6).
@@ -616,6 +622,9 @@ where
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
                     direct_child_scope_index: &target.direct_child_scope_index,
+                    // From the owner's plan, never the descendant's record
+                    // ([`CommittedSet::revoked_recipients`]).
+                    revoked_recipients: root_plan.committed.revoked_recipients,
                 },
                 current_override_seed: &target.override_seed,
                 current_read_epoch: target.current_read_epoch,
@@ -919,6 +928,19 @@ mod tests {
                 .read_epoch
         }
 
+        /// The recipient tags the scope's published section minted a blob for.
+        fn blob_tags(&self, byte: u8) -> Vec<[u8; 32]> {
+            self.published
+                .borrow()
+                .get(&sid(byte))
+                .expect("record")
+                .section
+                .grant_blobs
+                .iter()
+                .map(|blob| blob.tag)
+                .collect()
+        }
+
         fn history_len(&self, byte: u8) -> usize {
             self.published
                 .borrow()
@@ -999,6 +1021,7 @@ mod tests {
         current_seed: [u8; 32],
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
+        revoked_recipients: Vec<[u8; SECRET_LEN]>,
     }
 
     impl RootFx {
@@ -1017,7 +1040,14 @@ mod tests {
                 current_seed: [0x00; 32],
                 write_scope_seed: [0x01; 32],
                 pointer_read_key: [0x02; 32],
+                revoked_recipients: Vec::new(),
             }
+        }
+
+        /// The owner's cut removed `recipient` — carried down every descendant.
+        fn revoking(mut self, recipient: [u8; SECRET_LEN]) -> Self {
+            self.revoked_recipients.push(recipient);
+            self
         }
 
         /// Withhold the owner encryption subkey — a re-sealer that can neither
@@ -1045,6 +1075,7 @@ mod tests {
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,
                     direct_child_scope_index: root_children,
+                    revoked_recipients: &self.revoked_recipients,
                 },
                 current_override_seed: &self.current_seed,
                 current_read_epoch: 4,
@@ -1099,6 +1130,60 @@ mod tests {
         });
         let spawned = scheduler.take_spawned_tasks().len();
         (outcome, net, floors, spawned)
+    }
+
+    #[test]
+    fn a_descendant_replaying_a_pre_cut_committed_set_gets_no_re_keyed_grant_blob() {
+        // A grant-set commitment is epoch-free, so a pre-cut one the owner
+        // really did sign still passes every gate stage. A current write
+        // grantee can therefore republish a descendant root carrying it, at
+        // the live read and write epochs. Bound to the record's own set, the
+        // cascade would wrap the fresh read override seed straight back to the
+        // party the owner cut.
+        let net = FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
+        let revokee = net.owner.grantee.public().to_bytes();
+        let index = vec![childref(0x0a)];
+
+        let (outcome, before, ..) = run_fx(RootFx::new(net.clone()), net.clone(), index.clone());
+        outcome.expect("the cascade runs");
+        assert_eq!(
+            before.blob_tags(0x0a).len(),
+            1,
+            "the descendant's committed reader is re-keyed while the grant stands"
+        );
+
+        let net = FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
+        let (outcome, after, ..) = run_fx(
+            RootFx::new(net.clone()).revoking(revokee),
+            net.clone(),
+            index,
+        );
+        outcome.expect("the cascade still runs — a skipped row aborts nothing");
+        for descendant in [0x0a, 0x0b] {
+            assert!(
+                after.blob_tags(descendant).is_empty(),
+                "scope {descendant:#04x} re-admitted the cut party off its own record's set"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cut_leaves_every_surviving_grantee_re_keyed() {
+        // The cut names one recipient; a descendant committing a different one
+        // must still receive its blob, or the cascade over-revokes.
+        let survivor = [0x07; SECRET_LEN];
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let (outcome, net, ..) = run_fx(
+            RootFx::new(net.clone()).revoking(survivor),
+            net.clone(),
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert_eq!(
+            net.blob_tags(0x0a).len(),
+            1,
+            "a recipient the cut never named keeps its re-keyed grant"
+        );
     }
 
     #[test]

@@ -3343,7 +3343,9 @@ fn classify_author(error: AuthorError) -> Halt {
         | AuthorError::SectionSignatureInvalid => Halt::UploadAttempt,
         // Charged on the same terms as an over-length head: re-authoring the
         // same section repeats it verbatim, so an uncharged retry would spin.
-        AuthorError::HeadTooLarge { .. } | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
+        AuthorError::HeadTooLarge { .. }
+        | AuthorError::ScopeRootNotResealable { .. }
+        | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
         AuthorError::Seal(_) => Halt::Unclassified,
     }
 }

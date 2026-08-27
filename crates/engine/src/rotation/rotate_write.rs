@@ -40,12 +40,10 @@
 //! is refused unless it derives that root's own name
 //! ([`WriteRotateError::ResumedSeedNotAtItsRoot`]).
 //!
-//! Accepted limitation: a resumed wave enumerates its own moved copies
-//! ([`ResumedRoot`]), so it sees no superseded name and retires none — every
-//! interior old name a prior run left behind is orphaned rather than tombstoned.
-//! That is the fail-safe direction (leaking a registration beats retiring a live
-//! name) and those names expire at their 90-day EOL; recording them durably
-//! before the flip so a resume can drain them is not landed.
+//! A resumed wave walks its own moved copies ([`ResumedRoot`]), so it re-derives
+//! what the prior run superseded from
+//! [`ResumedWriteWave::prev_write_scope_seed`] — published state again, no
+//! checkpoint.
 //!
 //! # Owner-only, fail-closed, deterministic
 //!
@@ -158,6 +156,16 @@ pub struct ResumedWriteWave {
     pub root_name: IpnsName,
     /// The write epoch the moved root was published at, as the owner signed it.
     pub write_epoch: u64,
+    /// The **pre-wave** write scope seed, read off the moved root's owner-sealed
+    /// write history link, and only when it derives the root name the plan is
+    /// moving off — which is what proves it is this wave's own predecessor and
+    /// not a seed someone else sealed to the owner's public half.
+    ///
+    /// It is the resume's only way to name what the prior run superseded: every
+    /// interior old name derives from it, and the moved copies the resume
+    /// enumerates carry no trace of them. `None` leaves those names orphaned
+    /// until their EOL, the fail-safe direction.
+    pub prev_write_scope_seed: Option<SecretBytes>,
 }
 
 /// The moved root a resumed wave enumerates from: the name
@@ -331,8 +339,7 @@ pub struct WriteRotationOutcome {
     pub repoint_accelerators: Vec<RepointChannel>,
     /// The number of interior (non-root) nodes in the scope's subtree — the wave
     /// covers all of them, though a resumed wave may have republished some in a
-    /// prior run (skipped via `is_republished`), and a post-flip-crash resume
-    /// retires none of them (see the crash-recovery module docs).
+    /// prior run (skipped via `is_republished`).
     pub interior_node_count: usize,
 }
 
@@ -577,6 +584,7 @@ where
             reason,
         })?;
     let mut resumed_root: Option<ResumedRoot> = None;
+    let mut superseded_seed: Option<Zeroizing<[u8; SECRET_LEN]>> = None;
     let write_scope_seed: Zeroizing<[u8; SECRET_LEN]> = match resumed {
         Some(wave) => {
             if wave.write_epoch != new_write_epoch {
@@ -586,6 +594,9 @@ where
             if derive_write_name(&seed, &scope_id) != wave.root_name {
                 return Err(WriteRotateError::ResumedSeedNotAtItsRoot);
             }
+            superseded_seed = wave
+                .prev_write_scope_seed
+                .map(|prev| Zeroizing::new(*prev.as_bytes()));
             resumed_root = Some(ResumedRoot {
                 name: wave.root_name,
                 write_epoch: wave.write_epoch,
@@ -621,6 +632,13 @@ where
         // (never orphan).
         if node.current_name != new_name {
             interior_old_names.push(node.current_name.clone());
+        }
+        // The prior run's superseded names derive from the pre-wave seed.
+        if let Some(prev) = superseded_seed.as_ref() {
+            let old_name = derive_write_name(prev, &node.node_id);
+            if old_name != new_name && old_name != node.current_name {
+                interior_old_names.push(old_name);
+            }
         }
     }
 
@@ -883,11 +901,15 @@ mod tests {
     /// the publisher landed, and the write scope seed its grant section carries.
     /// Nothing else crosses a crash, so a resume that works here works off
     /// published records alone.
-    fn resumed((name, seed, write_epoch): &PublishedRoot) -> ResumedWriteWave {
+    fn resumed(
+        (name, seed, write_epoch): &PublishedRoot,
+        prev: Option<[u8; SECRET_LEN]>,
+    ) -> ResumedWriteWave {
         ResumedWriteWave {
             write_scope_seed: SecretBytes::new(*seed),
             root_name: name.clone(),
             write_epoch: *write_epoch,
+            prev_write_scope_seed: prev.map(SecretBytes::new),
         }
     }
 
@@ -905,6 +927,9 @@ mod tests {
         /// records, so the adoption gate refuses them — only the swept moved
         /// copies a resumed pass reads still resolve.
         below_floor: Cell<bool>,
+        /// The pre-wave write scope seed the moved root's owner-sealed history
+        /// link yields. `None` models a link the resume cannot open.
+        prev_seed: Option<[u8; SECRET_LEN]>,
     }
 
     impl FakeResolver {
@@ -947,7 +972,10 @@ mod tests {
         }
 
         async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
-            Ok(self.recovered().as_ref().map(resumed))
+            Ok(self
+                .recovered()
+                .as_ref()
+                .map(|root| resumed(root, self.prev_seed)))
         }
     }
 
@@ -1138,6 +1166,7 @@ mod tests {
             state,
             recovery: None,
             below_floor: Cell::new(false),
+            prev_seed: Some(OLD_WRITE_SCOPE_SEED),
         }
     }
 
@@ -1618,18 +1647,70 @@ mod tests {
         }
         drop(orders);
 
-        // The wave completed: pointer flipped on all three channels. The resume
-        // enumerated its own moved copies, so every name it saw is a live one and
-        // the first run's interior names stay orphaned — the fail-safe direction
-        // the module documents.
+        // The wave completed: pointer flipped on all three channels. Every name
+        // the resume enumerated is a live one, so what it tombstones comes from
+        // the pre-wave seed alone — exactly the interior names the first run
+        // superseded, and never the lingering root.
         assert_eq!(state.repoint_channels.borrow().len(), 3);
+        let retired = state.retired.borrow().clone();
+        let superseded: HashSet<String> = [nid(0x02), nid(0x03), nid(0x04), nid(0x05)]
+            .iter()
+            .map(|id| old_name_of(id).as_str().to_owned())
+            .collect();
+        assert_eq!(
+            retired, superseded,
+            "the resume tombstones every interior name its prior run superseded"
+        );
+        assert!(!retired.contains(current_root.as_str()), "root lingers");
+        let live: HashSet<String> = state.published.borrow().iter().cloned().collect();
+        assert!(
+            retired.is_disjoint(&live),
+            "no name a node currently lives at is retired"
+        );
+    }
+
+    #[test]
+    fn a_resume_that_cannot_read_the_pre_wave_seed_tombstones_nothing() {
+        // The pre-wave names are unreachable without that seed, and guessing is
+        // the one direction that could tombstone a live name.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let state = WaveState::default();
+        let current_root = old_name_of(&SCOPE);
+
+        let crashing = FakePublisher::refusing(state.clone(), RepointChannel::ScopePointer);
+        block_on(async {
+            let mut e = SeededEntropy::new(9);
+            rotate_scope_write(
+                &mut e,
+                &tree_on(state.clone()),
+                &crashing,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect_err("the wave crashes mid-flight");
+
+        let blind = FakeResolver {
+            prev_seed: None,
+            ..tree_on(state.clone())
+        };
+        let resume_pub = FakePublisher::new(state.clone());
+        block_on(async {
+            let mut e = SeededEntropy::new(123);
+            rotate_scope_write(
+                &mut e,
+                &blind,
+                &resume_pub,
+                &plan(&owner, &c, &sig, &current_root),
+            )
+            .await
+        })
+        .expect("the resumed wave still completes");
+
         assert!(
             state.retired.borrow().is_empty(),
-            "a resumed pass retires no name a node still lives at"
-        );
-        assert!(
-            !state.retired.borrow().contains(current_root.as_str()),
-            "root lingers"
+            "an unreadable history link leaks a registration rather than guessing a name"
         );
     }
 
@@ -1886,9 +1967,9 @@ mod tests {
     fn resume_after_flip_never_retires_a_live_name() {
         // A resume AFTER the pointer already flipped: the wave anchors the
         // enumeration at the moved root it recovered, so every node resolves at
-        // its NEW name. The wave must retire NONE of them — retiring a name a node
-        // still lives at would orphan a live descendant. Without the orphan guard
-        // this batch-retires the four live interior names.
+        // its NEW name. It must retire none of those — retiring a name a node
+        // still lives at would orphan a live descendant — and exactly the
+        // pre-wave names its prior run superseded.
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let recovered_seed = [0x77u8; 32];
@@ -1923,9 +2004,19 @@ mod tests {
         })
         .expect("the resumed wave completes");
 
+        let retired = state.retired.borrow().clone();
+        let live: HashSet<String> = state.published.borrow().iter().cloned().collect();
         assert!(
-            state.retired.borrow().is_empty(),
+            retired.is_disjoint(&live),
             "no live (already-migrated) name is retired on a post-flip resume"
+        );
+        let superseded: HashSet<String> = [nid(0x02), nid(0x03), nid(0x04), nid(0x05)]
+            .iter()
+            .map(|id| old_name_of(id).as_str().to_owned())
+            .collect();
+        assert_eq!(
+            retired, superseded,
+            "the pre-wave interior names are tombstoned instead of orphaned"
         );
     }
 
