@@ -68,10 +68,7 @@ export interface EngineTransport {
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  /**
-   * Reads the member's own settings (minus the provider credential), the
-   * account quota, and what a published prune still owes.
-   */
+  /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor>;
   /** Reads the login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]>;

@@ -51,9 +51,8 @@ pub(crate) struct TestLoginRequest<'a> {
     pub secret: &'a str,
 }
 
-/// The unlink body. It carries no `publicKey`: the server reads the account off
-/// the access token, and the challenge signature proves the identity key is
-/// live rather than naming which key answered.
+/// The unlink body for
+/// [`ApiClient::unlink_auth_method`](super::ApiClient::unlink_auth_method).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UnlinkMethodRequest<'a> {

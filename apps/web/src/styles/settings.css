@@ -93,7 +93,8 @@
   font-size: var(--font-size-md);
 }
 
-.settings-stalls {
+.settings-stalls,
+.settings-methods {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
@@ -115,15 +116,6 @@
   color: var(--color-text-dim);
 }
 
-.settings-methods {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .settings-method {
   display: grid;
   grid-template-columns: minmax(96px, max-content) 1fr max-content max-content;
@@ -133,14 +125,11 @@
   color: var(--color-text-secondary);
 }
 
-.settings-method-kind {
+.settings-method-kind,
+.settings-method-used {
   color: var(--color-text-dim);
 }
 
 .settings-method-id {
   overflow-wrap: anywhere;
-}
-
-.settings-method-used {
-  color: var(--color-text-dim);
 }

@@ -373,9 +373,8 @@ impl EngineHandle {
         })
     }
 
-    /// Reads the storage pane's whole view: the member's own settings minus the
-    /// provider credential, the account quota, and what a published prune still
-    /// owes. Resolves with the view; rejects with the engine error.
+    /// Reads the storage pane's whole view. Resolves with the view; rejects
+    /// with the engine error.
     #[wasm_bindgen(js_name = vaultStorage)]
     pub fn vault_storage(&self) -> Promise {
         let engine = self.engine.clone();

@@ -135,12 +135,13 @@ describe('prefillFromSummary', () => {
 
 describe('reclaimStallReason', () => {
   it('names each reason the engine can report', () => {
-    const named = (['nodeUnreadable', 'targetStillLive', 'targetUnexpandable'] as const).map(
-      reclaimStallReason
+    expect(reclaimStallReason('nodeUnreadable')).toBe('the owing node could not be read this pass');
+    expect(reclaimStallReason('targetStillLive')).toBe(
+      'the published record still names this version'
     );
-
-    expect(new Set(named).size).toBe(3);
-    for (const text of named) expect(text).not.toBe('');
+    expect(reclaimStallReason('targetUnexpandable')).toBe(
+      'no source served the version this would unpin'
+    );
   });
 });
 

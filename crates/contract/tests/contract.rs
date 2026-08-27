@@ -14,8 +14,6 @@
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
 //! sets it (and boots the stack), so the assertions always run there.
 
-use std::collections::BTreeSet;
-
 use cipherbox_contract::{
     MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_bytes, hex_to_scalar,
     prod_api_url, random_identity_signer, test_login_secret,
@@ -91,12 +89,19 @@ fn expect_auth<T>(what: &str, result: Result<T, ApiError>) -> T {
 /// always a fresh `(account, ...)` pair — no cross-run collision on the shared
 /// CI database.
 async fn fresh_account(base: &str) -> Client {
+    fresh_account_with_signer(base).await.0
+}
+
+/// The same, keeping the identity key it created the account with — which the
+/// unlink surface re-proves.
+async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSigner) {
     let client = new_client(base);
+    let signer = random_identity_signer();
     expect_auth(
         "identity login creates the account",
-        client.login_identity(&random_identity_signer()).await,
+        client.login_identity(&signer).await,
     );
-    client
+    (client, signer)
 }
 
 macro_rules! require_stack {
@@ -358,18 +363,6 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
 
 // --- login methods: list and unlink (blueprint/api.md) ---------------------
 
-/// A fresh account together with the identity key that created it, which the
-/// unlink surface re-proves.
-async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSigner) {
-    let client = new_client(base);
-    let signer = random_identity_signer();
-    expect_auth(
-        "identity login creates the account",
-        client.login_identity(&signer).await,
-    );
-    (client, signer)
-}
-
 #[tokio::test]
 async fn auth_methods_lists_only_the_callers_rows_in_display_form() {
     let base = require_stack!("auth_methods_lists_only_the_callers_rows_in_display_form");
@@ -391,13 +384,14 @@ async fn auth_methods_lists_only_the_callers_rows_in_display_form() {
         );
     }
 
-    let ours: BTreeSet<&String> = rows.iter().map(|row| &row.id).collect();
     let others = theirs
         .auth_methods()
         .await
         .expect("the other account's rows");
     assert!(
-        others.iter().all(|row| !ours.contains(&row.id)),
+        others
+            .iter()
+            .all(|row| rows.iter().all(|mine| mine.id != row.id)),
         "the read is scoped to the caller's own rows"
     );
 }

@@ -163,7 +163,7 @@ export class AuthController {
   ): Promise<LogoutResponseDto> {
     const { userId, publicKey } = request.user;
     // The re-proof runs against the key the session already proved, never one
-    // the body names; a token carrying none cannot re-prove anything.
+    // the body names.
     if (!publicKey) {
       throw new ForbiddenException('Insufficient token scope');
     }

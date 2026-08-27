@@ -864,8 +864,7 @@ pub enum Command {
         /// The wallet signature bytes.
         signature: Vec<u8>,
     },
-    /// Unlink one login method. Re-proves the account identity key server-side,
-    /// so a stolen access token alone cannot strip an account's other methods.
+    /// Unlink one login method. Re-proves the account identity key server-side.
     UnlinkAuthMethod {
         /// The row `/auth/methods` served.
         method_id: String,
@@ -6072,9 +6071,7 @@ where {
         })
     }
 
-    /// The storage pane's whole read: the member's own settings minus the
-    /// provider credential, the account quota, and what a published prune still
-    /// owes the registry.
+    /// The storage pane's whole read ([`VaultStorageView`]).
     pub async fn vault_storage(&self) -> Result<VaultStorageView, EngineError> {
         self.live_session()?;
         let settings = self

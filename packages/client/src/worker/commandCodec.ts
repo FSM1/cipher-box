@@ -544,7 +544,7 @@ function byoKindFrom(wasm: EngineWasm, kind: number | undefined): ByoKind | null
   }
 }
 
-function settingsOrigin(wasm: EngineWasm, origin: number): SettingsOrigin {
+function settingsOriginFrom(wasm: EngineWasm, origin: number): SettingsOrigin {
   switch (origin) {
     case wasm.SettingsOrigin.Resolved:
       return 'resolved';
@@ -560,7 +560,7 @@ function settingsOrigin(wasm: EngineWasm, origin: number): SettingsOrigin {
   }
 }
 
-function stallReason(wasm: EngineWasm, reason: number): ReclaimStallReason {
+function stallReasonFrom(wasm: EngineWasm, reason: number): ReclaimStallReason {
   switch (reason) {
     case wasm.ReclaimStallReason.NodeUnreadable:
       return 'nodeUnreadable';
@@ -576,7 +576,7 @@ function stallReason(wasm: EngineWasm, reason: number): ReclaimStallReason {
   }
 }
 
-function authMethodKind(wasm: EngineWasm, kind: number): AuthMethodKind {
+function authMethodKindFrom(wasm: EngineWasm, kind: number): AuthMethodKind {
   switch (kind) {
     case wasm.AuthMethodKind.Identity:
       return 'identity';
@@ -613,7 +613,7 @@ export function readVaultStorage(
       byoKind: byoKindFrom(wasm, settings.byoKind),
       byoCredentialStored: settings.byoCredentialStored,
       keepLatestVersions: settings.keepLatestVersions ?? null,
-      origin: settingsOrigin(wasm, settings.origin),
+      origin: settingsOriginFrom(wasm, settings.origin),
     },
     quota:
       quota === undefined
@@ -627,7 +627,7 @@ export function readVaultStorage(
     reclaimStalls: view.reclaimStalls.map((stall) => ({
       node: stall.node,
       target: stall.target,
-      reason: stallReason(wasm, stall.reason),
+      reason: stallReasonFrom(wasm, stall.reason),
     })),
   };
 }
@@ -639,7 +639,7 @@ export function readAuthMethods(
 ): AuthMethodDescriptor[] {
   return rows.map((row) => ({
     id: row.id,
-    kind: authMethodKind(wasm, row.kind),
+    kind: authMethodKindFrom(wasm, row.kind),
     identifierDisplay: row.identifierDisplay ?? null,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt ?? null,

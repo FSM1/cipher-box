@@ -92,7 +92,6 @@ export type {
   AuthMethodDescriptor,
 } from './worker/protocol.js';
 
-// The storage pane's derivation, unit-tested here rather than in the UI.
 export {
   formatBytes,
   prefillFromSummary,

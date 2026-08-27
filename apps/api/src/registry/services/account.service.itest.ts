@@ -13,7 +13,11 @@ import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../../mailbox/services/mailbox.service';
 import { RecordCache } from '../../republisher/entities/record-cache.entity';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
-import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
+import {
+  createIntegrationDatabase,
+  IntegrationDatabase,
+  waitForAdvisoryLockWait,
+} from '../../testing/integration-db';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
@@ -42,31 +46,6 @@ function compressedPublicKey(): string {
 
 function token(): string {
   return randomBytes(16).toString('hex');
-}
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Block until a backend is parked on an ungranted advisory lock — an observable
- * signal that the delete has actually reached and is WAITING on the contended
- * lock, replacing a fixed delay that only assumes it "should be blocked by now".
- * The suite runs serially and truncates between cases, so the only ungranted
- * advisory lock is the delete waiting on the gate holder's lock.
- */
-async function waitForAdvisoryLockWait(ds: DataSource, timeoutMs = 5000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const waiting = await ds.query(
-      `SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted LIMIT 1`
-    );
-    if (waiting.length > 0) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error('timed out waiting for the delete to park on the advisory lock');
-    }
-    await delay(20);
-  }
 }
 
 class RecordingPinStore extends PinStore {

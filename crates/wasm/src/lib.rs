@@ -1248,8 +1248,7 @@ impl ReclaimStall {
     }
 }
 
-/// The storage pane's whole read: the member's own settings minus the provider
-/// credential, the account quota, and what a published prune still owes.
+/// The storage pane's whole read (`facade::VaultStorageView`).
 #[wasm_bindgen]
 pub struct VaultStorageView {
     inner: facade::VaultStorageView,

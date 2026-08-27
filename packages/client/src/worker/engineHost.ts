@@ -61,7 +61,7 @@ export interface EngineHostLike {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   /** Reads this vault's accepted shares and the engine's verdict on each. */
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  /** Reads the member's own settings, the account quota, and what a prune owes. */
+  /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor>;
   /** Reads the login methods on this account, in display form. */
   authMethods(): Promise<AuthMethodDescriptor[]>;

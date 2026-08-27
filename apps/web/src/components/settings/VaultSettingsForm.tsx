@@ -43,18 +43,17 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [credentialStored, setCredentialStored] = useState(false);
   const { busy, error, run } = useCommandRunner<'saveVaultSettings'>();
   const message = problem ?? error;
+  const credentialStored = summary?.byoCredentialStored ?? false;
 
   // Each read the route lands refills the form, so a confirmed save shows what
   // the vault now carries rather than what was typed at it. The credential is
   // blanked rather than prefilled: no read can carry one.
   useEffect(() => {
     if (summary == null) return;
-    const { credentialStored: stored, ...prefill } = prefillFromSummary(summary);
-    setFields({ ...prefill, byoAccessToken: '' });
-    setCredentialStored(stored);
+    const { pinMode, byoEndpoint, byoKind, keepLatestVersions } = prefillFromSummary(summary);
+    setFields({ pinMode, byoEndpoint, byoKind, keepLatestVersions, byoAccessToken: '' });
   }, [summary]);
 
   const set = <K extends keyof VaultSettingsFields>(key: K, value: VaultSettingsFields[K]) => {

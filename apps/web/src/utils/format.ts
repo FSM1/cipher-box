@@ -1,7 +1,5 @@
 /** Display formatting for the vault browser. */
 
-// One byte formatter for the app: the storage pane's chrome derives its figures
-// in `@cipherbox/client`, which is where it therefore lives.
 export { formatBytes } from '@cipherbox/client';
 
 /** Past this, `Intl` throws on the `Date` rather than formatting it. */

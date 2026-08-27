@@ -1,5 +1,6 @@
-import { formatBytes, quotaChrome, reclaimStallReason, toHex } from '@cipherbox/client';
+import { quotaChrome, reclaimStallReason, toHex } from '@cipherbox/client';
 import type { VaultStorageDescriptor } from '@cipherbox/client';
+import { formatBytes } from '../../utils/format';
 
 interface QuotaChromeProps {
   /** `null` until the storage read lands. */
@@ -7,11 +8,9 @@ interface QuotaChromeProps {
 }
 
 /**
- * Usage against the account quota, and what a published prune still owes.
- *
- * The stall list is the point of the read: a debt the pass could not settle can
- * price at nothing, so the pending figure reads drained while the ledger never
- * empties — reporting the figure alone would be the silent failure.
+ * The stall list is the point of this pane: a debt the pass could not settle
+ * can price at nothing, so the pending figure reads drained while the ledger
+ * never empties — reporting the figure alone would be the silent failure.
  */
 export function QuotaChrome({ storage }: QuotaChromeProps) {
   if (storage === null) return null;

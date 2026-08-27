@@ -1,10 +1,4 @@
-/**
- * What the storage pane renders, derived once from one `vaultStorage` read.
- *
- * The derivation lives here rather than in the UI so it is unit-tested: the web
- * app's own components are covered by the shell suite, not by assertions on
- * these rules.
- */
+/** What the storage pane renders, derived once from one `vaultStorage` read. */
 
 import type {
   ByoKind,

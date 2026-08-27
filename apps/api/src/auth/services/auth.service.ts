@@ -16,8 +16,7 @@ import {
   runLockGuardedTransaction,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
-import { AuthMethodDto } from '../dto/auth.dto';
-import { AuthMethod } from '../entities/auth-method.entity';
+import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
 import { ChallengeService } from './challenge.service';
 import { IdentityService } from './identity.service';
@@ -27,6 +26,15 @@ import { TokenPair, TokenService } from './token.service';
 export interface LoginResult {
   pair: TokenPair;
   isNewUser: boolean;
+}
+
+/** One login method in the display form `GET /auth/methods` serves. */
+export interface AuthMethodView {
+  id: string;
+  kind: AuthMethodKind;
+  identifierDisplay: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 
 /**
@@ -154,7 +162,7 @@ export class AuthService {
    * hash is what makes a stored identifier unlinkable to the account that owns
    * it, and serving it would undo that.
    */
-  async listAuthMethods(userId: string): Promise<AuthMethodDto[]> {
+  async listAuthMethods(userId: string): Promise<AuthMethodView[]> {
     const rows = await this.authMethodRepository.find({
       where: { userId },
       select: ['id', 'kind', 'identifierDisplay', 'createdAt', 'lastUsedAt'],

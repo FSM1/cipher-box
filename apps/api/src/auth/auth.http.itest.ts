@@ -11,7 +11,11 @@ import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
-import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
+import {
+  createIntegrationDatabase,
+  IntegrationDatabase,
+  waitForAdvisoryLockWait,
+} from '../testing/integration-db';
 import { MetricsService } from '../ops/metrics.service';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
@@ -707,7 +711,7 @@ describe('auth HTTP flows (real Postgres)', () => {
           settled = true;
           return res;
         });
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await waitForAdvisoryLockWait(db.dataSource);
         expect(settled).toBe(false);
         expect(await authMethods().count({ where: { userId } })).toBe(2);
 

@@ -101,7 +101,7 @@ pub use settings::{
     DefaultsReason, Placement, PlacementDecision, PlacementRefusal, PlacementSource,
     SessionPlacement, SettingsLoad, SettingsOrigin, SettingsPublishError, SettingsRefusal,
     VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
-    publish_settings, settings_name, summarize_settings,
+    publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

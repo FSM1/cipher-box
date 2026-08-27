@@ -130,10 +130,7 @@ export class EngineFacade {
     return this.transport.receivedShares();
   }
 
-  /**
-   * The storage pane's whole read: the member's own settings minus the provider
-   * credential, the account quota, and what a published prune still owes.
-   */
+  /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor> {
     return this.transport.vaultStorage();
   }
@@ -348,10 +345,7 @@ export class EngineFacade {
     return this.command({ kind: 'siweLink', message, signature });
   }
 
-  /**
-   * Unlinks one login method. The engine re-proves the account identity key
-   * server-side, so a stolen access token alone cannot strip the others.
-   */
+  /** Unlinks one login method. The engine re-proves the account identity key. */
   unlinkAuthMethod(methodId: string): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'unlinkAuthMethod', methodId });
   }

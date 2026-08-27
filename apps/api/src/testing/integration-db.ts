@@ -70,6 +70,31 @@ export interface IntegrationDatabaseOptions {
   poolMax?: number;
 }
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Block until a backend is parked on an ungranted advisory lock — an observable
+ * signal that the contending statement has actually reached and is WAITING on
+ * the lock, replacing a fixed delay that only assumes it "should be blocked by
+ * now". Integration suites run serially and truncate between cases, so the only
+ * ungranted advisory lock is the contender waiting on the holder's.
+ */
+export async function waitForAdvisoryLockWait(ds: DataSource, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const waiting = await ds.query(
+      `SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted LIMIT 1`
+    );
+    if (waiting.length > 0) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error('timed out waiting for the contender to park on the advisory lock');
+    }
+    await delay(20);
+  }
+}
+
 /** One-off admin DDL via a short-lived connection to the default `postgres` database. */
 async function adminExec(sql: string): Promise<void> {
   const admin = new DataSource({ type: 'postgres', ...DB, database: 'postgres' });
