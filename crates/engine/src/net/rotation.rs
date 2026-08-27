@@ -2179,6 +2179,10 @@ fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
 fn reseal_verdict(error: ResealError) -> WritePublishError {
     match error {
         ResealError::Entropy(_) => WritePublishError::NotLanded,
+        // A size refusal on a record the next pass re-resolves, never a verdict
+        // on its trust: a permanent one would let whoever grew that root block
+        // the owner's revocation for good.
+        ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
         ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
@@ -7101,6 +7105,7 @@ mod tests {
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::WriteBodyTooLarge,
+            ResealError::SectionNotResealable { size: 2, limit: 1 },
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -7109,6 +7114,10 @@ mod tests {
                 ResealError::Entropy(_) => (
                     WritePublishError::NotLanded,
                     "the entropy seam being down is availability, not a verdict on the section",
+                ),
+                ResealError::SectionNotResealable { .. } => (
+                    WritePublishError::NotLanded,
+                    "a permanent size verdict would let whoever grew the root block the cascade",
                 ),
                 ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted

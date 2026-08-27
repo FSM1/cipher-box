@@ -41,16 +41,17 @@ use cipherbox_core::seal::{
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
-    StructureSigInput, WriteBody, encode_write_body, is_write_body_over_bound, open_ascent_link,
-    open_history_link, open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob,
-    seal_history_link, seal_owner_blob, seal_owner_history_link, seal_owner_write_blob,
-    sign_structure,
+    StructureSigInput, WriteBody, encode_grant_section, encode_write_body,
+    is_write_body_over_bound, open_ascent_link, open_history_link, open_owner_blob, seal,
+    seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
+    seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
+use crate::content::limits::MAX_RESEALABLE_SECTION_BYTES;
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{bound_recipient, enforce_committed_ledger, row_is_owner_attested};
@@ -309,6 +310,17 @@ pub enum ResealError {
     /// build's own decoder always rejects. Named apart from the generic encode
     /// fold so an operator can tell an over-budget body from an encoder fault.
     WriteBodyTooLarge,
+    /// The freshly minted section is past the budget the scope root's own
+    /// authoring reserved for it (`content::limits`). The two limits are one
+    /// coordination: the author holds a root's other bytes under the
+    /// complement, so a section within this budget always fits beside them.
+    /// Release-active (AGENTS.md rule 8).
+    SectionNotResealable {
+        /// The minted section's encoded size.
+        size: usize,
+        /// The budget it met.
+        limit: usize,
+    },
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -325,6 +337,9 @@ impl core::fmt::Display for ResealError {
             }
             ResealError::UnusableRecipientKey => {
                 f.write_str("grant-ledger recipient encryption key is unusable")
+            }
+            ResealError::SectionNotResealable { size, limit } => {
+                write!(f, "re-sealed grant section {size} > {limit}")
             }
             ResealError::TagNotBoundToRecipient => {
                 f.write_str("grant-ledger row is not filed under the tag its recipient key derives")
@@ -386,6 +401,7 @@ impl ResealError {
             ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::WriteBodyTooLarge => "write-body-too-large",
+            ResealError::SectionNotResealable { .. } => "section-not-resealable",
             ResealError::Encode(_) => "structure-encode-failed",
         }
     }
@@ -866,7 +882,7 @@ pub fn reseal_scope_root<E: Entropy>(
         }
     };
 
-    Ok(GrantSection {
+    let section = GrantSection {
         commitment: committed.commitment.clone(),
         commitment_sig: *committed.commitment_sig,
         grant_blobs,
@@ -876,7 +892,20 @@ pub fn reseal_scope_root<E: Entropy>(
         history_links,
         write_body,
         unknown: PreservedFields::new(),
-    })
+    };
+    // The author side holds a root's other bytes under the complement of this
+    // budget ([`MAX_RESEALABLE_SECTION_BYTES`]), so the pair is what keeps a
+    // scope root re-sealable rather than merely publishable once.
+    let size = encode_grant_section(&section)
+        .map_err(ResealError::Encode)?
+        .len();
+    if size > MAX_RESEALABLE_SECTION_BYTES {
+        return Err(ResealError::SectionNotResealable {
+            size,
+            limit: MAX_RESEALABLE_SECTION_BYTES,
+        });
+    }
+    Ok(section)
 }
 
 /// Reopen the freshly sealed ascent link as an ancestor reader does and refuse
@@ -1776,6 +1805,52 @@ mod tests {
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
             .expect_err("past the bound");
         assert_eq!(err.check(), "too-many-history-links");
+    }
+
+    #[test]
+    fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
+        // The other half of the coordination `net/author.rs` enforces: the
+        // author holds a scope root's other bytes under the complement of this
+        // budget, so a section that fits it always fits beside them. Measured on
+        // real bytes at the frozen ceiling of committed rows, since the budget
+        // is sized from per-row wire estimates.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (mut commitment, _, _) = fx.committed(b"n");
+        let rows: Vec<(_, _)> = (0..MAX_GRANT_BLOBS)
+            .map(|i| {
+                let mut tag = [0u8; SECRET_LEN];
+                tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                (
+                    GrantSetEntry::new(tag, Permission::Read, [0x02; 32]),
+                    fx.attested_row(
+                        [0x02; 33],
+                        fx.read_grantee.public().to_bytes(),
+                        Permission::Read,
+                        tag,
+                        b"n",
+                    ),
+                )
+            })
+            .collect();
+        commitment.entries = rows.iter().map(|(entry, _)| entry.clone()).collect();
+        let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
+            .expect("the owner signs the maximal set")
+            .to_compact();
+        let ledger: Vec<GrantLedgerEntry> = rows.into_iter().map(|(_, row)| row).collect();
+
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &real_chain(9))
+            .expect("a maximal committed set re-seals");
+        assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
+        let size = encode_grant_section(&section).expect("encodes").len();
+        assert!(
+            size <= MAX_RESEALABLE_SECTION_BYTES,
+            "a maximal re-seal is {size} bytes, past the {MAX_RESEALABLE_SECTION_BYTES}-byte budget the author reserved"
+        );
     }
 
     #[test]

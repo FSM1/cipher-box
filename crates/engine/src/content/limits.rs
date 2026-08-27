@@ -28,7 +28,57 @@ use super::profile::ContentProfile;
 /// fail-closed symmetry of AGENTS.md rule 8).
 pub(crate) const MAX_RESOLVED_RECORD_BYTES: usize = cipherbox_core::seal::MAX_BLOCK_BYTES;
 
-/// The shipped framing's sealed leaf must fit the block ceiling, or every
+/// The largest grant section a scope-root re-seal may mint, and the budget the
+/// rest of that root's record is held under ([`MAX_RESEALABLE_ROOT_REST_BYTES`]).
+///
+/// A re-seal rebuilds the section from the committed set, so it can mint one
+/// grant blob per committed row where the record it re-read carried none —
+/// growth the record itself never showed. Left uncoordinated, a scope root can
+/// sit under the block ceiling and still have no authorable re-seal, and the
+/// owner's revocation cascade refuses on it identically for ever: a party who
+/// can grow that record makes the scope rotation-proof.
+///
+/// The re-seal mints one blob per committed row, one ledger row per committed
+/// row, one entry per direct child scope, and a bounded run of history links.
+/// Every one of those runs is count-bounded in core, so the budget is those
+/// counts at their wire cost.
+pub(crate) const MAX_RESEALABLE_SECTION_BYTES: usize = 1024 * 1024;
+
+/// The budget every byte of a scope root **outside** its grant section is held
+/// under — the read-sealed body, the typed envelope fields, and the carried
+/// unknown maps. Its complement is reserved for the section the next re-seal
+/// mints, so a root this build authors always has an authorable re-seal.
+pub(crate) const MAX_RESEALABLE_ROOT_REST_BYTES: usize =
+    MAX_RESOLVED_RECORD_BYTES - MAX_RESEALABLE_SECTION_BYTES;
+
+/// The section budget must hold everything a full committed set mints, or the
+/// re-seal refuses sections the author side promised room for and the two limits
+/// stop coordinating. Compile-time, so an edit to either cannot reach a release
+/// build (AGENTS.md rule 8).
+const _: () = assert!(
+    MAX_RESEALABLE_SECTION_BYTES
+        >= cipherbox_core::seal::MAX_GRANT_BLOBS * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
+            + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES
+            + cipherbox_core::seal::MAX_HISTORY_LINKS * HISTORY_LINK_WIRE_BYTES,
+    "a re-seal's section budget must hold a full committed set"
+);
+
+/// One signed grant blob's det-CBOR wire cost: a 32-byte tag, a 32-byte HPKE
+/// `enc`, the sealed [`GrantBlobPayload`](cipherbox_core::seal::GrantBlobPayload)
+/// (three secrets, an epoch, and the AEAD tag), a 64-byte structure signature,
+/// and the map framing around them.
+const GRANT_BLOB_WIRE_BYTES: usize = 384;
+
+/// One grant-ledger row: two public keys, a permission, a blinded tag, the
+/// owner's compact ECDSA signature, an optional deadline, and framing.
+const LEDGER_ROW_WIRE_BYTES: usize = 224;
+
+/// One `directChildScopeIndex` entry: a 16-byte scope id and an `ipnsName`.
+const CHILD_SCOPE_REF_WIRE_BYTES: usize = 128;
+
+/// One retained history link: the sealed prev-epoch seed and a 64-byte
+/// structure signature.
+const HISTORY_LINK_WIRE_BYTES: usize = 256;
 /// content block this engine authors is refused by the ingress it publishes
 /// through. Compile-time, so a framing edit cannot reach a release build
 /// (AGENTS.md rule 8).
