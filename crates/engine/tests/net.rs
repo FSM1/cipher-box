@@ -25,9 +25,9 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    AdoptOutcome, Adopter, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
-    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
-    keyless_re_put, publish, resolve, revive, run_liveness_loop,
+    AdoptOutcome, Adopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,
+    PublishError, PublishOutcome, PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError,
+    ReviveRequest, eol_republish, keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
@@ -67,7 +67,7 @@ fn held_record(name: &IpnsName, bytes: Vec<u8>) -> HeldRecord {
         routing_key: name.as_str().to_owned(),
         record_bytes: bytes,
         signer: Ed25519Signer::from_seed([0u8; 32]),
-        head_cid: "bafyhead".into(),
+        value: HeldValue::Head("bafyhead".into()),
         content_cids: Vec::new(),
     }
 }
@@ -813,8 +813,10 @@ fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
         .seed_record(&endpoints[1], name.as_str(), record(&s, VALUE, 1, 0));
 
     let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-    held.borrow_mut()
-        .insert([1u8; 16], held_record(&name, record(&s, VALUE, 1, 0)));
+    held.borrow_mut().insert(
+        HeldKey::node([1u8; 16]),
+        held_record(&name, record(&s, VALUE, 1, 0)),
+    );
 
     // Drive exactly one interval over the populated set, then stop.
     let scheduler = world.scheduler.clone().with_auto_advance();
@@ -840,10 +842,12 @@ fn an_evicted_record_is_not_re_put() {
     let name = name_of(&s);
 
     let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-    held.borrow_mut()
-        .insert([1u8; 16], held_record(&name, record(&s, VALUE, 1, 0)));
+    held.borrow_mut().insert(
+        HeldKey::node([1u8; 16]),
+        held_record(&name, record(&s, VALUE, 1, 0)),
+    );
     // Eviction leaves the set before the loop runs.
-    held.borrow_mut().remove(&[1u8; 16]);
+    held.borrow_mut().remove(&HeldKey::node([1u8; 16]));
     assert!(held.borrow().is_empty(), "eviction removes the record");
 
     let scheduler = world.scheduler.clone().with_auto_advance();

@@ -20,6 +20,7 @@ use crate::content::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::NodeId;
 use crate::gate::floor;
+use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
     GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, PointerConsultArm,
     RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
@@ -60,6 +61,9 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// vault pointer (see [`WriteWaveNet::vault_pointer_signer`]). Only a cut at
     /// [`session_root_scope_id`](Self::session_root_scope_id) hands it on.
     pub vault_pointer_signer: Option<&'a Ed25519Signer>,
+    /// The session's held set, which the write wave enrols the flipped scope
+    /// pointer in ([`WriteWaveNet`]).
+    pub held: &'a RefCell<HeldRecords>,
     /// The pointer-payload envelope version.
     pub payload_version: u64,
     /// The scope root's `ipnsName` as the cut was authorized against it.
@@ -272,6 +276,7 @@ where
                 authorized_commitment: &cut.commitment,
                 owner_pointer_seed: self.owner_pointer_seed,
                 vault_pointer_signer,
+                held: self.held,
                 payload_version: self.payload_version,
                 current_root_name: self.scope_root_name,
                 session_root_scope_id: self.session_root_scope_id,

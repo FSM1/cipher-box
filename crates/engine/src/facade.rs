@@ -67,7 +67,7 @@ use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet, assemble_candidate,
@@ -2241,7 +2241,7 @@ fn steady_state_hold(
         return None;
     }
     let held = held.borrow();
-    let record = held.get(&scope_root)?;
+    let record = held.get(&HeldKey::node(scope_root))?;
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
@@ -2480,7 +2480,7 @@ async fn live_settings_record<R: RecordTransport>(
         return None;
     };
     match fanout_get_verify(transport, &name).await {
-        Some((live, _)) if live.value != format!("/ipfs/{}", held.head_cid).into_bytes() => {
+        Some((live, _)) if live.value != held.value.record_value() => {
             // The verdict names the record this pass read, not whatever the slot
             // holds now: a save that landed across the resolve installed its own
             // confirmed record, and clearing that one drops it from the renewal.
@@ -4606,6 +4606,7 @@ where {
             owner_signer: session.identity(),
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
             vault_pointer_signer: vault_pointer_signer.as_ref(),
+            held: &self.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
             scope_root_name: &scope_root_name,
             scope_id: target.scope.scope_id,
@@ -6892,6 +6893,7 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use crate::net::HeldValue;
     use serde_json::{Value, json};
 
     use cipherbox_core::ipns::IpnsRecord;
@@ -7019,7 +7021,7 @@ mod tests {
             )
             .marshal(),
             signer: kdf::settings_ipns_keypair(&SETTINGS_SECRET),
-            head_cid: head.to_owned(),
+            value: HeldValue::Head(head.to_owned()),
             content_cids: Vec::new(),
         }
     }
@@ -9851,7 +9853,9 @@ mod tests {
 
             let held = engine.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
-            let record = held.get(&ROOT.0).expect("held under the root node id");
+            let record = held
+                .get(&HeldKey::node(ROOT.0))
+                .expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
             assert_eq!(
                 engine
@@ -9998,13 +10002,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&ROOT.0)
+                .get_mut(&HeldKey::node(ROOT.0))
                 .expect("held under the root node id")
                 .content_cids = vec!["bafystamp".to_owned()];
 
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&ROOT.0].content_cids,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].content_cids,
                 vec!["bafystamp".to_owned()],
                 "the next poll left the hold alone"
             );
@@ -10032,7 +10036,9 @@ mod tests {
             let published = vec!["bafypublished".to_owned()];
             let before = {
                 let mut held = engine.held_records.borrow_mut();
-                let record = held.get_mut(&ROOT.0).expect("held under the root node id");
+                let record = held
+                    .get_mut(&HeldKey::node(ROOT.0))
+                    .expect("held under the root node id");
                 record.content_cids.clone_from(&published);
                 record.record_bytes.clone()
             };
@@ -10052,11 +10058,13 @@ mod tests {
             tick(&world, &device, &mut tasks);
             let held = engine.held_records.borrow();
             assert_ne!(
-                held[&ROOT.0].record_bytes, before,
+                held[&HeldKey::node(ROOT.0)].record_bytes,
+                before,
                 "the poll really did re-hold, so the assertion below is not vacuous"
             );
             assert_eq!(
-                held[&ROOT.0].content_cids, published,
+                held[&HeldKey::node(ROOT.0)].content_cids,
+                published,
                 "the re-hold carried the published set forward"
             );
             drop(held);
@@ -10066,13 +10074,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&ROOT.0)
+                .get_mut(&HeldKey::node(ROOT.0))
                 .expect("held under the root node id")
-                .head_cid = "bafyotherhead".to_owned();
+                .value = HeldValue::Head("bafyotherhead".to_owned());
             reseed(3);
             tick(&world, &device, &mut tasks);
             assert!(
-                engine.held_records.borrow()[&ROOT.0]
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)]
                     .content_cids
                     .is_empty(),
                 "CIDs held for a different head are dropped, not carried over"
@@ -10262,7 +10270,7 @@ mod tests {
             let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&ROOT.0].routing_key,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
                 root_name.as_str(),
                 "cold start opened at the name the vault pointer gave it"
             );
@@ -10296,7 +10304,7 @@ mod tests {
                 abuse[0]
             );
             assert_ne!(
-                engine.held_records.borrow()[&ROOT.0].routing_key,
+                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
                 moved.as_str(),
                 "and a gate refusal holds nothing (fail-closed)"
             );

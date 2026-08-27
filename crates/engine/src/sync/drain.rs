@@ -60,8 +60,8 @@ use crate::net::retire::{
     OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
+    RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -1729,7 +1729,7 @@ where
             if !base.links_to(*node).is_empty() {
                 continue;
             }
-            held.remove(&node.0);
+            held.remove(&HeldKey::node(node.0));
             base.remove_node(*node);
         }
         (!retired).then(|| Reclamation {
@@ -2880,7 +2880,7 @@ where
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
                 signer: SessionIdentity::write_name_signer(scope.write_scope_seed, &node.0),
-                head_cid: head.cid,
+                value: HeldValue::Head(head.cid),
                 // The same list the publish registered, so a sub-EOL renewal
                 // re-pins exactly the content this record points at.
                 content_cids,
@@ -2969,7 +2969,7 @@ where
     /// Insert a just-published record into the live held set so the liveness
     /// loop keeps it alive.
     fn hold(&self, node_id: [u8; 16], held: HeldRecord) {
-        self.held.borrow_mut().insert(node_id, held);
+        self.held.borrow_mut().insert(HeldKey::node(node_id), held);
     }
 
     /// Remove a resolved op from the durable queue.
@@ -2987,7 +2987,7 @@ where
             .held
             .borrow()
             .values()
-            .any(|record| record.head_cid == cid)
+            .any(|record| record.head_cid() == Some(cid))
         {
             return;
         }

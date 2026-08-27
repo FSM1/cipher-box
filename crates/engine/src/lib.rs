@@ -78,10 +78,11 @@ pub use grants::{
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
-    AdoptOutcome, Adopter, HeldRecord, HeldRecords, OrphanHeads, PreflightError, PublishError,
-    PublishOutcome, PublishRequest, RePutResult, ReclaimPass, ReclaimStall, ReclaimStallReason,
-    RecordPointerFetch, RecordPublishError, ResolveOutcome, Resolved, ReviveError, ReviveRequest,
-    RootAdopter, StagingRetireLedger, publish, resolve, revive,
+    AdoptOutcome, Adopter, HeldKey, HeldRecord, HeldRecords, HeldValue, OrphanHeads,
+    PreflightError, PublishError, PublishOutcome, PublishRequest, RePutResult, ReclaimPass,
+    ReclaimStall, ReclaimStallReason, RecordPointerFetch, RecordPublishError, ResolveOutcome,
+    Resolved, ReviveError, ReviveRequest, RootAdopter, StagingRetireLedger, publish, resolve,
+    revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{

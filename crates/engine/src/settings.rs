@@ -42,7 +42,7 @@ use crate::gate::floor;
 use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
-use crate::net::liveness::HeldRecord;
+use crate::net::liveness::{HeldRecord, HeldValue};
 use crate::net::publish::PublishOutcome;
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
@@ -711,7 +711,7 @@ where
         routing_key: name.as_str().to_owned(),
         record_bytes: receipt.record_bytes,
         signer,
-        head_cid: head.cid().to_owned(),
+        value: HeldValue::Head(head.cid().to_owned()),
         // The settings record anchors its sealed body and nothing else.
         content_cids: Vec::new(),
     })

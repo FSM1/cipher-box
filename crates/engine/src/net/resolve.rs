@@ -19,7 +19,7 @@ use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
-use super::liveness::{HeldRecord, HeldRecords};
+use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
 use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
@@ -372,18 +372,19 @@ where
         let mut held = held.borrow_mut();
         // The drain is the only source of a head's held content CIDs, so a
         // re-hold carries the set forward rather than wiping it.
+        let key = HeldKey::node(node_id);
         let content_cids = held
-            .remove(&node_id)
-            .filter(|prior| prior.head_cid == head_cid)
+            .remove(&key)
+            .filter(|prior| prior.head_cid() == Some(head_cid.as_str()))
             .map(|prior| prior.content_cids)
             .unwrap_or_default();
         held.insert(
-            node_id,
+            key,
             HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
                 signer,
-                head_cid,
+                value: HeldValue::Head(head_cid),
                 content_cids,
             },
         );
@@ -425,7 +426,7 @@ mod tests {
 
     use super::super::eol;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
-    use crate::net::{HeldRecord, HeldRecords};
+    use crate::net::{HeldKey, HeldRecord, HeldRecords, HeldValue};
     use crate::seams::{RecordTransport, UnixMillis};
     use crate::session::SessionIdentity;
     use crate::testkit::{FakeWorld, block_on};
@@ -572,7 +573,9 @@ mod tests {
         assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
         let map = held.borrow();
         assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
-        let record = map.get(&node_id).expect("held under its node id");
+        let record = map
+            .get(&HeldKey::node(node_id))
+            .expect("held under its node id");
         assert_eq!(record.routing_key, name.as_str());
         assert!(
             record.content_cids.is_empty(),
@@ -608,12 +611,12 @@ mod tests {
         let re_hold = |head_cid: &str| {
             let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
             held.borrow_mut().insert(
-                node_id,
+                HeldKey::node(node_id),
                 HeldRecord {
                     routing_key: name.as_str().to_owned(),
                     record_bytes: Vec::new(),
                     signer: SessionIdentity::write_name_signer(&write_scope_seed, &node_id),
-                    head_cid: head_cid.to_owned(),
+                    value: HeldValue::Head(head_cid.to_owned()),
                     content_cids: registered.clone(),
                 },
             );
@@ -627,7 +630,7 @@ mod tests {
                 ResolveMode::CacheFirst,
             ))
             .expect("resolve_and_hold");
-            held.borrow()[&node_id].content_cids.clone()
+            held.borrow()[&HeldKey::node(node_id)].content_cids.clone()
         };
 
         // `VALUE` is `/ipfs/<head>`, so this is the head the re-hold adopts.
@@ -718,7 +721,9 @@ mod tests {
         }
         let map = held.borrow();
         assert_eq!(map.len(), 1, "our own current record is held by node id");
-        let hr = map.get(&node_id).expect("held under its node id");
+        let hr = map
+            .get(&HeldKey::node(node_id))
+            .expect("held under its node id");
         assert_eq!(
             hr.record_bytes, bytes,
             "held bytes are the in-hand Current bytes"
@@ -775,7 +780,7 @@ mod tests {
 
         let hr = held
             .borrow()
-            .get(&node_id)
+            .get(&HeldKey::node(node_id))
             .cloned()
             .expect("own current root is held by its recovered node id");
         // Held under a valid signer that signs for exactly the routing key.
@@ -786,8 +791,11 @@ mod tests {
             .verify(&name)
             .unwrap()
             .value;
-        assert_eq!(Some(hr.head_cid.clone()), head_cid_from_value(&value));
-        assert!(!hr.head_cid.is_empty());
+        assert_eq!(
+            hr.head_cid().map(str::to_owned),
+            head_cid_from_value(&value)
+        );
+        assert!(!hr.head_cid().expect("a head plane record").is_empty());
 
         // The held record renews: model adoption (floor → 1), advance into the EOL
         // window, and prove the recovered signer republishes at seq+1.
@@ -908,7 +916,7 @@ mod tests {
         // gate's node id, and it signs for exactly the held name.
         let hr = held
             .borrow()
-            .get(&node_id)
+            .get(&HeldKey::node(node_id))
             .cloned()
             .expect("write grantee is held by the gate node id");
         assert_eq!(
@@ -986,9 +994,12 @@ mod tests {
         let expected = head_cid_from_value(VALUE).expect("fixture value has a head cid");
         assert!(!expected.is_empty());
         let map = held.borrow();
-        let record = map.get(&node_id).expect("held under its node id");
+        let record = map
+            .get(&HeldKey::node(node_id))
+            .expect("held under its node id");
         assert_eq!(
-            record.head_cid, expected,
+            record.head_cid(),
+            Some(expected.as_str()),
             "the held head CID is derived from the adopted record, never empty",
         );
     }
@@ -1034,11 +1045,11 @@ mod tests {
         .expect("resolve_and_hold");
         let hr = held
             .borrow()
-            .get(&node_id)
+            .get(&HeldKey::node(node_id))
             .cloned()
             .expect("held under its node id");
         let expected_head = head_cid_from_value(VALUE).expect("fixture value has a head cid");
-        assert_eq!(hr.head_cid, expected_head);
+        assert_eq!(hr.head_cid(), Some(expected_head.as_str()));
 
         // Advance into the EOL window and renew, then prove the republished
         // record's value round-trips to the SAME non-empty head CID (never
