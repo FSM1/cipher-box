@@ -146,6 +146,50 @@ export interface WasmReceivedShareRow {
   readonly resolution?: string;
 }
 
+/**
+ * wasm-bindgen `VaultSettingsSummary` — the member's settings minus the provider
+ * credential, which has no getter anywhere on the boundary.
+ */
+export interface WasmVaultSettingsSummary {
+  readonly pinMode: number;
+  readonly byoEndpoint?: string;
+  readonly byoKind?: number;
+  readonly byoCredentialStored: boolean;
+  readonly keepLatestVersions?: number;
+  readonly origin: number;
+}
+
+/** wasm-bindgen `QuotaView` — the account's hosted-storage figures. */
+export interface WasmQuotaView {
+  readonly usedBytes: bigint;
+  readonly limitBytes: bigint;
+  readonly advisory: boolean;
+}
+
+/** wasm-bindgen `ReclaimStall` — one debt a reclaim pass left owed. */
+export interface WasmReclaimStall {
+  readonly node: Uint8Array;
+  readonly target: string;
+  readonly reason: number;
+}
+
+/** wasm-bindgen `VaultStorageView` — the storage pane's whole read. */
+export interface WasmVaultStorageView {
+  readonly settings: WasmVaultSettingsSummary;
+  readonly quota?: WasmQuotaView;
+  readonly pendingReclaimBytes: bigint;
+  readonly reclaimStalls: readonly WasmReclaimStall[];
+}
+
+/** wasm-bindgen `AuthMethod` — one login method, in display form. */
+export interface WasmAuthMethod {
+  readonly id: string;
+  readonly kind: number;
+  readonly identifierDisplay?: string;
+  readonly createdAt: string;
+  readonly lastUsedAt?: string;
+}
+
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
@@ -163,6 +207,8 @@ export interface WasmEngineHandle {
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
   receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
+  vaultStorage(): Promise<WasmVaultStorageView>;
+  authMethods(): Promise<readonly WasmAuthMethod[]>;
   siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<bigint>;
@@ -208,6 +254,8 @@ export interface EngineWasm {
     rotateNow(node: WasmNodeId): WasmCommand;
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
     siweLogin(message: string, signature: Uint8Array): WasmCommand;
+    siweLink(message: string, signature: Uint8Array): WasmCommand;
+    unlinkAuthMethod(methodId: string): WasmCommand;
     logout(): WasmCommand;
     forgetDevice(): WasmCommand;
   };
@@ -230,6 +278,22 @@ export interface EngineWasm {
   Permission: { readonly Read: number; readonly Write: number };
   PinMode: { readonly Hosted: number; readonly External: number; readonly Dual: number };
   ByoKind: { readonly Kubo: number; readonly Psa: number; readonly Pinata: number };
+  SettingsOrigin: {
+    readonly Resolved: number;
+    readonly Stale: number;
+    readonly Defaults: number;
+  };
+  ReclaimStallReason: {
+    readonly NodeUnreadable: number;
+    readonly TargetStillLive: number;
+    readonly TargetUnexpandable: number;
+  };
+  AuthMethodKind: {
+    readonly Identity: number;
+    readonly Wallet: number;
+    readonly Test: number;
+    readonly Unknown: number;
+  };
   OpPhase: {
     readonly DownloadStarted: number;
     readonly DownloadCompleted: number;

@@ -19,10 +19,10 @@ use zeroize::Zeroizing;
 use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
-    ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest, MailboxItem,
-    MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest, RetireResult,
-    SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest,
-    TestLoginResponse, TokenResponse, UploadResult,
+    AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
+    MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
+    RetireResult, SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome,
+    TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
@@ -141,22 +141,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         signer: &impl ChallengeSigner,
     ) -> Result<LoginOutcome, ApiError> {
         let public_key = signer.public_key_hex();
-        let challenge = {
-            let response = self
-                .post_json(
-                    "/auth/challenge",
-                    &ChallengeRequest {
-                        public_key: &public_key,
-                    },
-                )
-                .await?;
-            let response = ok_or_err(response)?;
-            let body: ChallengeResponse = decode(&response)?;
-            if !is_identity_challenge(&body.challenge) {
-                return Err(ApiError::Decode("unusable login challenge".into()));
-            }
-            body.challenge
-        };
+        let challenge = self.identity_challenge(&public_key).await?;
         let signature = signer.sign_challenge(&challenge);
         let response = self
             .post_json(
@@ -212,6 +197,52 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let is_new_user = tokens.is_new_user.unwrap_or(false);
         self.store_tokens(tokens).await?;
         Ok(LoginOutcome { is_new_user })
+    }
+
+    /// Fetch a challenge for `public_key`, refusing one the API could not have
+    /// issued before it reaches the identity key ([`is_identity_challenge`]).
+    async fn identity_challenge(&self, public_key: &str) -> Result<String, ApiError> {
+        let response = self
+            .post_json("/auth/challenge", &ChallengeRequest { public_key })
+            .await?;
+        let response = ok_or_err(response)?;
+        let body: ChallengeResponse = decode(&response)?;
+        if !is_identity_challenge(&body.challenge) {
+            return Err(ApiError::Decode("unusable login challenge".into()));
+        }
+        Ok(body.challenge)
+    }
+
+    /// The login methods on the authenticated account (owner-authenticated).
+    pub async fn auth_methods(&self) -> Result<Vec<AuthMethod>, ApiError> {
+        let response = self
+            .request_authed(HttpMethod::Get, "/auth/methods")
+            .await?;
+        let response = ok_or_err(response)?;
+        decode(&response)
+    }
+
+    /// Unlink one login method, re-proving the account identity key first: a
+    /// stolen access token alone must not strip an account's other methods.
+    pub async fn unlink_auth_method(
+        &self,
+        method_id: &str,
+        signer: &impl ChallengeSigner,
+    ) -> Result<(), ApiError> {
+        let challenge = self.identity_challenge(&signer.public_key_hex()).await?;
+        let signature = signer.sign_challenge(&challenge);
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                "/auth/unlink",
+                &UnlinkMethodRequest {
+                    method_id,
+                    challenge: &challenge,
+                    signature: &signature,
+                },
+            )
+            .await?;
+        ok_or_err(response).map(drop)
     }
 
     /// Link a SIWE wallet to the authenticated account (owner-authenticated).
@@ -754,7 +785,7 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 
-    use super::super::types::{login_response, new_user_login_response};
+    use super::super::types::{AuthMethodKind, login_response, new_user_login_response};
 
     use crate::seams::{AUTHORIZATION, Mailbox};
     use crate::testkit::block_on;
@@ -1683,5 +1714,136 @@ mod tests {
             sent_after_login,
             "no request left the client"
         );
+    }
+
+    // --- login methods: list and unlink ---
+
+    /// A kind this build does not know still renders: the row is a display
+    /// fact, so refusing the whole read would blank a pane over a server the
+    /// account can still log in through.
+    #[test]
+    fn auth_methods_decodes_display_rows_including_an_unknown_kind() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!([
+                {
+                    "id": "row-1",
+                    "kind": "identity",
+                    "identifierDisplay": "0x1234\u{2026}abcd",
+                    "createdAt": "2026-08-27T10:00:00.000Z",
+                    "lastUsedAt": "2026-08-27T11:00:00.000Z",
+                },
+                {
+                    "id": "row-2",
+                    "kind": "wallet",
+                    "identifierDisplay": null,
+                    "createdAt": "2026-08-27T09:00:00.000Z",
+                },
+                { "id": "row-3", "kind": "passkey", "createdAt": "2026-08-27T08:00:00.000Z" },
+            ]),
+        ));
+
+        let methods = block_on(client.auth_methods()).expect("auth methods");
+
+        assert_eq!(
+            methods,
+            vec![
+                AuthMethod {
+                    id: "row-1".to_owned(),
+                    kind: AuthMethodKind::Identity,
+                    identifier_display: Some("0x1234\u{2026}abcd".to_owned()),
+                    created_at: "2026-08-27T10:00:00.000Z".to_owned(),
+                    last_used_at: Some("2026-08-27T11:00:00.000Z".to_owned()),
+                },
+                AuthMethod {
+                    id: "row-2".to_owned(),
+                    kind: AuthMethodKind::Wallet,
+                    identifier_display: None,
+                    created_at: "2026-08-27T09:00:00.000Z".to_owned(),
+                    last_used_at: None,
+                },
+                AuthMethod {
+                    id: "row-3".to_owned(),
+                    kind: AuthMethodKind::Unknown,
+                    identifier_display: None,
+                    created_at: "2026-08-27T08:00:00.000Z".to_owned(),
+                    last_used_at: None,
+                },
+            ],
+        );
+        let requests = http.requests();
+        assert_eq!(requests.len(), sent_after_login + 1);
+        let read = requests.last().expect("the read was sent");
+        assert_eq!(read.method, HttpMethod::Get);
+        assert_eq!(read.url, "http://api.test/auth/methods");
+        assert!(has_bearer(read), "the read is owner-authenticated");
+    }
+
+    /// A stolen access token alone must not strip an account's other login
+    /// methods, so the unlink re-proves live possession of the identity key.
+    #[test]
+    fn unlink_auth_method_reproves_the_identity_key_before_deleting() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(200, json!({ "challenge": challenge() })));
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(client.unlink_auth_method("method-1", &StubSigner)).expect("unlink");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 2, "one challenge, then one unlink");
+        assert_eq!(sent[0].url, "http://api.test/auth/challenge");
+        assert_eq!(
+            body_json(&sent[0])["publicKey"],
+            StubSigner.public_key_hex()
+        );
+        assert_eq!(sent[1].method, HttpMethod::Post);
+        assert_eq!(sent[1].url, "http://api.test/auth/unlink");
+        assert!(has_bearer(&sent[1]));
+        let body = body_json(&sent[1]);
+        assert_eq!(body["methodId"], "method-1");
+        assert_eq!(body["challenge"], challenge());
+        assert_eq!(body["signature"], format!("sig-for-{}", challenge()));
+        assert!(
+            body.get("publicKey").is_none(),
+            "the server reads the key off the token, never the body"
+        );
+    }
+
+    /// The unlink challenge clears the same pin the login one does — it goes
+    /// to the same signing key, so an unchecked one is the same oracle.
+    #[test]
+    fn an_unlink_challenge_the_api_could_not_have_issued_is_never_signed() {
+        struct PanickingSigner;
+
+        impl ChallengeSigner for PanickingSigner {
+            fn public_key_hex(&self) -> String {
+                "02".to_owned() + &"ab".repeat(32)
+            }
+            fn sign_challenge(&self, challenge: &str) -> String {
+                panic!("the identity key signed a refused challenge: {challenge:?}");
+            }
+        }
+
+        for challenge in hostile_challenges() {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": challenge.clone() }),
+            ));
+            assert_eq!(
+                block_on(client.unlink_auth_method("method-1", &PanickingSigner)).unwrap_err(),
+                ApiError::Decode("unusable login challenge".into()),
+                "challenge {challenge:?} must be refused"
+            );
+            let requests = http.requests();
+            assert_eq!(requests.len(), 1, "only /auth/challenge for {challenge:?}");
+            assert_eq!(requests[0].url, "http://api.test/auth/challenge");
+        }
     }
 }

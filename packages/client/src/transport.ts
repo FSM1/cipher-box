@@ -12,6 +12,7 @@
 import { CorrelatedTransport } from './correlatedTransport.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -19,6 +20,7 @@ import type {
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WorkerMessage,
   WorkerRequest,
   WriteHandle,
@@ -66,6 +68,13 @@ export interface EngineTransport {
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
+  /**
+   * Reads the member's own settings (minus the provider credential), the
+   * account quota, and what a published prune still owes.
+   */
+  vaultStorage(): Promise<VaultStorageDescriptor>;
+  /** Reads the login methods on this account, in the display form the API serves. */
+  authMethods(): Promise<AuthMethodDescriptor[]>;
   /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -199,6 +208,18 @@ export class LocalTransport extends CorrelatedTransport {
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.request<ReceivedShareDescriptor[]>(this.ready, (id) =>
       this.worker.postMessage({ type: 'receivedShares', id }, [])
+    );
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return this.request<VaultStorageDescriptor>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'vaultStorage', id }, [])
+    );
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    return this.request<AuthMethodDescriptor[]>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'authMethods', id }, [])
     );
   }
 

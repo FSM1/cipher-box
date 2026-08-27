@@ -75,6 +75,68 @@ impl Default for VaultSettings {
     }
 }
 
+impl VaultSettings {
+    /// The host-visible form of these settings, loaded from `origin`.
+    ///
+    /// The bearer is dropped here, at construction, rather than withheld by
+    /// whatever reads the summary: a field that never holds it cannot leak it
+    /// through a later getter (blueprint/web-client.md, the wasm boundary).
+    #[must_use]
+    pub fn summary(&self, origin: SettingsOrigin) -> VaultSettingsSummary {
+        VaultSettingsSummary {
+            pin_mode: self.pin_mode,
+            byo_endpoint: self.byo.as_ref().map(|byo| byo.endpoint.clone()),
+            byo_kind: self.byo.as_ref().map(|byo| byo.kind),
+            byo_credential_stored: self
+                .byo
+                .as_ref()
+                .is_some_and(|byo| byo.access_token.is_some()),
+            retention: self.retention,
+            origin,
+        }
+    }
+}
+
+/// The member's settings as a host may see them: everything but the provider
+/// credential, which the wasm boundary exists to keep uncrossable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultSettingsSummary {
+    /// Where a version's bytes are pinned.
+    pub pin_mode: PinMode,
+    /// The member's own provider endpoint, when they run one.
+    pub byo_endpoint: Option<String>,
+    /// That provider's kind.
+    pub byo_kind: Option<ByoKind>,
+    /// Whether a provider bearer is stored. The bearer itself never crosses.
+    pub byo_credential_stored: bool,
+    /// The content-version retention policy.
+    pub retention: RetentionPolicy,
+    /// Whose choice this summary reports.
+    pub origin: SettingsOrigin,
+}
+
+/// Whose choice a [`VaultSettingsSummary`] reports (blueprint/engine.md
+/// "Settings-load policy").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsOrigin {
+    /// The published record opened and validated.
+    Resolved,
+    /// This device's last-known-good copy: still the member's choice.
+    Stale,
+    /// Nothing here is the member's choice, only the documented defaults.
+    Defaults,
+}
+
+/// The host-visible summary of one settings load.
+#[must_use]
+pub fn summarize_settings(load: &SettingsLoad) -> VaultSettingsSummary {
+    match load {
+        SettingsLoad::Resolved(settings) => settings.summary(SettingsOrigin::Resolved),
+        SettingsLoad::Stale { settings, .. } => settings.summary(SettingsOrigin::Stale),
+        SettingsLoad::Defaults(_) => VaultSettings::default().summary(SettingsOrigin::Defaults),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The placement decision: which byte destinations a settings load authorises.
 // ---------------------------------------------------------------------------
@@ -708,6 +770,22 @@ where
         },
         None => SettingsLoad::Defaults(reason),
     }
+}
+
+/// The last-known-good cache entry a device would hold for `settings`: its key
+/// and its sealed head block. Lets a test stand an engine up on settings the
+/// member already chose without a live record plane to publish them through.
+#[cfg(test)]
+pub(crate) fn cached_settings_block(
+    login_secret: &[u8],
+    settings: &VaultSettings,
+    entropy: &mut dyn Entropy,
+) -> (Vec<u8>, Vec<u8>) {
+    let body = encode_settings_body(settings, 1).expect("encode");
+    let ephemeral = fresh_ephemeral(entropy).expect("ephemeral");
+    let block = seal_settings_record(&kdf::enc_subkey(login_secret), &ephemeral, &body)
+        .expect("seal the settings body");
+    (settings_cache_key(&settings_name(login_secret)), block)
 }
 
 /// The settings head block's own snapshot-cache key, kept apart from the

@@ -35,12 +35,14 @@ import { requestStoragePersistence } from './storagePersistence.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -445,6 +447,14 @@ export class EngineClient implements EngineTransport {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.current.receivedShares();
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return this.current.vaultStorage();
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    return this.current.authMethods();
   }
 
   siweChallenge(): Promise<string> {

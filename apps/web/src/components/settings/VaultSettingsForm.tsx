@@ -1,11 +1,19 @@
-import { useState } from 'react';
-import type { ByoKind, PinMode } from '@cipherbox/client';
+import { useEffect, useState } from 'react';
+import { prefillFromSummary } from '@cipherbox/client';
+import type { ByoKind, PinMode, VaultSettingsSummaryDescriptor } from '@cipherbox/client';
 import { useCommandRunner } from '../../hooks/useCommandRunner';
 import {
   buildVaultSettings,
   DEFAULT_VAULT_SETTINGS_FORM,
   type VaultSettingsFields,
 } from '../../settings/vaultSettings';
+
+interface VaultSettingsFormProps {
+  /** What the vault published, or `null` before the storage read lands. */
+  summary?: VaultSettingsSummaryDescriptor | null;
+  /** Re-reads the vault after a save, so the form shows what it now carries. */
+  onSaved?: () => void;
+}
 
 const PIN_MODES: { value: PinMode; label: string }[] = [
   { value: 'hosted', label: 'cipherbox only' },
@@ -23,19 +31,31 @@ const BYO_KINDS: { value: ByoKind; label: string }[] = [
  * The member's placement, provider and retention choice, published as one
  * `saveVaultSettings` (blueprint/web-client.md "Composition").
  *
- * The form starts at the defaults every time, because the wasm boundary is
- * write-only by design — no getter reads a stored config back, so a saved bearer
- * never crosses into JS (`crates/wasm/src/lib.rs`). A save therefore replaces the
- * whole record with what is on the form, tearing down a provider the member
- * configured earlier and cannot see here — so it is gated on an acknowledgement.
+ * Everything but the provider credential is read back and prefilled. The
+ * credential is not: it is the one field the wasm boundary keeps write-only, so
+ * a stored bearer never crosses into JS (`crates/wasm/src/lib.rs`). A save
+ * replaces the whole record with what is on the form — leaving the credential
+ * field blank clears a bearer the vault still holds — so it is gated on an
+ * acknowledgement.
  */
-export function VaultSettingsForm() {
+export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) {
   const [fields, setFields] = useState<VaultSettingsFields>(DEFAULT_VAULT_SETTINGS_FORM);
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [credentialStored, setCredentialStored] = useState(false);
   const { busy, error, run } = useCommandRunner<'saveVaultSettings'>();
   const message = problem ?? error;
+
+  // Each read the route lands refills the form, so a confirmed save shows what
+  // the vault now carries rather than what was typed at it. The credential is
+  // blanked rather than prefilled: no read can carry one.
+  useEffect(() => {
+    if (summary == null) return;
+    const { credentialStored: stored, ...prefill } = prefillFromSummary(summary);
+    setFields({ ...prefill, byoAccessToken: '' });
+    setCredentialStored(stored);
+  }, [summary]);
 
   const set = <K extends keyof VaultSettingsFields>(key: K, value: VaultSettingsFields[K]) => {
     setFields((current) => ({ ...current, [key]: value }));
@@ -58,6 +78,7 @@ export function VaultSettingsForm() {
         if (accepted) {
           setFields((current) => ({ ...current, byoAccessToken: '' }));
           setAcknowledged(false);
+          onSaved?.();
         }
       }
     );
@@ -147,10 +168,14 @@ export function VaultSettingsForm() {
         />
       </label>
 
-      <p className="sharing-note">
-        {'// the engine never reads a saved provider credential back out, so nothing'}
+      <p className="sharing-note" data-testid="settings-credential-note">
+        {credentialStored
+          ? '// a provider credential is stored. the engine never reads one back out,'
+          : '// the engine never reads a provider credential back out,'}
         <br />
-        {'// here is filled in from what you stored before.'}
+        {credentialStored
+          ? '// so this field stays blank — leave it blank and the save clears it.'
+          : '// so this field is the only place one can be set.'}
       </p>
 
       <label className="recovery-ack" htmlFor="settings-replace-ack">
@@ -162,7 +187,7 @@ export function VaultSettingsForm() {
         />
         <span>
           i understand saving replaces every stored setting with exactly what is on this form,
-          including any provider i configured before
+          including the provider credential this form cannot show me
         </span>
       </label>
 

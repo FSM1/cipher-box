@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
 import { createSiweMessage } from 'viem/siwe';
-import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
+import { rejectionOf } from './walletRejection';
 
 interface WalletLoginButtonProps {
   /** Reads the single-use nonce the EIP-4361 message embeds. */
@@ -157,10 +157,4 @@ export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLog
       {error && <LoginError message={error} />}
     </div>
   );
-}
-
-/** Renders a wallet refusal as a refusal rather than as a raw provider dump. */
-function rejectionOf(failure: unknown): string {
-  const text = errorMessage(failure);
-  return /user rejected|ACTION_REJECTED/i.test(text) ? 'the wallet request was rejected' : text;
 }

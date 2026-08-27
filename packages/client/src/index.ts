@@ -82,4 +82,21 @@ export type {
   ByoKind,
   ByoIpfsConfigDescriptor,
   VaultSettingsDescriptor,
+  SettingsOrigin,
+  VaultSettingsSummaryDescriptor,
+  QuotaDescriptor,
+  ReclaimStallReason,
+  ReclaimStallDescriptor,
+  VaultStorageDescriptor,
+  AuthMethodKind,
+  AuthMethodDescriptor,
 } from './worker/protocol.js';
+
+// The storage pane's derivation, unit-tested here rather than in the UI.
+export {
+  formatBytes,
+  prefillFromSummary,
+  quotaChrome,
+  reclaimStallReason,
+} from './settings/quota.js';
+export type { QuotaChrome } from './settings/quota.js';

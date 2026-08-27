@@ -5,18 +5,21 @@ import {
   byoSettings,
   emptySharing,
   emptySnapshot,
+  emptyVaultStorage,
   FAKE_SIWE_NONCE,
   TEST_ACCOUNT_ID,
 } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
+  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -37,6 +40,8 @@ class FakeTransport implements EngineTransport {
   snapshots: Uint8Array[] = [];
   sharingReads: Array<Uint8Array | null> = [];
   receivedShareReads = 0;
+  vaultStorageReads = 0;
+  authMethodReads = 0;
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
   opened: Uint8Array[] = [];
@@ -104,6 +109,16 @@ class FakeTransport implements EngineTransport {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     this.receivedShareReads += 1;
+    return Promise.resolve([]);
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    this.vaultStorageReads += 1;
+    return Promise.resolve(emptyVaultStorage());
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    this.authMethodReads += 1;
     return Promise.resolve([]);
   }
 
@@ -508,6 +523,39 @@ describe('EngineFacade', () => {
 
     await expect(facade.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
     expect(transport.siweChallenges).toBe(1);
+  });
+
+  it('forwards a vault-storage read', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.vaultStorage()).resolves.toEqual(emptyVaultStorage());
+    expect(transport.vaultStorageReads).toBe(1);
+  });
+
+  it('forwards an auth-methods read', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.authMethods()).resolves.toEqual([]);
+    expect(transport.authMethodReads).toBe(1);
+  });
+
+  it('sends a wallet link as its own command, never as a login', async () => {
+    const transport = new FakeTransport();
+    const signature = new Uint8Array(65).fill(7);
+
+    await new EngineFacade(transport).siweLink('link me', signature);
+
+    expect(transport.commands).toEqual([{ kind: 'siweLink', message: 'link me', signature }]);
+  });
+
+  it('sends an unlink naming only the method id', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).unlinkAuthMethod('3f2a-uuid');
+
+    expect(transport.commands).toEqual([{ kind: 'unlinkAuthMethod', methodId: '3f2a-uuid' }]);
   });
 
   it('hands the caller the two public keys an import verified', async () => {

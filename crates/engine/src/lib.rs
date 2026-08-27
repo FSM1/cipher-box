@@ -43,9 +43,9 @@ pub mod sync;
 pub mod testkit;
 
 pub use api::{
-    ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
-    NameRegistration, QUOTA_EXCEEDED, Quota, RetireResult, SiweNonce, TestLoginOutcome,
-    UPLOAD_TOO_LARGE, UploadResult,
+    ApiClient, ApiError, AuthMethod, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
+    LoginOutcome, MailboxItem, NameRegistration, QUOTA_EXCEEDED, Quota, RetireResult, SiweNonce,
+    TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
@@ -61,9 +61,9 @@ pub use facade::{
     ApiBaseUrl, BlankApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter,
     Engine, EngineError, EngineView, Event, EventStream, LoginSecret, MAX_CONTACT_CODE_BYTES,
     MAX_FOCUS_FILES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause,
-    Permission, ReceivedShareRow, RefusedBudget, ScopeSharing, SessionStatus, SharingContact,
-    SharingGrant, SharingInviteLinks, SharingView, SnapshotChild, SnapshotView, Staleness, StatFs,
-    StreamHandle, WriteHandle, WriteTarget,
+    Permission, QuotaView, ReceivedShareRow, RefusedBudget, ScopeSharing, SessionStatus,
+    SharingContact, SharingGrant, SharingInviteLinks, SharingView, SnapshotChild, SnapshotView,
+    Staleness, StatFs, StreamHandle, VaultStorageView, WriteHandle, WriteTarget,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -79,9 +79,9 @@ pub use grants::{
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
     AdoptOutcome, Adopter, HeldRecord, HeldRecords, OrphanHeads, PreflightError, PublishError,
-    PublishOutcome, PublishRequest, RePutResult, RecordPointerFetch, RecordPublishError,
-    ResolveOutcome, Resolved, ReviveError, ReviveRequest, RootAdopter, StagingRetireLedger,
-    publish, resolve, revive,
+    PublishOutcome, PublishRequest, RePutResult, ReclaimPass, ReclaimStall, ReclaimStallReason,
+    RecordPointerFetch, RecordPublishError, ResolveOutcome, Resolved, ReviveError, ReviveRequest,
+    RootAdopter, StagingRetireLedger, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{
@@ -99,8 +99,9 @@ pub use seams::{
 };
 pub use settings::{
     DefaultsReason, Placement, PlacementDecision, PlacementRefusal, PlacementSource,
-    SessionPlacement, SettingsLoad, SettingsPublishError, SettingsRefusal, VaultSettings,
-    decide_placement, load_settings, placement_of, publish_settings, settings_name,
+    SessionPlacement, SettingsLoad, SettingsOrigin, SettingsPublishError, SettingsRefusal,
+    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
+    publish_settings, settings_name, summarize_settings,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

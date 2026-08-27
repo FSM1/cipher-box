@@ -1,8 +1,22 @@
-import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { parseSiweMessage } from 'viem/siwe';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import {
+  authMethodLockKey,
+  boundedAcquire,
+  resolveAdvisoryLockTimeoutMs,
+  runLockGuardedTransaction,
+} from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
+import { AuthMethodDto } from '../dto/auth.dto';
 import { AuthMethod } from '../entities/auth-method.entity';
 import { User } from '../entities/user.entity';
 import { ChallengeService } from './challenge.service';
@@ -28,6 +42,7 @@ export interface LoginResult {
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly lockTimeoutMs: number;
 
   constructor(
     private readonly challengeService: ChallengeService,
@@ -35,11 +50,16 @@ export class AuthService {
     private readonly siweService: SiweService,
     private readonly tokenService: TokenService,
     private readonly clock: Clock,
+    configService: ConfigService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(AuthMethod)
-    private readonly authMethodRepository: Repository<AuthMethod>
-  ) {}
+    private readonly authMethodRepository: Repository<AuthMethod>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource
+  ) {
+    this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
+  }
 
   issueIdentityChallenge(publicKey: string): { challenge: string; expiresAt: Date } {
     const canonicalKey = this.identityService.normalizePublicKey(publicKey);
@@ -125,6 +145,59 @@ export class AuthService {
     await this.touchAuthMethod(userId, 'wallet', {
       identifierHash,
       identifierDisplay: this.siweService.truncateWalletAddress(address),
+    });
+  }
+
+  /**
+   * The account's login methods for the settings pane. The projection stops at
+   * the display columns, so `identifier_hash` never leaves the database — the
+   * hash is what makes a stored identifier unlinkable to the account that owns
+   * it, and serving it would undo that.
+   */
+  async listAuthMethods(userId: string): Promise<AuthMethodDto[]> {
+    const rows = await this.authMethodRepository.find({
+      where: { userId },
+      select: ['id', 'kind', 'identifierDisplay', 'createdAt', 'lastUsedAt'],
+      order: { createdAt: 'DESC', id: 'DESC' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      identifierDisplay: row.identifierDisplay,
+      createdAt: row.createdAt.toISOString(),
+      lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
+    }));
+  }
+
+  /**
+   * Unlink one login method. The identity challenge is re-proved first: a stolen
+   * access token alone must not be able to strip an account's other login
+   * methods, and only live possession of the account key can authorize it.
+   */
+  async unlinkAuthMethod(
+    userId: string,
+    publicKey: string,
+    methodId: string,
+    challenge: string,
+    signature: string
+  ): Promise<void> {
+    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
+    this.challengeService.consume(challenge, 'identity', canonicalKey);
+    this.identityService.verifyChallengeSignature(challenge, signature, canonicalKey);
+
+    await runLockGuardedTransaction(this.dataSource, async (manager) => {
+      await boundedAcquire(manager, [authMethodLockKey(userId)], this.lockTimeoutMs);
+      const repository = manager.getRepository(AuthMethod);
+      // One read answers both refusals: whether the row is the caller's, and
+      // whether it is the last one standing.
+      const owned = await repository.find({ where: { userId }, select: ['id'] });
+      if (!owned.some((row) => row.id === methodId)) {
+        throw new NotFoundException('Unknown login method');
+      }
+      if (owned.length <= 1) {
+        throw new ConflictException('An account must keep at least one login method');
+      }
+      await repository.delete({ id: methodId, userId });
     });
   }
 

@@ -1,10 +1,12 @@
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 import request from 'supertest';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createSiweMessage } from 'viem/siwe';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { authMethodLockKey } from '../common/advisory-lock';
 import { Clock, SystemClock } from '../common/clock';
 import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
@@ -345,21 +347,21 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
   });
 
-  describe('SIWE secondary auth', () => {
-    async function siweSign(account: ReturnType<typeof privateKeyToAccount>) {
-      const nonceRes = await request(http()).post('/auth/siwe/challenge').send({}).expect(200);
-      const message = createSiweMessage({
-        address: account.address,
-        chainId: 1,
-        domain: 'localhost:5173',
-        nonce: nonceRes.body.nonce,
-        uri: 'http://localhost:5173',
-        version: '1',
-      });
-      const signature = await account.signMessage({ message });
-      return { message, signature };
-    }
+  async function siweSign(account: ReturnType<typeof privateKeyToAccount>) {
+    const nonceRes = await request(http()).post('/auth/siwe/challenge').send({}).expect(200);
+    const message = createSiweMessage({
+      address: account.address,
+      chainId: 1,
+      domain: 'localhost:5173',
+      nonce: nonceRes.body.nonce,
+      uri: 'http://localhost:5173',
+      version: '1',
+    });
+    const signature = await account.signMessage({ message });
+    return { message, signature };
+  }
 
+  describe('SIWE secondary auth', () => {
     it('refuses login for an unlinked wallet — no implicit creation through SIWE', async () => {
       const account = privateKeyToAccount(generatePrivateKey());
       const { message, signature } = await siweSign(account);
@@ -484,6 +486,240 @@ describe('auth HTTP flows (real Postgres)', () => {
         })
         .expect(200);
       expect(loginRes.body.isNewUser).toBe(false);
+    });
+  });
+
+  describe('login methods', () => {
+    const authMethods = () => db.dataSource.getRepository(AuthMethod);
+
+    async function freshChallenge(identity: ReturnType<typeof newIdentity>): Promise<string> {
+      const res = await request(http())
+        .post('/auth/challenge')
+        .send({ publicKey: identity.publicKeyCompressed })
+        .expect(200);
+      return res.body.challenge;
+    }
+
+    /** An account whose identity method is joined by a linked wallet. */
+    async function accountWithTwoMethods() {
+      const { identity, loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const link = await siweSign(privateKeyToAccount(generatePrivateKey()));
+      await request(http())
+        .post('/auth/siwe/link')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(link)
+        .expect(201);
+      return { identity, accessToken, userId: jwtPayload(accessToken).sub };
+    }
+
+    function listMethods(accessToken: string) {
+      return request(http()).get('/auth/methods').set('Authorization', `Bearer ${accessToken}`);
+    }
+
+    function unlink(accessToken: string, body: Record<string, string>) {
+      return request(http())
+        .post('/auth/unlink')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(body);
+    }
+
+    async function signedUnlink(
+      identity: ReturnType<typeof newIdentity>,
+      methodId: string
+    ): Promise<Record<string, string>> {
+      const challenge = await freshChallenge(identity);
+      return { methodId, challenge, signature: signChallenge(challenge, identity.privateKey) };
+    }
+
+    it('lists only the caller rows, in display form, never the identifier hash', async () => {
+      const mine = await accountWithTwoMethods();
+      const theirs = await accountWithTwoMethods();
+
+      const res = await listMethods(mine.accessToken).expect(200);
+
+      expect(res.body).toHaveLength(2);
+      expect(res.body.map((row: { kind: string }) => row.kind).sort()).toEqual([
+        'identity',
+        'wallet',
+      ]);
+      for (const row of res.body) {
+        expect(Object.keys(row).sort()).toEqual([
+          'createdAt',
+          'id',
+          'identifierDisplay',
+          'kind',
+          'lastUsedAt',
+        ]);
+      }
+      // Newest-created first.
+      expect(res.body[0].kind).toBe('wallet');
+
+      const mineIds = (await authMethods().find({ where: { userId: mine.userId } })).map(
+        (row) => row.id
+      );
+      expect(res.body.map((row: { id: string }) => row.id).sort()).toEqual(mineIds.sort());
+
+      // No stored hash may appear in any response — the caller's or anyone's.
+      const stored = await authMethods().find();
+      expect(stored).toHaveLength(4);
+      const serialized = JSON.stringify(res.body);
+      for (const row of stored) {
+        expect(serialized).not.toContain(row.identifierHash);
+      }
+      expect(serialized).not.toContain('identifierHash');
+
+      const theirsRes = await listMethods(theirs.accessToken).expect(200);
+      expect(theirsRes.body.map((row: { id: string }) => row.id).sort()).not.toEqual(
+        mineIds.sort()
+      );
+    });
+
+    it('unlinks a method the caller owns once the identity key is re-proved', async () => {
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+
+      const res = await unlink(accessToken, await signedUnlink(identity, wallet)).expect(200);
+      expect(res.body).toEqual({ success: true });
+      expect(await authMethods().count({ where: { userId } })).toBe(1);
+    });
+
+    it('refuses to unlink the last remaining method and keeps the row', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const userId = jwtPayload(accessToken).sub;
+      const only = (await authMethods().findOneOrFail({ where: { userId } })).id;
+
+      const res = await unlink(accessToken, await signedUnlink(identity, only)).expect(409);
+      expect(res.body.message).toBe('An account must keep at least one login method');
+      expect(await authMethods().count({ where: { userId } })).toBe(1);
+    });
+
+    it('refuses a replayed challenge and keeps the row', async () => {
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
+      const methods = await authMethods().find({ where: { userId } });
+      const body = await signedUnlink(identity, methods[0].id);
+
+      await unlink(accessToken, body).expect(200);
+      // The same challenge again, now aimed at the survivor.
+      await unlink(accessToken, { ...body, methodId: methods[1].id }).expect(401);
+      expect(await authMethods().count({ where: { userId } })).toBe(1);
+    });
+
+    it('refuses a challenge issued to a different key', async () => {
+      const { accessToken, userId } = await accountWithTwoMethods();
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+      const stranger = newIdentity();
+
+      const challenge = await freshChallenge(stranger);
+      await unlink(accessToken, {
+        methodId: wallet,
+        challenge,
+        signature: signChallenge(challenge, stranger.privateKey),
+      }).expect(401);
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
+    });
+
+    it('refuses a signature from the wrong key', async () => {
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+
+      const challenge = await freshChallenge(identity);
+      await unlink(accessToken, {
+        methodId: wallet,
+        challenge,
+        signature: signChallenge(challenge, newIdentity().privateKey),
+      }).expect(401);
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
+    });
+
+    it('refuses a scoped token on both routes', async () => {
+      const { identity, userId } = await accountWithTwoMethods();
+      const scoped = await ctx.app.get(JwtService).signAsync({
+        sub: userId,
+        publicKey: identity.publicKeyCompressed,
+        scope: 'device-approval',
+      });
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+
+      await listMethods(scoped).expect(403);
+      const refused = await unlink(scoped, await signedUnlink(identity, wallet)).expect(403);
+      expect(refused.body.message).toBe('Insufficient token scope');
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
+    });
+
+    it('refuses a token that carries no account key', async () => {
+      const { identity, userId } = await accountWithTwoMethods();
+      const keyless = await ctx.app.get(JwtService).signAsync({ sub: userId });
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+
+      const refused = await unlink(keyless, await signedUnlink(identity, wallet)).expect(403);
+      expect(refused.body.message).toBe('Insufficient token scope');
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
+    });
+
+    it('answers 404 for a method belonging to another account, and deletes nothing', async () => {
+      const mine = await accountWithTwoMethods();
+      const theirs = await accountWithTwoMethods();
+      const theirWallet = (
+        await authMethods().findOneOrFail({ where: { userId: theirs.userId, kind: 'wallet' } })
+      ).id;
+
+      const res = await unlink(
+        mine.accessToken,
+        await signedUnlink(mine.identity, theirWallet)
+      ).expect(404);
+      expect(res.body.message).toBe('Unknown login method');
+      expect(await authMethods().count({ where: { userId: theirs.userId } })).toBe(2);
+      expect(await authMethods().count({ where: { userId: mine.userId } })).toBe(2);
+    });
+
+    it('leaves exactly one row when two unlinks race', async () => {
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
+      const methods = await authMethods().find({ where: { userId } });
+      // Both bodies are signed up front: a challenge is single-use, so the race
+      // has to be between two independently valid unlinks.
+      const first = await signedUnlink(identity, methods[0].id);
+      const second = await signedUnlink(identity, methods[1].id);
+
+      const statuses = (
+        await Promise.all([unlink(accessToken, first), unlink(accessToken, second)])
+      ).map((res) => res.status);
+
+      expect(statuses.sort()).toEqual([200, 409]);
+      expect(await authMethods().count({ where: { userId } })).toBe(1);
+    });
+
+    it('takes the account auth-method lock before it counts', async () => {
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
+      const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
+
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      try {
+        await holder.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+          authMethodLockKey(userId).toString(),
+        ]);
+
+        let settled = false;
+        const pending = unlink(accessToken, await signedUnlink(identity, wallet)).then((res) => {
+          settled = true;
+          return res;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(settled).toBe(false);
+        expect(await authMethods().count({ where: { userId } })).toBe(2);
+
+        await holder.rollbackTransaction();
+        expect((await pending).status).toBe(200);
+        expect(await authMethods().count({ where: { userId } })).toBe(1);
+      } finally {
+        if (holder.isTransactionActive) {
+          await holder.rollbackTransaction();
+        }
+        await holder.release();
+      }
     });
   });
 });

@@ -35,7 +35,10 @@ use crate::seams_bridge::{
     JsStagingStoreSeam, RecordTransportAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{Command, CommandOutcome, Event, NodeId, ReceivedShareRow, SharingView, SnapshotView};
+use crate::{
+    AuthMethod, Command, CommandOutcome, Event, NodeId, ReceivedShareRow, SharingView,
+    SnapshotView, VaultStorageView,
+};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -364,6 +367,44 @@ impl EngineHandle {
             Ok(rows
                 .into_iter()
                 .map(ReceivedShareRow::from_facade)
+                .map(JsValue::from)
+                .collect::<js_sys::Array>()
+                .into())
+        })
+    }
+
+    /// Reads the storage pane's whole view: the member's own settings minus the
+    /// provider credential, the account quota, and what a published prune still
+    /// owes. Resolves with the view; rejects with the engine error.
+    #[wasm_bindgen(js_name = vaultStorage)]
+    pub fn vault_storage(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let view = engine
+                .read()
+                .await
+                .vault_storage()
+                .await
+                .map_err(engine_error)?;
+            Ok(VaultStorageView::from_facade(view).into())
+        })
+    }
+
+    /// Reads this account's login methods for the account settings pane.
+    /// Resolves with the rows; rejects with the engine error.
+    #[wasm_bindgen(js_name = authMethods)]
+    pub fn auth_methods(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let rows = engine
+                .read()
+                .await
+                .auth_methods()
+                .await
+                .map_err(engine_error)?;
+            Ok(rows
+                .into_iter()
+                .map(AuthMethod::from_facade)
                 .map(JsValue::from)
                 .collect::<js_sys::Array>()
                 .into())

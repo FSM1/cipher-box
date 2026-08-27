@@ -80,3 +80,67 @@
   color: var(--color-warning);
   border-color: var(--color-warning);
 }
+
+.settings-quota {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.settings-quota-advisory {
+  margin: 0;
+  color: var(--color-warning);
+  font-size: var(--font-size-md);
+}
+
+.settings-stalls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-stall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs) var(--spacing-md);
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+}
+
+.settings-stall code {
+  overflow-wrap: anywhere;
+  color: var(--color-text-dim);
+}
+
+.settings-methods {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-method {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) 1fr max-content max-content;
+  gap: var(--spacing-xs) var(--spacing-md);
+  align-items: center;
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+}
+
+.settings-method-kind {
+  color: var(--color-text-dim);
+}
+
+.settings-method-id {
+  overflow-wrap: anywhere;
+}
+
+.settings-method-used {
+  color: var(--color-text-dim);
+}

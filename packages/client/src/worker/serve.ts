@@ -85,6 +85,16 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
+        case 'vaultStorage': {
+          const result = await host.vaultStorage();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'authMethods': {
+          const result = await host.authMethods();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'siweChallenge': {
           const result = await host.siweChallenge();
           post({ type: 'response', id: request.id, ok: true, result });

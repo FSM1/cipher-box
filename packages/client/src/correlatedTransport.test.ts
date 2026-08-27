@@ -8,10 +8,12 @@ import {
   overBudgetRemedy,
 } from './correlatedTransport.js';
 import type {
+  AuthMethodDescriptor,
   CommandOutcomeDescriptor,
   ReceivedShareDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
+  VaultStorageDescriptor,
   WriteHandle,
 } from './worker/protocol.js';
 
@@ -79,6 +81,12 @@ class ProbeTransport extends CorrelatedTransport {
     return unsupported();
   }
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return unsupported();
+  }
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return unsupported();
+  }
+  authMethods(): Promise<AuthMethodDescriptor[]> {
     return unsupported();
   }
   siweChallenge(): Promise<string> {

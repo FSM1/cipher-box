@@ -97,6 +97,18 @@ export function sessionCredentialLockKey(accountId: string): bigint {
 }
 
 /**
+ * Namespaced per-account key for the auth-method transaction. Unlink counts the
+ * account's surviving methods and deletes one under this key, so two concurrent
+ * unlinks cannot both observe two rows and both delete — the floor of one login
+ * method per account is only an invariant if the count and the delete serialize.
+ * Distinct from `accountLockKey` so an unlink never queues behind that account's
+ * upload quota gate.
+ */
+export function authMethodLockKey(userId: string): bigint {
+  return advisoryLockKey(`auth-method:${userId}`);
+}
+
+/**
  * Namespaced per-CID key for the SESSION lock that guards a durability window:
  * the upload path holds it across commit → pin, and retire (and the account
  * hard-delete cascade's post-commit unpin) holds it across commit → unpin.

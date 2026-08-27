@@ -14,6 +14,7 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import type { EngineHostLike } from './worker/engineHost.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
+  AuthMethodDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -22,6 +23,7 @@ import type {
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
+  VaultStorageDescriptor,
   WorkerMessage,
   WriteHandle,
   WriteTarget,
@@ -37,6 +39,9 @@ export const fakeWasmEnums = {
   Permission: { Read: 0, Write: 1 },
   PinMode: { Hosted: 0, External: 1, Dual: 2 },
   ByoKind: { Kubo: 0, Psa: 1, Pinata: 2 },
+  SettingsOrigin: { Resolved: 0, Stale: 1, Defaults: 2 },
+  ReclaimStallReason: { NodeUnreadable: 0, TargetStillLive: 1, TargetUnexpandable: 2 },
+  AuthMethodKind: { Identity: 0, Wallet: 1, Test: 2, Unknown: 3 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
   OpPhase: {
     DownloadStarted: 0,
@@ -114,6 +119,23 @@ export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDes
   };
 }
 
+/** A hosted vault whose ledger has drained, for transport-plumbing assertions. */
+export function emptyVaultStorage(): VaultStorageDescriptor {
+  return {
+    settings: {
+      pinMode: 'hosted',
+      byoEndpoint: null,
+      byoKind: null,
+      byoCredentialStored: false,
+      keepLatestVersions: null,
+      origin: 'resolved',
+    },
+    quota: { usedBytes: 0, limitBytes: 0, advisory: false },
+    pendingReclaimBytes: 0,
+    reclaimStalls: [],
+  };
+}
+
 const notStubbed = (method: string): Promise<never> =>
   Promise.reject(new Error(`${method} not stubbed`));
 
@@ -157,6 +179,14 @@ export class StubEngineHost implements EngineHostLike {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return notStubbed('receivedShares');
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    return notStubbed('vaultStorage');
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    return notStubbed('authMethods');
   }
 
   siweChallenge(): Promise<string> {
@@ -468,6 +498,8 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly sharingReads: Array<Uint8Array | null> = [];
   receivedShareReads = 0;
+  vaultStorageReads = 0;
+  authMethodReads = 0;
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
   readonly opened: Uint8Array[] = [];
@@ -491,6 +523,9 @@ export class FakeEngineTransport implements EngineTransport {
   respondSharing: (scope: Uint8Array | null) => Promise<SharingDescriptor> = (scope) =>
     Promise.resolve(emptySharing(scope ?? undefined));
   respondReceivedShares: () => Promise<ReceivedShareDescriptor[]> = () => Promise.resolve([]);
+  respondVaultStorage: () => Promise<VaultStorageDescriptor> = () =>
+    Promise.resolve(emptyVaultStorage());
+  respondAuthMethods: () => Promise<AuthMethodDescriptor[]> = () => Promise.resolve([]);
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
@@ -553,6 +588,16 @@ export class FakeEngineTransport implements EngineTransport {
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     this.receivedShareReads += 1;
     return this.respondReceivedShares();
+  }
+
+  vaultStorage(): Promise<VaultStorageDescriptor> {
+    this.vaultStorageReads += 1;
+    return this.respondVaultStorage();
+  }
+
+  authMethods(): Promise<AuthMethodDescriptor[]> {
+    this.authMethodReads += 1;
+    return this.respondAuthMethods();
   }
 
   siweChallenge(): Promise<string> {

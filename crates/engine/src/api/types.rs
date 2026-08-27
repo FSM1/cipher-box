@@ -51,6 +51,17 @@ pub(crate) struct TestLoginRequest<'a> {
     pub secret: &'a str,
 }
 
+/// The unlink body. It carries no `publicKey`: the server reads the account off
+/// the access token, and the challenge signature proves the identity key is
+/// live rather than naming which key answered.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnlinkMethodRequest<'a> {
+    pub method_id: &'a str,
+    pub challenge: &'a str,
+    pub signature: &'a str,
+}
+
 // --- auth responses (deserialized from JSON bodies) ---
 
 #[derive(Deserialize)]
@@ -153,6 +164,42 @@ impl ErrorBody {
 pub struct LoginOutcome {
     /// True when this login implicitly created the account (first login).
     pub is_new_user: bool,
+}
+
+/// One login method on the account, as `/auth/methods` serves it. Display form
+/// only: the identifier hash never crosses.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthMethod {
+    /// The row id, which [`ApiClient::unlink_auth_method`](super::ApiClient::unlink_auth_method)
+    /// names.
+    pub id: String,
+    /// Which login surface this row admits.
+    pub kind: AuthMethodKind,
+    /// A truncated, human-readable form of the identifier, when there is one.
+    #[serde(default)]
+    pub identifier_display: Option<String>,
+    /// When the row was created, ISO 8601.
+    pub created_at: String,
+    /// When the row last logged in, ISO 8601, or absent if it never has.
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+}
+
+/// Which login surface an [`AuthMethod`] admits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMethodKind {
+    /// The account identity key (challenge-signature login).
+    Identity,
+    /// A linked SIWE wallet.
+    Wallet,
+    /// The staging-gated test login.
+    Test,
+    /// A kind this client does not know. Rendered as-is rather than refused —
+    /// the row is a display fact, not a trust decision.
+    #[serde(other)]
+    Unknown,
 }
 
 /// A freshly issued SIWE nonce to embed in an EIP-4361 message.

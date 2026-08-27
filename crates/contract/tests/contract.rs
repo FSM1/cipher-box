@@ -6,12 +6,15 @@
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
-//! SIWE secondary surface, logout revocation, the pin/name registry and quota,
-//! the mailbox lifecycle, and a raw endpoint round-trip.
+//! SIWE secondary surface, the login-method list and its unlink, logout
+//! revocation, the pin/name registry and quota, the mailbox lifecycle, and a raw
+//! endpoint round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
 //! sets it (and boots the stack), so the assertions always run there.
+
+use std::collections::BTreeSet;
 
 use cipherbox_contract::{
     MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_bytes, hex_to_scalar,
@@ -25,8 +28,8 @@ use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
-    ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
-    REGISTRY_BATCH_REFUSED,
+    ApiClient, ApiError, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
+    NameRegistration, REGISTRY_BATCH_REFUSED,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
@@ -350,6 +353,99 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
     assert!(
         matches!(error, ApiError::Unauthorized | ApiError::Status { .. }),
         "unlinked/invalid SIWE is refused, got {error:?}"
+    );
+}
+
+// --- login methods: list and unlink (blueprint/api.md) ---------------------
+
+/// A fresh account together with the identity key that created it, which the
+/// unlink surface re-proves.
+async fn fresh_account_with_signer(base: &str) -> (Client, IdentityChallengeSigner) {
+    let client = new_client(base);
+    let signer = random_identity_signer();
+    expect_auth(
+        "identity login creates the account",
+        client.login_identity(&signer).await,
+    );
+    (client, signer)
+}
+
+#[tokio::test]
+async fn auth_methods_lists_only_the_callers_rows_in_display_form() {
+    let base = require_stack!("auth_methods_lists_only_the_callers_rows_in_display_form");
+    let mine = fresh_account(&base).await;
+    let theirs = fresh_account(&base).await;
+
+    let rows = mine.auth_methods().await.expect("the caller's methods");
+    assert_eq!(
+        rows.len(),
+        1,
+        "a fresh account carries exactly its identity row"
+    );
+    assert_eq!(rows[0].kind, AuthMethodKind::Identity);
+    assert!(!rows[0].id.is_empty() && !rows[0].created_at.is_empty());
+    if let Some(display) = &rows[0].identifier_display {
+        assert!(
+            display.len() < 64,
+            "the row carries a display form, never the 32-byte identifier hash: {display:?}"
+        );
+    }
+
+    let ours: BTreeSet<&String> = rows.iter().map(|row| &row.id).collect();
+    let others = theirs
+        .auth_methods()
+        .await
+        .expect("the other account's rows");
+    assert!(
+        others.iter().all(|row| !ours.contains(&row.id)),
+        "the read is scoped to the caller's own rows"
+    );
+}
+
+#[tokio::test]
+async fn unlinking_the_last_method_is_refused() {
+    let base = require_stack!("unlinking_the_last_method_is_refused");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+    let rows = client.auth_methods().await.expect("methods");
+    assert_eq!(rows.len(), 1, "a fresh account has one method to keep");
+
+    let error = client
+        .unlink_auth_method(&rows[0].id, &signer)
+        .await
+        .expect_err("an account must keep at least one login method");
+    assert!(
+        matches!(error, ApiError::Status { status: 409, .. }),
+        "the last remaining method is a 409, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        1,
+        "the refused unlink deleted nothing"
+    );
+}
+
+/// The challenge is bound to the key that asked for it, so a signature from any
+/// other key proves nothing about the account being stripped — and that check
+/// runs ahead of the last-method count, which is why a one-method account still
+/// answers 401 rather than 409.
+#[tokio::test]
+async fn unlink_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("unlink_without_a_fresh_challenge_is_refused");
+    let (client, _signer) = fresh_account_with_signer(&base).await;
+    let rows = client.auth_methods().await.expect("methods");
+
+    let error = client
+        .unlink_auth_method(&rows[0].id, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not unlink");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        rows.len(),
+        "the refused unlink deleted nothing"
     );
 }
 

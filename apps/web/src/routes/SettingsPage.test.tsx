@@ -65,6 +65,18 @@ describe('the settings route', () => {
     expect(screen.getByTestId('vault-settings-form')).toBeTruthy();
   });
 
+  it('renders the quota chrome beside the storage form', async () => {
+    await act(async () => void renderSettings());
+
+    expect(screen.getByTestId('settings-quota')).toBeTruthy();
+  });
+
+  it('hosts the login-methods pane', async () => {
+    await act(async () => void renderSettings());
+
+    expect(screen.getByTestId('settings-auth-methods')).toBeTruthy();
+  });
+
   it('asks before forgetting the device, and erases nothing until it is told to', async () => {
     const engine = renderSettings();
     const forget = vi.spyOn(engine.client.facade, 'forgetDevice');

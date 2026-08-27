@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 import { HEX_32_BYTES_RE } from '../../common/patterns';
+import { AUTH_METHOD_KINDS, type AuthMethodKind } from '../entities/auth-method.entity';
 
 const HEX_PUBLIC_KEY = /^(02|03)[0-9a-fA-F]{64}$|^04[0-9a-fA-F]{128}$/;
 const HEX_COMPACT_SIGNATURE = /^[0-9a-fA-F]{128}$/;
@@ -82,6 +83,50 @@ export class SiweLoginRequestDto {
   @IsString()
   @Matches(HEX_ETH_SIGNATURE, { message: 'signature must be a 65-byte 0x-prefixed hex string' })
   signature!: `0x${string}`;
+}
+
+export class AuthMethodDto {
+  @ApiProperty({ description: 'Row id, the handle POST /auth/unlink takes', format: 'uuid' })
+  id!: string;
+
+  @ApiProperty({ description: 'How the method authenticates', enum: AUTH_METHOD_KINDS })
+  kind!: AuthMethodKind;
+
+  @ApiProperty({
+    description: 'Truncated human-readable identifier; the stored hash never crosses',
+    type: String,
+    nullable: true,
+    example: '02a1633c…51b5dc',
+  })
+  identifierDisplay!: string | null;
+
+  @ApiProperty({ description: 'When the method was linked, ISO 8601' })
+  createdAt!: string;
+
+  @ApiProperty({
+    description: 'Last login through this method, ISO 8601',
+    type: String,
+    nullable: true,
+  })
+  lastUsedAt!: string | null;
+}
+
+export class UnlinkMethodRequestDto {
+  @ApiProperty({ description: 'The auth-method row to unlink', format: 'uuid' })
+  @IsUUID()
+  methodId!: string;
+
+  @ApiProperty({ description: 'A fresh challenge from POST /auth/challenge, verbatim' })
+  @IsString()
+  @MaxLength(256)
+  challenge!: string;
+
+  @ApiProperty({
+    description: 'Compact secp256k1 signature over sha256(challenge), 64 bytes hex',
+  })
+  @IsString()
+  @Matches(HEX_COMPACT_SIGNATURE, { message: 'signature must be 64 bytes of hex' })
+  signature!: string;
 }
 
 export class RefreshRequestDto {

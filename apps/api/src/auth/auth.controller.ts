@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
+  Get,
   HttpCode,
   Post,
   Req,
@@ -22,6 +24,7 @@ import type { Request, Response } from 'express';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import {
+  AuthMethodDto,
   ChallengeRequestDto,
   ChallengeResponseDto,
   HEX_REFRESH_TOKEN,
@@ -33,6 +36,7 @@ import {
   TestLoginRequestDto,
   TestLoginResponseDto,
   TokenResponseDto,
+  UnlinkMethodRequestDto,
 } from './dto/auth.dto';
 import { AuthenticatedRequest, JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
@@ -130,6 +134,46 @@ export class AuthController {
     @Req() request: AuthenticatedRequest
   ): Promise<LogoutResponseDto> {
     await this.authService.siweLink(request.user.userId, body.message, body.signature);
+    return { success: true };
+  }
+
+  @Get('methods')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'List the login methods on the authenticated account, in display form only',
+  })
+  @ApiOkResponse({ type: AuthMethodDto, isArray: true })
+  listMethods(@Req() request: AuthenticatedRequest): Promise<AuthMethodDto[]> {
+    return this.authService.listAuthMethods(request.user.userId);
+  }
+
+  @Post('unlink')
+  @HttpCode(200)
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Unlink one login method, re-proving the account identity key',
+  })
+  @ApiOkResponse({ type: LogoutResponseDto })
+  async unlink(
+    @Body() body: UnlinkMethodRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): Promise<LogoutResponseDto> {
+    const { userId, publicKey } = request.user;
+    // The re-proof runs against the key the session already proved, never one
+    // the body names; a token carrying none cannot re-prove anything.
+    if (!publicKey) {
+      throw new ForbiddenException('Insufficient token scope');
+    }
+    await this.authService.unlinkAuthMethod(
+      userId,
+      publicKey,
+      body.methodId,
+      body.challenge,
+      body.signature
+    );
     return { success: true };
   }
 
