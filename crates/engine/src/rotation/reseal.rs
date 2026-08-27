@@ -324,10 +324,9 @@ pub enum ResealError {
     /// build's own decoder always rejects. Named apart from the generic encode
     /// fold so an operator can tell an over-budget body from an encoder fault.
     WriteBodyTooLarge,
-    /// The freshly minted section is past the budget the scope root's own
-    /// authoring reserved for it (`content::limits`). The two limits are one
-    /// coordination: the author holds a root's other bytes under the
-    /// complement, so a section within this budget always fits beside them.
+    /// The freshly minted section is past
+    /// [`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES),
+    /// the budget the scope root's own authoring reserves room for.
     /// Release-active (AGENTS.md rule 8).
     SectionNotResealable {
         /// The minted section's encoded size.
@@ -917,9 +916,6 @@ pub fn reseal_scope_root<E: Entropy>(
         write_body,
         unknown: PreservedFields::new(),
     };
-    // The author side holds a root's other bytes under the complement of this
-    // budget ([`MAX_RESEALABLE_SECTION_BYTES`]), so the pair is what keeps a
-    // scope root re-sealable rather than merely publishable once.
     let size = encode_grant_section(&section)
         .map_err(ResealError::Encode)?
         .len();

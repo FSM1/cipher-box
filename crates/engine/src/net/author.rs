@@ -339,14 +339,11 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     })
 }
 
-/// Encode a scope root, and hold everything outside its grant section to the
-/// budget that leaves the next re-seal's own section room beside it
-/// (release-active, security rule 8).
+/// Encode a scope root, holding everything outside its grant section to
+/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8).
 ///
-/// A root over that budget still fits the block ceiling, so nothing downstream
-/// refuses it — but its re-seal mints a section the sum can no longer hold, and
-/// every rotation pass then refuses identically. The record only ever grows, so
-/// this is the one place the condition is still preventable.
+/// The record only ever grows, so this is the one place a root with no
+/// authorable re-seal is still preventable.
 fn encode_scope_root(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     let head = encode(envelope)?;
     let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);

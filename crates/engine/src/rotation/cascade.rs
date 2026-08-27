@@ -616,11 +616,8 @@ where
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
                     direct_child_scope_index: &target.direct_child_scope_index,
-                    // From the owner's plan, never the descendant's record: a
-                    // commitment is epoch-free, so a pre-cut one a write
-                    // grantee republishes here still verifies at every gate
-                    // stage and would re-admit the revokee to the fresh read
-                    // scope seed.
+                    // From the owner's plan, never the descendant's record
+                    // ([`CommittedSet::revoked_identities`]).
                     revoked_identities: root_plan.committed.revoked_identities,
                 },
                 current_override_seed: &target.override_seed,
