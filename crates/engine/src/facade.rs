@@ -4739,7 +4739,8 @@ where {
             // `writeEpoch`, and the root it signed binds the same value as its
             // owner-write blob's AAD — so the floor follows it here, exactly as
             // a later consult of the pointer this wave just wrote would move it.
-            // Monotonic-max, so it can never roll one back.
+            // Monotonic-max, so it can never roll one back. The wave holds no
+            // lease by the time it returns, so the raise is never deferred.
             floor::advance_write_epoch_on_sight(
                 &self.seams.floor_store,
                 &target.scope.scope_id,
@@ -4747,6 +4748,12 @@ where {
             )
             .await
             .map_err(EngineError::from_seam)?;
+            // Every wave moves the root, so every wave owes the index the same
+            // repoint — the vault root excepted, which no index names.
+            if node.0 != self.snapshot.borrow().root.0 {
+                self.repoint_child_scope_index(node, &write.new_root_name)
+                    .await?;
+            }
         }
         Ok(report)
     }
@@ -4776,6 +4783,17 @@ where {
         permission: Permission,
         expires_at: Option<UnixMillis>,
     ) -> Result<CommandOutcome, EngineError> {
+        // A link's fragment and the owner's own record both bind the scope root
+        // name the mint published at, and the write-scope cut moves it — so a
+        // write link would be unclaimable at the name it carries and
+        // unlocatable at the tag it recorded. The cut has to run before the
+        // fragment is sealed, which the mint's record-before-publish order does
+        // not admit.
+        if permission == Permission::Write {
+            return Err(EngineError::UnsupportedTarget {
+                check: "write-links-need-a-write-scope-cut",
+            });
+        }
         self.share_scope(node, ScopeShare::InviteLink { expires_at }, permission)
             .await
     }
@@ -4904,7 +4922,6 @@ where {
         };
 
         let scope_root_name = grantee.ipns_name();
-        let committed = cipherbox_core::seal::Permission::from(permission);
         let outcome = match share {
             ScopeShare::Contact(contact) => create_grant(
                 &mut SharedEntropy(&self.entropy),
@@ -4917,7 +4934,6 @@ where {
                     enc_pub: &contact.enc_subkey(),
                     display_name,
                 },
-                committed,
                 &owner,
                 &parent_plan,
             )
@@ -4938,7 +4954,6 @@ where {
                     grantee: &grantee,
                     parent: &parent_plan,
                     expires_at,
-                    permission: committed,
                 },
             )
             .await
@@ -5013,15 +5028,9 @@ where {
             owner_signer: session.identity(),
         })
         .map_err(EngineError::from_revoke)?;
-        let moved = self
-            .drive_cut(node, &target, scope_root_name, &cut)
-            .await?
-            .write
-            .ok_or(EngineError::UnsupportedTarget {
-                check: "write-grant-cut-rotated-no-write-plane",
-            })?
-            .new_root_name;
-        self.repoint_child_scope_index(node, &moved).await
+        self.drive_cut(node, &target, scope_root_name, &cut)
+            .await
+            .map(|_| ())
     }
 
     /// Point the vault root's direct-child-scope index at the name a write-scope

@@ -1417,7 +1417,6 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             enc_pub: &recipient_enc_pub,
             display_name: "Shared Folder".to_string(),
         },
-        Permission::Read,
         &OwnerGrantKeys {
             enc_secret: &owner_enc,
             identity_signer: &owner_identity,

@@ -335,11 +335,11 @@ fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
     );
 }
 
-/// A write link runs the same mint a read link does, so an offline engine
-/// stops at the scope material it has not resolved rather than refusing the
-/// permission itself.
+/// A link's fragment and the owner's own record both bind the name the mint
+/// published at, and the write-scope cut moves it — so a write link is refused
+/// ahead of every other check rather than minted unclaimable.
 #[test]
-fn minting_a_write_invite_link_reaches_the_same_mint_a_read_link_does() {
+fn minting_a_write_invite_link_is_refused() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
@@ -351,8 +351,8 @@ fn minting_a_write_invite_link_reaches_the_same_mint_a_read_link_does() {
             permission: Permission::Write,
             expires_at: None,
         })),
-        Err(EngineError::ContentUnavailable {
-            message: "no write scope seed is held for the vault root".to_owned()
+        Err(EngineError::UnsupportedTarget {
+            check: "write-links-need-a-write-scope-cut"
         }),
     );
 }

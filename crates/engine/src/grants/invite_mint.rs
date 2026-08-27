@@ -16,7 +16,6 @@
 
 use core::fmt;
 
-use cipherbox_core::seal::Permission;
 use cipherbox_core::suite::contact::ContactCode;
 use zeroize::Zeroizing;
 
@@ -45,13 +44,6 @@ pub struct InviteMintPlan<'a> {
     /// recorded copy is the authority for it
     /// ([`RecordedInvite::expires_at`](super::RecordedInvite::expires_at)).
     pub expires_at: Option<UnixMillis>,
-    /// What the link grants. A `Permission::Write` link is a **bearer** write
-    /// capability: the fragment carries the seed every name in the minted scope
-    /// derives from, so revoking or expiring one is only real via a write
-    /// rotation (blueprint/engine.md "Invites"). The caller mints
-    /// [`GranteeScopePlan::write_scope_seed`] fresh and runs that rotation, as
-    /// for any write grant.
-    pub permission: Permission,
 }
 
 /// A minted link as the host must present it: one opaque URL fragment
@@ -121,14 +113,13 @@ where
     S: InviteStore,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
-    let scope_root_name = plan.grantee.ipns_name();
     let minted = mint_invite_grant(
         owner.identity_signer,
         owner.enc_secret,
         &invitee,
         &plan.grantee.scope_id,
-        &scope_root_name,
-        plan.permission,
+        plan.grantee.write_scope_seed,
+        plan.grantee.permission(),
         plan.expires_at,
     )
     .map_err(InviteMintError::Mint)?;
@@ -139,7 +130,7 @@ where
         invite_secret: invitee.secret().clone(),
         owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
             .encode(),
-        scope_root_name: scope_root_name.as_str().as_bytes().to_vec(),
+        scope_root_name: plan.grantee.ipns_name().as_str().as_bytes().to_vec(),
     }
     .encode()
     .map_err(InviteMintError::Mint)?;
@@ -181,6 +172,8 @@ mod tests {
     use cipherbox_core::suite::secret::SECRET_LEN;
     use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
     use zeroize::Zeroizing;
+
+    use cipherbox_core::seal::Permission;
 
     use crate::grants::{RecordedInvite, StagingInviteStore, recipient_blinded_tag};
     use crate::rotation::{
@@ -453,7 +446,6 @@ mod tests {
                     grantee: &grantee,
                     parent: &parent,
                     expires_at,
-                    permission: Permission::Read,
                 },
             ))
         }

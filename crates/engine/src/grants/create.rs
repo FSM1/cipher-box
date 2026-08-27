@@ -11,8 +11,8 @@
 //!
 //! A **write** grant owes one further step this module does not run: the name
 //! wave that moves the minted scope off the names the scope it left derives.
-//! [`GranteeScopePlan::write_scope_seed`] carries the fresh seed that wave cuts
-//! to; the wave itself is
+//! [`GranteeScopePlan::write_cut`] carries the fresh seed the mint seals under;
+//! the wave itself is
 //! [`rotate_scope_write`](crate::rotation::rotate_scope_write), driven by the
 //! caller over the minted root.
 //!
@@ -108,9 +108,23 @@ impl GranteeScopePlan<'_> {
         derive_write_name(self.write_scope_seed, &self.scope_id)
     }
 
+    /// The permission this plan mints at, **derived** from
+    /// [`write_cut`](Self::write_cut) rather than taken as its own parameter.
+    ///
+    /// A `Permission::Write` row's blob carries
+    /// [`sealed_write_scope_seed`](Self::sealed_write_scope_seed) verbatim, so a
+    /// write permission paired with no cut would seal the seed that derives
+    /// every name in the scope the folder is leaving. Reading one off the other
+    /// makes that pair unrepresentable instead of refusing it after the fact.
+    pub fn permission(&self) -> Permission {
+        match self.write_cut {
+            Some(_) => Permission::Write,
+            None => Permission::Read,
+        }
+    }
+
     /// The write-scope seed the minted scope's blobs and owner-write blob are
-    /// sealed under — the cut for a write grant, the inherited seed otherwise
-    /// (see [`write_cut`](Self::write_cut)).
+    /// sealed under — the cut for a write grant, the inherited seed otherwise.
     fn sealed_write_scope_seed(&self) -> &[u8; SECRET_LEN] {
         self.write_cut.unwrap_or(self.write_scope_seed)
     }
@@ -318,10 +332,10 @@ pub trait ScopeRootPromoter {
 /// publish**; past that point the sequence is not atomic — see
 /// [`CreateGrantError`] for what each post-publish variant leaves committed.
 ///
-/// A `Permission::Write` grant additionally owes the write-scope cut: the caller
-/// mints [`GranteeScopePlan::write_scope_seed`] fresh, and runs the name wave
-/// over the minted scope once this returns (blueprint/engine.md "Grant
-/// creation").
+/// The permission comes from [`GranteeScopePlan::permission`], so a write grant
+/// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
+/// the name wave over the minted scope, which the caller runs once this returns
+/// (blueprint/engine.md "Grant creation").
 #[allow(clippy::too_many_arguments)]
 pub async fn create_grant<E, R, P, M>(
     entropy: &mut E,
@@ -330,7 +344,6 @@ pub async fn create_grant<E, R, P, M>(
     mailbox: &M,
     grantee: &GranteeScopePlan<'_>,
     recipient: &GrantRecipient<'_>,
-    permission: Permission,
     owner: &OwnerGrantKeys<'_>,
     parent: &ParentScopePlan<'_>,
 ) -> Result<CreateGrantOutcome, CreateGrantError>
@@ -346,6 +359,7 @@ where
     }
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
+    let permission = grantee.permission();
     let row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
@@ -1170,7 +1184,6 @@ mod tests {
             &recorder,
             &grantee,
             &recipient,
-            Permission::Read,
             &owner,
             &parent,
         ))
@@ -1303,7 +1316,6 @@ mod tests {
                 &mailbox,
                 &grantee,
                 &recipient,
-                Permission::Read,
                 &owner,
                 &parent,
             ))

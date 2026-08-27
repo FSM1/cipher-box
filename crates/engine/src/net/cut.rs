@@ -29,9 +29,9 @@ use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     AscentAuthority, CascadeError, CascadeOutcome, CommittedSet, CutRotator, MAX_ROTATION_ATTEMPTS,
     ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokedCommittedSet,
-    RotateScopePlan, RotateScopeWritePlan, ScopeRootIdentity, ScopeRootPublisher, WriteHistory,
-    WriteRotateError, WriteRotationOutcome, bounded, cascade_rotate_scope, reseal_scope_root,
-    rotate_scope_write,
+    RotateScopePlan, RotateScopeWritePlan, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome, bounded,
+    cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -179,9 +179,26 @@ where
             let current = net.resolve_anchored(&scope).await.map_err(resolve_failed)?;
             // Idempotent by comparison, never by assumption: a read cascade or a
             // grant mint may already have published this set, and republishing
-            // would spend a CAS to change nothing.
-            if current.commitment == cut.commitment {
+            // would spend a CAS to change nothing. Both halves are compared —
+            // the wave re-mints from the ledger and refuses one the commitment
+            // does not commit (`net/rotation.rs` `remint_grants`), so an equal
+            // commitment over a divergent ledger is a record this step still
+            // owes a republish.
+            if current.commitment == cut.commitment && current.grant_ledger == cut.grant_ledger {
                 return Ok(());
+            }
+            // The publisher derives this record's IPNS signer from the seed the
+            // root's own owner-write blob carries, so a root whose seed does not
+            // derive the name it sits at cannot be republished here — it would
+            // sign under a key the name does not answer to. Only the grant
+            // mint's interim state is shaped that way, and the comparison above
+            // leaves it alone. Release-active (AGENTS.md rule 8).
+            if derive_write_name(&current.write_scope_seed, &scope_root.0) != *self.scope_root_name
+            {
+                return Err(CascadeError::Publish {
+                    scope_id: scope_root.0,
+                    error: RotationPublishError::Rejected,
+                });
             }
             // Metadata-only: the same override seed at the same read epoch, so
             // `prev = None` mints no history link and the read-epoch floor never

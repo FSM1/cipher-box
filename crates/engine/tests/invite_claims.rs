@@ -120,7 +120,7 @@ fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
         &owner_enc(),
         &invitee,
         &SCOPE,
-        &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
+        &WRITE_SCOPE_SEED,
         permission,
         expires_at,
     )

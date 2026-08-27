@@ -465,7 +465,7 @@ fn expiring_invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>)
         &kdf::enc_subkey(&SECRET),
         &invitee,
         &SCOPE,
-        &derive_write_name(&WRITE_SCOPE_SEED, &SCOPE),
+        &WRITE_SCOPE_SEED,
         CorePermission::Read,
         expires_at,
     )
@@ -830,27 +830,71 @@ fn a_write_grant_cuts_the_granted_subtree_into_its_own_write_scope() {
     );
 }
 
-/// A write link is a bearer write capability, so it owes the same write-scope
-/// cut a personal write grant does: the fragment's seed must derive the granted
-/// scope alone, never the vault above it (blueprint/engine.md "Invites").
+/// The record the mint publishes before the wave lingers for ever — the wave
+/// retires interior names, never the root it moved off — and the recipient's tag
+/// at that name is the one it commits. So the seed it hands them has to be the
+/// mint's own cut, never the seed the scope above publishes under.
+///
+/// This is the one regression that would hand out vault-wide write capability,
+/// and the moved root cannot show it: its blob always carries the wave's fresh
+/// seed, whatever the mint sealed.
 #[test]
-fn a_write_invite_link_cuts_the_granted_subtree_into_its_own_write_scope() {
+fn the_record_a_write_grant_publishes_before_the_wave_withholds_the_vaults_seed() {
     let mut fx = GrantScenario::new();
-    let inherited_name = write_name(fx.folder);
+    let interim_name = write_name(fx.folder);
 
-    let outcome = block_on(fx.engine.command(Command::CreateInviteLink {
-        node: fx.folder,
-        permission: Permission::Write,
-        expires_at: None,
-    }))
-    .expect("the write link mints");
-    assert!(matches!(outcome, CommandOutcome::InviteLinkMinted(_)));
-
-    let repoint = fx.granted_scope_repoint();
-    assert_eq!(repoint.prev_root.as_ref(), Some(&inherited_name));
     assert_eq!(
-        repoint.write_epoch, 2,
-        "the link's scope sits on its own write clock"
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let interim = published_grant_section_at(&fx.world, &fx.blocks, &interim_name)
+        .expect("the pre-wave root lingers at the name the vault's seed derives");
+    let seed = grantee_write_scope_seed(&interim, &interim_name, &fx.folder.0, 1);
+    assert_ne!(
+        derive_write_name(&seed, &ROOT.0),
+        write_name(ROOT),
+        "the interim blob must not convey the seed the vault's own names derive from"
+    );
+    assert_ne!(
+        derive_write_name(&seed, &fx.folder.0),
+        interim_name,
+        "nor the seed that derives the name the record itself sits at"
+    );
+}
+
+/// The revoke control must survive a downgrade. The wave moves the scope root,
+/// and the owner reaches an interior root through the vault root's own index —
+/// so a cut that moves a root and leaves that index behind strands every later
+/// owner action on the scope at a name it has moved off.
+#[test]
+fn a_downgraded_grant_can_still_be_revoked() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert_eq!(
+        block_on(fx.engine.command(Command::Downgrade {
+            node: fx.folder,
+            recipient_identity_public_key: recipient.clone(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient,
+        })),
+        Ok(CommandOutcome::Done),
+        "the owner still reaches the scope the downgrade's wave moved"
+    );
+    assert_eq!(
+        fx.committed_permission(&fx.granted_scope_repoint().current_root),
+        None,
+        "and the revoke cut their row from the moved root"
     );
 }
 
