@@ -5,6 +5,9 @@ import type { LoginFacade } from '@cipherbox/login';
  * The facade the login sequence starts, over Tauri IPC (blueprint/desktop.md,
  * "Tauri shell"). What stands behind these two commands is
  * `src-tauri/src/session.rs`.
+ *
+ * `logout` reaches the engine's own `Command::Logout`, which revokes this
+ * device's refresh token at the API before the local copy goes.
  */
 export const shellFacade: LoginFacade = {
   // The buffer goes over IPC raw. Serialized as a JSON number array it would

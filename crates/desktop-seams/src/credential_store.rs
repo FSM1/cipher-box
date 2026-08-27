@@ -12,6 +12,25 @@ use crate::offload::Offload;
 const REFRESH_TOKEN_ACCOUNT: &str = "refresh-token";
 /// Keyring account label for the last-account id.
 const LAST_ACCOUNT_ID_ACCOUNT: &str = "last-account-id";
+/// Keyring account label for the Core Kit store's wrapping key.
+const CORE_KIT_WRAPPING_KEY_ACCOUNT: &str = "core-kit-wrapping-key";
+
+/// Custody of the key that seals the Core Kit store
+/// ([`SealedCoreKitStore`](crate::SealedCoreKitStore)).
+///
+/// A trait rather than an inherent method, because the store is written against
+/// whichever credential store the host built: the keyring in production, the
+/// file double on a headless runner.
+pub trait CoreKitWrappingKey {
+    /// Persists the wrapping key, replacing any previous one.
+    fn store_core_kit_wrapping_key(&self, key: &[u8]) -> impl Future<Output = SeamResult<()>>;
+    /// The persisted wrapping key, if this device holds one.
+    fn load_core_kit_wrapping_key(
+        &self,
+    ) -> impl Future<Output = SeamResult<Option<Zeroizing<Vec<u8>>>>>;
+    /// Deletes the wrapping key. Idempotent.
+    fn clear_core_kit_wrapping_key(&self) -> impl Future<Output = SeamResult<()>>;
+}
 
 fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
     keyring::Entry::new(service, account)
@@ -23,10 +42,15 @@ fn entry(service: &str, account: &str) -> SeamResult<keyring::Entry> {
 /// blueprint/engine.md "CredentialStore", desktop column;
 /// blueprint/desktop.md "OS keychain".
 ///
-/// Holds **only** the rotating refresh token and the last-account id, under
-/// one service name, two accounts — never key material, never a seed, never
-/// the short-lived access JWT (which lives in engine memory only). Both
-/// values are stored as opaque secret bytes.
+/// Holds the rotating refresh token, the last-account id, and the Core Kit
+/// store's wrapping key, under one service name, one account each — never a
+/// seed, and never the short-lived access JWT (which lives in engine memory
+/// only). Every value is stored as opaque secret bytes.
+///
+/// The wrapping key is the one key this store holds, and it is the reason it
+/// holds it: what it seals is local state only, it derives nothing in the KDF
+/// catalog, and it never leaves this device (blueprint/desktop.md "OS
+/// keychain").
 ///
 /// `Debug` is derived and safe: the struct carries only the service name and a
 /// queue handle, both non-secret; no token is ever held in memory by this
@@ -121,6 +145,25 @@ impl KeyringCredentialStore {
     }
 }
 
+impl CoreKitWrappingKey for KeyringCredentialStore {
+    fn store_core_kit_wrapping_key(&self, key: &[u8]) -> impl Future<Output = SeamResult<()>> {
+        self.store_secret(CORE_KIT_WRAPPING_KEY_ACCOUNT, key)
+    }
+
+    fn load_core_kit_wrapping_key(
+        &self,
+    ) -> impl Future<Output = SeamResult<Option<Zeroizing<Vec<u8>>>>> {
+        // The queue slot is taken here, before the wrapper future is built, so
+        // the ordering the worker queue exists to give is not lost to it.
+        let loading = self.load_secret(CORE_KIT_WRAPPING_KEY_ACCOUNT);
+        async move { loading.await.map(|held| held.map(Zeroizing::new)) }
+    }
+
+    fn clear_core_kit_wrapping_key(&self) -> impl Future<Output = SeamResult<()>> {
+        self.clear_secret(CORE_KIT_WRAPPING_KEY_ACCOUNT)
+    }
+}
+
 impl CredentialStore for KeyringCredentialStore {
     fn store_refresh_token(&self, refresh_token: &[u8]) -> impl Future<Output = SeamResult<()>> {
         self.store_secret(REFRESH_TOKEN_ACCOUNT, refresh_token)
@@ -164,7 +207,9 @@ mod file_double {
     use std::path::{Path, PathBuf};
 
     use cipherbox_engine::seams::{CredentialStore, SeamResult};
+    use zeroize::Zeroizing;
 
+    use crate::credential_store::CoreKitWrappingKey;
     use crate::fs_util::{atomic_write, ensure_dir, read_file_opt, remove_file_durable, seam_err};
 
     /// File-backed credential store — TEST DOUBLE ONLY. Values are written
@@ -172,6 +217,7 @@ mod file_double {
     pub struct FileCredentialStore {
         refresh_token_path: PathBuf,
         last_account_id_path: PathBuf,
+        core_kit_wrapping_key_path: PathBuf,
     }
 
     impl FileCredentialStore {
@@ -182,6 +228,7 @@ mod file_double {
             Ok(Self {
                 refresh_token_path: dir.join("refresh_token"),
                 last_account_id_path: dir.join("last_account_id"),
+                core_kit_wrapping_key_path: dir.join("core_kit_wrapping_key"),
             })
         }
 
@@ -202,6 +249,24 @@ mod file_double {
         pub async fn clear_last_account_id(&self) -> SeamResult<()> {
             remove_file_durable(&self.last_account_id_path)
                 .map_err(|err| seam_err("file_credential_store clear_last_account_id", &err))
+        }
+    }
+
+    impl CoreKitWrappingKey for FileCredentialStore {
+        async fn store_core_kit_wrapping_key(&self, key: &[u8]) -> SeamResult<()> {
+            atomic_write(&self.core_kit_wrapping_key_path, key)
+                .map_err(|err| seam_err("file_credential_store store_core_kit_wrapping_key", &err))
+        }
+
+        async fn load_core_kit_wrapping_key(&self) -> SeamResult<Option<Zeroizing<Vec<u8>>>> {
+            read_file_opt(&self.core_kit_wrapping_key_path)
+                .map(|held| held.map(Zeroizing::new))
+                .map_err(|err| seam_err("file_credential_store load_core_kit_wrapping_key", &err))
+        }
+
+        async fn clear_core_kit_wrapping_key(&self) -> SeamResult<()> {
+            remove_file_durable(&self.core_kit_wrapping_key_path)
+                .map_err(|err| seam_err("file_credential_store clear_core_kit_wrapping_key", &err))
         }
     }
 

@@ -26,7 +26,6 @@ use std::thread::JoinHandle;
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir, measured_storage_policy};
 use cipherbox_engine::facade::{Command, Engine, Event, EventStream, LoginSecret};
-use cipherbox_engine::seams::CredentialStore;
 use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
@@ -35,8 +34,7 @@ use zeroize::Zeroizing;
 use crate::mount::{FromMount, MountStatus, Projection};
 
 pub use config::EngineConfig;
-pub use seams::DesktopSeamTypes;
-use seams::OsEntropy;
+pub use seams::{DesktopSeamTypes, OsEntropy};
 
 /// The secp256k1 scalar length `crates/engine/src/session.rs` requires.
 pub const LOGIN_SECRET_LEN: usize = 32;
@@ -196,15 +194,17 @@ fn rung(staleness: Staleness) -> &'static str {
     }
 }
 
-/// What the host asks of the engine thread. Ending the session is not one of
-/// them: closing the channel is what ends it.
+/// What the host asks of the engine thread. A logout request is terminal — the
+/// loop ends on it rather than serving on against a session the facade has
+/// already ended; a quit closes the channel instead.
 enum Request {
     /// Read the vault's status, and answer here.
     Status(oneshot::Sender<Result<VaultStatus, String>>),
     /// Force a refresh with nocache semantics — the tray's "Sync Now".
     Refresh(oneshot::Sender<Result<(), String>>),
-    /// Delete this device's stored refresh token. A logout is not a quit: the
-    /// durable stores survive both, but the credential survives only the quit
+    /// End the session at the facade, which revokes this device's refresh token
+    /// and drops the local copy. A logout is not a quit: the durable stores
+    /// survive both, but the credential survives only the quit
     /// (blueprint/desktop.md, "Lifecycle").
     ForgetCredentials,
     /// The same, plus the last-account id — the one datum of this account the
@@ -247,13 +247,11 @@ impl EngineHost {
         outcome
     }
 
-    /// Logs out: deletes this device's stored refresh token, then ends the
-    /// session as [`stop`](Self::stop) does. The durable stores survive by
-    /// design; an explicit "forget this device" is what sweeps them.
-    ///
-    /// The token is deleted here rather than revoked at the API: this shell ends
-    /// a session by closing the channel to the engine thread, so nothing on this
-    /// path reaches the facade.
+    /// Logs out: the engine thread ends the session at the facade, which revokes
+    /// this device's refresh token at the API before dropping the local copy,
+    /// and then the thread joins as [`stop`](Self::stop) does. The durable
+    /// stores survive by design; an explicit "forget this device" is what sweeps
+    /// them.
     ///
     /// Idempotent — the login flow calls it on paths where no session is live.
     pub fn log_out(&self) {
@@ -391,8 +389,10 @@ pub struct SessionEnv {
     /// `None` on a device that reports none, which refuses the mount and not
     /// the session (blueprint/desktop.md "Lifecycle").
     pub home_dir: Option<PathBuf>,
-    /// The OS keyring service name holding the rotating refresh token.
-    pub keyring_service: String,
+    /// The app's one OS-keyring handle. Handed in rather than opened here, so
+    /// the engine's credential writes and the shell's Core Kit custody share the
+    /// worker queue that orders them.
+    pub credentials: KeyringCredentialStore,
     /// What the session paints when its state moves.
     pub shell: Shell,
 }
@@ -499,7 +499,7 @@ async fn start_engine(
     ),
     String,
 > {
-    let seams = seams::seam_set(&session.config, account_dir, &session.keyring_service)
+    let seams = seams::seam_set(&session.config, account_dir, session.credentials.clone())
         .map_err(|error| error.to_string())?;
     let credentials = seams.credential_store.clone();
     // After the stores have opened: the split is measured on the volume the
@@ -535,7 +535,7 @@ async fn start_engine(
 /// in turn rather than contending for it. The mount is a wake source of its own
 /// so that making it never becomes something the loop waits out.
 enum Woke {
-    /// The host asked for something, or closed the channel — logout or quit.
+    /// The host asked for something, or closed the channel — a quit.
     Request(Option<Request>),
     /// The engine emitted, or dropped its stream.
     Event(Option<Event>),
@@ -543,8 +543,9 @@ enum Woke {
     Mount(FromMount),
 }
 
-/// Serves the session until the host closes the request channel (logout or
-/// quit), then tears the projection down: quiesce, unmount, stop the engine.
+/// Serves the session until a logout request ends it or the host closes the
+/// request channel (a quit), then tears the projection down: quiesce, unmount,
+/// stop the engine.
 async fn serve(
     mut projection: Projection,
     credentials: KeyringCredentialStore,
@@ -594,15 +595,22 @@ async fn serve(
                     }
                 }
             }
-            // A keyring that refuses the delete is reported to no one: the
-            // session is ending either way, and there is no surface left to
-            // tell. It is the next login's `store` that overwrites it.
+            // The facade's own logout, not a keyring delete: it revokes this
+            // device's refresh token at the API before dropping the local copy,
+            // and a delete here would leave the token live until it expired.
+            // The refusal is reported to no one — the session is ending either
+            // way, and there is no surface left to tell. Terminal, so the mount
+            // is never served against a session the facade has ended.
             Woke::Request(Some(Request::ForgetCredentials)) => {
-                let _ = credentials.clear_refresh_token().await;
+                let _ = projection.engine_mut().command(Command::Logout).await;
+                break;
             }
+            // The last-account id is the keyring's own datum, outside the
+            // credential the facade drops.
             Woke::Request(Some(Request::ForgetCredentialsAndAccount)) => {
-                let _ = credentials.clear_refresh_token().await;
+                let _ = projection.engine_mut().command(Command::Logout).await;
                 let _ = credentials.clear_last_account_id().await;
+                break;
             }
             Woke::Event(Some(event)) => {
                 if absorb_burst(&mut projection, &mut warnings, &mut events, event).await {
@@ -713,8 +721,7 @@ mod tests {
                 tray: Box::new(|_| {}),
             },
             painted,
-            credentials: KeyringCredentialStore::new(&session.keyring_service)
-                .expect("a credential store"),
+            credentials: session.credentials.clone(),
             requests,
             inbox,
         }
@@ -740,7 +747,8 @@ mod tests {
             .expect("a configured build parses"),
             data_local_dir: data_local_dir.to_path_buf(),
             home_dir: Some(data_local_dir.join("home")),
-            keyring_service: "com.cipherbox.desktop.test".to_owned(),
+            credentials: KeyringCredentialStore::new("com.cipherbox.desktop.test")
+                .expect("a credential store"),
             shell: Shell {
                 changed: Box::new(|| {}),
                 tray: Box::new(|_| {}),
@@ -751,7 +759,7 @@ mod tests {
     /// An engine built over the desktop seam set but never started — enough to
     /// be held, which is all a mount refusal has to leave behind.
     fn unstarted_engine(session: &SessionEnv, account_dir: &Path) -> Engine<DesktopSeamTypes> {
-        let seams = seams::seam_set(&session.config, account_dir, &session.keyring_service)
+        let seams = seams::seam_set(&session.config, account_dir, session.credentials.clone())
             .expect("the desktop stores open under a temp root");
         Engine::new(
             seams,
@@ -1139,6 +1147,56 @@ mod tests {
                 painted.load(Ordering::Relaxed),
                 2,
                 "{burst} events: one paint on start, one for the burst",
+            );
+        }
+    }
+
+    /// A logout ends the session loop itself, rather than leaving it to the
+    /// channel close that follows.
+    ///
+    /// The facade's `Command::Logout` runs first — the arm awaits it — and the
+    /// loop then breaks, so the mount is never answered from an engine whose
+    /// session that command has already ended. A request queued behind the
+    /// logout proves it: the loop must reach its tear-down without serving it.
+    #[tokio::test]
+    async fn a_logout_ends_the_session_loop_ahead_of_the_channel_close() {
+        for forget in [false, true] {
+            let dir = tempfile::tempdir().expect("a temp dir");
+            let session = session_env(dir.path());
+            let account_dir = dir.path().join("account");
+            let projection =
+                Projection::open(unstarted_engine(&session, &account_dir), None, &account_dir);
+            let Counted {
+                shell,
+                credentials,
+                requests,
+                inbox,
+                ..
+            } = counted(&session);
+            // Both held open, so only the logout can end the loop.
+            let (_sink, events) = EventStream::piped();
+
+            requests
+                .send(if forget {
+                    Request::ForgetCredentialsAndAccount
+                } else {
+                    Request::ForgetCredentials
+                })
+                .expect("the session is serving");
+            let (reply, queued) = oneshot::channel();
+            requests
+                .send(Request::Status(reply))
+                .expect("the session is serving");
+
+            let local = tokio::task::LocalSet::new();
+            let served = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                local.run_until(serve(projection, credentials, inbox, events, shell)),
+            );
+            assert!(served.await.is_ok(), "the logout is what ends the loop");
+            assert!(
+                queued.await.is_err(),
+                "nothing queued behind the logout is served against the ended session",
             );
         }
     }
