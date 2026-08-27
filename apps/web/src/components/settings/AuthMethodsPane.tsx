@@ -13,6 +13,20 @@ const KIND_LABEL: Record<AuthMethodKind, string> = {
 /** Why the account's last remaining method cannot go, in the API's own terms. */
 const ONLY_METHOD = 'an account must keep at least one login method';
 
+const AUTHORISES_ITSELF = 'this login is the account itself, so unlinking it would revoke nothing';
+
+/**
+ * Why a row of this kind cannot go, or `null` where it can. Identity and test
+ * logins authorise off the account rather than off the row, so the next one
+ * through recreates it — the API refuses the same pair with a 409.
+ */
+const KIND_REFUSAL: Record<AuthMethodKind, string | null> = {
+  identity: AUTHORISES_ITSELF,
+  test: AUTHORISES_ITSELF,
+  wallet: null,
+  unknown: null,
+};
+
 /**
  * The login methods on this account: what opens it, and the one exchange that
  * adds or removes one.
@@ -36,28 +50,33 @@ export function AuthMethodsPane() {
       </p>
 
       <ul className="settings-methods">
-        {methods.map((method) => (
-          <li key={method.id} className="settings-method">
-            <span className="settings-method-kind">{KIND_LABEL[method.kind]}</span>
-            <span className="settings-method-id">{method.identifierDisplay ?? '—'}</span>
-            <span className="settings-method-used">
-              {method.lastUsedAt === null ? 'never used' : `last used ${method.lastUsedAt}`}
-            </span>
-            <button
-              type="button"
-              className="terminal-btn terminal-btn--danger"
-              onClick={() => unlink(method.id)}
-              disabled={lastOne || busy}
-              // A disabled control fires no hover, so the reason has to reach a
-              // screen reader by name as well as by tooltip.
-              title={lastOne ? ONLY_METHOD : undefined}
-              aria-label={lastOne ? `unlink — ${ONLY_METHOD}` : `unlink ${KIND_LABEL[method.kind]}`}
-              data-testid="settings-unlink"
-            >
-              unlink
-            </button>
-          </li>
-        ))}
+        {methods.map((method) => {
+          const refusal = lastOne ? ONLY_METHOD : KIND_REFUSAL[method.kind];
+          return (
+            <li key={method.id} className="settings-method">
+              <span className="settings-method-kind">{KIND_LABEL[method.kind]}</span>
+              <span className="settings-method-id">{method.identifierDisplay ?? '—'}</span>
+              <span className="settings-method-used">
+                {method.lastUsedAt === null ? 'never used' : `last used ${method.lastUsedAt}`}
+              </span>
+              <button
+                type="button"
+                className="terminal-btn terminal-btn--danger"
+                onClick={() => unlink(method.id)}
+                disabled={refusal !== null || busy}
+                // A disabled control fires no hover, so the reason has to reach a
+                // screen reader by name as well as by tooltip.
+                title={refusal ?? undefined}
+                aria-label={
+                  refusal === null ? `unlink ${KIND_LABEL[method.kind]}` : `unlink — ${refusal}`
+                }
+                data-testid="settings-unlink"
+              >
+                unlink
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="settings-actions">

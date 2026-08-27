@@ -32,6 +32,7 @@ import {
   LogoutResponseDto,
   RefreshRequestDto,
   SiweChallengeResponseDto,
+  SiweLinkRequestDto,
   SiweLoginRequestDto,
   TestLoginRequestDto,
   TestLoginResponseDto,
@@ -127,17 +128,31 @@ export class AuthController {
   @Throttle(THROTTLE_SURFACES.auth)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Link a SIWE wallet to the authenticated account' })
+  @ApiOperation({
+    summary: 'Link a SIWE wallet to the authenticated account, re-proving the account identity key',
+  })
   @ApiCreatedResponse({ type: LogoutResponseDto })
   async siweLink(
-    @Body() body: SiweLoginRequestDto,
+    @Body() body: SiweLinkRequestDto,
     @Req() request: AuthenticatedRequest
   ): Promise<LogoutResponseDto> {
-    await this.authService.siweLink(request.user.userId, body.message, body.signature);
+    const { userId, publicKey } = request.user;
+    if (!publicKey) {
+      throw new ForbiddenException('Insufficient token scope');
+    }
+    await this.authService.siweLink(
+      userId,
+      publicKey,
+      body.message,
+      body.signature,
+      body.challenge,
+      body.challengeSignature
+    );
     return { success: true };
   }
 
   @Get('methods')
+  @Throttle(THROTTLE_SURFACES.account)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({

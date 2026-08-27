@@ -361,6 +361,70 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
     );
 }
 
+/// The engine formats a wallet signature once, at the facade, and a mocked
+/// transport will certify whatever it is handed — so the shape only becomes a
+/// fact here, where the DTO's `HEX_ETH_SIGNATURE` answers 400 for anything else
+/// before the SIWE service runs.
+#[tokio::test]
+async fn siwe_link_sends_a_body_the_login_dto_accepts() {
+    let base = require_stack!("siwe_link_sends_a_body_the_login_dto_accepts");
+    let (client, signer) = fresh_account_with_signer(&base).await;
+
+    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         0x0000000000000000000000000000000000000000\n\n\
+         Link wallet to CipherBox account\n\nNonce: {}\n",
+        nonce.nonce
+    );
+    // The exact string `Command::SiweLink` builds from 65 signature bytes.
+    let signature = format!("0x{}", "ab".repeat(65));
+
+    let error = client
+        .siwe_link(&message, &signature, &signer)
+        .await
+        .expect_err("the all-0xab signature cannot recover a wallet address");
+    assert!(
+        !matches!(error, ApiError::Status { status: 400, .. }),
+        "the API refused the engine's own link body as malformed: {error:?}"
+    );
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "an unverifiable wallet signature is a 401 from the SIWE service, got {error:?}"
+    );
+}
+
+/// A bearer alone must not add a login method: the link route re-proves the
+/// account identity key exactly as unlink does.
+#[tokio::test]
+async fn siwe_link_without_a_fresh_challenge_is_refused() {
+    let base = require_stack!("siwe_link_without_a_fresh_challenge_is_refused");
+    let (client, _signer) = fresh_account_with_signer(&base).await;
+
+    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
+    let message = format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         0x0000000000000000000000000000000000000000\n\n\
+         Link wallet to CipherBox account\n\nNonce: {}\n",
+        nonce.nonce
+    );
+    let signature = format!("0x{}", "ab".repeat(65));
+
+    let error = client
+        .siwe_link(&message, &signature, &random_identity_signer())
+        .await
+        .expect_err("a challenge bound to another key must not link");
+    assert!(
+        matches!(error, ApiError::Unauthorized),
+        "a challenge the account's own key did not answer is a 401, got {error:?}"
+    );
+    assert_eq!(
+        client.auth_methods().await.expect("methods").len(),
+        1,
+        "the refused link added nothing"
+    );
+}
+
 // --- login methods: list and unlink (blueprint/api.md) ---------------------
 
 #[tokio::test]
@@ -396,20 +460,25 @@ async fn auth_methods_lists_only_the_callers_rows_in_display_form() {
     );
 }
 
+/// The account IS its identity key, and `identityLogin` re-inserts the row on
+/// the next login — so removing it would revoke nothing. Every account carries
+/// one, which is also why the last-remaining-method refusal has no reachable
+/// case here.
 #[tokio::test]
-async fn unlinking_the_last_method_is_refused() {
-    let base = require_stack!("unlinking_the_last_method_is_refused");
+async fn unlinking_the_identity_method_is_refused() {
+    let base = require_stack!("unlinking_the_identity_method_is_refused");
     let (client, signer) = fresh_account_with_signer(&base).await;
     let rows = client.auth_methods().await.expect("methods");
-    assert_eq!(rows.len(), 1, "a fresh account has one method to keep");
+    assert_eq!(rows.len(), 1, "a fresh account has one method");
+    assert_eq!(rows[0].kind, AuthMethodKind::Identity);
 
     let error = client
         .unlink_auth_method(&rows[0].id, &signer)
         .await
-        .expect_err("an account must keep at least one login method");
+        .expect_err("the identity method cannot be unlinked");
     assert!(
         matches!(error, ApiError::Status { status: 409, .. }),
-        "the last remaining method is a 409, got {error:?}"
+        "an unlink that would revoke nothing is a 409, got {error:?}"
     );
     assert_eq!(
         client.auth_methods().await.expect("methods").len(),

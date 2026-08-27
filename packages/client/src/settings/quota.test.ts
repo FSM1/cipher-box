@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBytes, prefillFromSummary, quotaChrome, reclaimStallReason } from './quota.js';
+import {
+  formatBytes,
+  originNotice,
+  prefillFromSummary,
+  quotaChrome,
+  reclaimStallReason,
+  settingsSaveVerdict,
+  type SettingsSaveIntent,
+} from './quota.js';
 import type {
   PinMode,
   ReclaimStallDescriptor,
@@ -130,6 +138,83 @@ describe('prefillFromSummary', () => {
       keepLatestVersions: '',
       credentialStored: false,
     });
+  });
+});
+
+describe('originNotice', () => {
+  it('leaves a resolved read unremarked: it is the member’s published record', () => {
+    expect(originNotice('resolved')).toEqual({ note: null, unread: false });
+  });
+
+  it('names a stale read as this device’s copy, still the member’s own choice', () => {
+    const notice = originNotice('stale');
+
+    expect(notice.note).toMatch(/this device/);
+    expect(notice.unread).toBe(false);
+  });
+
+  it('marks defaults as nobody’s choice, because nothing read the record', () => {
+    const notice = originNotice('defaults');
+
+    expect(notice.note).toMatch(/no settings record loaded/);
+    expect(notice.unread).toBe(true);
+  });
+});
+
+describe('settingsSaveVerdict', () => {
+  const intent = (overrides: Partial<SettingsSaveIntent> = {}): SettingsSaveIntent => ({
+    origin: 'resolved',
+    credentialStored: false,
+    byoEndpoint: '',
+    byoAccessToken: '',
+    clearCredential: false,
+    loadAcknowledged: false,
+    ...overrides,
+  });
+
+  const stored = (overrides: Partial<SettingsSaveIntent> = {}): SettingsSaveIntent =>
+    intent({ credentialStored: true, byoEndpoint: 'https://kubo.example', ...overrides });
+
+  it('takes a save off a record this session read', () => {
+    expect(settingsSaveVerdict(intent())).toEqual({ ok: true });
+  });
+
+  // The regression the prefill introduced: every other field round-trips, so a
+  // blank credential reads as "unchanged" while a save would publish it as gone.
+  it('refuses a blank credential over one the vault still holds', () => {
+    const verdict = settingsSaveVerdict(stored());
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok ? '' : verdict.problem).toMatch(/credential/);
+  });
+
+  it('takes the save once the member asks outright for the credential to go', () => {
+    expect(settingsSaveVerdict(stored({ clearCredential: true }))).toEqual({ ok: true });
+  });
+
+  it('takes the save once a new credential is typed', () => {
+    expect(settingsSaveVerdict(stored({ byoAccessToken: 'a fresh one' }))).toEqual({ ok: true });
+  });
+
+  it('lets a blank credential go with the provider it belonged to', () => {
+    expect(settingsSaveVerdict(stored({ byoEndpoint: '  ' }))).toEqual({ ok: true });
+  });
+
+  it('refuses to publish defaults over a record nothing read', () => {
+    const verdict = settingsSaveVerdict(intent({ origin: 'defaults' }));
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok ? '' : verdict.problem).toMatch(/no settings record loaded/);
+  });
+
+  it('publishes them once the member takes that on', () => {
+    expect(settingsSaveVerdict(intent({ origin: 'defaults', loadAcknowledged: true }))).toEqual({
+      ok: true,
+    });
+  });
+
+  it('asks nothing extra of a stale read: it is still the member’s choice', () => {
+    expect(settingsSaveVerdict(intent({ origin: 'stale' }))).toEqual({ ok: true });
   });
 });
 

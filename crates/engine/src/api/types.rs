@@ -44,6 +44,18 @@ pub(crate) struct SiweLoginRequest<'a> {
     pub signature: &'a str,
 }
 
+/// The link body for [`ApiClient::siwe_link`](super::ApiClient::siwe_link): the
+/// SIWE pair plus the identity re-proof, whose signature is named apart from the
+/// wallet's.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SiweLinkRequest<'a> {
+    pub message: &'a str,
+    pub signature: &'a str,
+    pub challenge: &'a str,
+    pub challenge_signature: &'a str,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TestLoginRequest<'a> {

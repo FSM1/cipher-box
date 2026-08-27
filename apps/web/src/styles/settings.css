@@ -87,7 +87,8 @@
   gap: var(--spacing-xs);
 }
 
-.settings-quota-advisory {
+.settings-quota-advisory,
+.settings-origin {
   margin: 0;
   color: var(--color-warning);
   font-size: var(--font-size-md);

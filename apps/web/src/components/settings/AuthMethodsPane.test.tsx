@@ -42,6 +42,14 @@ const WALLET: AuthMethodDescriptor = {
   lastUsedAt: '2026-08-27T11:00:00.000Z',
 };
 
+const TEST_METHOD: AuthMethodDescriptor = {
+  id: 'method-test',
+  kind: 'test',
+  identifierDisplay: 'acct01',
+  createdAt: '2026-08-03T10:00:00.000Z',
+  lastUsedAt: null,
+};
+
 async function renderPane(methods: AuthMethodDescriptor[]) {
   const engine = fakeEngineClient({ authMethods: () => Promise.resolve(methods) });
   const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
@@ -76,6 +84,21 @@ describe('the login methods pane', () => {
     expect(only.getAttribute('aria-label')).toMatch(/at least one login method/);
 
     fireEvent.click(only);
+    expect(engine.calls.unlinked).toEqual([]);
+  });
+
+  it('refuses to unlink a login the account authorises off itself, and says why', async () => {
+    const engine = await renderPane([IDENTITY, TEST_METHOD, WALLET]);
+    const [identity, test] = unlinks();
+
+    for (const button of [identity, test]) {
+      expect(button.disabled).toBe(true);
+      expect(button.title).toMatch(/revoke nothing/);
+      expect(button.getAttribute('aria-label')).toMatch(/revoke nothing/);
+    }
+
+    fireEvent.click(identity);
+    fireEvent.click(test);
     expect(engine.calls.unlinked).toEqual([]);
   });
 

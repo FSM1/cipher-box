@@ -21,8 +21,16 @@ export class SettingsPage {
     await expect(this.panel).toBeVisible();
   }
 
-  /** Acknowledges the whole-record replace, then saves the form as it stands. */
+  /**
+   * Acknowledges the whole-record replace, then saves the form as it stands.
+   *
+   * A vault that has never published settings reads back as `defaults`, which
+   * carries its own acknowledgement — so the first save of a cold-started vault
+   * takes both.
+   */
   async save(): Promise<void> {
+    const unreadAck = this.page.getByTestId('settings-defaults-ack');
+    if ((await unreadAck.count()) > 0) await unreadAck.check();
     await this.page.getByLabel(/replaces every stored setting/).check();
     await this.page.getByTestId('settings-save').click();
   }

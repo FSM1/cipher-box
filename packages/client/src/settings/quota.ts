@@ -6,6 +6,7 @@ import type {
   QuotaDescriptor,
   ReclaimStallReason,
   ReclaimStallDescriptor,
+  SettingsOrigin,
   VaultSettingsSummaryDescriptor,
   VaultStorageDescriptor,
 } from '../worker/protocol.js';
@@ -63,6 +64,80 @@ export function prefillFromSummary(summary: VaultSettingsSummaryDescriptor): {
     keepLatestVersions: summary.keepLatestVersions?.toString() ?? '',
     credentialStored: summary.byoCredentialStored,
   };
+}
+
+/** What one load's origin means for the form rendering it. */
+export interface OriginNotice {
+  /** Where the shown values came from, or `null` for the published record. */
+  note: string | null;
+  /**
+   * True where nothing shown is the member's own choice, so a save publishes
+   * documented defaults over a record this session never read.
+   */
+  unread: boolean;
+}
+
+const ORIGIN_NOTICES: Record<SettingsOrigin, OriginNotice> = {
+  resolved: { note: null, unread: false },
+  stale: {
+    note: "this device's copy of your settings, not the record the vault published",
+    unread: false,
+  },
+  // `defaults` covers a vault that never published a record and one whose
+  // record did not resolve alike (`SettingsOrigin`), so the copy names both
+  // rather than alarming a first run or reassuring a failed read.
+  defaults: {
+    note: 'no settings record loaded — this vault either never published one, or its record did not resolve. nothing on this form is your stored choice',
+    unread: true,
+  },
+};
+
+export function originNotice(origin: SettingsOrigin): OriginNotice {
+  return ORIGIN_NOTICES[origin];
+}
+
+export type SettingsSaveVerdict = { ok: true } | { ok: false; problem: string };
+
+/** The settings form as it stands, against the summary it was prefilled from. */
+export interface SettingsSaveIntent {
+  origin: SettingsOrigin;
+  /** Whether the vault holds a provider bearer, which no read can show. */
+  credentialStored: boolean;
+  byoEndpoint: string;
+  byoAccessToken: string;
+  /** The member asked outright for the stored credential to go. */
+  clearCredential: boolean;
+  /** The member took on publishing over a record this session never read. */
+  loadAcknowledged: boolean;
+}
+
+/**
+ * Whether the form may be published as it stands. A save replaces the whole
+ * record, so both refusals here are destructive edits the member did not ask
+ * for: publishing defaults over an unread record, and blanking a bearer the
+ * form cannot show back.
+ */
+export function settingsSaveVerdict(intent: SettingsSaveIntent): SettingsSaveVerdict {
+  if (originNotice(intent.origin).unread && !intent.loadAcknowledged) {
+    return {
+      ok: false,
+      problem:
+        'no settings record loaded, so saving would publish these defaults over whatever the vault holds. take that on to save anyway.',
+    };
+  }
+  if (
+    intent.credentialStored &&
+    intent.byoEndpoint.trim() !== '' &&
+    intent.byoAccessToken === '' &&
+    !intent.clearCredential
+  ) {
+    return {
+      ok: false,
+      problem:
+        'a provider credential is stored and this field is blank, which would clear it. re-enter it, or clear it outright.',
+    };
+  }
+  return { ok: true };
 }
 
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;

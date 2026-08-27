@@ -5,6 +5,16 @@ import { getAddress, verifyMessage } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
 
 /**
+ * The EIP-4361 `statement` each SIWE surface binds. One nonce pool serves
+ * signing in and linking, so the statement is the only thing separating the two
+ * intents: without it a signature phished under a sign-in prompt replays as a
+ * link onto the attacker's account, and the unique `(kind, identifier_hash)`
+ * index makes that permanent.
+ */
+export const SIWE_LOGIN_STATEMENT = 'Sign in to CipherBox encrypted storage';
+export const SIWE_LINK_STATEMENT = 'Link wallet to CipherBox account';
+
+/**
  * SIWE (EIP-4361) verification for the secondary wallet auth method.
  * EOA-only, no RPC. Domains are validated against CORS_ALLOWED_ORIGINS.
  */
@@ -30,13 +40,15 @@ export class SiweService {
   }
 
   /**
-   * Verify a SIWE message and signature against the expected nonce.
-   * Returns the EIP-55 checksummed wallet address.
+   * Verify a SIWE message and signature against the expected nonce and the
+   * intent the calling surface serves. Returns the EIP-55 checksummed wallet
+   * address.
    */
   async verifySiweMessage(
     message: string,
     signature: `0x${string}`,
-    expectedNonce: string
+    expectedNonce: string,
+    expectedStatement: string
   ): Promise<string> {
     const parsed = parseSiweMessage(message);
     if (!parsed.address) {
@@ -48,6 +60,10 @@ export class SiweService {
     );
     if (!fieldsValid) {
       throw new UnauthorizedException('SIWE message validation failed');
+    }
+
+    if (parsed.statement !== expectedStatement) {
+      throw new UnauthorizedException('SIWE message states a different intent');
     }
 
     const signatureValid = await verifyMessage({ address: parsed.address, message, signature });

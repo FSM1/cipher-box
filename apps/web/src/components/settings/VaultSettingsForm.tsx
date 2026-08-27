@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { prefillFromSummary } from '@cipherbox/client';
+import { originNotice, prefillFromSummary, settingsSaveVerdict } from '@cipherbox/client';
 import type { ByoKind, PinMode, VaultSettingsSummaryDescriptor } from '@cipherbox/client';
 import { useCommandRunner } from '../../hooks/useCommandRunner';
 import {
@@ -34,17 +34,22 @@ const BYO_KINDS: { value: ByoKind; label: string }[] = [
  * Everything but the provider credential is read back and prefilled. The
  * credential is not: it is the one field the wasm boundary keeps write-only, so
  * a stored bearer never crosses into JS (`crates/wasm/src/lib.rs`). A save
- * replaces the whole record with what is on the form — leaving the credential
- * field blank clears a bearer the vault still holds — so it is gated on an
- * acknowledgement.
+ * replaces the whole record with what is on the form, so `settingsSaveVerdict`
+ * refuses the two shapes that destroy a choice the member did not edit.
  */
 export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) {
   const [fields, setFields] = useState<VaultSettingsFields>(DEFAULT_VAULT_SETTINGS_FORM);
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [clearCredential, setClearCredential] = useState(false);
+  const [loadAcknowledged, setLoadAcknowledged] = useState(false);
   const { busy, error, run } = useCommandRunner<'saveVaultSettings'>();
   const message = problem ?? error;
+  // Before the first read lands there is nothing to warn about, so an absent
+  // summary reads as the unremarkable origin rather than as a failed load.
+  const origin = summary?.origin ?? 'resolved';
+  const notice = originNotice(origin);
   const credentialStored = summary?.byoCredentialStored ?? false;
 
   // Each read the route lands refills the form, so a confirmed save shows what
@@ -54,6 +59,8 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
     if (summary == null) return;
     const { pinMode, byoEndpoint, byoKind, keepLatestVersions } = prefillFromSummary(summary);
     setFields({ pinMode, byoEndpoint, byoKind, keepLatestVersions, byoAccessToken: '' });
+    setClearCredential(false);
+    setLoadAcknowledged(false);
   }, [summary]);
 
   const set = <K extends keyof VaultSettingsFields>(key: K, value: VaultSettingsFields[K]) => {
@@ -62,6 +69,18 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
   };
 
   const save = () => {
+    const verdict = settingsSaveVerdict({
+      origin,
+      credentialStored,
+      byoEndpoint: fields.byoEndpoint,
+      byoAccessToken: fields.byoAccessToken,
+      clearCredential,
+      loadAcknowledged,
+    });
+    if (!verdict.ok) {
+      setProblem(verdict.problem);
+      return;
+    }
     const draft = buildVaultSettings(fields);
     setProblem(draft.ok ? null : draft.problem);
     if (!draft.ok) return;
@@ -77,6 +96,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
         if (accepted) {
           setFields((current) => ({ ...current, byoAccessToken: '' }));
           setAcknowledged(false);
+          setClearCredential(false);
           onSaved?.();
         }
       }
@@ -92,6 +112,12 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
         save();
       }}
     >
+      {notice.note !== null && (
+        <p className="settings-origin" role="status" data-testid="settings-origin-notice">
+          {`// ${notice.note}`}
+        </p>
+      )}
+
       <label className="settings-field" htmlFor="settings-pin-mode">
         <span>where versions are pinned</span>
         <select
@@ -167,15 +193,48 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
         />
       </label>
 
-      <p className="sharing-note" data-testid="settings-credential-note">
-        {credentialStored
-          ? '// a provider credential is stored. the engine never reads one back out,'
-          : '// the engine never reads a provider credential back out,'}
-        <br />
-        {credentialStored
-          ? '// so this field stays blank — leave it blank and the save clears it.'
-          : '// so this field is the only place one can be set.'}
-      </p>
+      {/* A `defaults` load knows nothing about the record, so it can claim
+          nothing about what the vault holds. */}
+      {!notice.unread && (
+        <p className="sharing-note" data-testid="settings-credential-note">
+          {credentialStored
+            ? '// a provider credential is stored. the engine never reads one back out,'
+            : '// the engine never reads a provider credential back out,'}
+          <br />
+          {credentialStored
+            ? '// so keeping the provider means typing it again — or clearing it outright.'
+            : '// so this field is the only place one can be set.'}
+        </p>
+      )}
+
+      {credentialStored && (
+        <label className="recovery-ack" htmlFor="settings-clear-credential">
+          <input
+            id="settings-clear-credential"
+            type="checkbox"
+            checked={clearCredential}
+            onChange={(event) => setClearCredential(event.target.checked)}
+            data-testid="settings-clear-credential"
+          />
+          <span>clear the stored provider credential, leaving the provider with none</span>
+        </label>
+      )}
+
+      {notice.unread && (
+        <label className="recovery-ack" htmlFor="settings-defaults-ack">
+          <input
+            id="settings-defaults-ack"
+            type="checkbox"
+            checked={loadAcknowledged}
+            onChange={(event) => setLoadAcknowledged(event.target.checked)}
+            data-testid="settings-defaults-ack"
+          />
+          <span>
+            i understand no settings record loaded, and that saving publishes these defaults over
+            whatever the vault holds
+          </span>
+        </label>
+      )}
 
       <label className="recovery-ack" htmlFor="settings-replace-ack">
         <input

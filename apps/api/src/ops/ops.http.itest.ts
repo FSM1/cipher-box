@@ -27,7 +27,7 @@ import {
   seedAccount,
 } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
-import { resolveAuthLimit } from './throttling';
+import { resolveAuthLimit, THROTTLE_SURFACES } from './throttling';
 
 /**
  * The Ops HTTP surface on a booted app against a throwaway Postgres: the
@@ -88,6 +88,21 @@ describe('ops HTTP surface (real Postgres)', () => {
       await request(http()).post('/auth/challenge').send({}).expect(429);
       // 401 (missing token), not 429 — the refresh surface has its own bucket.
       await request(http()).post('/auth/refresh').send({}).expect(401);
+    });
+
+    /**
+     * The login-method read is an account-scoped read on the auth controller,
+     * so without its own surface it silently falls to the global default rather
+     * than the cap the account surface sets for reads of this shape.
+     */
+    it('caps the login-method read at the account surface, not the global default', async () => {
+      const limit = THROTTLE_SURFACES.account.default.limit;
+      // Unauthenticated: the throttler guard runs ahead of JwtAuthGuard, so an
+      // admitted request is a 401 and a shed one is the guard's 429.
+      for (let i = 0; i < limit; i += 1) {
+        await request(http()).get('/auth/methods').expect(401);
+      }
+      await request(http()).get('/auth/methods').expect(429);
     });
 
     it('exempts health and metrics via SkipThrottle', async () => {

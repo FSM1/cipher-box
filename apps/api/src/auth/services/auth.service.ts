@@ -20,13 +20,21 @@ import { AuthMethod, type AuthMethodKind } from '../entities/auth-method.entity'
 import { User } from '../entities/user.entity';
 import { ChallengeService } from './challenge.service';
 import { IdentityService } from './identity.service';
-import { SiweService } from './siwe.service';
+import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
 import { TokenPair, TokenService } from './token.service';
 
 export interface LoginResult {
   pair: TokenPair;
   isNewUser: boolean;
 }
+
+/**
+ * The kinds an unlink can actually revoke. `identity` and `test` authorise off
+ * the `users` table rather than off `auth_methods`, and their login paths
+ * re-insert the row on the next login — so deleting one would promise a
+ * revocation the server does not perform.
+ */
+const UNLINKABLE_KINDS: readonly AuthMethodKind[] = ['wallet'];
 
 /** One login method in the display form `GET /auth/methods` serves. */
 export interface AuthMethodView {
@@ -109,7 +117,12 @@ export class AuthService {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
     this.challengeService.consume(nonce, 'siwe');
-    const address = await this.siweService.verifySiweMessage(message, signature, nonce);
+    const address = await this.siweService.verifySiweMessage(
+      message,
+      signature,
+      nonce,
+      SIWE_LOGIN_STATEMENT
+    );
 
     const identifierHash = this.siweService.hashWalletAddress(address);
     const method = await this.authMethodRepository.findOne({
@@ -133,14 +146,35 @@ export class AuthService {
     return { pair, isNewUser: false };
   }
 
-  /** Link a SIWE wallet to the authenticated account (secondary method). */
-  async siweLink(userId: string, message: string, signature: `0x${string}`): Promise<void> {
+  /**
+   * Link a SIWE wallet to the authenticated account (secondary method). The
+   * identity challenge is re-proved first for the reason `unlinkAuthMethod`
+   * states — adding a login method changes which keys open the account just as
+   * removing one does, and the added method outlives the token that added it.
+   */
+  async siweLink(
+    userId: string,
+    publicKey: string,
+    message: string,
+    signature: `0x${string}`,
+    challenge: string,
+    challengeSignature: string
+  ): Promise<void> {
+    const canonicalKey = this.identityService.normalizePublicKey(publicKey);
+    this.challengeService.consume(challenge, 'identity', canonicalKey);
+    this.identityService.verifyChallengeSignature(challenge, challengeSignature, canonicalKey);
+
     const nonce = parseSiweMessage(message).nonce;
     if (!nonce) {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
     this.challengeService.consume(nonce, 'siwe');
-    const address = await this.siweService.verifySiweMessage(message, signature, nonce);
+    const address = await this.siweService.verifySiweMessage(
+      message,
+      signature,
+      nonce,
+      SIWE_LINK_STATEMENT
+    );
 
     const identifierHash = this.siweService.hashWalletAddress(address);
     const existing = await this.authMethodRepository.findOne({
@@ -196,11 +230,17 @@ export class AuthService {
     await runLockGuardedTransaction(this.dataSource, async (manager) => {
       await boundedAcquire(manager, [authMethodLockKey(userId)], this.lockTimeoutMs);
       const repository = manager.getRepository(AuthMethod);
-      // One read answers both refusals: whether the row is the caller's, and
-      // whether it is the last one standing.
-      const owned = await repository.find({ where: { userId }, select: ['id'] });
-      if (!owned.some((row) => row.id === methodId)) {
+      // One read answers every refusal: whether the row is the caller's, what
+      // kind it is, and whether it is the last one standing.
+      const owned = await repository.find({ where: { userId }, select: ['id', 'kind'] });
+      const target = owned.find((row) => row.id === methodId);
+      if (!target) {
         throw new NotFoundException('Unknown login method');
+      }
+      if (!UNLINKABLE_KINDS.includes(target.kind)) {
+        throw new ConflictException(
+          `A ${target.kind} login method cannot be unlinked: logging in through it recreates the row, so removing it would revoke nothing`
+        );
       }
       if (owned.length <= 1) {
         throw new ConflictException('An account must keep at least one login method');

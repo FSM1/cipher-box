@@ -94,8 +94,15 @@ export type {
 
 export {
   formatBytes,
+  originNotice,
   prefillFromSummary,
   quotaChrome,
   reclaimStallReason,
+  settingsSaveVerdict,
 } from './settings/quota.js';
-export type { QuotaChrome } from './settings/quota.js';
+export type {
+  OriginNotice,
+  QuotaChrome,
+  SettingsSaveIntent,
+  SettingsSaveVerdict,
+} from './settings/quota.js';

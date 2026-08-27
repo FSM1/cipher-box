@@ -21,8 +21,9 @@ use super::signer::ChallengeSigner;
 use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
     MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
-    RetireResult, SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome,
-    TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest, UploadResult,
+    RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
+    TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest,
+    UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
@@ -245,13 +246,28 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         ok_or_err(response).map(drop)
     }
 
-    /// Link a SIWE wallet to the authenticated account (owner-authenticated).
-    pub async fn siwe_link(&self, message: &str, signature: &str) -> Result<(), ApiError> {
+    /// Link a SIWE wallet to the authenticated account, re-proving the account
+    /// identity key first: a link is a change to which keys open the account,
+    /// so it carries the same live-possession proof [`Self::unlink_auth_method`]
+    /// demands.
+    pub async fn siwe_link(
+        &self,
+        message: &str,
+        signature: &str,
+        signer: &impl ChallengeSigner,
+    ) -> Result<(), ApiError> {
+        let challenge = self.identity_challenge(&signer.public_key_hex()).await?;
+        let challenge_signature = signer.sign_challenge(&challenge);
         let response = self
             .json_authed(
                 HttpMethod::Post,
                 "/auth/siwe/link",
-                &SiweLoginRequest { message, signature },
+                &SiweLinkRequest {
+                    message,
+                    signature,
+                    challenge: &challenge,
+                    challenge_signature: &challenge_signature,
+                },
             )
             .await?;
         ok_or_err(response).map(drop)

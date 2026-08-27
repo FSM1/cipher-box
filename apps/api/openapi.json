@@ -172,7 +172,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SiweLoginRequestDto"
+                "$ref": "#/components/schemas/SiweLinkRequestDto"
               }
             }
           }
@@ -194,7 +194,7 @@
             "bearer": []
           }
         ],
-        "summary": "Link a SIWE wallet to the authenticated account",
+        "summary": "Link a SIWE wallet to the authenticated account, re-proving the account identity key",
         "tags": [
           "Auth"
         ]
@@ -1596,6 +1596,33 @@
         "required": [
           "message",
           "signature"
+        ]
+      },
+      "SiweLinkRequestDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 message text"
+          },
+          "signature": {
+            "type": "string",
+            "description": "EIP-191 signature over the message, 0x-prefixed hex"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "A fresh challenge from POST /auth/challenge, verbatim"
+          },
+          "challengeSignature": {
+            "type": "string",
+            "description": "Compact secp256k1 signature over sha256(challenge) by the account identity key, 64 bytes hex"
+          }
+        },
+        "required": [
+          "message",
+          "signature",
+          "challenge",
+          "challengeSignature"
         ]
       },
       "LogoutResponseDto": {

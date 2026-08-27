@@ -85,6 +85,21 @@ export class SiweLoginRequestDto {
   signature!: `0x${string}`;
 }
 
+export class SiweLinkRequestDto extends SiweLoginRequestDto {
+  @ApiProperty({ description: 'A fresh challenge from POST /auth/challenge, verbatim' })
+  @IsString()
+  @MaxLength(256)
+  challenge!: string;
+
+  @ApiProperty({
+    description:
+      'Compact secp256k1 signature over sha256(challenge) by the account identity key, 64 bytes hex',
+  })
+  @IsString()
+  @Matches(HEX_COMPACT_SIGNATURE, { message: 'challengeSignature must be 64 bytes of hex' })
+  challengeSignature!: string;
+}
+
 export class AuthMethodDto {
   @ApiProperty({ description: 'Row id, the handle POST /auth/unlink takes', format: 'uuid' })
   id!: string;

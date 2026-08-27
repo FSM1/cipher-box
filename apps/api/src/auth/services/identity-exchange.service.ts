@@ -6,7 +6,7 @@ import { EmailOtpService } from './email-otp.service';
 import { GoogleOAuthService } from './google-oauth.service';
 import { IdentitySubjectService } from './identity-subject.service';
 import { IdentityTokenService } from './identity-token.service';
-import { SiweService } from './siwe.service';
+import { SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
 
 export interface IdentityGrant {
   /** The CipherBox identity token the Core Kit logs in with. */
@@ -57,7 +57,12 @@ export class IdentityExchangeService {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
     this.challenges.consume(nonce, 'siwe');
-    const address = await this.siwe.verifySiweMessage(message, signature, nonce);
+    const address = await this.siwe.verifySiweMessage(
+      message,
+      signature,
+      nonce,
+      SIWE_LOGIN_STATEMENT
+    );
     return this.mint('wallet', address, this.siwe.truncateWalletAddress(address), null);
   }
 
