@@ -40,13 +40,10 @@
 //! is refused unless it derives that root's own name
 //! ([`WriteRotateError::ResumedSeedNotAtItsRoot`]).
 //!
-//! A resumed wave enumerates its own moved copies ([`ResumedRoot`]), so no node
-//! it walks still sits at a superseded name. It re-derives those names instead,
-//! from the pre-wave write scope seed the moved root's owner-sealed history link
-//! carries ([`ResumedWriteWave::prev_write_scope_seed`]) — published state
-//! again, no checkpoint. A link that does not open, or whose seed does not
-//! derive the root the plan is moving off, retires nothing: leaking a
-//! registration beats retiring a live name.
+//! A resumed wave walks its own moved copies ([`ResumedRoot`]), so it re-derives
+//! what the prior run superseded from
+//! [`ResumedWriteWave::prev_write_scope_seed`] — published state again, no
+//! checkpoint.
 //!
 //! # Owner-only, fail-closed, deterministic
 //!
@@ -636,9 +633,7 @@ where
         if node.current_name != new_name {
             interior_old_names.push(node.current_name.clone());
         }
-        // A resume enumerates its own moved copies, so `current_name` is already
-        // the post-wave name and the prior run's names appear nowhere in the
-        // walk. The pre-wave seed re-derives them.
+        // The prior run's superseded names derive from the pre-wave seed.
         if let Some(prev) = superseded_seed.as_ref() {
             let old_name = derive_write_name(prev, &node.node_id);
             if old_name != new_name && old_name != node.current_name {

@@ -222,7 +222,13 @@ impl RotateError {
                 reason,
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
-            RotateError::Reseal(error) => matches!(error, ResealError::Entropy(_)),
+            // A size refusal judges the record the next pass re-resolves, not
+            // its trust: a permanent verdict there would let whoever grew that
+            // root block the owner's revocation for good.
+            RotateError::Reseal(error) => matches!(
+                error,
+                ResealError::Entropy(_) | ResealError::SectionNotResealable { .. }
+            ),
             RotateError::Publish(error) => error.is_retryable(),
             RotateError::Floor(_) => true,
             RotateError::EpochExhausted => false,
@@ -526,7 +532,7 @@ mod tests {
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
                     direct_child_scope_index: &[],
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 4,
@@ -656,7 +662,7 @@ mod tests {
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
                     direct_child_scope_index: &[],
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 1,
@@ -727,7 +733,7 @@ mod tests {
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
                     direct_child_scope_index: &[],
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: 4,
@@ -793,7 +799,7 @@ mod tests {
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
                     direct_child_scope_index: &[],
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &current_seed,
                 current_read_epoch: u64::MAX,

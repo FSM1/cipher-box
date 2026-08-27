@@ -80,10 +80,8 @@ pub enum AuthorError {
         limit: usize,
     },
     /// A scope root's bytes outside its grant section met
-    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`]. The root fits the block ceiling, but
-    /// the section its own next re-seal mints would not fit beside it — and a
-    /// scope whose re-seal cannot be authored cannot be revoked. Refused where
-    /// the record is grown, since nothing downstream can shrink it.
+    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`], the budget that leaves its own next
+    /// re-seal room beside it.
     ScopeRootNotResealable {
         /// The bytes outside the section.
         size: usize,
@@ -342,8 +340,9 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
 /// Encode a scope root, holding everything outside its grant section to
 /// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8).
 ///
-/// The record only ever grows, so this is the one place a root with no
-/// authorable re-seal is still preventable.
+/// This binds only what this engine authors; a foreign client is held instead by
+/// the re-seal's own budget
+/// ([`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES)).
 fn encode_scope_root(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     let head = encode(envelope)?;
     let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
@@ -907,8 +906,7 @@ mod tests {
         let fixture = owner_root();
         let body = folder_past_the_resealable_budget();
         let carried = carried_section(&fixture.grant_section);
-        // Matched rather than unwrapped: the `Ok` side is a whole authored head,
-        // and a failure would render megabytes of it.
+        // let-else: the `Ok` side would render megabytes.
         let Err(AuthorError::ScopeRootNotResealable { size, limit }) =
             author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner())
         else {

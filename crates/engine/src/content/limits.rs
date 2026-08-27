@@ -60,7 +60,10 @@ const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 /// scope rotation-proof.
 ///
 /// Derived from the frozen count bounds rather than picked, so a change to any
-/// of them moves the budget with it.
+/// of them moves the budget with it. The counts are frozen; the per-item sizes
+/// are not, because a re-seal carries each row's and each child ref's preserved
+/// unknown map forward. A section over the budget is therefore a **retryable**
+/// refusal on the record the next pass re-resolves, never a trust verdict.
 pub(crate) const MAX_RESEALABLE_SECTION_BYTES: usize = cipherbox_core::seal::MAX_GRANT_BLOBS
     * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
     + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES

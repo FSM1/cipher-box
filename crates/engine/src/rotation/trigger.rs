@@ -19,15 +19,14 @@ use cipherbox_core::seal::{
     GrantLedgerEntry, GrantSetBindingError, GrantSetCommitment, Permission, sign_grant_set,
     verify_grant_set_bound,
 };
-use cipherbox_core::suite::ecdsa::{
-    EcdsaSignature, EcdsaSigner, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
-};
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::secret::SECRET_LEN;
 
 use super::cascade::{CascadeError, CascadeOutcome};
 use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
-use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
+use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger, row_is_owner_attested};
 use crate::seams::UnixMillis;
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
@@ -181,10 +180,10 @@ pub struct RevokedCommittedSet {
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
     /// The grant ledger with the same cut applied.
     pub grant_ledger: Vec<GrantLedgerEntry>,
-    /// The recipient identity keys the cut removed — what a re-key refuses to
+    /// The recipient encryption keys the cut removed — what a re-key refuses to
     /// mint a blob for anywhere in the cascade
-    /// ([`CommittedSet::revoked_identities`](super::reseal::CommittedSet::revoked_identities)).
-    pub revoked_identities: Vec<[u8; IDENTITY_PUBLIC_LEN]>,
+    /// ([`CommittedSet::revoked_recipients`](super::reseal::CommittedSet::revoked_recipients)).
+    pub revoked_recipients: Vec<[u8; SECRET_LEN]>,
     /// Read-only — see [`planes`](Self::planes).
     planes: RotationPlanes,
 }
@@ -325,12 +324,18 @@ fn drop_tags(plan: &GrantCutPlan<'_>, tags: &BTreeSet<[u8; 32]>) -> DroppedSet {
         .iter()
         .cloned()
         .partition(|e| tags.contains(&e.tag));
+    // Any committed writer authors a ledger row, so a key the owner never
+    // signed would carry a bystander down the cascade and strip their grants
+    // vault-wide.
+    let owner_identity = plan.owner_signer.verifying_key();
+    let name = plan.scope_root_name.as_str().as_bytes();
     DroppedSet {
         commitment,
         grant_ledger: kept,
-        revoked_identities: dropped
+        revoked_recipients: dropped
             .into_iter()
-            .map(|e| e.recipient_identity_pk)
+            .filter(|e| row_is_owner_attested(&owner_identity, e, name))
+            .map(|e| e.recipient_enc_pk)
             .collect(),
     }
 }
@@ -339,7 +344,7 @@ fn drop_tags(plan: &GrantCutPlan<'_>, tags: &BTreeSet<[u8; 32]>) -> DroppedSet {
 struct DroppedSet {
     commitment: GrantSetCommitment,
     grant_ledger: Vec<GrantLedgerEntry>,
-    revoked_identities: Vec<[u8; IDENTITY_PUBLIC_LEN]>,
+    revoked_recipients: Vec<[u8; SECRET_LEN]>,
 }
 
 /// Owner-re-sign the cut set, refusing release-active to sign a commitment its
@@ -352,7 +357,7 @@ fn resign(
     let DroppedSet {
         commitment,
         grant_ledger,
-        revoked_identities,
+        revoked_recipients,
     } = set;
     enforce_committed_ledger(&commitment, &grant_ledger).map_err(RevokeError::LedgerDiverges)?;
     let commitment_sig = sign_grant_set(owner_signer, &commitment)
@@ -362,7 +367,7 @@ fn resign(
         commitment,
         commitment_sig,
         grant_ledger,
-        revoked_identities,
+        revoked_recipients,
         planes,
     })
 }
@@ -451,7 +456,7 @@ pub fn revoke_write_grant(
             DroppedSet {
                 commitment,
                 grant_ledger,
-                revoked_identities: Vec::new(),
+                revoked_recipients: Vec::new(),
             }
         }
     };
@@ -644,7 +649,9 @@ mod tests {
     use crate::seams::Scheduler;
     use crate::testkit::block_on;
     use crate::testkit::fakes::VirtualScheduler;
-    use cipherbox_core::seal::{GrantSetEntry, PreservedFields, verify_grant_set};
+    use cipherbox_core::seal::{
+        GrantSetEntry, PreservedFields, sign_recipient_binding, verify_grant_set,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     /// Records the roots it was asked to cut, failing the ones named in
@@ -756,12 +763,20 @@ mod tests {
                 unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&owner, &commitment).unwrap().to_compact();
-            // A cut plan is a `(tag, permission)` comparison, so these rows need
-            // no recipient key the owner attested — nor a real one.
+            // The rows carry no real recipient key — a cut plan is a
+            // `(tag, permission)` comparison — but they are owner-attested,
+            // because a cut reads the identity key off the row it drops.
+            let attest = |identity: [u8; 33], enc: [u8; 32], perm, tag| {
+                let mut row = GrantLedgerEntry::new(identity, enc, perm, tag, NO_SIG);
+                row.owner_sig = sign_recipient_binding(&owner, name.as_str().as_bytes(), &row)
+                    .expect("the owner attests the row it minted")
+                    .to_compact();
+                row
+            };
             let ledger = vec![
-                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, READ_TAG, NO_SIG),
-                GrantLedgerEntry::new([0x04; 33], [0x12; 32], Permission::Read, LINK_TAG, NO_SIG),
-                GrantLedgerEntry::new([0x03; 33], [0x13; 32], Permission::Write, WRITE_TAG, NO_SIG),
+                attest([0x02; 33], [0x11; 32], Permission::Read, READ_TAG),
+                attest([0x04; 33], [0x12; 32], Permission::Read, LINK_TAG),
+                attest([0x03; 33], [0x13; 32], Permission::Write, WRITE_TAG),
             ];
             Self {
                 owner,
@@ -827,19 +842,41 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_names_the_identity_it_removed_and_no_survivor() {
+    fn a_cut_names_the_recipient_it_removed_and_no_survivor() {
         // The cascade carries this down every descendant, where a blinded tag
-        // cannot reach: a tag is per-scope, an identity key is vault-wide.
+        // cannot reach: a tag is per-scope, a recipient key is vault-wide.
         let fx = Fixture::new();
         let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
-        assert_eq!(cut.revoked_identities, vec![[0x04; 33]]);
+        assert_eq!(cut.revoked_recipients, vec![[0x12; 32]]);
 
         let downgraded =
             revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
                 .expect("downgrade");
         assert!(
-            downgraded.revoked_identities.is_empty(),
+            downgraded.revoked_recipients.is_empty(),
             "a downgrade keeps the recipient committed, so nothing is revoked"
+        );
+    }
+
+    #[test]
+    fn a_cut_names_no_recipient_off_a_row_the_owner_never_signed() {
+        // Any committed writer authors a ledger row. Harvesting a key off an
+        // unsigned one would let a writer point the cascade at a bystander and
+        // strip their grants vault-wide.
+        let mut fx = Fixture::new();
+        for row in &mut fx.ledger {
+            if row.tag == LINK_TAG {
+                row.recipient_enc_pk = [0x99; 32];
+            }
+        }
+        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
+        assert!(
+            cut.revoked_recipients.is_empty(),
+            "a forged row names nobody the cascade will cut"
+        );
+        assert!(
+            !cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG),
+            "the tag still leaves the owner-signed set"
         );
     }
 

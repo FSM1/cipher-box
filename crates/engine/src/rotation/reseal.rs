@@ -46,9 +46,7 @@ use cipherbox_core::seal::{
     seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
     seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
-use cipherbox_core::suite::ecdsa::{
-    EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
-};
+use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -235,8 +233,14 @@ pub struct CommittedSet<'a> {
     pub grant_ledger: &'a [GrantLedgerEntry],
     /// The directly-descendant scope roots (the F-4 cascade index, #38 D6).
     pub direct_child_scope_index: &'a [cipherbox_core::seal::ChildScopeRef],
-    /// Recipient identity keys the owner's cut removed. No blob is minted for a
-    /// row naming one, whatever `commitment` says.
+    /// Recipient encryption keys the owner's cut removed. No blob is minted for
+    /// a row a blinded tag proves belongs to one, whatever `commitment` says.
+    ///
+    /// The encryption key, not the identity key: a tag is
+    /// `blind(ownerEncSecret, recipientEncPk, ipnsName)`, so the owner's own
+    /// subkey proves which encryption key a committed tag belongs to, while
+    /// `recipientIdentityPk` carries no such proof and any committed writer can
+    /// re-author it.
     ///
     /// A grant-set commitment is epoch-free, so a pre-cut one an owner really
     /// did sign still verifies at every gate stage. Down a cascade that reads
@@ -244,9 +248,9 @@ pub struct CommittedSet<'a> {
     /// permanent read-revocation bypass: a current write grantee republishes a
     /// descendant root carrying the pre-cut set, and the next ancestor rotation
     /// wraps the fresh read override seed straight back to the revokee.
-    /// Identity keys are vault-wide where a blinded tag is per-scope, so this is
-    /// the axis the owner's cut carries down.
-    pub revoked_identities: &'a [[u8; IDENTITY_PUBLIC_LEN]],
+    /// An encryption key is vault-wide where a blinded tag is per-scope, so this
+    /// is the axis the owner's cut carries down.
+    pub revoked_recipients: &'a [[u8; SECRET_LEN]],
 }
 
 /// A fail-closed re-seal failure. Every variant leaves nothing published — the
@@ -718,12 +722,13 @@ pub fn reseal_scope_root<E: Entropy>(
             continue;
         };
         // The owner's cut outranks the set the record carries
-        // ([`CommittedSet::revoked_identities`]). Skipped per row rather than
-        // refused whole: a refusal would let anyone able to republish a
-        // descendant root abort the owner's cascade for good.
+        // ([`CommittedSet::revoked_recipients`]). Matched against the key the
+        // committed tag proves, never a field off the row. Per row rather than
+        // a whole-record refusal: a refusal would let anyone able to republish
+        // a descendant root abort the owner's cascade for good.
         if committed
-            .revoked_identities
-            .contains(&entry.recipient_identity_pk)
+            .revoked_recipients
+            .contains(&recipient_pub.to_bytes())
         {
             continue;
         }
@@ -999,9 +1004,10 @@ mod tests {
     use crate::grants::mint_grant_row;
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
-        GrantSetEntry, MAX_WRITE_BODY_BYTES, encode_grant_section, open_ascent_link,
-        open_grant_blob, open_history_link, open_owner_blob, open_owner_history_link,
-        open_owner_write_blob, sign_grant_set, sign_recipient_binding, verify_structure,
+        ChildScopeRef, GrantSetEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_BODY_BYTES,
+        encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
+        open_owner_blob, open_owner_history_link, open_owner_write_blob, sign_grant_set,
+        sign_recipient_binding, verify_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -1250,7 +1256,7 @@ mod tests {
             commitment_sig: sig,
             grant_ledger: ledger,
             direct_child_scope_index: &[],
-            revoked_identities: &[],
+            revoked_recipients: &[],
         }
     }
 
@@ -1860,17 +1866,42 @@ mod tests {
             .to_compact();
         let ledger: Vec<GrantLedgerEntry> = rows.into_iter().map(|(_, row)| row).collect();
 
+        // Every count axis at its ceiling at once, since only the joint maximum
+        // can exhaust the budget.
+        let children: Vec<ChildScopeRef> = (0..MAX_DIRECT_CHILD_SCOPES)
+            .map(|i| {
+                let mut scope_id = [0u8; 16];
+                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                ChildScopeRef {
+                    scope_id,
+                    ipns_name: crate::rotation::derive_write_name(&[0x5b; SECRET_LEN], &scope_id)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec(),
+                    unknown: PreservedFields::new(),
+                }
+            })
+            .collect();
         let id = identity(&fx, &owner_pub, b"n", None);
-        let seed = chain_seed(9);
-        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
-        let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &real_chain(9))
+        let seed = chain_seed(MAX_HISTORY_LINKS as u64 + 1);
+        let s = seeds(
+            &seed,
+            MAX_HISTORY_LINKS as u64 + 1,
+            None,
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let mut cs = committed_set(&fx, &commitment, &sig, &ledger);
+        cs.direct_child_scope_index = &children;
+        let carried = real_chain(MAX_HISTORY_LINKS as u64);
+        let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
             .expect("a maximal committed set re-seals");
         assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
         let size = encode_grant_section(&section).expect("encodes").len();
+        // Headroom, so a wire-shape edit fails here rather than at the cliff.
         assert!(
-            size <= MAX_RESEALABLE_SECTION_BYTES,
-            "a maximal re-seal is {size} bytes, past the {MAX_RESEALABLE_SECTION_BYTES}-byte budget the author reserved"
+            size + 64 * 1024 <= MAX_RESEALABLE_SECTION_BYTES,
+            "a maximal re-seal is {size} bytes against a {MAX_RESEALABLE_SECTION_BYTES}-byte budget"
         );
     }
 
@@ -2038,7 +2069,7 @@ mod tests {
             commitment_sig: &cut.commitment_sig,
             grant_ledger: &cut.grant_ledger,
             direct_child_scope_index: &[],
-            revoked_identities: &[],
+            revoked_recipients: &[],
         };
         let mut e = SeededEntropy::new(4);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");

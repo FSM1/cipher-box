@@ -337,7 +337,13 @@ impl CascadeError {
                 reason,
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
-            CascadeError::Reseal { error, .. } => matches!(error, ResealError::Entropy(_)),
+            // A size refusal judges the record the next pass re-resolves, not
+            // its trust: a permanent verdict there would let whoever grew a
+            // descendant root block the owner's revocation for good.
+            CascadeError::Reseal { error, .. } => matches!(
+                error,
+                ResealError::Entropy(_) | ResealError::SectionNotResealable { .. }
+            ),
             // A publish that did not land is availability; one the publisher
             // refused is its own fail-closed verdict on the bytes, and retrying
             // it forever would launder a trust violation into a stall (rule 6).
@@ -617,8 +623,8 @@ where
                     grant_ledger: &target.grant_ledger,
                     direct_child_scope_index: &target.direct_child_scope_index,
                     // From the owner's plan, never the descendant's record
-                    // ([`CommittedSet::revoked_identities`]).
-                    revoked_identities: root_plan.committed.revoked_identities,
+                    // ([`CommittedSet::revoked_recipients`]).
+                    revoked_recipients: root_plan.committed.revoked_recipients,
                 },
                 current_override_seed: &target.override_seed,
                 current_read_epoch: target.current_read_epoch,
@@ -682,7 +688,7 @@ mod tests {
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
         sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
     use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
@@ -1015,7 +1021,7 @@ mod tests {
         current_seed: [u8; 32],
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
-        revoked_identities: Vec<[u8; IDENTITY_PUBLIC_LEN]>,
+        revoked_recipients: Vec<[u8; SECRET_LEN]>,
     }
 
     impl RootFx {
@@ -1034,13 +1040,13 @@ mod tests {
                 current_seed: [0x00; 32],
                 write_scope_seed: [0x01; 32],
                 pointer_read_key: [0x02; 32],
-                revoked_identities: Vec::new(),
+                revoked_recipients: Vec::new(),
             }
         }
 
-        /// The owner's cut removed `identity` — carried down every descendant.
-        fn revoking(mut self, identity: [u8; IDENTITY_PUBLIC_LEN]) -> Self {
-            self.revoked_identities.push(identity);
+        /// The owner's cut removed `recipient` — carried down every descendant.
+        fn revoking(mut self, recipient: [u8; SECRET_LEN]) -> Self {
+            self.revoked_recipients.push(recipient);
             self
         }
 
@@ -1069,7 +1075,7 @@ mod tests {
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,
                     direct_child_scope_index: root_children,
-                    revoked_identities: &self.revoked_identities,
+                    revoked_recipients: &self.revoked_recipients,
                 },
                 current_override_seed: &self.current_seed,
                 current_read_epoch: 4,
@@ -1134,8 +1140,8 @@ mod tests {
         // the live read and write epochs. Bound to the record's own set, the
         // cascade would wrap the fresh read override seed straight back to the
         // party the owner cut.
-        let revokee = [0x02; IDENTITY_PUBLIC_LEN];
         let net = FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
+        let revokee = net.owner.grantee.public().to_bytes();
         let index = vec![childref(0x0a)];
 
         let (outcome, before, ..) = run_fx(RootFx::new(net.clone()), net.clone(), index.clone());
@@ -1163,9 +1169,9 @@ mod tests {
 
     #[test]
     fn a_cut_leaves_every_surviving_grantee_re_keyed() {
-        // The cut names one identity; a descendant committing a different one
+        // The cut names one recipient; a descendant committing a different one
         // must still receive its blob, or the cascade over-revokes.
-        let survivor = [0x07; IDENTITY_PUBLIC_LEN];
+        let survivor = [0x07; SECRET_LEN];
         let net = FakeNet::new().scope(0x0a, 4, &[]);
         let (outcome, net, ..) = run_fx(
             RootFx::new(net.clone()).revoking(survivor),
@@ -1176,7 +1182,7 @@ mod tests {
         assert_eq!(
             net.blob_tags(0x0a).len(),
             1,
-            "an identity the cut never named keeps its re-keyed grant"
+            "a recipient the cut never named keeps its re-keyed grant"
         );
     }
 

@@ -4383,7 +4383,7 @@ where {
                         commitment_sig: &current.commitment_sig,
                         grant_ledger: &current.grant_ledger,
                         direct_child_scope_index: &current.direct_child_scope_index,
-                        revoked_identities: &[],
+                        revoked_recipients: &[],
                     },
                     current_override_seed: &current.override_seed,
                     current_read_epoch: current.current_read_epoch,
@@ -5115,7 +5115,7 @@ where {
                 commitment_sig: &signature.to_compact(),
                 grant_ledger: ledger,
                 direct_child_scope_index: &current.direct_child_scope_index,
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &current.carried_history_links,
         )

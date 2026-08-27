@@ -1389,7 +1389,7 @@ where
                 commitment_sig: &source.section.commitment_sig,
                 grant_ledger: &source.write_body.grant_ledger,
                 direct_child_scope_index: &source.write_body.direct_child_scope_index,
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             current_override_seed: &source.read_scope_seed,
             current_read_epoch: source.read_epoch,
@@ -1876,7 +1876,7 @@ where
                 commitment_sig: &source.commitment_sig,
                 grant_ledger: &source.grant_ledger,
                 direct_child_scope_index: index,
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &source.history_links,
         )
@@ -2181,9 +2181,8 @@ fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
 fn reseal_verdict(error: ResealError) -> WritePublishError {
     match error {
         ResealError::Entropy(_) => WritePublishError::NotLanded,
-        // A size refusal on a record the next pass re-resolves, never a verdict
-        // on its trust: a permanent one would let whoever grew that root block
-        // the owner's revocation for good.
+        // Availability, not trust: the next pass re-resolves that record
+        // ([`ResealError::SectionNotResealable`]).
         ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
         ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
@@ -2657,7 +2656,7 @@ where
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
                 direct_child_scope_index: &plane.write_body.direct_child_scope_index,
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &plane.section.history_links,
         )
@@ -2931,6 +2930,17 @@ where
         if repoint.prev_root.as_ref() != Some(self.current_root_name) {
             return Ok(None);
         }
+        // The owner-write blob is opened at the re-point's *own* claimed epoch,
+        // not at the durable floor, so this is the one path the floor's
+        // monotonicity does not already fail-safe. An epoch below the floor is a
+        // rollback past a re-key, never staleness (rule 6).
+        if floor::write_epoch_regression(self.floors, &self.scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .is_some()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
         let Some((_, record_bytes)) =
             fanout_get_verify(self.transport, &repoint.current_root).await
         else {
@@ -2945,17 +2955,6 @@ where
         .await
         .map_err(ResolveFailure::from)?;
         if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
-            return Err(ResolveFailure::Rejected);
-        }
-        // The owner-write blob is opened at the re-point's *own* claimed epoch,
-        // not at the durable floor, so this is the one path the floor's
-        // monotonicity does not already fail-safe. An epoch below the floor is a
-        // rollback past a re-key, never staleness (rule 6).
-        if floor::write_epoch_regression(self.floors, &self.scope_id, repoint.write_epoch)
-            .await
-            .map_err(|_| ResolveFailure::Unavailable)?
-            .is_some()
-        {
             return Err(ResolveFailure::Rejected);
         }
         let seed = self
@@ -3671,7 +3670,7 @@ mod tests {
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &[],
         )
@@ -4019,7 +4018,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: &[],
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                 current_read_epoch: OWNER_ROOT_EPOCH,
@@ -4129,7 +4128,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: children,
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &[],
         )
@@ -4537,7 +4536,7 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     direct_child_scope_index: index,
-                    revoked_identities: &[],
+                    revoked_recipients: &[],
                 },
                 current_override_seed: override_seed,
                 current_read_epoch: read_epoch,
@@ -5392,7 +5391,7 @@ mod tests {
                             commitment_sig: &world.root.grant_section.commitment_sig,
                             grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
                             direct_child_scope_index: &[],
-                            revoked_identities: &[],
+                            revoked_recipients: &[],
                         },
                         current_override_seed: &OWNER_ROOT_SCOPE_SEED,
                         current_read_epoch: OWNER_ROOT_EPOCH,
@@ -8385,7 +8384,7 @@ mod tests {
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
                 direct_child_scope_index: &[],
-                revoked_identities: &[],
+                revoked_recipients: &[],
             },
             &[],
         )
