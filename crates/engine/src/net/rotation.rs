@@ -1960,7 +1960,7 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// this rationale.
     pub vault_pointer_signer: Option<&'a Ed25519Signer>,
     /// The session's held set, so a confirmed pointer flip enrols the pointer
-    /// for renewal ([`WriteWaveNet::publish_scope_pointer`]).
+    /// for renewal (`WriteWaveNet::publish_repoint`).
     pub held: &'a RefCell<HeldRecords>,
     /// The pointer-payload envelope version the scope pointer is read under
     /// (`RotateScopeWritePlan::payload_version`).

@@ -292,7 +292,7 @@ where
 ///
 /// Nothing gates a pointer record, so no adopt ever raises its sequence floor
 /// and the network is the only lower bound a renewal can clear (see
-/// `WriteWaveNet::publish_scope_pointer`). For the same reason a re-point another
+/// `WriteWaveNet::publish_pointer_record`). For the same reason a re-point another
 /// device landed is visible only here: re-signing this session's own superseded
 /// block at a higher sequence would roll the scope back to a root name that no
 /// longer holds, so a differing live `Value` refuses the renewal fail-closed.
