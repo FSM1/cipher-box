@@ -55,9 +55,9 @@ base64.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
 
-# The filesystem the engine is projected through. A platform with no host
-# adapter runs the session with no mount (`src/mount/detached.rs`).
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# The filesystem the engine is projected through: libfuse3 on Linux, FUSE-T's
+# SMB backend on macOS, WinFsp on Windows. One projection serves all three.
+[target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
 cipherbox-fuse.workspace = true
 
 [dev-dependencies]

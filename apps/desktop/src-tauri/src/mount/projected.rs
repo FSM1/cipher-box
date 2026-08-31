@@ -1,13 +1,15 @@
-//! The vault projected as a filesystem, on the platforms `crates/fuse` has a
-//! host adapter for.
+//! The vault projected as a filesystem. One projection over all three host
+//! adapters: which one a build links is the only thing that differs.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
-use cipherbox_fuse::{
-    CacheBudget, FuseInvalidator, FuseMount, OperationCore, Publication, SpillArea,
-};
+use cipherbox_fuse::{CacheBudget, OperationCore, Publication, SpillArea};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use cipherbox_fuse::{FuseInvalidator as Invalidator, FuseMount as Mount};
+#[cfg(windows)]
+use cipherbox_fuse::{WinFspInvalidator as Invalidator, WinFspMount as Mount};
 use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};
@@ -16,7 +18,7 @@ use crate::engine::DesktopSeamTypes;
 pub use cipherbox_fuse::KernelOp;
 
 /// What the mounting thread hands back: the mount it made, or why it made none.
-pub type Landing = Result<FuseMount, String>;
+pub type Landing = Result<Mount, String>;
 
 /// Shown once the kernel session has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
@@ -42,7 +44,8 @@ const NOT_PUBLISHED: &str = "the mount was made but the backend never published 
 const SHUTDOWN_WITHIN: Duration = Duration::from_secs(5);
 
 /// The vault's mount point: `~/CipherBox`, the name v1 taught members to look
-/// for.
+/// for. WinFsp makes that directory itself and removes it at unmount; the unix
+/// backends mount over one the adapter prepares.
 fn mount_point(home_dir: &Path) -> PathBuf {
     home_dir.join("CipherBox")
 }
@@ -66,8 +69,8 @@ pub enum Projection {
     /// The vault is projected through `core`. `mount` empties when the kernel
     /// session ends; the engine goes on running inside the core either way.
     Projected {
-        core: Box<OperationCore<DesktopSeamTypes, FuseInvalidator>>,
-        mount: Option<FuseMount>,
+        core: Box<OperationCore<DesktopSeamTypes, Invalidator>>,
+        mount: Option<Mount>,
         at: PathBuf,
     },
 }
@@ -232,7 +235,7 @@ impl Projection {
     pub async fn tear_down(self) {
         match self {
             Self::Opening { landing, .. } => {
-                // Whatever it lands is dropped, and dropping a `FuseMount` is
+                // Whatever it lands is dropped, and dropping a mount is
                 // the unmount.
                 let _ = tokio::time::timeout(SHUTDOWN_WITHIN, landing).await;
             }
