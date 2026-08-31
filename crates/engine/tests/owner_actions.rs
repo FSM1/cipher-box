@@ -12,9 +12,10 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields,
-    ReadBody, STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_grant_blob, open_read_body, sign_grant_set,
+    AadContext, AscentLink, GrantSection, GrantSetCommitment, Permission as CorePermission,
+    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, decode_envelope,
+    decode_grant_section, grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body,
+    sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -29,7 +30,7 @@ use cipherbox_engine::grants::{
     mint_invite_grant, post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{
-    ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
+    ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
@@ -246,6 +247,55 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
             .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
     }
     name
+}
+
+/// Re-seal `node`'s record under `scope_id`'s derivation at `epoch` and publish
+/// it past the sequence it answers at now.
+///
+/// A mint promotes a folder to a scope root under a fresh override seed and
+/// leaves the interior nodes it carried sealed under the scope they left, so a
+/// test that needs the granted subtree readable inside the fresh scope stands
+/// that re-seal in here.
+fn reseal_interior_node(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+    scope_id: [u8; 16],
+    override_seed: &[u8; 32],
+    epoch: u64,
+) {
+    let name = write_name(node);
+    let read_key = kdf::read_key(kdf::node_seed(override_seed, &node.0).as_bytes());
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id,
+        epoch,
+        read_key: read_key.as_bytes(),
+        nonce: &[0x5e; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the interior node re-seals");
+    blocks.put(head.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes()),
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        sequence_at(world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
 }
 
 /// A cold-started owner engine over a seeded vault, with the spawned loops
@@ -1188,6 +1238,84 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
         1,
         "the share pointer reached the recipient"
     );
+}
+
+/// A grant on a folder that already sits inside a granted scope anchors under
+/// **that** scope, not the vault root: its commitment, seeds and index are the
+/// ones the mint re-seals, and the fresh scope's ascent link is sealed to the
+/// derivation only that scope's own reader can walk.
+#[test]
+fn a_grant_inside_a_granted_scope_anchors_under_that_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let enclosing = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder is a scope root");
+    let enclosing_override_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &enclosing,
+    )
+    .expect("the owner blob yields the enclosing scope's override seed");
+    reseal_interior_node(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        fx.folder.0,
+        &enclosing_override_seed,
+        1,
+    );
+
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+    let enclosing_before = sequence_at(&fx.world, &write_name(fx.folder));
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "the vault root's index never gains a scope it does not directly hold"
+    );
+    assert!(
+        sequence_at(&fx.world, &write_name(fx.folder)) > enclosing_before,
+        "the enclosing scope re-sealed its own index instead"
+    );
+
+    // The ascent link is the decisive binding: it opens only under
+    // `nodeSeed(overrideSeed, inner)` of the scope that encloses `inner`, so a
+    // mint that had anchored at the vault root could not produce it.
+    let section = published_grant_section(&fx.world, &fx.blocks, inner)
+        .expect("the nested folder now answers as a scope root");
+    let ascent = section
+        .ascent_link
+        .as_ref()
+        .expect("a nested scope root carries an ascent link");
+    open_ascent_link(
+        kdf::node_seed(&enclosing_override_seed, &inner.0).as_bytes(),
+        &AadContext {
+            v: ENVELOPE_V,
+            id: inner.0,
+            scope: inner.0,
+            epoch: 1,
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        },
+        &AscentLink {
+            ascent_public: ascent.ascent_public,
+            enc: ascent.enc,
+            ciphertext: ascent.ciphertext.clone(),
+            unknown: PreservedFields::new(),
+        },
+    )
+    .expect("the enclosing scope's derivation opens the nested scope's ascent link");
 }
 
 /// The read the share dialog renders from: engine truth, not a tally of the

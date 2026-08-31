@@ -4518,14 +4518,78 @@ where {
         ))
     }
 
+    /// The scope root that encloses `node`, with the gated record it resolves
+    /// to — the vault root when no scope this vault granted contains `node`.
+    ///
+    /// Each hop reads the next level's `ipnsName` out of the level above's
+    /// owner-signed direct-child-scope index and gates it under the ancestor
+    /// seed that level derives, so a nested scope root is never read at a name
+    /// this session merely re-derives. The walk follows the base snapshot's
+    /// ancestor chain downward, so it visits each level at most once and a vault
+    /// with no nested scope spends exactly one resolve.
+    async fn enclosing_scope(
+        &self,
+        node: NodeId,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        pointer_consult: PointerConsultArm,
+    ) -> Result<(OwnerScope, CascadeTarget), EngineError> {
+        let OwnerRotationKeys {
+            enc_secret,
+            identity,
+            scope_keys,
+        } = keys;
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret,
+            identity,
+            scope_keys,
+        };
+        let mut scope = OwnerScope {
+            scope: self.vault_root_scope()?,
+            parent_node_seed: None,
+            vouched: true,
+        };
+        let mut current = self
+            .owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult)
+            .resolve_vault_root(&scope.scope)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        // Root-first, so each step descends into the index the step above signed.
+        let mut chain = self.snapshot.borrow().ancestors(node);
+        chain.reverse();
+        for ancestor in chain {
+            let Some(child) = current
+                .direct_child_scope_index
+                .iter()
+                .find(|child| child.scope_id == ancestor.0)
+                .cloned()
+            else {
+                continue;
+            };
+            let parent_node_seed = kdf::node_seed(&current.override_seed, &child.scope_id);
+            scope = OwnerScope {
+                scope: child,
+                parent_node_seed: Some(Zeroizing::new(*parent_node_seed.as_bytes())),
+                vouched: true,
+            };
+            current = self
+                .owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult)
+                .resolve_anchored(&scope.scope)
+                .await
+                .map_err(EngineError::from_resolve_failure)?;
+        }
+        Ok((scope, current))
+    }
+
     /// The scope root `node` names, and the ancestor node seed a gated read of an
     /// interior one needs.
     ///
-    /// The authority for what is a scope root is the vault root's owner-signed
-    /// direct-child-scope index, so an interior root's `ipnsName` is taken from
-    /// that index rather than re-derived: a scope a write rotation has moved is
-    /// then read at the name its parent vouches for. A node the base snapshot
-    /// does not hold is refused before any resolve.
+    /// The authority for what is a scope root is the owner-signed
+    /// direct-child-scope index of the scope that encloses it
+    /// ([`enclosing_scope`](Self::enclosing_scope)), so an interior root's
+    /// `ipnsName` is taken from that index rather than re-derived: a scope a
+    /// write rotation has moved is then read at the name its parent vouches for.
+    /// A node the base snapshot does not hold is refused before any resolve.
     ///
     /// `unindexed` decides what an index miss means — see [`UnindexedScope`].
     /// Either way the read is gated and its ascent link is proved under the
@@ -4572,17 +4636,9 @@ where {
         if !self.snapshot.borrow().contains(node) {
             return Err(EngineError::UnsupportedTarget { check });
         }
-        let parent = self.vault_root_scope()?;
-        let current = self
-            .owner_rotation_net(
-                api,
-                keys,
-                RotationAncestry::default(),
-                PointerConsultArm::Refused,
-            )
-            .resolve_vault_root(&parent)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
+        let (_, current) = self
+            .enclosing_scope(node, api, keys, PointerConsultArm::Refused)
+            .await?;
         let standing = record_share_standing(node, current.v, &current.direct_child_scope_index);
         let indexed = current
             .direct_child_scope_index
@@ -4779,7 +4835,7 @@ where {
         .map_err(EngineError::from_rotate)
     }
 
-    /// Revoke a recipient's grant on the vault root's scope.
+    /// Revoke a recipient's grant at `node`'s scope root.
     ///
     /// The owner's half of the same pairwise ECDH the recipient self-locates
     /// under names the tag, so it is derived here and never taken from a caller.
@@ -4792,7 +4848,7 @@ where {
             .await
     }
 
-    /// Demote a recipient's write grant on the vault root's scope to read
+    /// Demote a recipient's write grant at `node`'s scope root to read
     /// (blueprint/engine.md "Triggers": write revoke / downgrade).
     ///
     /// The read plane is untouched — the recipient keeps the grant they hold —
@@ -4994,7 +5050,7 @@ where {
         Ok(report)
     }
 
-    /// Grant a node inside the vault root's scope to an imported contact
+    /// Grant a node to an imported contact
     /// (blueprint/engine.md "Grant creation").
     async fn grant(
         &self,
@@ -5064,29 +5120,27 @@ where {
                 check: checks.vault_root,
             });
         }
-        let parent = self.vault_root_scope()?;
-        let rendered = self.render().await?;
-        // A link owes the bound too: the pointer its conversion posts carries
-        // this label, so a link minted past it would be one nobody can claim.
-        let display_name = share_display_name(&rendered, node)?;
-
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        // The parent is the scope that already holds the folder, which is the
+        // vault root only when no scope this vault granted encloses it. Its
+        // commitment, ledger, seeds and index are the ones the mint re-seals.
+        let (parent_scope, current) = self
+            // The converge pass consults the scope pointer.
+            .enclosing_scope(node, api, owner_keys(), PointerConsultArm::Permitted)
+            .await?;
+        let parent = &parent_scope.scope;
         let net = self.owner_rotation_net(
             api,
-            OwnerRotationKeys {
-                enc_secret: session.enc_subkey(),
-                identity: &owner_identity,
-                scope_keys: &scope_keys,
-            },
-            RotationAncestry::default(),
-            // The converge pass consults the scope pointer.
+            owner_keys(),
+            parent_scope.ancestry(),
             PointerConsultArm::Permitted,
         );
-        let current = net
-            .resolve_vault_root(&parent)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
 
         if let Some(check) = checks.refusal(record_share_standing(
             node,
@@ -5096,6 +5150,10 @@ where {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
+        let rendered = self.render().await?;
+        // A link owes the bound too: the pointer its conversion posts carries
+        // this label, so a link minted past it would be one nobody can claim.
+        let display_name = share_display_name(&rendered, node)?;
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
 
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
@@ -5134,7 +5192,12 @@ where {
                 ipns_name: &parent.ipns_name,
                 owner_enc_pub: &current.owner_enc_pub,
                 owner_enc_secret: Some(session.enc_subkey()),
-                ascent: None,
+                // An interior parent is itself a descendant, so its re-seal owes
+                // the ascent link it already carries.
+                ascent: parent_scope
+                    .parent_node_seed
+                    .as_deref()
+                    .map(AscentAuthority::ParentSeed),
                 owes_ascent_link: current.carried_ascent_link,
                 pseudonym_signer: &current.pseudonym_signer,
             },
@@ -5268,8 +5331,8 @@ where {
             .map(|_| ())
     }
 
-    /// Point the vault root's direct-child-scope index at the name a write-scope
-    /// cut moved `node`'s scope root to.
+    /// Point the enclosing scope's direct-child-scope index at the name a
+    /// write-scope cut moved `node`'s scope root to.
     ///
     /// The index is the owner's own authority for where an interior scope root
     /// lives ([`Self::owner_scope_standing`]), and a later owner action reads it
@@ -5286,21 +5349,21 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
-        let parent = self.vault_root_scope()?;
+        let owner_keys = || OwnerRotationKeys {
+            enc_secret: session.enc_subkey(),
+            identity: &owner_identity,
+            scope_keys: &scope_keys,
+        };
+        let (parent_scope, current) = self
+            .enclosing_scope(node, api, owner_keys(), PointerConsultArm::Permitted)
+            .await?;
+        let parent = &parent_scope.scope;
         let net = self.owner_rotation_net(
             api,
-            OwnerRotationKeys {
-                enc_secret: session.enc_subkey(),
-                identity: &owner_identity,
-                scope_keys: &scope_keys,
-            },
-            RotationAncestry::default(),
+            owner_keys(),
+            parent_scope.ancestry(),
             PointerConsultArm::Permitted,
         );
-        let current = net
-            .resolve_vault_root(&parent)
-            .await
-            .map_err(EngineError::from_resolve_failure)?;
         let index = insert_child(
             &current.direct_child_scope_index,
             ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
@@ -5313,7 +5376,10 @@ where {
                 ipns_name: &parent.ipns_name,
                 owner_enc_pub: &current.owner_enc_pub,
                 owner_enc_secret: Some(session.enc_subkey()),
-                ascent: None,
+                ascent: parent_scope
+                    .parent_node_seed
+                    .as_deref()
+                    .map(AscentAuthority::ParentSeed),
                 owes_ascent_link: current.carried_ascent_link,
                 pseudonym_signer: &current.pseudonym_signer,
             },
@@ -6743,8 +6809,8 @@ where {
     /// plane rather than remembered, so a reload — or a grant another device
     /// issued — renders the same list.
     ///
-    /// A node the vault root's committed child-scope index does not name is not
-    /// a scope root, and nothing is granted at it: the grant list is empty, and
+    /// A node the enclosing scope's committed child-scope index does not name is
+    /// not a scope root, and nothing is granted at it: the grant list is empty, and
     /// that emptiness is the answer. A node this vault does not hold at all is
     /// [`EngineError::UnknownNode`], and a scope root this read could not reach
     /// leaves [`SharingView::state`] absent rather than empty.
@@ -6782,8 +6848,8 @@ where {
     /// grant ledger its record commits projected key-free, this owner's invite
     /// links there, and the refusal a further share of it would report.
     ///
-    /// The authority for what is a scope root is the vault root's owner-signed
-    /// direct-child-scope index, which
+    /// The authority for what is a scope root is the enclosing scope's
+    /// owner-signed direct-child-scope index, which
     /// [`owner_scope_standing`](Self::owner_scope_standing) owns — so a node it
     /// does not name has an empty grant list, and only the parent record's own
     /// grounds stand in a mint's way.
