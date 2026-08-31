@@ -5150,13 +5150,23 @@ where {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
+        let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
+        self.refuse_an_unindexed_scope(
+            node,
+            &current,
+            parent_node_seed.as_bytes(),
+            api,
+            owner_keys(),
+            checks.already_a_scope,
+        )
+        .await?;
+
         let rendered = self.render().await?;
         // A link owes the bound too: the pointer its conversion posts carries
         // this label, so a link minted past it would be one nobody can claim.
         let display_name = share_display_name(&rendered, node)?;
         let subtree = subtree_child_scopes(&rendered, node, &current.direct_child_scope_index)?;
 
-        let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
         // A read grant cuts no write scope: the granted node keeps the
@@ -5263,6 +5273,54 @@ where {
                 .await?;
         }
         Ok(outcome)
+    }
+
+    /// Refuse a share of `node` when a live scope root already answers at the
+    /// name a mint would publish it under.
+    ///
+    /// [`record_share_standing`] decides from the parent's index, which
+    /// `mint_grantee_scope` writes last: a mint that published the grantee scope
+    /// root and then failed leaves a live scope the index does not name. A second
+    /// share would republish at that same derived name under a fresh override
+    /// seed and cut the first grantee off a scope they still hold — a revocation
+    /// the owner never asked for. So the name is probed before anything is
+    /// minted, under the ascent authority a real scope root there must answer to.
+    ///
+    /// `node`'s own record answers at that name until a mint promotes it, so a
+    /// gate rejection is the ordinary "no scope here" and the share proceeds. A
+    /// name this pass could not read leaves the question open, and the answer
+    /// that costs nothing is to retry.
+    #[allow(clippy::too_many_arguments)]
+    async fn refuse_an_unindexed_scope(
+        &self,
+        node: NodeId,
+        parent: &CascadeTarget,
+        parent_node_seed: &[u8; SECRET_LEN],
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        check: &'static str,
+    ) -> Result<(), EngineError> {
+        let derived = ChildScopeRef::new(
+            node.0,
+            derive_write_name(&parent.write_scope_seed, &node.0)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+        );
+        let probe = OwnerScope {
+            scope: derived,
+            parent_node_seed: Some(Zeroizing::new(*parent_node_seed)),
+            vouched: false,
+        };
+        match self
+            .owner_rotation_net(api, keys, probe.ancestry(), PointerConsultArm::Refused)
+            .resolve_anchored(&probe.scope)
+            .await
+        {
+            Ok(_) => Err(EngineError::UnsupportedTarget { check }),
+            Err(ResolveFailure::Rejected) => Ok(()),
+            Err(other) => Err(EngineError::from_resolve_failure(other)),
+        }
     }
 
     /// The write-scope cut a write grant owes, over the scope the mint just

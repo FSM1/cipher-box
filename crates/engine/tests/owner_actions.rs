@@ -1240,6 +1240,45 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
     );
 }
 
+/// The parent's index is written last, so a mint that published the grantee
+/// scope root and then failed leaves a live scope the index does not name. A
+/// second share of that folder must refuse: republishing at the same derived
+/// name under a fresh override seed would cut the first grantee off a scope
+/// they still hold.
+#[test]
+fn a_second_share_of_a_folder_whose_scope_the_index_lost_is_refused() {
+    let mut fx = GrantScenario::new();
+    // The grantee root publishes first and the parent's index update fails, so
+    // the scope goes live and nothing names it.
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the mint reports the partial commit"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let stranded = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the grantee scope root is live at its derived name");
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+        "the second share is refused against the name, not the index",
+    );
+    assert_eq!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder)
+            .expect("the stranded scope still answers")
+            .commitment,
+        stranded.commitment,
+        "and the first grantee's scope is untouched"
+    );
+}
+
 /// A grant on a folder that already sits inside a granted scope anchors under
 /// **that** scope, not the vault root: its commitment, seeds and index are the
 /// ones the mint re-seals, and the fresh scope's ascent link is sealed to the
