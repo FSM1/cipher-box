@@ -243,11 +243,9 @@ pub(crate) async fn assemble_candidate<H: Http>(
         )
     })?;
     let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
-    // After the decode, because the reservation is sized from this root's own
-    // committed grant count. Stage 2 has not verified the owner signature over
-    // that count yet, and does not need to here: a writer that edits it breaks
-    // the signature and the record is refused a stage later, so no record this
-    // gate passes ever bought itself room with a count the owner did not sign.
+    // Sized from this root's own committed grant count, which the gate's stage 2
+    // holds to the owner's signature — so no record that passes ever bought
+    // itself room with a count the owner did not sign.
     let rest = scope_root_rest_bytes(block_len, section_bytes.len());
     let limit = resealable_root_rest_bytes(grant_section.commitment.entries.len());
     if rest > limit {

@@ -495,7 +495,7 @@ mod tests {
                     prev: None,
                     write_scope_seed: &write_scope_seed,
                     write_epoch: 1,
-                    write_history: WriteHistory::Carried(&[]),
+                    write_history: WriteHistory::Genesis,
                     pointer_read_key: &pointer_read_key,
                 },
                 commitment: &self.parent_commitment,

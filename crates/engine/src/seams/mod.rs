@@ -29,8 +29,8 @@ mod staging_store;
 
 pub use credential_store::CredentialStore;
 pub use floor_store::{
-    ContactLabel, FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN, OwnerScopedFloorStore,
-    SharerScopedFloorStore,
+    CONTACT_LABEL_LEN, ContactLabel, FloorNamespace, FloorRaise, FloorStore, OWNER_TAG_LEN,
+    OwnerScopedFloorStore, SharerScopedFloorStore,
 };
 pub use http::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,

@@ -17,7 +17,6 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 
 use crate::api::ApiClient;
 use crate::content::Gateway;
-use crate::content::profile::ContentProfile;
 use crate::entropy::{Entropy, SharedEntropy};
 use crate::facade::NodeId;
 use crate::gate::floor;
@@ -51,8 +50,6 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub floors: &'a F,
     pub scheduler: &'a Sch,
     pub profile: &'a SyncTimingProfile,
-    /// The frozen content framing the write wave expands moved records against.
-    pub content_profile: &'a ContentProfile,
     pub entropy: &'a RefCell<E>,
     /// The owner material both planes re-seal under.
     pub keys: OwnerRotationKeys<'a>,
@@ -359,7 +356,6 @@ where
                 floors: self.floors,
                 scheduler: self.scheduler,
                 profile: self.profile,
-                content_profile: self.content_profile,
                 entropy: self.entropy,
                 scope_id: scope_root.0,
                 read_scope_seed: &current.override_seed,

@@ -53,11 +53,9 @@ use super::record_publish::{
 use super::retire::{retire, root_retire_ready};
 use crate::api::ApiClient;
 use crate::content::Gateway;
-use crate::content::profile::ContentProfile;
+use crate::content::dag::decode_root;
 use crate::content::read::{ContentPlane, read_block};
-use crate::content::retention::{
-    ContentVersion, RootPlacement, expand_retire_targets, version_cids,
-};
+use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
@@ -1963,6 +1961,16 @@ where
     }
 }
 
+/// How many of a moved record's content versions the wave expands. A committed
+/// writer sizes the list, and each entry costs one gateway fetch inside a pass
+/// the revocation waits on. A version past the bound keeps whatever pin rows the
+/// old name's registrations left, and the node's next publish re-registers it.
+const MAX_MOVED_VERSIONS: usize = 64;
+
+/// How many content CIDs one moved record's registration carries. A committed
+/// writer sizes the leaf list too, and the whole set rides one register body.
+const MAX_MOVED_CONTENT_CIDS: usize = 8192;
+
 /// The write-plane name wave's transport edge (blueprint/engine.md
 /// "rotateScopeWrite"): the owner arm of both [`WriteSubtreeResolver`] and
 /// [`WriteWavePublisher`] over the same net plane the read-plane seams above run
@@ -1990,9 +1998,6 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
     pub profile: &'a SyncTimingProfile,
-    /// The frozen content framing every version was published under — what a
-    /// moved record's content CIDs are expanded against.
-    pub content_profile: &'a ContentProfile,
     /// Injected entropy — the per-seal nonce source (determinism law).
     pub entropy: &'a RefCell<E>,
     /// The scope under rotation; every record the wave touches must claim it.
@@ -2748,56 +2753,56 @@ where
     /// name anchored. Without them the wave leaves the account holding pin rows
     /// no record of it names.
     ///
-    /// A version whose root block no source serves is **retryable**: publishing
-    /// the move without those edges strands them the moment step 8 retires the
-    /// old name. A version whose root block reads but is not this build's
-    /// framing contributes its own root alone — no retry reframes it, and the
-    /// retire path expands it no better, so its leaves were already beyond every
-    /// set this engine names.
-    async fn moved_content_cids(&self, body: &ReadBody) -> Result<Vec<String>, WritePublishError> {
+    /// The whole version list is a committed writer's, so nothing here may cost
+    /// the wave: a version this pass cannot expand contributes its own root and
+    /// the walk goes on. Aborting instead would let the very party a write
+    /// rotation revokes stall the rotation by naming a block no source serves.
+    /// The leaves come from the manifest the fetched block decodes to, and
+    /// [`read_block`] holds that block to the CID the record names, so a
+    /// writer's `size` steers no CID into or out of the set.
+    ///
+    /// [`MAX_MOVED_VERSIONS`] and [`MAX_MOVED_CONTENT_CIDS`] bound the walk,
+    /// because neither the version count nor the leaf count is bounded by
+    /// anything but the record's own byte ceiling.
+    async fn moved_content_cids(&self, body: &ReadBody) -> Vec<String> {
         let ReadBody::File { versions, .. } = body else {
-            return Ok(Vec::new());
+            return Vec::new();
         };
         let mut cids = Vec::new();
         let mut seen = BTreeSet::new();
-        for version in versions {
+        for version in versions.iter().take(MAX_MOVED_VERSIONS) {
             if !is_wellformed_content_cid(&version.content_cid) {
                 continue;
             }
             let root_cid = encode_content_cid_str(&version.content_cid);
-            let expected = version.content_cid.clone();
-            let root_block = read_block(
+            let leaves = match read_block(
                 self.gateway,
                 self.http,
                 &root_cid,
-                &expected,
+                &version.content_cid,
                 ContentPlane::Root,
             )
             .await
-            .map_err(|_| WritePublishError::NotLanded)?;
-            let pinned_bytes = ContentVersion::from_plaintext_size(
-                root_cid.clone(),
-                version.size,
-                self.content_profile,
-            )
-            .map(|framed| framed.pinned_bytes)
-            .unwrap_or_default();
-            let named = match expand_retire_targets(
-                &root_cid,
-                &root_block,
-                self.content_profile,
-                pinned_bytes,
-            ) {
-                Ok(expansion) => expansion.cids(),
-                Err(_) => version_cids(&version.content_cid, [], RootPlacement::First),
+            .ok()
+            .and_then(|block| decode_root(&block).ok())
+            {
+                Some(manifest) => manifest.leaf_cid_vecs(),
+                None => Vec::new(),
             };
-            for cid in named {
+            for cid in version_cids(
+                &version.content_cid,
+                leaves.iter().map(Vec::as_slice),
+                RootPlacement::Last,
+            ) {
+                if cids.len() == MAX_MOVED_CONTENT_CIDS {
+                    return cids;
+                }
                 if seen.insert(cid.clone()) {
                     cids.push(cid);
                 }
             }
         }
-        Ok(cids)
+        cids
     }
 
     /// Author and CAS-publish `node`'s rewritten record at its new name, signing
@@ -2823,7 +2828,7 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
-        let content_cids = self.moved_content_cids(&read_body).await?;
+        let content_cids = self.moved_content_cids(&read_body).await;
 
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
@@ -3450,11 +3455,10 @@ mod tests {
     use cipherbox_core::codec::Value;
     use cipherbox_core::error::{CodecError, Malformed};
     use cipherbox_core::ipns::{IpnsRecord, VerifiedRecord};
-    use cipherbox_core::seal::Version;
     use cipherbox_core::seal::{
         AscentLink, ChildRef, GrantBlobPayload, GrantSetCommitment, NodeKind, Permission,
         STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, StructureSigInput,
+        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, StructureSigInput, Version,
         decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
         encode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob,
         open_history_link, open_owner_history_link, open_owner_write_blob, open_read_body, seal,
@@ -3465,7 +3469,9 @@ mod tests {
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
     use super::*;
-    use crate::content::{ContentKey, GatewaySource, assemble, frame_and_seal};
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
+
+    use crate::content::{ContentKey, ContentProfile, GatewaySource, assemble, frame_and_seal};
     use crate::rotation::sweep::sim;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
@@ -4027,7 +4033,7 @@ mod tests {
                 }),
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
@@ -4484,7 +4490,7 @@ mod tests {
                 prev,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
@@ -6014,7 +6020,6 @@ mod tests {
             floors,
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
-            content_profile: &ContentProfile::CI,
             entropy,
             scope_id: SCOPE,
             read_scope_seed: &OWNER_ROOT_SCOPE_SEED,
@@ -6165,6 +6170,34 @@ mod tests {
         }
     }
 
+    /// The `contentCids` the wave registered under `name`.
+    fn registered_content_cids<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        name: &IpnsName,
+    ) -> Vec<String> {
+        harness
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/registry/register"))
+            .flat_map(|request| {
+                serde_json::from_slice::<Vec<serde_json::Value>>(
+                    request.body.as_deref().expect("a register call has a body"),
+                )
+                .expect("a register body is a JSON array")
+            })
+            .filter(|entry| entry["ipnsName"] == name.as_str())
+            .flat_map(|entry| {
+                entry["contentCids"]
+                    .as_array()
+                    .expect("contentCids")
+                    .iter()
+                    .map(|cid| cid.as_str().expect("a CID string").to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     /// The wave retires the old names account-wide, so a new name that claims no
     /// content edge leaves the account holding pin rows no record of it names —
     /// and the next doomed-root retire unpins a leaf a live node still names.
@@ -6211,36 +6244,46 @@ mod tests {
         let moved = order(node_id, &old_name, BTreeMap::new(), false);
         block_on(net.republish(&moved)).expect("the file republishes");
 
-        let registered: Vec<String> = harness
-            .http
-            .requests()
-            .iter()
-            .filter(|request| request.url.ends_with("/registry/register"))
-            .flat_map(|request| {
-                serde_json::from_slice::<Vec<serde_json::Value>>(
-                    request.body.as_deref().expect("a register call has a body"),
-                )
-                .expect("a register body is a JSON array")
-            })
-            .filter(|entry| entry["ipnsName"] == moved.new_name.as_str())
-            .flat_map(|entry| {
-                entry["contentCids"]
-                    .as_array()
-                    .expect("contentCids")
-                    .iter()
-                    .map(|cid| cid.as_str().expect("a CID string").to_owned())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
         assert_eq!(
-            registered,
+            registered_content_cids(&harness, &moved.new_name),
             version_cids(
                 &dag.content_cid,
                 leaf_cids.iter().map(Vec::as_slice),
                 RootPlacement::Last,
             ),
             "the moved name must anchor every block its record names"
+        );
+    }
+
+    /// The version list is a committed writer's. A version naming a block no
+    /// source serves must cost that version's leaves and nothing else — a wave
+    /// that aborted here would let the party a write rotation revokes stall the
+    /// rotation that revokes it.
+    #[test]
+    fn an_unservable_version_root_still_registers_and_still_publishes() {
+        let harness = Harness::plain();
+        // Well-formed and never served: no block is filed under it.
+        let unservable = compute_cid(CONTENT_CID_CODEC, b"a root no source serves");
+        let node_id = [0x0d; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions: vec![Version::new(unservable.clone(), [0x77; SECRET_LEN], 16, 0)],
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        block_on(net.republish(&moved)).expect("the move publishes anyway");
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            vec![encode_content_cid_str(&unservable)],
+            "the version root still anchors, and no leaf is invented for it"
         );
     }
 
@@ -9186,7 +9229,7 @@ mod tests {
                 prev: None,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {

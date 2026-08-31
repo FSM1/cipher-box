@@ -1105,7 +1105,7 @@ mod tests {
                 write_scope_seed: &WRITE_SCOPE_SEED,
                 write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
             },
             &CommittedSet {
                 commitment: &commitment,

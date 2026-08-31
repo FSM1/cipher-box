@@ -58,7 +58,7 @@ pub(crate) struct SessionIdentity {
     /// (FSM1/cipher-box-next ADR 0005). Zeroizes on drop.
     owner_pseudonym_seed: SecretBytes,
     /// The contact-label seed (`contact-label-seed` edge) — what a contact
-    /// identity is labelled under before it keys durable device-local state
+    /// identity is labelled under before it keys durable local state
     /// ([`ContactLabel`](crate::seams::ContactLabel)). Zeroizes on drop.
     contact_label_seed: SecretBytes,
     /// The owner ECDSA identity: the login-secret scalar adopted directly (v1
@@ -178,10 +178,9 @@ impl SessionIdentity {
     }
 
     /// The contact-label seed (`contact-label-seed` edge) — the input every
-    /// [`ContactLabel`](crate::seams::ContactLabel) derives under. Copied out
-    /// for the tick loop, which labels the sharer of each received share.
-    pub(crate) fn contact_label_seed(&self) -> SecretBytes {
-        self.contact_label_seed.clone()
+    /// [`ContactLabel`](crate::seams::ContactLabel) derives under.
+    pub(crate) fn contact_label_seed(&self) -> &SecretBytes {
+        &self.contact_label_seed
     }
 
     /// The genesis scope read (override) seed (`genesis-read-scope-seed` edge).

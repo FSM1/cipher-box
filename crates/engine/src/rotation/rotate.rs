@@ -356,7 +356,7 @@ mod tests {
     use crate::entropy::EntropyError;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+    use crate::testkit::{CARRIED_WRITE_HISTORY_LINK, SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
         sign_grant_set, sign_recipient_binding,
@@ -368,9 +368,6 @@ mod tests {
     use std::rc::Rc;
 
     const SCOPE: [u8; 16] = [0x5c; 16];
-    /// A scope past write epoch 1 carries a write-plane history link its cut
-    /// minted. The bytes are opaque to the re-seal, which only bounds them.
-    const CARRIED_WRITE_LINK: &[u8] = b"opaque-write-history-link";
 
     /// The caller-side bound needs one classifier it can trust: an availability
     /// stall — including one at the entropy seam — and the C2 label conflict the
@@ -559,7 +556,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: CARRIED_WRITE_LINK,
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -758,7 +755,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: CARRIED_WRITE_LINK,
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -823,7 +820,7 @@ mod tests {
                 current_read_epoch: u64::MAX,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: CARRIED_WRITE_LINK,
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };

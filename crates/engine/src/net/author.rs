@@ -82,7 +82,7 @@ pub enum AuthorError {
         limit: usize,
     },
     /// A scope root's bytes outside its grant section met
-    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`], the budget that leaves its own next
+    /// [`resealable_root_rest_bytes`], the budget that leaves its own next
     /// re-seal room beside it.
     ScopeRootNotResealable {
         /// The bytes outside the section.
@@ -349,9 +349,7 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
 /// (release-active, security rule 8). The adoption gate holds a foreign
 /// client's root to the same measure ([`scope_root_rest_bytes`]).
 ///
-/// `committed_grants` comes from [`check_scope_root`], which verified the owner
-/// signature over that count first, so the reservation is the owner's figure and
-/// never a writer's.
+/// `committed_grants` comes from [`check_scope_root`].
 ///
 /// The reservation enters as the encode's own limit, so carried cuttable fields
 /// are **cut** against it rather than refused: a committed write grantee would
@@ -981,12 +979,29 @@ mod tests {
         );
     }
 
+    /// A grant inside the same reservation step must never un-author a root the
+    /// step before it authored.
+    #[test]
+    fn a_grant_inside_one_reservation_step_never_un_authors_a_live_root() {
+        let fixture = owner_root();
+        let entries = fixture.grant_section.commitment.entries.len();
+        let budget = resealable_root_rest_bytes(entries);
+        assert_eq!(
+            budget,
+            resealable_root_rest_bytes(entries + 1),
+            "one more grant must not move the budget inside a step"
+        );
+    }
+
     #[test]
     fn a_child_record_is_held_to_the_block_ceiling_alone() {
         // Only a scope root owes a re-seal, so reserving that headroom on every
         // interior node would shrink an honest folder for nothing.
+        // The widest budget any committed set leaves, so this folder is past
+        // every scope root's reservation and still inside the block ceiling.
+        let widest = resealable_root_rest_bytes(0);
         author_child_envelope(authoring(
-            &folder_past_the_resealable_budget(resealable_root_rest_bytes(0)),
+            &folder_past_the_resealable_budget(widest),
             PreservedFields::new(),
         ))
         .expect("an interior node fills the block ceiling");

@@ -60,7 +60,7 @@ const HISTORY_LINK_WIRE_BYTES: usize = 352;
 /// [`MAX_WRITE_HISTORY_LINK_BYTES`](cipherbox_core::seal::MAX_WRITE_HISTORY_LINK_BYTES),
 /// which bounds the same payload shape on the write plane. That one is a frozen
 /// wire bound; this one is a retention budget for links the re-seal keeps, and
-/// [`MAX_RESEALABLE_SECTION_BYTES`] budgets [`HISTORY_LINK_WIRE_BYTES`] for
+/// [`resealable_section_bytes`] budgets [`HISTORY_LINK_WIRE_BYTES`] for
 /// each of them. An honest link seals to at most 103 bytes at a `u64::MAX`
 /// epoch, so the margin holds several additive payload fields — the headroom
 /// matters, because a link over the bound takes every older link with it and
@@ -78,6 +78,14 @@ const _: () = assert!(
 /// The owner blobs, the ascent link, the write history link, and the map
 /// framing around every run — none of them count-driven, all of them small.
 const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
+
+/// The granularity [`resealable_section_bytes`] charges the committed grant
+/// count at. A reservation that tracked the count exactly would shrink on every
+/// grant, so a root the owner authored inside its budget could stop fitting the
+/// moment the owner granted once more. Charging a step at a time keeps the
+/// budget flat across ordinary grant churn while still returning most of what
+/// the frozen ceiling reserved.
+const GRANT_RESERVATION_STEP: usize = 64;
 
 /// The largest grant section a scope-root re-seal can mint for a root carrying
 /// `committed_grants` owner-committed entries, and so the room that record must
@@ -106,11 +114,23 @@ const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 /// signature, so dropping them would break it, and only the owner can author
 /// them. A section over the budget is still a **retryable** refusal on the
 /// record the next pass re-resolves, never a trust verdict.
+///
+/// The count is rounded up to [`GRANT_RESERVATION_STEP`] before it is charged,
+/// so the budget is a step function of the grant set rather than a line. A root
+/// authored inside its budget therefore keeps that budget across the grants that
+/// share its step, and only a grant that crosses a step can find a root too full
+/// to carry the section it would then owe.
+///
+/// The clamp keeps [`resealable_root_rest_bytes`]'s complement a total: every
+/// caller feeds a decode-bounded count, and an unclamped one would underflow it.
 pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
-    let grants = if committed_grants > cipherbox_core::seal::MAX_GRANT_BLOBS {
+    // One whole step above the count, so the step a root was authored in always
+    // holds at least one more grant than it committed.
+    let stepped = (committed_grants / GRANT_RESERVATION_STEP + 1) * GRANT_RESERVATION_STEP;
+    let grants = if stepped > cipherbox_core::seal::MAX_GRANT_BLOBS {
         cipherbox_core::seal::MAX_GRANT_BLOBS
     } else {
-        committed_grants
+        stepped
     };
     grants * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
         + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES
@@ -122,13 +142,8 @@ pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
 /// under — the read-sealed body, the typed envelope fields, and the carried
 /// unknown maps. The complement of [`resealable_section_bytes`] at the same
 /// committed count, so a root this build authors always has an authorable
-/// re-seal.
-///
-/// A root whose body alone fills this leaves its own next section nowhere to go,
-/// and no cut shrinks a read-sealed body. Such a root is un-authorable to this
-/// build and un-adoptable by it, in both directions, which is the fail-closed
-/// symmetry (AGENTS.md rule 8) rather than a wedge one side can spring on the
-/// other.
+/// re-seal. A root whose body alone fills it is refused on both sides, because
+/// no cut shrinks a read-sealed body.
 pub(crate) const fn resealable_root_rest_bytes(committed_grants: usize) -> usize {
     MAX_RESOLVED_RECORD_BYTES - resealable_section_bytes(committed_grants)
 }

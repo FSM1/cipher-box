@@ -249,14 +249,19 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
 /// Floor-store keys are plaintext in IndexedDB on web and in the local journal
 /// on desktop, so a raw identity prefix would name every party that shared with
 /// this account to anyone who can read local storage. The label is fixed-width
-/// and deterministic on one device, the two properties
-/// [`SharerScopedFloorStore`] depends on, and unlinkable off it, because the
-/// seed is the account's alone.
+/// ([`CONTACT_LABEL_LEN`]) and deterministic, the two properties
+/// [`SharerScopedFloorStore`] depends on, and unlinkable to anyone without the
+/// seed, which is the account's alone.
 ///
-/// Device-local only. Publishing a label makes it the cross-scope correlator
-/// the blinded tag exists to deny ([`kdf::contact_label`]).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ContactLabel([u8; SECRET_LEN]);
+/// The seed is the account's, so the label is the same on every device of the
+/// account; its **use** is local. Publishing one makes it the cross-scope
+/// correlator the blinded tag exists to deny ([`kdf::contact_label`]).
+#[derive(Clone, Copy)]
+pub struct ContactLabel([u8; CONTACT_LABEL_LEN]);
+
+/// The fixed-width prefix [`SharerScopedFloorStore`] puts on every epoch key —
+/// [`OWNER_TAG_LEN`]'s counterpart one layer out.
+pub const CONTACT_LABEL_LEN: usize = SECRET_LEN;
 
 impl ContactLabel {
     /// The label `identity_pk` takes under `contact_label_seed`, this account's

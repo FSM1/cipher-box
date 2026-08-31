@@ -32,6 +32,11 @@ pub const OWNER_ROOT_SCOPE_SEED: [u8; 32] = [0x66; 32];
 pub const OWNER_ROOT_WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
 /// The read epoch every structure in the fixture is authored at.
 pub const OWNER_ROOT_EPOCH: u64 = 1;
+/// A stand-in for the write-plane history link a scope past write epoch 1
+/// carries. The bytes are opaque to a re-seal, which only bounds them, and a
+/// fixture that leaves the link empty above write epoch 1 is refused
+/// (`rotation::reseal::ResealError::EmptyWriteHistoryAboveFirstEpoch`).
+pub const CARRIED_WRITE_HISTORY_LINK: &[u8] = b"opaque-write-history-link";
 /// The seed of the writer pseudonym the fixture detach-signs every structure
 /// with — the key a re-seal of this root must sign under to stay committed.
 pub const OWNER_ROOT_PSEUDONYM_SEED: [u8; 32] = [0x22; 32];

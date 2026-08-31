@@ -112,7 +112,7 @@ pub enum RejectionReason {
     },
     /// A scope root leaves no room for its own re-seal: its bytes outside the
     /// grant section are over
-    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`](crate::content::limits::MAX_RESEALABLE_ROOT_REST_BYTES).
+    /// [`resealable_root_rest_bytes`](crate::content::limits::resealable_root_rest_bytes).
     ///
     /// This engine never authors one (`net/author.rs::encode_scope_root`), so
     /// adopting one from any other client would leave the owner's own re-key

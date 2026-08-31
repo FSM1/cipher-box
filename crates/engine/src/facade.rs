@@ -5119,7 +5119,7 @@ where {
             Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
         *self.tick_settings_signer.borrow_mut() =
             Some(Rc::new(kdf::settings_ipns_keypair(session.login_secret())));
-        *self.tick_contact_label_seed.borrow_mut() = Some(session.contact_label_seed());
+        *self.tick_contact_label_seed.borrow_mut() = Some(session.contact_label_seed().clone());
         spawn();
     }
 
@@ -5985,7 +5985,6 @@ where {
             .get()
             .map(|index| session.vault_pointer_signer(index));
         let rotator = OwnerCutNet {
-            content_profile: &self.content_profile,
             transport: &self.seams.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
@@ -7025,7 +7024,7 @@ where {
         let Some(floors) = floor_view(
             &self.seams.floor_store,
             &sharers,
-            &session.contact_label_seed(),
+            session.contact_label_seed(),
             &own_root,
             scope_id,
         ) else {
