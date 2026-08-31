@@ -706,6 +706,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
     contacts: view.contacts.map((contact) => ({
       identityPublicKey: contact.identityPublicKey,
     })),
+    ownContactCode: view.ownContactCode,
     state:
       state === undefined
         ? null

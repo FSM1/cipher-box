@@ -15,6 +15,8 @@ import type { ListingRow } from '../../vault/listing';
 import { ShareDialog } from './ShareDialog';
 
 const DOCS = new Uint8Array(16).fill(7);
+/** This member's own contact code, as the engine hands it out. */
+const OWN_CODE = new Uint8Array([0xc0, 0xde]);
 const CODE_HEX = '00ff10';
 
 /** Stands in for the engine's opaque capability; the UI reads none of it. */
@@ -110,6 +112,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           contacts: state.contacts.map((seed) => ({
             identityPublicKey: identity(seed),
           })),
+          ownContactCode: OWN_CODE,
           state:
             state.grants.get(toHex(scope)) === null
               ? null
@@ -340,7 +343,7 @@ describe('the import step', () => {
   it('hands the engine the pasted code as bytes and comes back with the contact', async () => {
     const engine = await openImport();
 
-    fireEvent.change(screen.getByLabelText('contact code'), { target: { value: CODE_HEX } });
+    fireEvent.change(screen.getByLabelText('their contact code'), { target: { value: CODE_HEX } });
     await click('import-contact-confirm');
 
     expect(engine.facade.importContact).toHaveBeenCalledWith(new Uint8Array([0x00, 0xff, 0x10]));
@@ -351,7 +354,9 @@ describe('the import step', () => {
   it('refuses to send a paste that is not a code, without calling it unverified', async () => {
     const engine = await openImport();
 
-    fireEvent.change(screen.getByLabelText('contact code'), { target: { value: 'not a code' } });
+    fireEvent.change(screen.getByLabelText('their contact code'), {
+      target: { value: 'not a code' },
+    });
 
     expect(screen.getByTestId('import-contact-unreadable')).toBeTruthy();
     expect((screen.getByTestId('import-contact-confirm') as HTMLButtonElement).disabled).toBe(true);
@@ -362,7 +367,7 @@ describe('the import step', () => {
     const refusal = new EngineRequestError('contact-code-binding refused', 'trustViolation');
     await openImport(sharingEngine({ importContact: refusal }));
 
-    fireEvent.change(screen.getByLabelText('contact code'), { target: { value: CODE_HEX } });
+    fireEvent.change(screen.getByLabelText('their contact code'), { target: { value: CODE_HEX } });
     await click('import-contact-confirm');
 
     expect(screen.getByTestId('dialog-error').textContent).toBe('contact-code-binding refused');
@@ -370,10 +375,19 @@ describe('the import step', () => {
     expect(sharingStore.getState().contacts).toEqual([]);
   });
 
+  it("shows this member's own code so the exchange can go both ways", async () => {
+    await openImport();
+
+    // Hex, the encoding the paste field beside it parses, so two members can
+    // exchange with only what the dialog shows them.
+    expect(screen.getByTestId('own-contact-code').textContent).toContain(toHex(OWN_CODE));
+    expect(screen.getByLabelText('copy your contact code')).toBeTruthy();
+  });
+
   it('retires the import refusal when the step it belongs to is left', async () => {
     const refusal = new EngineRequestError('contact-code-binding refused', 'trustViolation');
     await openImport(sharingEngine({ importContact: refusal }));
-    fireEvent.change(screen.getByLabelText('contact code'), { target: { value: CODE_HEX } });
+    fireEvent.change(screen.getByLabelText('their contact code'), { target: { value: CODE_HEX } });
     await click('import-contact-confirm');
 
     await click('import-contact-cancel');

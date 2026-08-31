@@ -23,6 +23,7 @@ use core::fmt;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
+use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
@@ -118,6 +119,14 @@ impl SessionIdentity {
     /// use. Secret-bearing, so in-crate only.
     pub(crate) fn enc_subkey(&self) -> &X25519Secret {
         &self.enc_subkey
+    }
+
+    /// This member's own contact code: the self-authenticating
+    /// `{identityPk, encSubkey, bindingSig}` bundle a peer imports. Public
+    /// material — the binding signature is over two public keys, and nothing
+    /// here is secret-bearing.
+    pub(crate) fn contact_code(&self) -> Vec<u8> {
+        ContactCode::create(&self.identity, self.enc_subkey.public()).encode()
     }
 
     /// The `i`-th vault-pointer signer (`vault-pointer-index` edge): the

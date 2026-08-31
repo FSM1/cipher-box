@@ -423,7 +423,6 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &WRITE_SCOPE_SEED,
                 write_cut,
-                write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
             };

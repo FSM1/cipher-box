@@ -1,18 +1,27 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { MAX_PASTED_CHARS, parseContactCode } from '../../sharing/contactCode';
+import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 
 interface ContactImportFormProps {
   busy: boolean;
+  /** Hex, or `null` until a sharing read has landed (`stores/sharing.store`). */
+  ownContactCode: string | null;
   onCancel: () => void;
   onConfirm: (contactCode: Uint8Array) => void;
 }
 
 /**
- * Takes a contact code by paste and hands its bytes on. Identity keys arrive
- * only out-of-band (blueprint/api.md "Contact exchange") and the code
- * authenticates itself, so this reads nothing inside it.
+ * Both halves of a contact exchange: the code this member hands over, and the
+ * peer's code by paste. Identity keys arrive only out-of-band
+ * (blueprint/api.md "Contact exchange") and each code authenticates itself, so
+ * this reads nothing inside either one.
  */
-export function ContactImportForm({ busy, onCancel, onConfirm }: ContactImportFormProps) {
+export function ContactImportForm({
+  busy,
+  ownContactCode,
+  onCancel,
+  onConfirm,
+}: ContactImportFormProps) {
   const [pasted, setPasted] = useState('');
   // Memoized: a mis-paste can be arbitrarily long, and this runs per keystroke.
   const code = useMemo(() => parseContactCode(pasted), [pasted]);
@@ -25,8 +34,18 @@ export function ContactImportForm({ busy, onCancel, onConfirm }: ContactImportFo
 
   return (
     <form className="dialog-content" onSubmit={submit} data-testid="import-contact-form">
+      <p className="dialog-label">your contact code</p>
+      {ownContactCode === null ? (
+        <p className="sharing-note">{'// no read has landed yet'}</p>
+      ) : (
+        <div data-testid="own-contact-code">
+          <CopyableValue value={ownContactCode} label="your contact code" />
+          <p className="sharing-note">{'// send this to them — an exchange needs both codes'}</p>
+        </div>
+      )}
+
       <label className="dialog-label" htmlFor="import-contact-code">
-        contact code
+        their contact code
       </label>
       <textarea
         id="import-contact-code"

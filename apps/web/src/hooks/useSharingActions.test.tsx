@@ -39,6 +39,7 @@ function view(grants: Permission[], links: SharingInviteLinksDescriptor): Sharin
   return {
     scope: DOCS,
     contacts: [{ identityPublicKey: IDENTITY }],
+    ownContactCode: new Uint8Array([0xc0, 0xde]),
     state: {
       grants: grants.map((permission) => ({
         recipientIdentityPublicKey: IDENTITY,

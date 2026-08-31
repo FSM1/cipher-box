@@ -1016,7 +1016,8 @@ impl ScopeSharing {
 }
 
 /// A key-free read of one scope's sharing state: this vault's whole verified
-/// contact book, and the grants the scope's own record commits.
+/// contact book, this member's own contact code, and the grants the scope's own
+/// record commits.
 #[wasm_bindgen]
 pub struct SharingView {
     inner: facade::SharingView,
@@ -1039,6 +1040,13 @@ impl SharingView {
             .cloned()
             .map(SharingContact::from_facade)
             .collect()
+    }
+
+    /// This member's own contact code, for a peer to import. Public material
+    /// only.
+    #[wasm_bindgen(getter, js_name = ownContactCode)]
+    pub fn own_contact_code(&self) -> Vec<u8> {
+        self.inner.own_contact_code.clone()
     }
 
     /// What the scope's own record says about sharing, or `undefined` when the

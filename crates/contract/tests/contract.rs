@@ -1407,7 +1407,6 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
             write_cut: None,
-            write_epoch: 1,
             pointer_read_key: &grantee_pointer_read_key,
             subtree_child_index: &[],
         },

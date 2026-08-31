@@ -875,6 +875,7 @@ describe('readSharing', () => {
   const view = {
     scope: new Uint8Array(16).fill(3),
     contacts: [{ identityPublicKey: new Uint8Array([1]) }],
+    ownContactCode: new Uint8Array([4, 5, 6]),
     state: {
       grants: [
         {
@@ -892,6 +893,7 @@ describe('readSharing', () => {
     expect(readSharing(fakeWasm, view)).toEqual({
       scope: view.scope,
       contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey }],
+      ownContactCode: view.ownContactCode,
       state: {
         grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
         grantRefusal: 'grant-target-already-names-a-scope',
@@ -920,6 +922,13 @@ describe('readSharing', () => {
 
   it('reads an unreachable scope as absent, never as one granting nothing', () => {
     expect(readSharing(fakeWasm, { ...view, state: undefined }).state).toBeNull();
+  });
+
+  it("hands out this member's own contact code even when the scope is unreachable", () => {
+    // The exchange's outbound half does not depend on any scope read.
+    expect(readSharing(fakeWasm, { ...view, state: undefined }).ownContactCode).toEqual(
+      view.ownContactCode
+    );
   });
 });
 

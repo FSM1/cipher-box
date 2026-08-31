@@ -89,8 +89,6 @@ pub struct GranteeScopePlan<'a> {
     /// mint is what moves the subtree onto names the granted scope's own seed
     /// derives (blueprint/engine.md "Grant creation").
     pub write_cut: Option<&'a [u8; SECRET_LEN]>,
-    /// The folder's current write epoch.
-    pub write_epoch: u64,
     /// The scope's pointer read key.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
     /// The descendant scope roots inside the folder: converged before minting,
@@ -504,9 +502,13 @@ where
         .to_compact();
     let ledger = vec![row.ledger_entry.clone()];
 
-    // 3) Mint at read epoch 1 with a FRESH RANDOM override seed (never
-    // KDF-derived). The new scope adopts the folder's descendant scope roots as
-    // its direct-child-scope index (they now live inside the granted scope).
+    // 3) Mint at read and write epoch 1 with a FRESH RANDOM override seed
+    // (never KDF-derived). Both planes start with the mint: an empty
+    // `writeHistoryLink` is exactly write epoch 1 (`cipherbox_core::seal::
+    // write_body`), so the parent's epoch here would advertise a walk-back this
+    // root holds no link for. The new scope adopts the folder's descendant
+    // scope roots as its direct-child-scope index (they now live inside the
+    // granted scope).
     let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
 
     let grantee_section = {
@@ -526,7 +528,7 @@ where
             read_epoch: 1,
             prev: None,
             write_scope_seed: grantee.sealed_write_scope_seed(),
-            write_epoch: grantee.write_epoch,
+            write_epoch: 1,
             write_history: WriteHistory::Carried(&[]),
             pointer_read_key: grantee.pointer_read_key,
         };
@@ -549,7 +551,7 @@ where
         scope_id: grantee.scope_id,
         ipns_name: name_bytes.to_vec(),
         read_epoch: 1,
-        write_epoch: grantee.write_epoch,
+        write_epoch: 1,
         section: grantee_section,
     };
 
@@ -1010,9 +1012,9 @@ mod tests {
                 owner_enc_pub: owner_enc().public(),
                 pseudonym_signer: pseudonym,
                 override_seed: Zeroizing::new([0x71; SECRET_LEN]),
+                write_epoch: 1,
                 write_scope_seed: Zeroizing::new([0x72; SECRET_LEN]),
                 pointer_read_key: Zeroizing::new([0x73; SECRET_LEN]),
-                write_epoch: 1,
                 commitment,
                 commitment_sig,
                 grant_ledger: Vec::new(),
@@ -1137,7 +1139,6 @@ mod tests {
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
             write_cut: None,
-            write_epoch: 1,
             pointer_read_key: &grantee_pointer_read_key,
             subtree_child_index: &[],
         };
@@ -1269,7 +1270,6 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &grantee_write_scope_seed,
                 write_cut: None,
-                write_epoch: 1,
                 pointer_read_key: &grantee_pointer_read_key,
                 subtree_child_index: subtree,
             };
@@ -1380,6 +1380,21 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "and nothing is delivered",
+        );
+    }
+
+    #[test]
+    fn a_granted_scope_mints_at_write_epoch_one_however_far_the_parent_has_rotated() {
+        let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[]);
+        outcome.expect("grant creation succeeds over a converged subtree");
+
+        assert_eq!(
+            published[1].write_epoch, 2,
+            "the parent scope has already rotated its write plane"
+        );
+        assert_eq!(
+            published[0].write_epoch, 1,
+            "and the scope minted inside it starts a write plane of its own"
         );
     }
 
