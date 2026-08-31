@@ -8,15 +8,10 @@
 //!
 //! An entry keeps a node reachable after its parent drops the `ChildRef`: the
 //! `ipnsName` is the only remaining route to a record no folder names, and
-//! `originParent`/`originName` are what a restore puts back. `heldKey` is
-//! present only when the delete re-keyed the doomed subtree out of a shared
-//! scope's derivation (ADR 0010 item 3), which is the access cut key regression
-//! cannot give.
+//! `originParent`/`originName` are what a restore puts back.
 //!
 //! One strictness policy, everywhere (#27 D10): every map level decodes strict
-//! det-CBOR and preserves unknown fields byte-stable, and `nodeId` uniqueness is
-//! fail-closed at decode — two entries for one node would make restore and purge
-//! pick a winner by position.
+//! det-CBOR and preserves unknown fields byte-stable.
 
 use core::fmt;
 use std::collections::BTreeSet;
@@ -24,7 +19,9 @@ use std::collections::BTreeSet;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
-use crate::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode, encode_fixed_depth};
+use crate::codec::{
+    Map, RedactedBytes, RedactedText, Value, decode, encode, encode_fixed_depth, encoded_len,
+};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
 use crate::seal::aad::{AAD_DOMAIN, STRUCT_TAG_BIN_INDEX};
@@ -33,7 +30,8 @@ use crate::seal::body::{
     collect_unknown, merge_unknown, req,
 };
 use crate::seal::envelope::MAX_BLOCK_BYTES;
-use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
+use crate::seal::{open_framed, seal_framed};
+use crate::suite::aead::{KEY_LEN, NONCE_LEN};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 
 /// The bin-index format version this build writes and can open. Carried in the
@@ -41,8 +39,9 @@ use crate::suite::secret::{SECRET_LEN, SecretBytes};
 /// tag.
 pub const BIN_INDEX_V: u64 = 1;
 
-/// The bytes a seal adds around a bin index plaintext: the nonce, the AEAD tag,
-/// and the clear-header framing.
+/// The bytes reserved above [`MAX_BIN_INDEX_BYTES`]: the nonce, the AEAD tag,
+/// and the clear-header framing, plus room for a later `v` to add a clear-header
+/// field without shrinking the body a conforming writer may already emit.
 const BIN_INDEX_SEAL_HEADROOM_BYTES: usize = 1024;
 
 /// The frozen bound on a bin index plaintext's total encoded size. The record
@@ -59,7 +58,10 @@ pub const MAX_BIN_INDEX_BYTES: usize = MAX_BLOCK_BYTES - BIN_INDEX_SEAL_HEADROOM
 /// `ipns_name` and `origin_name` are sealed-record plaintext — user-private
 /// metadata in a zero-knowledge system — so they render redacted and the entry
 /// is their terminal owner: it wipes both on drop. A clone owns its own buffers,
-/// so one instance's wipe never reaches another's.
+/// so one instance's wipe never reaches another's. They stay private, unlike
+/// [`ChildRef`](super::body::ChildRef)'s pair, because an entry is written once:
+/// with no rewrite path there is no assignment that could drop a live buffer
+/// unwiped.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BinEntry {
     /// The deleted node's location-independent node id (16-byte UUID).
@@ -140,8 +142,7 @@ impl BinEntry {
         }
     }
 
-    /// The deleted node's opaque `ipnsName` bytes — the only route left to a
-    /// record no folder names.
+    /// The deleted node's opaque `ipnsName` bytes.
     pub fn ipns_name(&self) -> &[u8] {
         &self.ipns_name
     }
@@ -151,9 +152,8 @@ impl BinEntry {
         &self.origin_name
     }
 
-    /// The key the doomed subtree was re-keyed under, when the delete re-keyed
-    /// it. `None` for a delete from a scope with no grants, which keeps the
-    /// cheap unlink.
+    /// The key the doomed subtree was re-keyed under; `None` when the delete
+    /// skipped the re-key.
     pub fn held_key(&self) -> Option<&[u8; SECRET_LEN]> {
         self.held_key.as_ref().map(SecretBytes::as_bytes)
     }
@@ -167,15 +167,13 @@ impl BinEntry {
 
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
-        let ipns_name = req(map, "ipnsName")?.as_bytes()?;
-        assert_within_bound("ipnsName", ipns_name.len(), MAX_IPNS_NAME_BYTES)?;
         let held_key = match map.get("heldKey") {
             Some(v) => Some(SecretBytes::new(bytes_fixed::<SECRET_LEN>(v, "heldKey")?)),
             None => None,
         };
         Ok(Self {
             node_id: bytes_fixed::<16>(req(map, "nodeId")?, "nodeId")?,
-            ipns_name: ipns_name.to_vec(),
+            ipns_name: req(map, "ipnsName")?.as_bytes()?.to_vec(),
             kind: NodeKind::from_wire(req(map, "kind")?.as_text()?)
                 .ok_or(Malformed::InvalidNodeKind)?,
             origin_parent: bytes_fixed::<16>(req(map, "originParent")?, "originParent")?,
@@ -233,28 +231,23 @@ impl BinIndex {
         }
     }
 
-    /// The decode-time invariants re-checked on a *constructed* index: the
-    /// encode path runs this so it never publishes a body decode would refuse
-    /// to reopen (AGENTS.md rule 8).
-    pub fn validate(&self) -> Result<(), CodecError> {
+    /// Every invariant a decode hard-rejects, re-checked on a *constructed*
+    /// index: both directions run this, so the encode path never publishes a
+    /// body decode would refuse to reopen (AGENTS.md rule 8).
+    ///
+    /// `node_id` uniqueness is the fail-closed one: two entries for one node
+    /// would let restore and purge pick a winner by position.
+    fn validate(&self) -> Result<(), CodecError> {
         assert_unknown_disjoint(&self.unknown, INDEX_KNOWN)?;
+        let mut ids = BTreeSet::new();
         for entry in &self.entries {
             entry.validate()?;
+            if !ids.insert(entry.node_id) {
+                return Err(TrustViolation::DuplicateId.into());
+            }
         }
-        assert_entries_unique(&self.entries)
+        Ok(())
     }
-}
-
-/// Fail-closed uniqueness over the index: a node id names at most one entry, so
-/// a duplicate would let restore and purge pick a winner by position.
-fn assert_entries_unique(entries: &[BinEntry]) -> Result<(), CodecError> {
-    let mut ids = BTreeSet::new();
-    for e in entries {
-        if !ids.insert(e.node_id) {
-            return Err(TrustViolation::DuplicateId.into());
-        }
-    }
-    Ok(())
 }
 
 /// Decode a bin index plaintext (strict det-CBOR, uniqueness enforced).
@@ -267,17 +260,18 @@ pub fn decode_bin_index(bytes: &[u8]) -> Result<BinIndex, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
-    let revision = req(map, "revision")?.as_unsigned()?;
-    let mut entries = Vec::new();
-    for item in req(map, "entries")?.as_array()? {
+    let items = req(map, "entries")?.as_array()?;
+    let mut entries = Vec::with_capacity(items.len());
+    for item in items {
         entries.push(BinEntry::from_value(item)?);
     }
-    assert_entries_unique(&entries)?;
-    Ok(BinIndex {
-        revision,
+    let index = BinIndex {
+        revision: req(map, "revision")?.as_unsigned()?,
         entries,
         unknown: collect_unknown(map, INDEX_KNOWN),
-    })
+    };
+    index.validate()?;
+    Ok(index)
 }
 
 /// Encode a bin index to its canonical det-CBOR plaintext.
@@ -296,9 +290,14 @@ pub fn encode_bin_index(index: &BinIndex) -> Result<Vec<u8>, CodecError> {
 
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
-    let bytes = encode(guard.0)?;
-    assert_within_bound(BIN_INDEX_SIZE_CHECK, bytes.len(), MAX_BIN_INDEX_BYTES)?;
-    Ok(bytes)
+    // Measured rather than encoded first: an over-bound body never materializes
+    // the plaintext buffer it would only be refused and wiped for.
+    assert_within_bound(
+        BIN_INDEX_SIZE_CHECK,
+        encoded_len(guard.0)?,
+        MAX_BIN_INDEX_BYTES,
+    )?;
+    encode(guard.0)
 }
 
 /// The collection label the total-size refusal reports.
@@ -309,36 +308,47 @@ const BIN_INDEX_SIZE_CHECK: &str = "binIndex";
 // ---------------------------------------------------------------------------
 
 /// The AAD of a bin index record: the `cipherbox/v2` domain separator, the
-/// version, and the `bin-index` structure tag. The tag is what keeps a bin
-/// ciphertext from being reinterpreted as any other symmetric structure, and the
-/// version is the downgrade defence. Public — the frozen layout, so the KAT
+/// declared version, and the `bin-index` structure tag. The tag is what keeps a
+/// bin ciphertext from being reinterpreted as any other symmetric structure, and
+/// the version is the downgrade defence. Public — the frozen layout, so the KAT
 /// generator pins it directly.
-pub fn bin_index_aad() -> Vec<u8> {
+///
+/// `version` is the record's own declared value rather than [`BIN_INDEX_V`], so
+/// the binding stays honest once a build accepts more than one version.
+pub fn bin_index_aad(version: u64) -> Vec<u8> {
     encode_fixed_depth(&Value::Array(vec![
         Value::Text(AAD_DOMAIN.to_string()),
-        Value::Unsigned(BIN_INDEX_V),
+        Value::Unsigned(version),
         Value::Unsigned(u64::from(STRUCT_TAG_BIN_INDEX)),
     ]))
 }
 
 /// Seal a bin index under the owner's `bin-index-seal-key`.
 ///
-/// `nonce` must be unique for every seal under a given key: XChaCha20-Poly1305
-/// nonce reuse is a confidentiality and integrity break. It is caller-injected
-/// entropy (the KATs pin it), prefixed inside the sealed blob so
-/// [`open_bin_index`] recovers it, and authenticated by the AEAD.
+/// `nonce` must be **drawn fresh from a CSPRNG for every seal**, not counted and
+/// not derived from the body revision. The seal key takes no epoch input, so it
+/// never rotates, and two devices publish this record concurrently under one CAS
+/// guard: a counter is unique on one device and collides across two.
+/// XChaCha20-Poly1305 nonce reuse under one key discloses every `heldKey` the
+/// two bodies carry and admits forgery. The nonce is caller-injected entropy
+/// (the KATs pin it), prefixed inside the sealed blob so [`open_bin_index`]
+/// recovers it, and authenticated by the AEAD.
 pub fn seal_bin_index(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
     index: &BinIndex,
 ) -> Result<Vec<u8>, CodecError> {
     let plaintext = Zeroizing::new(encode_bin_index(index)?);
-    let mut sealed = Vec::with_capacity(NONCE_LEN + plaintext.len() + TAG_LEN);
-    sealed.extend_from_slice(nonce);
-    sealed.extend(aead::encrypt(key, nonce, &bin_index_aad(), &plaintext));
-
     let mut m = Map::new();
-    m.insert("sealed", Value::Bytes(sealed));
+    m.insert(
+        "sealed",
+        Value::Bytes(seal_framed(
+            key,
+            nonce,
+            &bin_index_aad(BIN_INDEX_V),
+            &plaintext,
+        )),
+    );
     m.insert("v", Value::Unsigned(BIN_INDEX_V));
     encode(&Value::Map(m))
 }
@@ -350,6 +360,9 @@ pub fn seal_bin_index(
 /// tampering, a transplant, or a rewritten `v`, which is the AAD — is
 /// [`TrustViolation::SealOpenFailed`], never a stale read.
 pub fn open_bin_index(key: &[u8; KEY_LEN], record: &[u8]) -> Result<BinIndex, CodecError> {
+    // Charged before the decode, so an oversized record costs a comparison
+    // rather than a full tree walk of attacker bytes.
+    assert_within_bound(BIN_INDEX_SIZE_CHECK, record.len(), MAX_BLOCK_BYTES)?;
     let value = decode(record)?;
     let map = value.as_map()?;
     let version = req(map, "v")?.as_unsigned()?;
@@ -364,25 +377,7 @@ pub fn open_bin_index(key: &[u8; KEY_LEN], record: &[u8]) -> Result<BinIndex, Co
         return Err(Malformed::UnknownRecordField { key: field.clone() }.into());
     }
     let sealed = req(map, "sealed")?.as_bytes()?;
-    if sealed.len() < NONCE_LEN + TAG_LEN {
-        return Err(Malformed::Truncated {
-            offset: sealed.len(),
-        }
-        .into());
-    }
-    // The plaintext bound before the AEAD, so an oversized record costs a length
-    // check rather than a decrypt of attacker-chosen bytes.
-    assert_within_bound(
-        BIN_INDEX_SIZE_CHECK,
-        sealed.len() - NONCE_LEN - TAG_LEN,
-        MAX_BIN_INDEX_BYTES,
-    )?;
-    let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
-    let nonce: &[u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
-    let plaintext = Zeroizing::new(
-        aead::decrypt(key, nonce, &bin_index_aad(), ciphertext)
-            .ok_or(TrustViolation::SealOpenFailed)?,
-    );
+    let plaintext = Zeroizing::new(open_framed(key, &bin_index_aad(version), sealed)?);
     decode_bin_index(&plaintext)
 }
 
@@ -392,6 +387,7 @@ const HEADER_KEYS: [&str; 2] = ["sealed", "v"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::suite::aead::TAG_LEN;
 
     fn entry(seed: u8) -> BinEntry {
         BinEntry::new(
@@ -452,6 +448,35 @@ mod tests {
         assert_eq!(open_bin_index(&[9; KEY_LEN], &record).unwrap(), index);
     }
 
+    /// The nonce is a real input and the AEAD authenticates it: two nonces over
+    /// one index give two records, and a flip inside the nonce prefix fails the
+    /// tag rather than opening a shifted keystream.
+    #[test]
+    fn the_nonce_is_an_input_and_is_authenticated() {
+        let key = [8u8; KEY_LEN];
+        let index = populated();
+        let a = seal_bin_index(&key, &[1; NONCE_LEN], &index).unwrap();
+        let b = seal_bin_index(&key, &[2; NONCE_LEN], &index).unwrap();
+        assert_ne!(a, b, "a fresh nonce must change the record");
+
+        let mut sealed = decode(&a)
+            .unwrap()
+            .as_map()
+            .unwrap()
+            .get("sealed")
+            .unwrap()
+            .as_bytes()
+            .unwrap()
+            .to_vec();
+        sealed[0] ^= 1;
+        assert_eq!(
+            open_bin_index(&key, &reframe(&a, "sealed", Value::Bytes(sealed)))
+                .unwrap_err()
+                .check(),
+            "seal-open-failed"
+        );
+    }
+
     #[test]
     fn a_foreign_seal_key_never_opens() {
         let record = seal_bin_index(&[1; KEY_LEN], &[2; NONCE_LEN], &populated()).unwrap();
@@ -471,12 +496,13 @@ mod tests {
         let foreign_aad = encode_fixed_depth(&Value::Array(vec![
             Value::Text(AAD_DOMAIN.to_string()),
             Value::Unsigned(BIN_INDEX_V),
-            Value::Unsigned(u64::from(STRUCT_TAG_BIN_INDEX) + 1),
+            Value::Unsigned(u64::from(crate::seal::aad::STRUCT_TAG_READ_BODY)),
         ]));
-        let mut sealed = nonce.to_vec();
-        sealed.extend(aead::encrypt(&key, &nonce, &foreign_aad, &plaintext));
         let mut m = Map::new();
-        m.insert("sealed", Value::Bytes(sealed));
+        m.insert(
+            "sealed",
+            Value::Bytes(seal_framed(&key, &nonce, &foreign_aad, &plaintext)),
+        );
         m.insert("v", Value::Unsigned(BIN_INDEX_V));
         let record = encode(&Value::Map(m)).unwrap();
 
@@ -506,6 +532,32 @@ mod tests {
         assert_eq!(
             decode_bin_index(&bytes).unwrap_err().check(),
             "duplicate-id"
+        );
+    }
+
+    #[test]
+    fn an_over_bound_body_is_refused_on_both_sides() {
+        let mut index = BinIndex::new(1);
+        index.entries.push(entry(1));
+        index.unknown = core::iter::once((
+            "pad".to_string(),
+            Value::Bytes(vec![0; MAX_BIN_INDEX_BYTES]),
+        ))
+        .collect();
+        assert_eq!(
+            encode_bin_index(&index).unwrap_err().check(),
+            "too-many-structures"
+        );
+
+        // The same body framed past the encoder: decode must refuse it too.
+        let mut m = Map::new();
+        m.insert("entries", Value::Array(vec![entry(1).to_value()]));
+        m.insert("pad", Value::Bytes(vec![0; MAX_BIN_INDEX_BYTES]));
+        m.insert("revision", Value::Unsigned(1));
+        let bytes = encode(&Value::Map(m)).unwrap();
+        assert_eq!(
+            decode_bin_index(&bytes).unwrap_err().check(),
+            "too-many-structures"
         );
     }
 
@@ -611,16 +663,9 @@ mod tests {
         }
     }
 
-    /// The plaintext bound is charged before the AEAD, so an oversized record
-    /// costs a length check rather than a decrypt of attacker-chosen bytes.
     #[test]
-    fn an_over_bound_sealed_blob_never_reaches_the_aead() {
-        let record = seal_bin_index(&[1; KEY_LEN], &[2; NONCE_LEN], &populated()).unwrap();
-        let over = reframe(
-            &record,
-            "sealed",
-            Value::Bytes(vec![0; NONCE_LEN + TAG_LEN + MAX_BIN_INDEX_BYTES + 1]),
-        );
+    fn an_over_bound_record_never_reaches_the_decoder() {
+        let over = vec![0u8; MAX_BLOCK_BYTES + 1];
         assert_eq!(
             open_bin_index(&[1; KEY_LEN], &over).unwrap_err().check(),
             "too-many-structures"
@@ -669,12 +714,17 @@ mod tests {
         );
     }
 
-    /// Never-log-keys: an entry's `Debug` must not render the held key or the
-    /// user-private origin name.
+    /// Never-log-keys: an entry's `Debug` must render neither the held key nor
+    /// the two user-private plaintext fields.
     #[test]
-    fn debug_redacts_the_held_key_and_the_origin_name() {
+    fn debug_redacts_the_held_key_the_origin_name_and_the_ipns_name() {
         let rendered = format!("{:?}", entry(1));
         assert!(!rendered.contains("note-1.txt"), "{rendered}");
         assert!(rendered.contains("SecretBytes(redacted)"), "{rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+        assert!(
+            !rendered.contains("[1, 2, 3]"),
+            "the ipnsName bytes must not render: {rendered}"
+        );
     }
 }

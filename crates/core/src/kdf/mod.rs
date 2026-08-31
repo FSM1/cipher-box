@@ -158,7 +158,7 @@ pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
         name: "bin-held-key",
         context: CTX_BIN_HELD_KEY,
-        input_layout: "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])",
+        input_layout: "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16] || deletedAt[8 BE])",
     },
     EdgeSpec {
         name: "genesis-read-scope-seed",
@@ -278,10 +278,13 @@ fn bin_index_seal_key_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_BIN_INDEX_SEAL_KEY, login_secret)
 }
 
-fn bin_held_key_bytes(login_secret: &[u8], node_id: &[u8; 16]) -> SecretBytes {
+fn bin_held_key_bytes(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
+    let mut message = [0u8; 24];
+    message[..16].copy_from_slice(node_id);
+    message[16..].copy_from_slice(&deleted_at.to_be_bytes());
     keyed_hash(
         derive_key(CTX_BIN_HELD_KEY, login_secret).as_bytes(),
-        node_id,
+        &message,
     )
 }
 
@@ -407,18 +410,26 @@ pub fn bin_index_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
 /// `bin-index-seal-key`: the symmetric key that seals the bin index body. The
 /// index is owner-sealed, so it derives from the login secret and no grant
 /// carries it.
+///
+/// This key takes no epoch input, so it never rotates: every publish of the bin
+/// index, on every device, seals under it. A caller must therefore draw each
+/// seal's nonce from a CSPRNG. A counter or a `revision`-derived nonce is unique
+/// on one device and collides across two, and two devices publish this record
+/// concurrently under one CAS guard.
 pub fn bin_index_seal_key(login_secret: &[u8]) -> SecretBytes {
     bin_index_seal_key_bytes(login_secret)
 }
 
-/// `bin-held-key`: the per-entry seed a soft delete re-keys a doomed subtree
-/// under (ADR 0010 item 3). It sits outside every scope's derivation, which is
-/// what cuts a grantee's access; deriving it from the login secret rather than
-/// drawing it at random keeps a binned subtree recoverable when the index body
-/// is lost, and the entry carries the same bytes so a reader never re-derives
-/// under a value the index does not record.
-pub fn bin_held_key(login_secret: &[u8], node_id: &[u8; 16]) -> SecretBytes {
-    bin_held_key_bytes(login_secret, node_id)
+/// `bin-held-key`: the seed one soft delete re-keys a doomed subtree under
+/// (ADR 0010 item 3). It sits outside every scope's derivation, which is what
+/// cuts a grantee's access — key regression cannot reach it, because no scope
+/// seed of any epoch is an input.
+///
+/// `deleted_at` makes the key per-delete rather than per-node: a node that is
+/// binned, restored, and binned again re-keys under fresh bytes, so a disclosed
+/// held key opens one bin generation and not every later one.
+pub fn bin_held_key(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
+    bin_held_key_bytes(login_secret, node_id, deleted_at)
 }
 
 /// `genesis-read-scope-seed`: the vault root scope's read (override) seed at the
@@ -584,7 +595,7 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         },
         EdgeProbeOutput {
             name: "bin-held-key",
-            output: b(bin_held_key_bytes(probe.seed, probe.id)),
+            output: b(bin_held_key_bytes(probe.seed, probe.id, probe.index)),
         },
         EdgeProbeOutput {
             name: "genesis-read-scope-seed",
@@ -688,7 +699,7 @@ mod tests {
             bin_index_seal_key(&seed).as_bytes(),
             &by("bin-index-seal-key")
         );
-        assert_eq!(bin_held_key(&seed, &id).as_bytes(), &by("bin-held-key"));
+        assert_eq!(bin_held_key(&seed, &id, 0).as_bytes(), &by("bin-held-key"));
         assert_eq!(
             genesis_read_scope_seed(&seed).as_bytes(),
             &by("genesis-read-scope-seed")
@@ -696,6 +707,42 @@ mod tests {
         assert_eq!(
             genesis_write_scope_seed(&seed).as_bytes(),
             &by("genesis-write-scope-seed")
+        );
+    }
+
+    /// The bin edges are the owner's alone, and the held key is per-delete: the
+    /// access cut ADR 0010 item 3 rests on is that nothing a grantee holds is an
+    /// input, and that a second binning of one node draws fresh bytes.
+    #[test]
+    fn the_bin_edges_separate_by_secret_node_and_delete_time() {
+        let secret = b"login-secret".as_slice();
+        let other = b"another-secret".as_slice();
+        let node = [7u8; 16];
+
+        assert_ne!(
+            bin_index_ipns_keypair(secret).verifying_key().to_bytes(),
+            bin_index_ipns_keypair(other).verifying_key().to_bytes(),
+        );
+        assert_ne!(
+            bin_index_seal_key(secret).as_bytes(),
+            bin_index_seal_key(other).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(other, &node, 10).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &[8u8; 16], 10).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &node, 11).as_bytes(),
+            "a re-bin of one node must not reuse the first binning's key",
+        );
+        assert_eq!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &node, 10).as_bytes(),
         );
     }
 

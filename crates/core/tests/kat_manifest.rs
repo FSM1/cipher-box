@@ -4599,8 +4599,13 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
         "bin-index accept count drift"
     );
 
+    // One seal key covers this whole family and never rotates, so a repeated
+    // nonce would seal two bodies under one keystream. Mirrors the HPKE
+    // ephemeral-freshness check.
+    let mut nonces = BTreeSet::new();
     let mut names = BTreeSet::new();
-    let mut entry_counts = BTreeSet::new();
+    let mut saw_empty = false;
+    let mut saw_populated = false;
     for v in &vectors {
         assert!(
             names.insert(v.name.clone()),
@@ -4609,6 +4614,11 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
         );
         let key: [u8; KEY_LEN] = unhex32(&v.name, &v.seal_key);
         let nonce: [u8; NONCE_LEN] = unhex_n(&v.name, &v.nonce);
+        assert!(
+            nonces.insert(nonce),
+            "bin-index accept {}: nonce reused under one seal key",
+            v.name
+        );
         let plaintext = unhex(&v.name, &v.plaintext);
 
         let index = decode_bin_index(&plaintext)
@@ -4649,7 +4659,8 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
         let reopened = open_bin_index(&key, &record)
             .unwrap_or_else(|e| panic!("bin-index accept {}: open ({e})", v.name));
         assert_eq!(reopened, index, "bin-index accept {}: index", v.name);
-        entry_counts.insert(index.entries.len());
+        saw_empty |= index.entries.is_empty();
+        saw_populated |= !index.entries.is_empty();
 
         // The index is owner-sealed, so no entry's held key may appear in the
         // clear bytes a zero-knowledge server stores.
@@ -4664,7 +4675,7 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
         }
     }
     assert!(
-        entry_counts.contains(&0) && entry_counts.iter().any(|n| *n > 0),
+        saw_empty && saw_populated,
         "bin-index accept must cover both an empty and a populated index"
     );
 }
@@ -4706,8 +4717,8 @@ fn bin_index_reject_vectors_fire_the_named_check() {
             "bin-index reject must cover the {required} check"
         );
     }
-    // The tag is the whole separation claim: the same key, nonce, and plaintext
-    // under the read-body tag must not open here.
+    // The tag is the whole separation claim: the same key and plaintext under
+    // the read-body tag must not open here.
     assert!(
         vectors.iter().any(|v| v.name == "struct-tag-transplant"),
         "bin-index reject must pin a structure-tag transplant"

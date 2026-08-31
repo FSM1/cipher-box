@@ -118,8 +118,8 @@
     {
       "name": "bin-held-key",
       "context": "cipherbox/v2/bin-held-key",
-      "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])",
-      "output": "3450ac89ce3e893e465b45ace1f2098ad40b5b9d64ed986942730fd06bfd54d6"
+      "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16] || deletedAt[8 BE])",
+      "output": "f61df75c73eaef370ce8296eb50e355d4ade090171d2be5562072f256642b455"
     },
     {
       "name": "genesis-read-scope-seed",

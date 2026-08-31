@@ -21,7 +21,8 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use cipherbox_core::codec::{
-    MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_map_partial,
+    MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_fixed_depth,
+    encode_map_partial,
 };
 use cipherbox_core::content::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
@@ -8013,66 +8014,62 @@ fn bin_entry(seed: u8, kind: NodeKind, held: bool) -> BinEntry {
     )
 }
 
-/// The bin-index AAD layout under an arbitrary structure tag — the transplant
-/// vector's only lever.
-fn bin_index_aad_under(struct_tag: u8) -> Vec<u8> {
-    cipherbox_core::codec::encode_fixed_depth(&Value::Array(vec![
-        Value::Text(AAD_DOMAIN.to_string()),
-        Value::Unsigned(BIN_INDEX_V),
-        Value::Unsigned(u64::from(struct_tag)),
-    ]))
-}
-
-/// Frame a sealed blob into the bin-index clear header.
-fn bin_index_header(sealed: Vec<u8>) -> Vec<u8> {
+/// Seal an arbitrary plaintext under `aad` and frame it into the bin-index
+/// clear header, so a hand-built body reaches the grammar decoder instead of
+/// failing the tag first.
+fn framed_bin_record(nonce: &[u8; NONCE_LEN], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
+    let mut sealed = nonce.to_vec();
+    sealed.extend(aead::encrypt(&bin_index_seal_key(), nonce, aad, plaintext));
     let mut m = Map::new();
     m.insert("sealed", Value::Bytes(sealed));
     m.insert("v", Value::Unsigned(BIN_INDEX_V));
     encode(&Value::Map(m)).expect("bin index header re-encodes")
 }
 
-/// Seal an arbitrary plaintext under `aad`, so a hand-framed body reaches the
-/// grammar decoder instead of failing the tag first.
-fn framed_bin_record(nonce: &[u8; NONCE_LEN], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
-    let mut sealed = nonce.to_vec();
-    sealed.extend(aead::encrypt(&bin_index_seal_key(), nonce, aad, plaintext));
-    bin_index_header(sealed)
+/// The one-entry probe body the live encoder emits, decoded back into a map.
+/// The reject bodies edit this rather than restate the grammar, so a new field
+/// cannot leave the vectors testing a shape the encoder no longer writes.
+fn bin_probe_body() -> Map {
+    let mut index = BinIndex::new(3);
+    index.entries.push(bin_entry(0x04, NodeKind::File, true));
+    decode(&encode_bin_index(&index).expect("bin probe encodes"))
+        .expect("bin probe decodes")
+        .as_map()
+        .expect("bin probe body is a map")
+        .clone()
 }
 
-/// One bin entry's canonical map, the base for the hand-framed reject bodies.
-fn bin_entry_map(entry: &BinEntry) -> Map {
-    let mut m = Map::new();
-    m.insert("nodeId", Value::Bytes(entry.node_id.to_vec()));
-    m.insert("ipnsName", Value::Bytes(entry.ipns_name().to_vec()));
-    m.insert("kind", Value::Text(entry.kind.as_wire().to_string()));
-    m.insert("originParent", Value::Bytes(entry.origin_parent.to_vec()));
-    m.insert("originName", Value::Text(entry.origin_name().to_string()));
-    m.insert("deletedAt", Value::Unsigned(entry.deleted_at));
-    m.insert("scopeId", Value::Bytes(entry.scope_id.to_vec()));
-    if let Some(key) = entry.held_key() {
-        m.insert("heldKey", Value::Bytes(key.to_vec()));
-    }
-    m
+/// The probe body's sole entry, with one edit the encoder refuses to emit.
+fn bin_edited_entry(edit: impl FnOnce(&mut Map)) -> Value {
+    let body = bin_probe_body();
+    let mut entry = body
+        .get("entries")
+        .and_then(|e| e.as_array().ok())
+        .and_then(|a| a.first())
+        .and_then(|e| e.as_map().ok())
+        .expect("bin probe carries one entry")
+        .clone();
+    edit(&mut entry);
+    Value::Map(entry)
 }
 
-/// A bin index body framed from entry maps the encoder refuses to emit.
-fn framed_bin_body(entries: Vec<Value>, revision: u64) -> Vec<u8> {
-    let mut m = Map::new();
-    m.insert("entries", Value::Array(entries));
-    m.insert("revision", Value::Unsigned(revision));
-    encode(&Value::Map(m)).expect("bin index body re-encodes")
-}
-
-/// One reject body: the sole entry of a valid index, edited past what the
-/// encoder emits.
-fn bin_reject_body(nonce: &[u8; NONCE_LEN], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
-    let mut m = bin_entry_map(&bin_entry(0x04, NodeKind::File, true));
-    edit(&mut m);
+/// A record whose body carries `entries` — bodies the encoder refuses to emit,
+/// sealed correctly so the grammar decoder is what refuses them.
+fn bin_reject_body(nonce: &[u8; NONCE_LEN], entries: Vec<Value>) -> Vec<u8> {
+    let mut body = bin_probe_body();
+    body.insert("entries", Value::Array(entries));
     framed_bin_record(
         nonce,
-        &bin_index_aad(),
-        &framed_bin_body(vec![Value::Map(m)], 3),
+        &bin_index_aad(BIN_INDEX_V),
+        &encode(&Value::Map(body)).expect("bin reject body re-encodes"),
     )
+}
+
+/// The `n`-th reject nonce. One seal key covers this whole family, so every
+/// vector that seals gets its own nonce — the corpus must model the rule
+/// `seal_bin_index` states, not the reuse it forbids.
+fn bin_reject_nonce(n: u8) -> [u8; NONCE_LEN] {
+    std::array::from_fn(|i| (0x71 + i) as u8 ^ (n << 4))
 }
 
 fn build_bin_index_accept() -> Vec<BinIndexAcceptVector> {
@@ -8141,15 +8138,21 @@ fn bin_index_accept_vector(
 
 fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
     let key = bin_index_seal_key();
-    let nonce: [u8; NONCE_LEN] = std::array::from_fn(|i| (0x71 + i) as u8);
     let mut index = BinIndex::new(3);
     index.entries.push(bin_entry(0x04, NodeKind::File, true));
-    let record = seal_bin_index(&key, &nonce, &index).unwrap();
+    let record = seal_bin_index(&key, &bin_reject_nonce(0), &index).unwrap();
 
     let tampered = reframe_record(&record, |m| {
         let mut sealed = m.get("sealed").unwrap().as_bytes().unwrap().to_vec();
         let last = sealed.len() - 1;
         sealed[last] ^= 0x01;
+        m.insert("sealed", Value::Bytes(sealed));
+    });
+    // The nonce sits outside the AAD, so only the AEAD's own authentication of
+    // it can refuse a flip inside the prefix.
+    let tampered_nonce = reframe_record(&record, |m| {
+        let mut sealed = m.get("sealed").unwrap().as_bytes().unwrap().to_vec();
+        sealed[0] ^= 0x01;
         m.insert("sealed", Value::Bytes(sealed));
     });
     let forward_version = reframe_record(&record, |m| {
@@ -8171,35 +8174,46 @@ fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
     });
     // The read-body tag over the same key, nonce, and plaintext: only the tag
     // in the AAD separates the two families, so the AEAD must refuse it.
+    let read_body_aad = encode_fixed_depth(&Value::Array(vec![
+        Value::Text(AAD_DOMAIN.to_string()),
+        Value::Unsigned(BIN_INDEX_V),
+        Value::Unsigned(u64::from(STRUCT_TAG_READ_BODY)),
+    ]));
     let struct_tag_transplant = framed_bin_record(
-        &nonce,
-        &bin_index_aad_under(STRUCT_TAG_READ_BODY),
+        &bin_reject_nonce(1),
+        &read_body_aad,
         &encode_bin_index(&index).unwrap(),
     );
 
-    // Bodies the encoder refuses to emit, framed by hand and sealed correctly
-    // so the grammar decoder — not the tag — is what refuses them.
-    let one = Value::Map(bin_entry_map(&bin_entry(0x04, NodeKind::File, true)));
-    let duplicate_node_id = framed_bin_record(
-        &nonce,
-        &bin_index_aad(),
-        &framed_bin_body(vec![one.clone(), one], 3),
+    let one = bin_edited_entry(|_| {});
+    let duplicate_node_id = bin_reject_body(&bin_reject_nonce(2), vec![one.clone(), one]);
+    let short_held_key = bin_reject_body(
+        &bin_reject_nonce(3),
+        vec![bin_edited_entry(|m| {
+            m.insert("heldKey", Value::Bytes(vec![0u8; SECRET_LEN - 1]));
+        })],
     );
-    let short_held_key = bin_reject_body(&nonce, |m| {
-        m.insert("heldKey", Value::Bytes(vec![0u8; SECRET_LEN - 1]));
-    });
-    let unknown_kind = bin_reject_body(&nonce, |m| {
-        m.insert("kind", Value::Text("shortcut".to_string()));
-    });
-    let missing_origin_parent = bin_reject_body(&nonce, |m| {
-        m.remove("originParent");
-    });
-    let over_bound_ipns_name = bin_reject_body(&nonce, |m| {
-        m.insert(
-            "ipnsName",
-            Value::Bytes(vec![0x6b; MAX_IPNS_NAME_BYTES + 1]),
-        );
-    });
+    let unknown_kind = bin_reject_body(
+        &bin_reject_nonce(4),
+        vec![bin_edited_entry(|m| {
+            m.insert("kind", Value::Text("shortcut".to_string()));
+        })],
+    );
+    let missing_origin_parent = bin_reject_body(
+        &bin_reject_nonce(5),
+        vec![bin_edited_entry(|m| {
+            m.remove("originParent");
+        })],
+    );
+    let over_bound_ipns_name = bin_reject_body(
+        &bin_reject_nonce(6),
+        vec![bin_edited_entry(|m| {
+            m.insert(
+                "ipnsName",
+                Value::Bytes(vec![0x6b; MAX_IPNS_NAME_BYTES + 1]),
+            );
+        })],
+    );
 
     // A stranger's seal key derives a different AEAD key, so the tag refuses it.
     let stranger_key: [u8; KEY_LEN] = std::array::from_fn(|i| (0x91 + i) as u8);
@@ -8209,6 +8223,13 @@ fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
             "tampered-ciphertext",
             key,
             &tampered,
+            "seal-open-failed",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "tampered-nonce",
+            key,
+            &tampered_nonce,
             "seal-open-failed",
             "trust",
         ),

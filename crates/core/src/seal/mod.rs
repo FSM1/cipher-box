@@ -105,10 +105,21 @@ pub fn seal(
     ctx: &AadContext,
     plaintext: &[u8],
 ) -> Vec<u8> {
-    let aad = build_aad(ctx);
+    seal_framed(key, nonce, &build_aad(ctx), plaintext)
+}
+
+/// [`seal`] over raw AAD bytes, for the structures that bind their own clear
+/// header instead of an [`AadContext`] ([`bin_index`]). The wire framing and the
+/// nonce rule are [`seal`]'s.
+pub fn seal_framed(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(NONCE_LEN + plaintext.len() + TAG_LEN);
     out.extend_from_slice(nonce);
-    out.extend(aead::encrypt(key, nonce, &aad, plaintext));
+    out.extend(aead::encrypt(key, nonce, aad, plaintext));
     out
 }
 
@@ -121,6 +132,13 @@ pub fn seal(
 /// transplant, or a `v` downgrade — is [`TrustViolation::SealOpenFailed`], never
 /// a silent degrade.
 pub fn unseal(key: &[u8; KEY_LEN], ctx: &AadContext, sealed: &[u8]) -> Result<Vec<u8>, CodecError> {
+    open_framed(key, &build_aad(ctx), sealed)
+}
+
+/// [`unseal`] over raw AAD bytes, for the structures that bind their own clear
+/// header instead of an [`AadContext`] ([`bin_index`]). The two-class
+/// fail-closed policy is [`unseal`]'s.
+pub fn open_framed(key: &[u8; KEY_LEN], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CodecError> {
     if sealed.len() < NONCE_LEN + TAG_LEN {
         return Err(Malformed::Truncated {
             offset: sealed.len(),
@@ -129,8 +147,7 @@ pub fn unseal(key: &[u8; KEY_LEN], ctx: &AadContext, sealed: &[u8]) -> Result<Ve
     }
     let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
     let nonce: &[u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
-    let aad = build_aad(ctx);
-    aead::decrypt(key, nonce, &aad, ciphertext).ok_or_else(|| TrustViolation::SealOpenFailed.into())
+    aead::decrypt(key, nonce, aad, ciphertext).ok_or_else(|| TrustViolation::SealOpenFailed.into())
 }
 
 #[cfg(test)]

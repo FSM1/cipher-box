@@ -159,7 +159,7 @@
       {
         "name": "bin-held-key",
         "context": "cipherbox/v2/bin-held-key",
-        "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])"
+        "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16] || deletedAt[8 BE])"
       },
       {
         "name": "genesis-read-scope-seed",
@@ -632,7 +632,7 @@
     },
     "reject": {
       "file": "vectors/bin_index/bin_index_reject.json",
-      "count": 13,
+      "count": 14,
       "checks": [
         "seal-open-failed",
         "duplicate-id",
