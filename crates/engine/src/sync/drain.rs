@@ -356,6 +356,12 @@ enum Halt {
     /// unreferenced create name [`Halt::UploadAttempt`] does, under its own
     /// dead-letter reason.
     HeadOversized,
+    /// The authored scope root fits the block ceiling but leaves no room for
+    /// its own re-seal. Charged exactly like [`Halt::HeadOversized`] — no
+    /// re-author shrinks it either — and reported under its own verdict,
+    /// because the record is not too large and telling the member it is sends
+    /// them looking for content to remove that is not the cause.
+    ScopeRootNotResealable,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
     /// The member's own settings were refused before any request was built.
@@ -1028,7 +1034,10 @@ where
                     self.retire_cancelled(op_id).await;
                 }
             }
-            Halt::Attempt | Halt::UploadAttempt | Halt::HeadOversized => {
+            Halt::Attempt
+            | Halt::UploadAttempt
+            | Halt::HeadOversized
+            | Halt::ScopeRootNotResealable => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
@@ -1037,7 +1046,9 @@ where
                 // ever reached ([`Halt`]).
                 let (reason, owes_its_name) = match halt {
                     Halt::Attempt => (DeadLetterReason::AttemptsExhausted, false),
-                    Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
+                    Halt::HeadOversized | Halt::ScopeRootNotResealable => {
+                        (DeadLetterReason::HeadTooLarge, true)
+                    }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
                 let Ok(preserved) = self.preserve_dead_letter(op_id, reason).await else {
@@ -4519,9 +4530,8 @@ fn classify_author(error: AuthorError) -> Halt {
         | AuthorError::SectionSignatureInvalid => Halt::UploadAttempt,
         // Charged on the same terms as an over-length head: re-authoring the
         // same section repeats it verbatim, so an uncharged retry would spin.
-        AuthorError::HeadTooLarge { .. }
-        | AuthorError::ScopeRootNotResealable { .. }
-        | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
+        AuthorError::HeadTooLarge { .. } | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
+        AuthorError::ScopeRootNotResealable { .. } => Halt::ScopeRootNotResealable,
         AuthorError::Seal(_) => Halt::Unclassified,
     }
 }
@@ -4708,6 +4718,9 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
             Some("the network refused it without a classification")
         }
         Halt::HeadOversized => Some("the record this change publishes is over the size limit"),
+        Halt::ScopeRootNotResealable => {
+            Some("this shared folder's own record leaves no room for the re-key a revoke needs")
+        }
         Halt::Permanent(DeadLetterReason::PayloadRefused) => {
             Some("the network refused the payload")
         }
@@ -5234,9 +5247,22 @@ mod tests {
                 Halt::HeadOversized,
             ),
             (AuthorError::GrantSectionTooLarge, Halt::HeadOversized),
+            (
+                AuthorError::ScopeRootNotResealable { size: 2, limit: 1 },
+                Halt::ScopeRootNotResealable,
+            ),
         ] {
             let check = error.check();
             assert_eq!(classify_author(error), expected, "{check}");
         }
+    }
+
+    /// A root with no re-seal room is not an over-large record, and a member
+    /// told it is one goes looking for content to remove that is not the cause.
+    #[test]
+    fn a_root_with_no_re_seal_room_reads_differently_to_the_host_than_an_over_large_one() {
+        let no_room = upload_failure(Halt::ScopeRootNotResealable).expect("a reported verdict");
+        let oversized = upload_failure(Halt::HeadOversized).expect("a reported verdict");
+        assert_ne!(no_room, oversized);
     }
 }

@@ -110,6 +110,21 @@ pub enum RejectionReason {
         /// The rejected record's epoch tag.
         epoch: u64,
     },
+    /// A scope root leaves no room for its own re-seal: its bytes outside the
+    /// grant section are over
+    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`](crate::content::limits::MAX_RESEALABLE_ROOT_REST_BYTES).
+    ///
+    /// This engine never authors one (`net/author.rs::encode_scope_root`), so
+    /// adopting one from any other client would leave the owner's own re-key
+    /// refusing on it for ever. The read-side half of that produce-side bound
+    /// (AGENTS.md rule 8). Cache-first keeps the previously adopted head, so
+    /// the scope stays readable.
+    ScopeRootNotResealable {
+        /// The record's byte count outside its grant section.
+        size: usize,
+        /// The budget that count must stay under.
+        limit: usize,
+    },
 }
 
 /// A fail-closed adoption-gate rejection: the stage that fired and its reason.
@@ -131,6 +146,7 @@ impl GateRejection {
             RejectionReason::Trust(e) => e.check(),
             RejectionReason::SequenceNotNewer { .. } => "sequence-not-newer",
             RejectionReason::EpochBelowFloor { .. } => "epoch-below-floor",
+            RejectionReason::ScopeRootNotResealable { .. } => "scope-root-not-resealable",
         }
     }
 }

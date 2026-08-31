@@ -59,9 +59,9 @@ impl FolderRefreshReport {
 fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
     match reason {
         RejectionReason::EpochBelowFloor { .. } => None,
-        RejectionReason::Trust(_) | RejectionReason::SequenceNotNewer { .. } => {
-            Some(RefreshVerdict::Rejected)
-        }
+        RejectionReason::Trust(_)
+        | RejectionReason::SequenceNotNewer { .. }
+        | RejectionReason::ScopeRootNotResealable { .. } => Some(RefreshVerdict::Rejected),
     }
 }
 
