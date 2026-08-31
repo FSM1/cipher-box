@@ -3383,6 +3383,11 @@ pub struct Engine<T: SeamTypes> {
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass.
     orphan_heads: Rc<OrphanHeads>,
+    /// Whether a poll tick has reconciled the record plane since this session
+    /// started. The drain holds a replayed quarantine until it is set: the base
+    /// opens empty, so a decide pass before the first converged tick would read
+    /// no link for any descendant (blueprint/engine.md "Retirement").
+    converged_tick: Rc<Cell<bool>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -3514,6 +3519,7 @@ impl<T: SeamTypes> Engine<T> {
                 pending_reclaim: Rc::new(Cell::new(0)),
                 reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
                 orphan_heads: Rc::new(OrphanHeads::default()),
+                converged_tick: Rc::new(Cell::new(false)),
                 alive: Rc::new(Cell::new(true)),
                 manual_refresh: ManualRefresh::default(),
                 session: None,
@@ -4361,6 +4367,7 @@ where {
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
         let orphan_heads = self.orphan_heads.clone();
+        let converged_tick = self.converged_tick.clone();
         let cancels = self.cancels.clone();
         let live_blocks = self.live_blocks.clone();
         let transport = self.seams.record_transport.clone();
@@ -4710,6 +4717,7 @@ where {
                             pending_reclaim: &pending_reclaim,
                             reclaim_stalls: &reclaim_stalls,
                             orphan_heads: &orphan_heads,
+                            converged_tick: &converged_tick,
                             cancels: &cancels,
                             events: &events,
                             bin_keys: &bin_keys,
@@ -4782,6 +4790,9 @@ where {
                     status.reconcile_in_flight = false;
                     if reconciled {
                         status.last_success = Some(scheduler.now());
+                        // Set after the drain above, so the pass that converges
+                        // the base is never the pass that decides against it.
+                        converged_tick.set(true);
                     }
                     let rung = classify(
                         scheduler.now(),

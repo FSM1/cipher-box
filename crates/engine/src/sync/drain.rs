@@ -594,6 +594,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
+    /// Whether a poll tick has reconciled the record plane since this session
+    /// started ([`Settle`]).
+    pub(crate) converged_tick: &'a Cell<bool>,
     /// The upload-cancel interlock, shared with the facade's cancel command.
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
@@ -682,8 +685,9 @@ enum Verdict {
 /// and so what bounds the quarantine to one converged poll tick
 /// (blueprint/engine.md "Retirement").
 enum Settle<'a> {
-    /// The delete's own pass. The snapshot it just repainted is this device's
-    /// own work rather than a converged view of the plane.
+    /// The delete's own pass, and every pass of a session whose base no poll
+    /// has reconciled yet. The snapshot is this device's own work, or the empty
+    /// one a restart opens, rather than a converged view of the plane.
     Hold,
     /// A later pass, with the proof budget it has left to spend.
     Decide(&'a mut usize),
@@ -2108,14 +2112,15 @@ where
                 continue;
             };
             replayed += 1;
+            // A journal entry outlives the process; the base does not. Until a
+            // poll of this session has reconciled it, no descendant's absence
+            // from it means anything.
+            let settle = match self.converged_tick.get() {
+                true => Settle::Decide(&mut proofs),
+                false => Settle::Hold,
+            };
             let residue = self
-                .settle_reclamation(
-                    scope,
-                    seal,
-                    owner,
-                    &reclamation,
-                    Settle::Decide(&mut proofs),
-                )
+                .settle_reclamation(scope, seal, owner, &reclamation, settle)
                 .await;
             self.update_journal(seal, &key, target, &reclamation, residue)
                 .await;

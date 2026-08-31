@@ -158,8 +158,10 @@ bytes (FSM1/cipher-box-next#28 D2).
   record the pass resolved and republished — and holds every descendant in a
   bounded quarantine. A descendant is reached through a `ChildRef`, which any
   holder of the scope's write seed authors, so its name and its pins wait for a
-  proof, and no pass that journals an entry may decide it. The proof is two
-  halves: the snapshot no longer reaches the node, and the node's freshly
+  proof, and no pass that journals an entry may decide it. A journal entry
+  outlives the process and the snapshot does not, so a session decides nothing
+  until one of its own poll ticks has reconciled the record plane. The proof is
+  two halves: the snapshot no longer reaches the node, and the node's freshly
   resolved record still names exactly the version roots the owner-authored
   doomed manifest quoted at delete time. **No live namer is consulted**, and the
   snapshot is populated by the focus window rather than by a whole-vault walk,

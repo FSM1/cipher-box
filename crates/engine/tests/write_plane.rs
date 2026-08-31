@@ -4804,6 +4804,91 @@ fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     }
 }
 
+/// The same bound across a restart. A journal entry is durable and the snapshot
+/// is not: a restarted session opens the base empty, so the proof's first half
+/// would read no link for any descendant and release on the record half alone.
+/// The first pass of that session decides nothing (blueprint/engine.md
+/// "Retirement").
+#[test]
+fn a_restart_holds_a_replayed_quarantine_until_one_of_its_own_polls_converges() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let deep = child_id(&engine, photos, "deep.bin");
+    let deep_name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &deep_name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the descendant published a version");
+
+    // The delete journals its quarantine, and the process goes before any pass
+    // of that session replays it.
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    drop(engine);
+
+    let mark = retire_targets(&alice).len();
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 43);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        !retired.contains(&deep_name.as_str().to_owned()),
+        "the first pass of the restarted session decides no quarantine"
+    );
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "so nothing irreversible fires against the base a restart opens"
+        );
+    }
+
+    // That pass converged the base, so the passes behind it decide as a
+    // same-session pass does.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&deep_name.as_str().to_owned()),
+        "the descendant's record leaves the inventory once a poll has converged"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "and every block its version pinned is reclaimed"
+        );
+    }
+}
+
 /// The pending half of the same law: a queued folder delete renders its whole
 /// detached subtree gone *before* the drain publishes anything, the way a delete
 /// another device published does. A host holds descendant ids as inodes, so one
