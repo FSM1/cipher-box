@@ -24,13 +24,14 @@ function build(
     offered?: { google?: boolean; email?: boolean; wallet?: boolean };
     facade?: ReturnType<typeof fakeFacade>;
     session?: ReturnType<typeof fakeSession>;
+    progress?: ReturnType<typeof fakeProgress>;
   } = {}
 ) {
   const exchange = fakeExchange();
   const session = options.session ?? fakeSession();
   const facade = options.facade ?? fakeFacade();
   const account = fakeAccount();
-  const progress = fakeProgress();
+  const progress = options.progress ?? fakeProgress();
   const armed: (LoginSecretExporter | null)[] = [];
   // Every step the end drives, in the order it drove them, so a test asserts
   // sequencing rather than only that each leg ran.
@@ -69,6 +70,29 @@ function build(
 }
 
 const loggedIn = (parts: Parts) => parts.account.calls.signedIn;
+
+describe('the serialization gate', () => {
+  // A latch left set refuses every later sign-in and every logout, so the host
+  // is stranded on a screen with no working control.
+  it('releases the latch when the host throws as a transition begins', async () => {
+    const progress = fakeProgress();
+    const render = progress.progress.begin;
+    let raises = true;
+    progress.progress.begin = () => {
+      render();
+      if (!raises) return;
+      raises = false;
+      throw new Error('the window could not render');
+    };
+    const parts = build({ progress });
+
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toThrow(
+      'the window could not render'
+    );
+
+    await expect(parts.flow.loginWithGoogle('google.id.token')).resolves.toBeUndefined();
+  });
+});
 
 describe('the recovery phrase step', () => {
   it('reports a login held at the factor policy as a transition, not a failure', async () => {
