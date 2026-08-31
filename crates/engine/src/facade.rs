@@ -5704,6 +5704,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name: &scope_root_name,
             owner_signer: session.identity(),
+            pointer_read_key: &current.pointer_read_key,
         };
         let cut = match kind {
             // A write grant is cut by `revoke_write_grant`, never by a read
@@ -6172,6 +6173,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name,
             owner_signer: session.identity(),
+            pointer_read_key: &current.pointer_read_key,
         })
         .map_err(EngineError::from_revoke)?;
         // `cut_for_write_grant` sets the write plane, so the wave ran and its
@@ -6500,6 +6502,7 @@ where {
             let converted = convert_invite_claim(
                 &authority,
                 &bound_scope(&target, &current, &commitment_sig)?,
+                &current.pointer_read_key,
                 &records.links,
                 &records.claims,
                 item,

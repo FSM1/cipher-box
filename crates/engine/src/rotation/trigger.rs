@@ -140,6 +140,9 @@ pub struct GrantCutPlan<'a> {
     /// The owner identity signer — MUST be the identity that produced
     /// `commitment_sig`, and re-signs the cut set.
     pub owner_signer: &'a EcdsaSigner,
+    /// The scope's stable pointer read key, which unmasks a committed entry's
+    /// recipient (see [`GrantSetEntry`](cipherbox_core::seal::GrantSetEntry)).
+    pub pointer_read_key: &'a [u8; SECRET_LEN],
 }
 
 /// Which planes a committed-set cut must rotate before it is a real revocation.
@@ -339,7 +342,7 @@ fn drop_tags(
         .entries
         .iter()
         .filter(|e| tags.contains(&e.tag))
-        .filter_map(|e| X25519Public::from_bytes(e.recipient_enc_pk))
+        .filter_map(|e| X25519Public::from_bytes(e.recipient_enc_pk(plan.pointer_read_key)))
         .collect();
     commitment.entries.retain(|e| !tags.contains(&e.tag));
     Ok(DroppedSet {
@@ -757,7 +760,9 @@ mod tests {
     use crate::seams::Scheduler;
     use crate::testkit::block_on;
     use crate::testkit::fakes::VirtualScheduler;
-    use cipherbox_core::seal::{PreservedFields, sign_recipient_binding, verify_grant_set};
+    use cipherbox_core::seal::{
+        GrantSetEntry, PreservedFields, sign_recipient_binding, verify_grant_set,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     use crate::grants::ledger::{mint_grant_row, recipient_blinded_tag};
@@ -844,6 +849,8 @@ mod tests {
     const NO_SIG: [u8; ECDSA_SIG_LEN] = [0u8; ECDSA_SIG_LEN];
 
     /// The three recipients the fixture commits, by their X25519 scalar seed.
+    /// The scope pointer read key every fixture masks its recipients under.
+    const PRK: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
     const READ_RECIPIENT: u8 = 0x11;
     const LINK_RECIPIENT: u8 = 0x12;
     const WRITE_RECIPIENT: u8 = 0x13;
@@ -900,6 +907,7 @@ mod tests {
                 mint_grant_row(
                     &owner,
                     &owner_enc(),
+                    &PRK,
                     identity,
                     &recipient_enc(seed).public(),
                     &[0x01; 16],
@@ -938,6 +946,7 @@ mod tests {
                 grant_ledger: &self.ledger,
                 scope_root_name: &self.name,
                 owner_signer: &self.owner,
+                pointer_read_key: &PRK,
             }
         }
 
@@ -1028,7 +1037,13 @@ mod tests {
     fn relabel_link_entry(fx: &mut Fixture, enc_pk: [u8; 32]) {
         for entry in &mut fx.commitment.entries {
             if entry.tag == link_tag() {
-                entry.recipient_enc_pk = enc_pk;
+                *entry = GrantSetEntry::new(
+                    &PRK,
+                    entry.tag,
+                    enc_pk,
+                    entry.permission,
+                    entry.pseudonym_pk,
+                );
             }
         }
         fx.commitment_sig = sign_grant_set(&fx.owner, &fx.commitment)

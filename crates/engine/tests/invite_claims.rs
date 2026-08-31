@@ -37,6 +37,8 @@ use core::time::Duration;
 const V: u64 = 2;
 const SCOPE: [u8; 16] = [0x5c; 16];
 const WRITE_SCOPE_SEED: [u8; 32] = [0x55; 32];
+/// The scope pointer read key every fixture masks its recipients under.
+const POINTER_READ_KEY: [u8; 32] = [0x66; 32];
 const EPH_MAILBOX: [u8; 32] = [0x71; 32];
 const EPH_FORGED: [u8; 32] = [0x72; 32];
 const EPH_TRANSPORT: [u8; 32] = [0x73; 32];
@@ -129,6 +131,7 @@ fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
     let minted = mint_invite_grant(
         &owner_identity(),
         &owner_enc(),
+        &POINTER_READ_KEY,
         &invitee,
         &SCOPE,
         &WRITE_SCOPE_SEED,
@@ -194,6 +197,7 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
     let converted = convert_invite_claim(
         &keys.authority(),
         &l.scope(),
+        &POINTER_READ_KEY,
         &[l.recorded],
         &[],
         &items[0],
@@ -247,6 +251,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
         convert_invite_claim(
             &keys.authority(),
             &l.scope(),
+            &POINTER_READ_KEY,
             &[l.recorded],
             &[],
             &items[0],
@@ -378,6 +383,7 @@ fn a_link_minted_in_one_session_converts_and_revokes_in_the_next() {
     let converted = convert_invite_claim(
         &keys.authority(),
         &l.scope(),
+        &POINTER_READ_KEY,
         &recovered.links,
         &recovered.claims,
         &delivered_claim(&l, 0x67, [0x11; CLAIM_ID_LEN]),
@@ -422,6 +428,7 @@ fn a_recovered_record_carries_the_deadline_conversion_judges_expiry_on() {
         convert_invite_claim(
             &keys.authority(),
             &l.scope(),
+            &POINTER_READ_KEY,
             &recovered.links,
             &recovered.claims,
             &delivered_claim(&l, 0x69, [0x12; CLAIM_ID_LEN]),
@@ -490,6 +497,7 @@ fn convert_and_record(
     let converted = convert_invite_claim(
         &keys.authority(),
         scope,
+        &POINTER_READ_KEY,
         &held.links,
         &held.claims,
         &delivered_claim(l, claimant_seed, claim_id),
@@ -523,6 +531,7 @@ fn refuse(
     convert_invite_claim(
         &keys.authority(),
         scope,
+        &POINTER_READ_KEY,
         &held.links,
         &held.claims,
         item,

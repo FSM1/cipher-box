@@ -38,7 +38,9 @@ use cipherbox_engine::content::{
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::gate::authenticate_section_structures;
-use cipherbox_engine::testkit::{OWNER_ROOT_EPOCH, OwnerRootSpec, owner_root_fixture};
+use cipherbox_engine::testkit::{
+    OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootSpec, owner_root_fixture,
+};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 engine content-dag";
@@ -345,6 +347,7 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSigne
     let committed = {
         let mut section = fixture.grant_section.clone();
         section.commitment.entries.push(GrantSetEntry::new(
+            &OWNER_ROOT_POINTER_READ_KEY,
             GATE_KAT_GRANTEE_TAG,
             GATE_KAT_GRANTEE_ENC_PK,
             Permission::Write,

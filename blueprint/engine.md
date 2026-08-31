@@ -828,7 +828,8 @@ grant blobs keyed by blinded tags, the authoritative ledger
 `(recipientIdentityPk, recipientEncPk, permission, tag)` in the write-body,
 and the owner-signed grant-set commitment. Every re-seal and every cut names
 its recipients from the commitment, which the owner signs, never from a ledger
-row a committed write grantee authors. The engine maintains all
+row a committed write grantee authors. The commitment carries each recipient
+masked, so a reader needs the scope's `pointerReadKey` to recover it. The engine maintains all
 three plus the per-(scope, writer) pseudonyms; re-mint does not exist as a
 separate step — every rekey re-seals surviving committed grants uniformly in
 the republish it already does.

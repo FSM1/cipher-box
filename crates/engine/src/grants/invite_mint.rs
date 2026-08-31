@@ -166,6 +166,7 @@ where
     let minted = mint_invite_grant(
         owner.identity_signer,
         owner.enc_secret,
+        plan.grantee.pointer_read_key,
         &invitee,
         &plan.grantee.scope_id,
         plan.grantee.write_scope_seed,

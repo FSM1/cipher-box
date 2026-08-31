@@ -886,6 +886,8 @@ struct StructureSigRejectVector {
 struct GrantSetAcceptVector {
     name: String,
     owner_identity_pk: String,
+    pointer_read_key: String,
+    recipients: Vec<String>,
     commitment: String,
     signature: String,
 }
@@ -2458,6 +2460,7 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "genesis-write-scope-seed",
     "contact-label-seed",
     "contact-label",
+    "committed-recipient-mask",
 ];
 
 #[test]
@@ -2616,6 +2619,7 @@ fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
         owner_pseudonym_pk: [0x44; 32],
         cut_epoch: 0,
         entries: vec![GrantSetEntry::new(
+            &[0x66; 32],
             [0x55; 32],
             [0x95; 32],
             Permission::Read,
@@ -5403,6 +5407,25 @@ fn grant_set_accept_vectors_decode_and_verify() {
             "grant-set accept {}: must verify",
             v.name
         );
+        // The mask, not merely the framing: each entry must recover the frozen
+        // recipient under the frozen pointer read key, and must not carry it in
+        // the clear.
+        let prk = unhex32(&v.name, &v.pointer_read_key);
+        assert_eq!(c.entries.len(), v.recipients.len(), "recipient count drift");
+        for (entry, expected) in c.entries.iter().zip(&v.recipients) {
+            let recipient = unhex32(&v.name, expected);
+            assert_eq!(
+                entry.recipient_enc_pk(&prk),
+                recipient,
+                "grant-set accept {}: masked recipient drift",
+                v.name
+            );
+            assert_ne!(
+                entry.masked_recipient_enc_pk, recipient,
+                "grant-set accept {}: the recipient must not ride in the clear",
+                v.name
+            );
+        }
     }
 }
 

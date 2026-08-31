@@ -554,8 +554,20 @@ mod tests {
     fn sample() -> GrantSection {
         GrantSection {
             commitment: commitment(vec![
-                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
+                GrantSetEntry::new(
+                    &[0x66; 32],
+                    [0x01; 32],
+                    [0x41; 32],
+                    Permission::Read,
+                    [0x02; 32],
+                ),
+                GrantSetEntry::new(
+                    &[0x66; 32],
+                    [0x03; 32],
+                    [0x43; 32],
+                    Permission::Write,
+                    [0x04; 32],
+                ),
             ]),
             commitment_sig: [0x11; ECDSA_SIG_LEN],
             grant_blobs: vec![blob(0x01), blob(0x03)],

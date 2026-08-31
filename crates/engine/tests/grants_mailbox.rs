@@ -212,6 +212,7 @@ impl GrantFixture {
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
+                &[0x66; 32],
                 tag,
                 recipient_enc.public().to_bytes(),
                 Permission::Read,
@@ -356,6 +357,7 @@ impl GrantFixture {
 
         let mut commitment = self.commitment.clone();
         commitment.entries = vec![GrantSetEntry::new(
+            &[0x66; 32],
             self.tag,
             self.recipient_enc.public().to_bytes(),
             permission,

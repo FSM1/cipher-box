@@ -551,13 +551,17 @@ fn mint_owner_history_link<E: Entropy>(
 ///
 /// A committed key core refuses to adopt is the owner attesting a key nothing
 /// can seal to, so the whole re-seal fails closed rather than skip the entry.
-fn adopt_recipients(committed: &CommittedSet<'_>) -> Result<Vec<X25519Public>, ResealError> {
+fn adopt_recipients(
+    committed: &CommittedSet<'_>,
+    pointer_read_key: &[u8; SECRET_LEN],
+) -> Result<Vec<X25519Public>, ResealError> {
     committed
         .commitment
         .entries
         .iter()
         .map(|e| {
-            X25519Public::from_bytes(e.recipient_enc_pk).ok_or(ResealError::UnusableRecipientKey)
+            X25519Public::from_bytes(e.recipient_enc_pk(pointer_read_key))
+                .ok_or(ResealError::UnusableRecipientKey)
         })
         .collect()
 }
@@ -654,7 +658,7 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // Fail-closed BEFORE any seal, and the only adoption pass: the blob loop
     // below wraps to these keys rather than re-adopting the same bytes.
-    let recipients = adopt_recipients(committed)?;
+    let recipients = adopt_recipients(committed, seeds.pointer_read_key)?;
 
     let scope_id = identity.scope_id;
     let read_epoch = seeds.read_epoch;
@@ -1138,12 +1142,14 @@ mod tests {
         ) {
             let entries = vec![
                 GrantSetEntry::new(
+                    &self.pointer_read_key,
                     Self::read_tag(),
                     Self::read_recipient().public().to_bytes(),
                     Permission::Read,
                     [0x02; 32],
                 ),
                 GrantSetEntry::new(
+                    &self.pointer_read_key,
                     Self::write_tag(),
                     Self::write_recipient().public().to_bytes(),
                     Permission::Write,
@@ -1194,6 +1200,7 @@ mod tests {
                 mint_grant_row(
                     &self.owner_ecdsa,
                     &self.owner_enc,
+                    &self.pointer_read_key,
                     identity.verifying_key().to_sec1(),
                     &grantee.public(),
                     &SCOPE,
@@ -1867,7 +1874,7 @@ mod tests {
                 tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
                 let recipient = Fixture::nth_recipient(i).public().to_bytes();
                 (
-                    GrantSetEntry::new(tag, recipient, Permission::Read, [0x02; 32]),
+                    GrantSetEntry::new(&[0x66; 32], tag, recipient, Permission::Read, [0x02; 32]),
                     fx.attested_row([0x02; 33], recipient, Permission::Read, tag, b"n"),
                 )
             })
@@ -2070,6 +2077,7 @@ mod tests {
                 let mut tag = [0u8; SECRET_LEN];
                 tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
                 GrantSetEntry::new(
+                    &fx.pointer_read_key,
                     tag,
                     Fixture::nth_recipient(i).public().to_bytes(),
                     Permission::Read,
@@ -2162,18 +2170,21 @@ mod tests {
 
         let entries = vec![
             GrantSetEntry::new(
+                &[0x66; 32],
                 Fixture::read_tag(),
                 Fixture::read_recipient().public().to_bytes(),
                 Permission::Read,
                 [0x02; 32],
             ),
             GrantSetEntry::new(
+                &[0x66; 32],
                 revoked_tag,
                 revoked.public().to_bytes(),
                 Permission::Read,
                 [0x04; 32],
             ),
             GrantSetEntry::new(
+                &[0x66; 32],
                 Fixture::write_tag(),
                 Fixture::write_recipient().public().to_bytes(),
                 Permission::Write,
@@ -2222,6 +2233,7 @@ mod tests {
                 grant_ledger: &ledger,
                 scope_root_name: &scope_name,
                 owner_signer: &fx.owner_ecdsa,
+                pointer_read_key: &fx.pointer_read_key,
             },
             &revoked_tag,
         )
@@ -2563,7 +2575,14 @@ mod tests {
             .chain([high_bit]);
         for enc_pk in unadoptable {
             let (mut commitment, _, ledger) = fx.minted();
-            commitment.entries[0].recipient_enc_pk = enc_pk;
+            let entry = &commitment.entries[0];
+            commitment.entries[0] = GrantSetEntry::new(
+                &fx.pointer_read_key,
+                entry.tag,
+                enc_pk,
+                entry.permission,
+                entry.pseudonym_pk,
+            );
             let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
                 .expect("the owner signs the set it attests")
                 .to_compact();
@@ -2595,6 +2614,7 @@ mod tests {
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
+                &[0x66; 32],
                 Fixture::read_tag(),
                 [0u8; 32], // low-order X25519 → from_bytes rejects
                 Permission::Read,

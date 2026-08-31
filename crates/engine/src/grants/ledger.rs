@@ -27,7 +27,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
 };
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::UnixMillis;
@@ -167,9 +167,14 @@ pub const UNATTESTED_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0u8; IDENTITY_PUB
 /// from the owner's authority ([`row_is_owner_attested`]) — pass
 /// [`UNATTESTED_IDENTITY_PK`] where the caller cannot vouch for the bytes it
 /// holds, rather than signing them.
+///
+/// The commitment entry masks the recipient under `pointer_read_key`, the
+/// scope's stable pointer read key (see [`GrantSetEntry`]).
+#[allow(clippy::too_many_arguments)]
 pub fn mint_grant_row(
     owner_identity_signer: &EcdsaSigner,
     owner_enc_secret: &X25519Secret,
+    pointer_read_key: &[u8; SECRET_LEN],
     recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     recipient_enc_pub: &X25519Public,
     scope_id: &[u8; 16],
@@ -195,6 +200,7 @@ pub fn mint_grant_row(
     Some(GrantRow {
         tag,
         commitment_entry: GrantSetEntry::new(
+            pointer_read_key,
             tag,
             recipient_enc_pub.to_bytes(),
             permission,
@@ -275,6 +281,9 @@ mod tests {
     use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
     use core::num::NonZeroU64;
 
+    /// The scope pointer read key every fixture masks its recipients under.
+    const PRK: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
+
     fn commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
         GrantSetCommitment {
             ipns_name: b"scope-root".to_vec(),
@@ -328,6 +337,7 @@ mod tests {
         let row = mint_grant_row(
             &owner_identity(),
             &owner_enc,
+            &PRK,
             [0x02; IDENTITY_PUBLIC_LEN],
             &recipient.public(),
             &[0x07; 16],
@@ -338,11 +348,12 @@ mod tests {
 
         assert_eq!(row.commitment_entry.tag, row.tag);
         assert_eq!(
-            row.commitment_entry.recipient_enc_pk,
+            row.commitment_entry.recipient_enc_pk(&PRK),
             recipient.public().to_bytes()
         );
         assert_eq!(
-            row.ledger_entry.recipient_enc_pk, row.commitment_entry.recipient_enc_pk,
+            row.ledger_entry.recipient_enc_pk,
+            row.commitment_entry.recipient_enc_pk(&PRK),
             "the row repeats what the owner committed"
         );
         assert_eq!(
@@ -366,6 +377,7 @@ mod tests {
         let row = mint_grant_row(
             &owner_identity,
             &owner_enc,
+            &PRK,
             [0x02; IDENTITY_PUBLIC_LEN],
             &victim,
             &[0x07; 16],
@@ -443,8 +455,20 @@ mod tests {
     #[test]
     fn matching_ledger_passes_owner_authority() {
         let c = commitment(vec![
-            GrantSetEntry::new([0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x21; 32],
+                [0x61; 32],
+                Permission::Read,
+                [0x02; 32],
+            ),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x22; 32],
+                [0x62; 32],
+                Permission::Write,
+                [0x03; 32],
+            ),
         ]);
         let ledger = vec![
             ledger_entry([0x21; 32], Permission::Read),
@@ -457,6 +481,7 @@ mod tests {
     fn write_grantee_added_tag_is_an_authority_violation() {
         // A write-grantee injects a row for a tag the owner never committed.
         let c = commitment(vec![GrantSetEntry::new(
+            &[0x66; 32],
             [0x21; 32],
             [0x61; 32],
             Permission::Read,
@@ -473,6 +498,7 @@ mod tests {
     #[test]
     fn changed_permission_is_an_authority_violation() {
         let c = commitment(vec![GrantSetEntry::new(
+            &[0x66; 32],
             [0x21; 32],
             [0x61; 32],
             Permission::Read,
@@ -485,8 +511,20 @@ mod tests {
     #[test]
     fn dropped_tag_is_an_authority_violation() {
         let c = commitment(vec![
-            GrantSetEntry::new([0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x21; 32],
+                [0x61; 32],
+                Permission::Read,
+                [0x02; 32],
+            ),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x22; 32],
+                [0x62; 32],
+                Permission::Write,
+                [0x03; 32],
+            ),
         ]);
         let ledger = vec![ledger_entry([0x21; 32], Permission::Read)]; // dropped 0x22
         assert!(enforce_committed_ledger(&c, &ledger).is_err());

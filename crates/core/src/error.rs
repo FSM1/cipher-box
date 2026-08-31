@@ -87,13 +87,6 @@ pub enum TrustViolation {
     /// a duplicate is a confused-deputy over read-vs-write authority. Fail-closed
     /// at decode, never first-match.
     DuplicateGrantTag,
-    /// Two entries of a grant-set commitment carried the same
-    /// `recipientEncPk`. One recipient encryption subkey derives exactly one
-    /// blinded tag at one scope root, so a duplicate is the
-    /// [`Self::DuplicateGrantTag`] confused deputy seen from the recipient
-    /// side: two permissions for one party, decided by whichever entry a reader
-    /// matches first. Fail-closed at decode, never first-match.
-    DuplicateGrantRecipient,
     /// An IPNS record's `signatureV2` did not verify over
     /// `"ipns-signature:" || data` under the Ed25519 key **extracted from the
     /// name itself** (#24). *Trust*: the record is structurally a well-formed
@@ -155,7 +148,6 @@ impl TrustViolation {
         "duplicate-id",
         "duplicate-ipns-name",
         "duplicate-grant-tag",
-        "duplicate-grant-recipient",
         "ipns-signature-invalid",
         "ipns-value-mismatch",
         "identity-signature-invalid",
@@ -181,7 +173,6 @@ impl TrustViolation {
             Self::DuplicateId => "duplicate-id",
             Self::DuplicateIpnsName => "duplicate-ipns-name",
             Self::DuplicateGrantTag => "duplicate-grant-tag",
-            Self::DuplicateGrantRecipient => "duplicate-grant-recipient",
             Self::IpnsSignatureInvalid => "ipns-signature-invalid",
             Self::IpnsValueMismatch => "ipns-value-mismatch",
             Self::IdentitySignatureInvalid => "identity-signature-invalid",
@@ -219,7 +210,6 @@ impl fmt::Display for TrustViolation {
             | Self::DuplicateId
             | Self::DuplicateIpnsName
             | Self::DuplicateGrantTag
-            | Self::DuplicateGrantRecipient
             | Self::IpnsSignatureInvalid
             | Self::IpnsValueMismatch
             | Self::IdentitySignatureInvalid

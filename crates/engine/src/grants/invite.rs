@@ -296,9 +296,11 @@ pub struct MintedInvite {
 /// `write_scope_seed`, never accepted as input — the tag binds that name and the
 /// link holder re-derives it from the record it resolves, so binding anything but
 /// the real resolvable name would mint a link nobody can self-locate.
+#[allow(clippy::too_many_arguments)]
 pub fn mint_invite_grant(
     owner_identity_signer: &EcdsaSigner,
     owner_enc_secret: &X25519Secret,
+    pointer_read_key: &[u8; SECRET_LEN],
     invitee: &EphemeralInvitee,
     scope_id: &[u8; 16],
     write_scope_seed: &[u8; SECRET_LEN],
@@ -313,6 +315,7 @@ pub fn mint_invite_grant(
     let mut row = mint_grant_row(
         owner_identity_signer,
         owner_enc_secret,
+        pointer_read_key,
         invitee.identity_pk().to_sec1(),
         &invitee.enc_public(),
         scope_id,
@@ -728,6 +731,7 @@ pub struct ConvertedClaim {
 pub fn convert_invite_claim(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
+    pointer_read_key: &[u8; SECRET_LEN],
     links: &[RecordedInvite],
     converted: &[ConvertedClaimRecord],
     item: &VerifiedMailboxItem,
@@ -801,6 +805,7 @@ pub fn convert_invite_claim(
     let mut row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
+        pointer_read_key,
         contact.identity_pk().to_sec1(),
         &contact.enc_subkey(),
         scope.scope_id,
@@ -971,10 +976,10 @@ pub fn locate_invite_link(
 }
 
 /// The produce-side mirror of what a resolver hard-rejects: the grant-set
-/// ceiling, a repeated tag or recipient key, and a ledger diverging from the
-/// commitment (core rejects the first three at decode and before signing; the
-/// last is the adoption gate's owner-authority check). Release-active, so no
-/// build can emit a set its own readers refuse.
+/// ceiling, a repeated tag, and a ledger diverging from the commitment (core
+/// rejects the first two at decode and before signing; the last is the adoption
+/// gate's owner-authority check). Release-active, so no build can emit a set its
+/// own readers refuse.
 pub(super) fn check_publishable(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -984,7 +989,6 @@ pub(super) fn check_publishable(
     }
     if !ids_are_unique(commitment.entries.iter().map(|e| e.tag))
         || !ids_are_unique(ledger.iter().map(|e| e.tag))
-        || !ids_are_unique(commitment.entries.iter().map(|e| e.recipient_enc_pk))
     {
         return Err(InviteError::DuplicateTag);
     }
@@ -1050,6 +1054,7 @@ mod tests {
         mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &invitee(),
             &SCOPE,
             &WRITE_SCOPE_SEED,
@@ -1187,6 +1192,7 @@ mod tests {
         let personal = mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             contact_identity.verifying_key().to_sec1(),
             &contact.public(),
             &SCOPE,
@@ -1223,6 +1229,7 @@ mod tests {
         let invite = mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &minted,
             &SCOPE,
             &WRITE_SCOPE_SEED,
@@ -1305,6 +1312,7 @@ mod tests {
             mint_invite_grant(
                 &owner_identity(),
                 &owner_enc(),
+                &POINTER_READ_KEY,
                 &invitee(),
                 &SCOPE,
                 &WRITE_SCOPE_SEED,
@@ -1339,6 +1347,7 @@ mod tests {
         let here = mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &minted,
             &SCOPE,
             &WRITE_SCOPE_SEED,
@@ -1350,6 +1359,7 @@ mod tests {
         let elsewhere = mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &minted,
             &SCOPE,
             &[0x56; 32],
@@ -1372,6 +1382,7 @@ mod tests {
         let row = mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &minted,
             &SCOPE,
             &WRITE_SCOPE_SEED,
@@ -1403,6 +1414,7 @@ mod tests {
         let row = mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &minted,
             &SCOPE,
             &WRITE_SCOPE_SEED,
@@ -1575,6 +1587,7 @@ mod tests {
         mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             &EphemeralInvitee::from_secret(&[secret; 32]).expect("valid"),
             &SCOPE,
             write_scope_seed,
@@ -1644,6 +1657,7 @@ mod tests {
         let first = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
+            &POINTER_READ_KEY,
             &[l.link],
             &[],
             &claim_item(&signer, contact_code(&a_id, &a_enc)),
@@ -1659,6 +1673,7 @@ mod tests {
         let second = convert_invite_claim(
             &owner,
             &committed_scope(&first.commitment, &second_sig, &first.ledger),
+            &POINTER_READ_KEY,
             &[l.link],
             &[],
             &claim_item(&signer, contact_code(&b_id, &b_enc)),
@@ -1692,6 +1707,7 @@ mod tests {
         let converted = convert_invite_claim(
             &owner,
             &scope,
+            &POINTER_READ_KEY,
             &[l.link],
             &[],
             &claim_item(&signer, contact_code(&id, &enc)),
@@ -1738,6 +1754,7 @@ mod tests {
                 convert_invite_claim(
                     &owner,
                     &scope,
+                    &POINTER_READ_KEY,
                     &[l.link],
                     &[],
                     &claim_item(&signer, code),
@@ -1760,6 +1777,7 @@ mod tests {
         let grantee = mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &POINTER_READ_KEY,
             grantee_identity.verifying_key().to_sec1(),
             &grantee_enc.public(),
             &SCOPE,
@@ -1777,6 +1795,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&grantee_identity, contact_code(&id, &enc)),
@@ -1796,6 +1815,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
@@ -1821,6 +1841,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &scope,
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
@@ -1835,6 +1856,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &scope,
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -1848,6 +1870,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &scope,
+                &POINTER_READ_KEY,
                 &[l.link, l.link],
                 &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -1863,6 +1886,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&cut, &cut_sig, &cut_ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -1888,6 +1912,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &scope,
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &item,
@@ -1897,9 +1922,17 @@ mod tests {
             "live one tick before the deadline",
         );
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[l.link], &[], &item, EXPIRES_AT)
-                .unwrap_err()
-                .check(),
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &POINTER_READ_KEY,
+                &[l.link],
+                &[],
+                &item,
+                EXPIRES_AT
+            )
+            .unwrap_err()
+            .check(),
             "link-expired",
         );
         assert_eq!(ledger.len(), 1, "the expired row is inert, not pruned");
@@ -1912,6 +1945,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &stripped),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &item,
@@ -1925,9 +1959,17 @@ mod tests {
         // And a published deadline alone makes the row inert before any prune.
         let unrecorded = link(0x4e, Permission::Read, None);
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[unrecorded.link], &[], &item, EXPIRES_AT)
-                .unwrap_err()
-                .check(),
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &POINTER_READ_KEY,
+                &[unrecorded.link],
+                &[],
+                &item,
+                EXPIRES_AT
+            )
+            .unwrap_err()
+            .check(),
             "link-expired",
         );
     }
@@ -1948,9 +1990,17 @@ mod tests {
             enc_secret: &owner_e,
         };
         assert_eq!(
-            convert_invite_claim(&rogue, &scope, &[l.link], &[], &item, UnixMillis(0))
-                .unwrap_err()
-                .check(),
+            convert_invite_claim(
+                &rogue,
+                &scope,
+                &POINTER_READ_KEY,
+                &[l.link],
+                &[],
+                &item,
+                UnixMillis(0)
+            )
+            .unwrap_err()
+            .check(),
             "not-owner",
         );
         assert_eq!(
@@ -1969,9 +2019,17 @@ mod tests {
             enc_secret: &foreign_enc,
         };
         assert_eq!(
-            convert_invite_claim(&half, &scope, &[l.link], &[], &item, UnixMillis(0))
-                .unwrap_err()
-                .check(),
+            convert_invite_claim(
+                &half,
+                &scope,
+                &POINTER_READ_KEY,
+                &[l.link],
+                &[],
+                &item,
+                UnixMillis(0)
+            )
+            .unwrap_err()
+            .check(),
             "link-not-committed",
         );
     }
@@ -2226,6 +2284,7 @@ mod tests {
         let first = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
+            &POINTER_READ_KEY,
             &[l.link],
             &[],
             &first_item,
@@ -2238,6 +2297,7 @@ mod tests {
         let again = convert_invite_claim(
             &owner,
             &committed_scope(&first.commitment, &resigned, &first.ledger),
+            &POINTER_READ_KEY,
             &[l.link],
             &[spent],
             &claim_item_id(
@@ -2272,6 +2332,7 @@ mod tests {
             convert_invite_claim(
                 &keys.authority(),
                 &committed_scope(&commitment, &sig, &ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item_id(
@@ -2300,6 +2361,7 @@ mod tests {
         let read_grant = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
+            &POINTER_READ_KEY,
             &[read_link.link],
             &[],
             &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -2313,6 +2375,7 @@ mod tests {
         let upgraded = convert_invite_claim(
             &owner,
             &committed_scope(&read_grant.commitment, &resigned, &read_grant.ledger),
+            &POINTER_READ_KEY,
             &[write_link.link],
             &[],
             &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
@@ -2338,6 +2401,7 @@ mod tests {
         let held = convert_invite_claim(
             &owner,
             &committed_scope(&upgraded.commitment, &resigned, &upgraded.ledger),
+            &POINTER_READ_KEY,
             &[read_link.link],
             &[],
             &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -2360,6 +2424,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item_for(
@@ -2390,9 +2455,17 @@ mod tests {
             payload: b"not det-cbor".to_vec(),
         };
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &[l.link], &[], &junk, UnixMillis(0))
-                .unwrap_err()
-                .check(),
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &POINTER_READ_KEY,
+                &[l.link],
+                &[],
+                &junk,
+                UnixMillis(0)
+            )
+            .unwrap_err()
+            .check(),
             "malformed-claim",
         );
 
@@ -2403,6 +2476,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &scope,
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4e), code),
@@ -2436,6 +2510,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &[l.row.ledger_entry.clone(), stray]),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &item,
@@ -2457,6 +2532,7 @@ mod tests {
             let mut recipient_enc_pk = [0x42u8; 32];
             recipient_enc_pk[..8].copy_from_slice(&(i as u64).to_be_bytes());
             full_commitment.entries.push(GrantSetEntry::new(
+                &[0x66; 32],
                 tag,
                 recipient_enc_pk,
                 Permission::Read,
@@ -2477,6 +2553,7 @@ mod tests {
             convert_invite_claim(
                 &owner,
                 &committed_scope(&full_commitment, &full_sig, &full_ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &item,

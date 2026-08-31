@@ -38,7 +38,7 @@ pub const OWNER_ROOT_PSEUDONYM_SEED: [u8; 32] = [0x22; 32];
 
 const V: u64 = 1;
 /// The stable per-scope pointer read key the fixture's grant blobs carry.
-const OWNER_ROOT_POINTER_READ_KEY: [u8; 32] = [0x88; 32];
+pub const OWNER_ROOT_POINTER_READ_KEY: [u8; 32] = [0x88; 32];
 const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
 const EPH_OWNER: [u8; 32] = [3u8; 32];

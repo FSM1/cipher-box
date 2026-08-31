@@ -467,6 +467,7 @@ async fn effective_revoked_recipients<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
     committed: &CommittedSet<'_>,
+    pointer_read_key: &[u8; SECRET_LEN],
 ) -> Result<Vec<[u8; SECRET_LEN]>, SeamError> {
     let mut revoked: BTreeSet<[u8; SECRET_LEN]> =
         committed.revoked_recipients.iter().copied().collect();
@@ -478,7 +479,7 @@ async fn effective_revoked_recipients<F: FloorStore>(
         return Ok(revoked.into_iter().collect());
     }
     for entry in &committed.commitment.entries {
-        let recipient = entry.recipient_enc_pk;
+        let recipient = entry.recipient_enc_pk(pointer_read_key);
         if revoked.contains(&recipient) {
             continue;
         }
@@ -589,9 +590,10 @@ where
 
     // Fail-closed BEFORE minting: a floor this re-key cannot read would wrap the
     // fresh seed back to a party the owner removed.
-    let revoked = effective_revoked_recipients(floors, &scope_id, &plan.committed)
-        .await
-        .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
+    let revoked =
+        effective_revoked_recipients(floors, &scope_id, &plan.committed, plan.pointer_read_key)
+            .await
+            .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
 
     // Mint the fresh random override seed — the fresh-seed cut that revokes cached
     // access. `Zeroizing` wipes it on every return path, including a panic unwind.
@@ -954,6 +956,7 @@ mod tests {
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 cut_epoch: 0,
                 entries: vec![GrantSetEntry::new(
+                    &scope_pointer_read_key(byte),
                     tag,
                     self.grantee.public().to_bytes(),
                     Permission::Read,
@@ -966,6 +969,12 @@ mod tests {
                 .to_compact();
             (commitment, commitment_sig, vec![entry])
         }
+    }
+
+    /// The pointer read key of the scope registered under `byte` — what its
+    /// committed entries mask their recipients under.
+    fn scope_pointer_read_key(byte: u8) -> [u8; 32] {
+        [byte.wrapping_add(2); 32]
     }
 
     /// The immutable per-scope material a descendant resolves to, plus the mutable
@@ -1029,7 +1038,7 @@ mod tests {
                     owner_enc_pub: None,
                     override_seed: [byte; 32],
                     write_scope_seed: [byte.wrapping_add(1); 32],
-                    pointer_read_key: [byte.wrapping_add(2); 32],
+                    pointer_read_key: scope_pointer_read_key(byte),
                     commitment,
                     commitment_sig,
                     grant_ledger,
@@ -1231,7 +1240,7 @@ mod tests {
                 grant_ledger,
                 current_seed: [0x00; 32],
                 write_scope_seed: [0x01; 32],
-                pointer_read_key: [0x02; 32],
+                pointer_read_key: scope_pointer_read_key(0x00),
                 revoked_recipients: Vec::new(),
             }
         }

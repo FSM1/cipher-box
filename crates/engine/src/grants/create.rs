@@ -376,6 +376,7 @@ where
     let row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
+        grantee.pointer_read_key,
         recipient.identity_pk().to_sec1(),
         &recipient_enc_pub,
         &grantee.scope_id,
@@ -756,7 +757,9 @@ mod tests {
     const V: u64 = 1;
     const GRANTEE_SCOPE: [u8; 16] = [0x5c; 16];
     const GRANTEE_WRITE_SCOPE_SEED: [u8; SECRET_LEN] = [0x55; SECRET_LEN];
+    const GRANTEE_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
     const PARENT_SCOPE: [u8; 16] = [0x0e; 16];
+    const PARENT_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x0c; SECRET_LEN];
     const PARENT_NAME: &[u8] = b"parent-scope-root-name";
     const DESCENDANT_SCOPE: [u8; 16] = [0xdd; 16];
     const DESCENDANT_NAME: &[u8] = b"descendant-scope-root-name";
@@ -1158,10 +1161,8 @@ mod tests {
 
         let parent_node_seed = [0x44; SECRET_LEN];
         let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
-        let grantee_pointer_read_key = [0x66; SECRET_LEN];
         let parent_override_seed = [0x0a; SECRET_LEN];
         let parent_write_scope_seed = [0x0b; SECRET_LEN];
-        let parent_pointer_read_key = [0x0c; SECRET_LEN];
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
@@ -1181,7 +1182,7 @@ mod tests {
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
             write_cut: None,
-            pointer_read_key: &grantee_pointer_read_key,
+            pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
         };
         let recipient_contact = contact_for(recipient_pub);
@@ -1213,7 +1214,7 @@ mod tests {
                 write_history: WriteHistory::Carried(&[]),
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
-                pointer_read_key: &parent_pointer_read_key,
+                pointer_read_key: &PARENT_POINTER_READ_KEY,
             },
             commitment: &parent_commitment,
             commitment_sig: &parent_commitment_sig,
@@ -1295,11 +1296,9 @@ mod tests {
 
         let parent_node_seed = [0x44; SECRET_LEN];
         let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
-        let grantee_pointer_read_key = [0x66; SECRET_LEN];
 
         let parent_override_seed = [0x0a; SECRET_LEN];
         let parent_write_scope_seed = [0x0b; SECRET_LEN];
-        let parent_pointer_read_key = [0x0c; SECRET_LEN];
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
@@ -1326,7 +1325,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &grantee_write_scope_seed,
                 write_cut: None,
-                pointer_read_key: &grantee_pointer_read_key,
+                pointer_read_key: &GRANTEE_POINTER_READ_KEY,
                 subtree_child_index: subtree,
             };
             let recipient_contact = contact_for(recipient_pub);
@@ -1358,7 +1357,7 @@ mod tests {
                     write_history: WriteHistory::Carried(&[]),
                     write_scope_seed: &parent_write_scope_seed,
                     write_epoch: 2,
-                    pointer_read_key: &parent_pointer_read_key,
+                    pointer_read_key: &PARENT_POINTER_READ_KEY,
                 },
                 commitment: &parent_commitment,
                 commitment_sig: &parent_commitment_sig,
@@ -2005,6 +2004,7 @@ mod tests {
         mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &PARENT_POINTER_READ_KEY,
             recipient_identity().to_sec1(),
             recipient,
             &PARENT_SCOPE,

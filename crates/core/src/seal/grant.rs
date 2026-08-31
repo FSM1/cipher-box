@@ -765,16 +765,25 @@ pub fn open_owner_history_link(
 // Grant-set commitment: the owner-signed recipient/permission/pseudonym set.
 // ---------------------------------------------------------------------------
 
-/// One committed grant: a recipient's blinded tag, their encryption subkey,
-/// their permission, and the writer pseudonym public key any envelope holder
-/// verifies committed-write authorship against.
+/// One committed grant: a recipient's blinded tag, their masked encryption
+/// subkey, their permission, and the writer pseudonym public key any envelope
+/// holder verifies committed-write authorship against.
 ///
-/// `recipient_enc_pk` is the same value the matching grant-ledger row carries,
-/// but under the owner's own signature rather than the write-grantee-authored
+/// The recipient rides here rather than only in the write-body grant ledger, so
+/// it is under the owner's own signature rather than the write-grantee-authored
 /// ledger. A cut names the party it revokes from here, so a committed write
 /// grantee cannot relabel its own row and leave the cut naming nobody.
 ///
-/// `tag` and `recipient_enc_pk` MUST come from one owner-recipient ECDH: a
+/// The grant section is published in the clear, and `recipientEncPk` is a global
+/// identifier — the contact code's encryption subkey and the mailbox key the
+/// untrusted API sees. So the entry carries it XORed with
+/// [`kdf::committed_recipient_mask`](crate::kdf::committed_recipient_mask), the
+/// per-(scope, tag) keystream the owner and every grantee of the scope derive
+/// and no observer can. One recipient therefore masks to unrelated bytes at
+/// every scope root, which keeps the unlinkability the blinded tag exists for.
+/// Recover it with [`recipient_enc_pk`](Self::recipient_enc_pk).
+///
+/// `tag` and the masked recipient MUST come from one owner-recipient ECDH: a
 /// consumer seals to the key and files the blob under the tag, so a pair that
 /// disagrees sends the scope seed to one party while another self-locates it.
 /// Only a holder of the owner encryption subkey can check that, so the
@@ -783,8 +792,9 @@ pub fn open_owner_history_link(
 pub struct GrantSetEntry {
     /// The recipient's blinded tag.
     pub tag: [u8; SECRET_LEN],
-    /// The recipient's X25519 encryption subkey public half.
-    pub recipient_enc_pk: [u8; SECRET_LEN],
+    /// The recipient's X25519 encryption subkey public half, masked. Read it
+    /// through [`recipient_enc_pk`](Self::recipient_enc_pk).
+    pub masked_recipient_enc_pk: [u8; SECRET_LEN],
     /// The recipient's permission.
     pub permission: Permission,
     /// The writer pseudonym public key (Ed25519).
@@ -793,14 +803,17 @@ pub struct GrantSetEntry {
     pub unknown: PreservedFields,
 }
 
-/// `tag`, `recipient_enc_pk` and `pseudonym_pk` each name one grantee. A
+/// `tag`, `masked_recipient_enc_pk` and `pseudonym_pk` each name one grantee. A
 /// rendered set links every grantee of a scope, which is what blinding the tag
 /// exists to deny.
 impl fmt::Debug for GrantSetEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GrantSetEntry")
             .field("tag", &RedactedBytes::of(&self.tag))
-            .field("recipient_enc_pk", &RedactedBytes::of(&self.recipient_enc_pk))
+            .field(
+                "masked_recipient_enc_pk",
+                &RedactedBytes::of(&self.masked_recipient_enc_pk),
+            )
             .field("permission", &self.permission)
             .field("pseudonym_pk", &RedactedBytes::of(&self.pseudonym_pk))
             .field("unknown", &self.unknown)
@@ -808,35 +821,47 @@ impl fmt::Debug for GrantSetEntry {
     }
 }
 
-const GRANT_SET_ENTRY_KNOWN: &[&str] = &["permission", "pseudonymPk", "recipientEncPk", "tag"];
+const GRANT_SET_ENTRY_KNOWN: &[&str] =
+    &["maskedRecipientEncPk", "permission", "pseudonymPk", "tag"];
 
 impl GrantSetEntry {
-    /// A committed grant with no preserved unknown fields.
+    /// A committed grant with no preserved unknown fields, masking `recipient`
+    /// under the scope's pointer read key. The one constructor, so no caller can
+    /// publish a recipient in the clear by mistake.
     pub fn new(
+        pointer_read_key: &[u8; SECRET_LEN],
         tag: [u8; SECRET_LEN],
-        recipient_enc_pk: [u8; SECRET_LEN],
+        recipient: [u8; SECRET_LEN],
         permission: Permission,
         pseudonym_pk: [u8; 32],
     ) -> Self {
         Self {
             tag,
-            recipient_enc_pk,
+            masked_recipient_enc_pk: xor_mask(pointer_read_key, &tag, &recipient),
             permission,
             pseudonym_pk,
             unknown: PreservedFields::new(),
         }
     }
 
+    /// The recipient encryption subkey this entry commits, unmasked under the
+    /// scope's `pointerReadKey`. The bytes are not lifted onto the curve — a
+    /// caller that goes on to seal adopts them once, through
+    /// [`X25519Public::from_bytes`](crate::suite::x25519::X25519Public::from_bytes).
+    pub fn recipient_enc_pk(&self, pointer_read_key: &[u8; SECRET_LEN]) -> [u8; SECRET_LEN] {
+        xor_mask(pointer_read_key, &self.tag, &self.masked_recipient_enc_pk)
+    }
+
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
-        let recipient_enc_pk =
-            bytes_fixed::<SECRET_LEN>(req(map, "recipientEncPk")?, "recipientEncPk")?;
+        let masked_recipient_enc_pk =
+            bytes_fixed::<SECRET_LEN>(req(map, "maskedRecipientEncPk")?, "maskedRecipientEncPk")?;
         let permission = Permission::from_value(req(map, "permission")?)?;
         let pseudonym_pk = bytes_fixed::<32>(req(map, "pseudonymPk")?, "pseudonymPk")?;
         Ok(Self {
             tag,
-            recipient_enc_pk,
+            masked_recipient_enc_pk,
             permission,
             pseudonym_pk,
             unknown: collect_unknown(map, GRANT_SET_ENTRY_KNOWN),
@@ -846,18 +871,29 @@ impl GrantSetEntry {
     fn to_value(&self) -> Value {
         let mut m = Map::new();
         m.insert(
+            "maskedRecipientEncPk",
+            Value::Bytes(self.masked_recipient_enc_pk.to_vec()),
+        );
+        m.insert(
             "permission",
             Value::Text(self.permission.as_wire().to_string()),
         );
         m.insert("pseudonymPk", Value::Bytes(self.pseudonym_pk.to_vec()));
-        m.insert(
-            "recipientEncPk",
-            Value::Bytes(self.recipient_enc_pk.to_vec()),
-        );
         m.insert("tag", Value::Bytes(self.tag.to_vec()));
         merge_unknown(&mut m, &self.unknown);
         Value::Map(m)
     }
+}
+
+/// The committed-recipient mask applied to `value`. An involution, so one
+/// function both masks a recipient and recovers it.
+fn xor_mask(
+    pointer_read_key: &[u8; SECRET_LEN],
+    tag: &[u8; SECRET_LEN],
+    value: &[u8; SECRET_LEN],
+) -> [u8; SECRET_LEN] {
+    let mask = kdf::committed_recipient_mask(pointer_read_key, tag);
+    core::array::from_fn(|i| value[i] ^ mask.as_bytes()[i])
 }
 
 /// The owner-signed grant-set commitment: the scope root's `ipnsName`, the
@@ -922,10 +958,6 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
         entries.iter().map(|e| e.tag),
         TrustViolation::DuplicateGrantTag,
     )?;
-    assert_grant_ids_unique(
-        entries.iter().map(|e| e.recipient_enc_pk),
-        TrustViolation::DuplicateGrantRecipient,
-    )?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
@@ -938,10 +970,9 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
-/// Fails closed on a duplicate-tag or duplicate-recipient commitment, or on an
-/// entry set past [`MAX_GRANT_BLOBS`], with the same verdict
-/// `decode_grant_set_commitment` raises, so the sign path never attests bytes
-/// every recipient rejects.
+/// Fails closed on a duplicate-tag commitment, or on an entry set past
+/// [`MAX_GRANT_BLOBS`], with the same verdict `decode_grant_set_commitment`
+/// raises, so the sign path never attests bytes every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
     // Bound first, the order the decoder checks them in, so a value violating
     // both invariants gets the same verdict from either side.
@@ -949,10 +980,6 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
     assert_grant_ids_unique(
         c.entries.iter().map(|e| e.tag),
         TrustViolation::DuplicateGrantTag,
-    )?;
-    assert_grant_ids_unique(
-        c.entries.iter().map(|e| e.recipient_enc_pk),
-        TrustViolation::DuplicateGrantRecipient,
     )?;
     let mut m = Map::new();
     m.insert("cutEpoch", Value::Unsigned(c.cut_epoch));
@@ -1056,6 +1083,9 @@ pub fn verify_grant_set_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scope pointer read key every fixture masks its recipients under.
+    const PRK: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
     use crate::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 
     fn grant_ctx(struct_tag: u8) -> AadContext {
@@ -1472,8 +1502,8 @@ mod tests {
             owner_pseudonym_pk: [0x88; 32],
             cut_epoch: 0,
             entries: vec![
-                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
+                GrantSetEntry::new(&PRK, [0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new(&PRK, [0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
             ],
             unknown: PreservedFields::new(),
         };
@@ -1508,6 +1538,7 @@ mod tests {
             owner_pseudonym_pk: [0x88; 32],
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
+                &PRK,
                 [0x01; 32],
                 [0x41; 32],
                 Permission::Read,
@@ -1544,6 +1575,7 @@ mod tests {
             owner_pseudonym_pk: [0x88; 32],
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
+                &PRK,
                 [0x01; 32],
                 [0x41; 32],
                 Permission::Read,
@@ -1577,21 +1609,6 @@ mod tests {
         );
     }
 
-    /// One recipient key derives one tag at one scope root, so two entries
-    /// naming it are two permissions for one party — the confused deputy the
-    /// tag check catches from the other side.
-    #[test]
-    fn duplicate_grant_set_recipient_rejects() {
-        let a = entry_value(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]);
-        let b = entry_value(vec![0x02; 32], vec![0x41; 32], "write", vec![0x09; 32]);
-        assert_eq!(
-            decode_grant_set_commitment(&commitment_value(vec![a, b]))
-                .unwrap_err()
-                .check(),
-            "duplicate-grant-recipient"
-        );
-    }
-
     /// The whole of the recipient binding: the field is inside the preimage the
     /// owner signs, so relabelling it detaches the entry from the owner
     /// signature instead of passing under the committed tag.
@@ -1603,6 +1620,7 @@ mod tests {
             owner_pseudonym_pk: [0x88; 32],
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
+                &PRK,
                 [0x01; 32],
                 [0x41; 32],
                 Permission::Read,
@@ -1612,7 +1630,7 @@ mod tests {
         };
         let sig = sign_grant_set(&owner, &c).expect("signs");
         let mut relabelled = c.clone();
-        relabelled.entries[0].recipient_enc_pk = [0x99; 32];
+        relabelled.entries[0].masked_recipient_enc_pk = [0x99; 32];
         assert_ne!(
             encode_grant_set_commitment(&relabelled).unwrap(),
             encode_grant_set_commitment(&c).unwrap(),
@@ -1636,6 +1654,7 @@ mod tests {
             owner_pseudonym_pk: [0x88; 32],
             cut_epoch: 4,
             entries: vec![GrantSetEntry::new(
+                &PRK,
                 [0x01; 32],
                 [0x41; 32],
                 Permission::Read,
@@ -1706,7 +1725,7 @@ mod tests {
         let mut m = Map::new();
         m.insert("permission", Value::Text(permission.into()));
         m.insert("pseudonymPk", Value::Bytes(pseudonym));
-        m.insert("recipientEncPk", Value::Bytes(recipient));
+        m.insert("maskedRecipientEncPk", Value::Bytes(recipient));
         m.insert("tag", Value::Bytes(tag));
         Value::Map(m)
     }
@@ -1721,38 +1740,75 @@ mod tests {
     }
 
     #[test]
-    fn encode_and_sign_reject_a_repeated_grant_identifier() {
+    fn encode_and_sign_reject_a_duplicate_grant_tag() {
         // Release-active guard: a caller-built commitment the decoder refuses
         // never encodes or gets signed, so the sign path cannot publish bytes
         // its own readers reject. Exercised without relying on a
         // `debug_assert`.
         let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
-        for (entries, check) in [
-            (
-                vec![
-                    GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                    GrantSetEntry::new([0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
-                ],
-                "duplicate-grant-tag",
-            ),
-            (
-                vec![
-                    GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                    GrantSetEntry::new([0x02; 32], [0x41; 32], Permission::Write, [0x04; 32]),
-                ],
-                "duplicate-grant-recipient",
-            ),
-        ] {
-            let c = GrantSetCommitment {
-                ipns_name: b"n".to_vec(),
-                owner_pseudonym_pk: [0x88; 32],
-                cut_epoch: 0,
-                entries,
-                unknown: PreservedFields::new(),
-            };
-            assert_eq!(encode_grant_set_commitment(&c).unwrap_err().check(), check);
-            assert_eq!(sign_grant_set(&owner, &c).unwrap_err().check(), check);
-        }
+        let c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
+            entries: vec![
+                GrantSetEntry::new(&PRK, [0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new(&PRK, [0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
+            ],
+            unknown: PreservedFields::new(),
+        };
+        assert_eq!(
+            encode_grant_set_commitment(&c).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &c).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+    }
+
+    /// The masking is the whole of what keeps a published commitment from
+    /// naming its grantees: the entry never carries the key, one recipient
+    /// masks to unrelated bytes at two scope roots, and only a holder of the
+    /// scope pointer read key gets it back.
+    #[test]
+    fn a_committed_recipient_is_masked_per_scope_and_recovers_under_the_pointer_key() {
+        let recipient = [0x5a; 32];
+
+        let here = GrantSetEntry::new(&PRK, [0x01; 32], recipient, Permission::Read, [0x02; 32]);
+        assert_ne!(here.masked_recipient_enc_pk, recipient);
+        assert_eq!(here.recipient_enc_pk(&PRK), recipient);
+        assert_ne!(
+            here.recipient_enc_pk(&[0x67; 32]),
+            recipient,
+            "no observer without the scope pointer read key recovers it"
+        );
+
+        let elsewhere = GrantSetEntry::new(
+            &[0x67; 32],
+            [0x02; 32],
+            recipient,
+            Permission::Read,
+            [0x02; 32],
+        );
+        assert_ne!(
+            here.masked_recipient_enc_pk, elsewhere.masked_recipient_enc_pk,
+            "one recipient is unlinkable across two scope roots"
+        );
+
+        let c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
+            entries: vec![here],
+            unknown: PreservedFields::new(),
+        };
+        let bytes = encode_grant_set_commitment(&c).expect("encodes");
+        let decoded = decode_grant_set_commitment(&bytes).expect("decodes");
+        assert_eq!(decoded.entries[0].recipient_enc_pk(&PRK), recipient);
+        assert!(
+            !bytes.windows(32).any(|w| w == recipient),
+            "the recipient key is nowhere in the published bytes"
+        );
     }
 
     /// A commitment of `n` distinct-tag, distinct-recipient read entries.
@@ -1767,7 +1823,7 @@ mod tests {
                     tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
                     let mut recipient = [0xffu8; SECRET_LEN];
                     recipient[..8].copy_from_slice(&(i as u64).to_be_bytes());
-                    GrantSetEntry::new(tag, recipient, Permission::Read, [0x02; 32])
+                    GrantSetEntry::new(&PRK, tag, recipient, Permission::Read, [0x02; 32])
                 })
                 .collect(),
             unknown: PreservedFields::new(),
@@ -1872,7 +1928,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commitment_entry_without_a_recipient_key_rejects() {
+    fn a_commitment_entry_without_a_masked_recipient_rejects() {
         let mut entry = Map::new();
         entry.insert("permission", Value::Text("read".into()));
         entry.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));

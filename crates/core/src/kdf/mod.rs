@@ -1,6 +1,7 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these twenty-three edges. Every edge
+//! Nothing in CipherBox derives a key outside these twenty-four edges. Every
+//! edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -54,6 +55,7 @@ const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed"
 const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
 const CTX_CONTACT_LABEL_SEED: &str = "cipherbox/v2/contact-label-seed";
 const CTX_CONTACT_LABEL: &str = "cipherbox/v2/contact-label";
+const CTX_COMMITTED_RECIPIENT_MASK: &str = "cipherbox/v2/committed-recipient-mask";
 
 /// One catalog edge's frozen, machine-checkable metadata: its stable name, its
 /// `cipherbox/v2/...` context string, and an input-layout descriptor. The KAT
@@ -65,7 +67,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The twenty-three edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The twenty-four edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -182,6 +184,11 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "contact-label",
         context: CTX_CONTACT_LABEL,
         input_layout: "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])",
+    },
+    EdgeSpec {
+        name: "committed-recipient-mask",
+        context: CTX_COMMITTED_RECIPIENT_MASK,
+        input_layout: "keyed_hash(derive_key(ctx, pointerReadKey[32]), tag[32])",
     },
 ];
 
@@ -316,6 +323,16 @@ fn genesis_write_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
 
 fn contact_label_seed_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_CONTACT_LABEL_SEED, login_secret)
+}
+
+fn committed_recipient_mask_bytes(
+    pointer_read_key: &[u8; SECRET_LEN],
+    tag: &[u8; SECRET_LEN],
+) -> SecretBytes {
+    keyed_hash(
+        derive_key(CTX_COMMITTED_RECIPIENT_MASK, pointer_read_key).as_bytes(),
+        tag,
+    )
 }
 
 fn contact_label_bytes(
@@ -508,6 +525,21 @@ pub fn contact_label_seed(login_secret: &[u8]) -> SecretBytes {
     contact_label_seed_bytes(login_secret)
 }
 
+/// `committed-recipient-mask`: the per-(scope, tag) keystream a grant-set
+/// commitment entry hides its recipient encryption subkey under.
+///
+/// Keyed on the scope's `pointerReadKey`, which the owner derives and every
+/// grant blob carries, so the owner and every grantee of the scope recover the
+/// recipient and no observer does. The blinded tag is the message, so one
+/// recipient masks to unrelated bytes at every scope root — the unlinkability
+/// the tag itself exists for, extended to the recipient the owner must commit.
+pub fn committed_recipient_mask(
+    pointer_read_key: &[u8; SECRET_LEN],
+    tag: &[u8; SECRET_LEN],
+) -> SecretBytes {
+    committed_recipient_mask_bytes(pointer_read_key, tag)
+}
+
 /// `contact-label`: a fixed-width local label for a contact identity key, for
 /// keying durable device-local state that would otherwise name that contact in
 /// the clear.
@@ -695,6 +727,10 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "contact-label",
             output: b(contact_label_bytes(probe.seed, probe.identity_pk)),
+        },
+        EdgeProbeOutput {
+            name: "committed-recipient-mask",
+            output: b(committed_recipient_mask_bytes(probe.seed, probe.seed)),
         },
     ]
 }

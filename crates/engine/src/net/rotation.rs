@@ -1305,9 +1305,7 @@ where
             .iter()
             .find(|entry| entry.tag == tag)
             .ok_or(ResolveFailure::Rejected)?;
-        if own_entry.permission != Permission::Write
-            || own_entry.recipient_enc_pk != self.keys.enc_secret.public().to_bytes()
-        {
+        if own_entry.permission != Permission::Write {
             return Err(ResolveFailure::Rejected);
         }
         let grant = self
@@ -1317,6 +1315,11 @@ where
                 &grant_blob_aad(granted.scope_id, envelope.epoch),
             )
             .ok_or(ResolveFailure::Rejected)?;
+        let pointer_read_key = Zeroizing::new(*grant.pointer_read_key());
+        if own_entry.recipient_enc_pk(&pointer_read_key) != self.keys.enc_secret.public().to_bytes()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
         let pseudonym = SessionIdentity::grantee_writer_pseudonym_signer(
             pairwise.as_bytes(),
             &granted.scope_id,
@@ -1330,7 +1333,7 @@ where
             write_epoch,
             read_scope_seed,
             write_scope_seed: write_scope_seed.clone(),
-            pointer_read_key: Zeroizing::new(*grant.pointer_read_key()),
+            pointer_read_key,
             pseudonym,
         };
         self.gated.park(
@@ -2597,14 +2600,16 @@ where
             ledger.iter().map(|e| (e.tag, e)).collect();
 
         let owner_identity = self.owner.verifying_key();
+        let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
 
         let mut reminted = RemintedGrants {
             entries: Vec::with_capacity(commitment.entries.len()),
             ledger: Vec::with_capacity(commitment.entries.len()),
         };
         for committed_entry in &commitment.entries {
-            let recipient_enc = X25519Public::from_bytes(committed_entry.recipient_enc_pk)
-                .ok_or(WritePublishError::Rejected)?;
+            let recipient_enc =
+                X25519Public::from_bytes(committed_entry.recipient_enc_pk(&pointer_read_key))
+                    .ok_or(WritePublishError::Rejected)?;
             let row = rows
                 .get(&committed_entry.tag)
                 .ok_or(WritePublishError::Rejected)?;
@@ -2621,6 +2626,7 @@ where
             let minted = mint_grant_row(
                 self.owner,
                 self.owner_enc_secret,
+                &pointer_read_key,
                 recipient_identity_pk,
                 &recipient_enc,
                 &self.scope_id,
@@ -3400,9 +3406,9 @@ mod tests {
         VirtualScheduler,
     };
     use crate::testkit::{
-        FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, SilentEntropy,
-        block_on, owner_root_fixture, requested_cid,
+        FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_PSEUDONYM_SEED,
+        OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
+        SeededEntropy, SilentEntropy, block_on, owner_root_fixture, requested_cid,
     };
 
     const SCOPE: [u8; 16] = [0x44; 16];
@@ -5079,6 +5085,7 @@ mod tests {
         mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &OWNER_ROOT_POINTER_READ_KEY,
             identity.verifying_key().to_sec1(),
             &grantee_enc().public(),
             &GRANTEE_SCOPE,
@@ -5512,8 +5519,13 @@ mod tests {
         let mut row = grantee_row(&name, Permission::Write);
         // The blob and the ledger row stay; the owner's commitment drops the tag,
         // exactly as a revoke leaves it before the writer re-plants the blob.
-        row.commitment_entry =
-            GrantSetEntry::new([0xee; 32], [0x2e; 32], Permission::Write, [0u8; 32]);
+        row.commitment_entry = GrantSetEntry::new(
+            &OWNER_ROOT_POINTER_READ_KEY,
+            [0xee; 32],
+            [0x2e; 32],
+            Permission::Write,
+            [0u8; 32],
+        );
         let world = GranteeWorld::staged(
             Harness::plain(),
             granted_scope_root_with(vec![row], Vec::new()),
@@ -5590,8 +5602,13 @@ mod tests {
         // rather than publish a root it can never read back.
         let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
         let mut row = grantee_row(&name, Permission::Write);
-        row.commitment_entry.recipient_enc_pk =
-            X25519Secret::from_scalar([0x66; 32]).public().to_bytes();
+        row.commitment_entry = GrantSetEntry::new(
+            &OWNER_ROOT_POINTER_READ_KEY,
+            row.commitment_entry.tag,
+            X25519Secret::from_scalar([0x66; 32]).public().to_bytes(),
+            row.commitment_entry.permission,
+            row.commitment_entry.pseudonym_pk,
+        );
         let root = granted_scope_root_with(vec![row], Vec::new());
         let world = GranteeWorld::staged(Harness::plain(), root);
 
@@ -5779,7 +5796,7 @@ mod tests {
                         write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                         write_epoch: OWNER_ROOT_EPOCH,
                         write_history_link: &[],
-                        pointer_read_key: &POINTER_READ_KEY,
+                        pointer_read_key: &OWNER_ROOT_POINTER_READ_KEY,
                         carried_history_links: &[],
                     },
                     || Box::pin(async {}),
@@ -6294,6 +6311,7 @@ mod tests {
             mint_grant_row(
                 &owner_identity(),
                 &owner_enc(),
+                &WaveSeeds.pointer_read_key(&SCOPE),
                 identity.verifying_key().to_sec1(),
                 &enc.public(),
                 &SCOPE,
@@ -6717,7 +6735,8 @@ mod tests {
                 .commitment
                 .entries
                 .iter()
-                .all(|e| e.recipient_enc_pk != attacker.public().to_bytes()),
+                .all(|e| e.recipient_enc_pk(&WaveSeeds.pointer_read_key(&SCOPE))
+                    != attacker.public().to_bytes()),
             "and the attacker's key reaches no owner-signed entry"
         );
         assert!(
@@ -6816,7 +6835,14 @@ mod tests {
         for enc_pk in unadoptable {
             let harness = Harness::plain();
             let mut rows = granted_rows();
-            rows[0].commitment_entry.recipient_enc_pk = enc_pk;
+            let entry = &rows[0].commitment_entry;
+            rows[0].commitment_entry = GrantSetEntry::new(
+                &WaveSeeds.pointer_read_key(&SCOPE),
+                entry.tag,
+                enc_pk,
+                entry.permission,
+                entry.pseudonym_pk,
+            );
             let root = granted_root_with(rows, Vec::new());
             harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
