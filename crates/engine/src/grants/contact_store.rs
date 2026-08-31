@@ -58,6 +58,27 @@ const CONTACT_BOOK_V: u64 = 1;
 /// every load re-verifies one binding signature per stored code.
 pub const MAX_CONTACTS: usize = 1024;
 
+/// The frozen bound on the share of the book claim conversions may take.
+///
+/// An invite link is bearer and multi-claim, and a link holder mints a fresh
+/// identity per claim, so one leaked link would otherwise fill the whole
+/// per-vault book and deny contact import across the account.
+///
+/// An admission charge rather than a stored bound, and charged **per link**
+/// ([`link_budget_full`]): one leaked link takes only its own share, so it
+/// denies no other link's claims and no hand import. [`MAX_CONTACTS`] is what
+/// bounds the stored set.
+///
+/// The owner clears a link that reached the bound by revoking it and minting a
+/// fresh one, which carries its own share. No contact is dropped on that path,
+/// so every converted grant stays cuttable.
+pub const MAX_LINK_CONTACTS: usize = 128;
+
+/// The frozen bound on the scopes one link-sourced contact holds a converted
+/// grant on. Enforced release-active in both codec directions
+/// (AGENTS.md rule 8).
+pub const MAX_LINK_CONTACT_SCOPES: usize = 64;
+
 /// Why a contact-book operation failed.
 #[derive(Debug)]
 pub enum ContactStoreError {
@@ -76,6 +97,18 @@ pub enum ContactStoreError {
     /// set this import would make is the one past the bound — so a host can
     /// offer [`ContactStore::forget`] rather than report corruption.
     Full,
+    /// This link's own claim conversions already hold [`MAX_LINK_CONTACTS`].
+    /// Named, because the remedy is to revoke that link, and a bearer link's
+    /// claimants are strangers the owner cannot pick out of the book by hand.
+    LinkBookFull {
+        /// The committed tag of the link the refused claim came in on.
+        link_tag: [u8; 32],
+    },
+    /// One link-sourced contact already holds a converted grant on
+    /// [`MAX_LINK_CONTACT_SCOPES`] scopes. Distinct from
+    /// [`Encode`](Self::Encode), which says the whole book is unwritable: here
+    /// the book is fine and one contact reached a frozen bound.
+    LinkContactScopesFull,
     /// The book to store is not one this build may write: two codes for one
     /// identity, or a field past its bound. A write-path refusal, so never
     /// [`Unreadable`](Self::Unreadable) — nothing was read.
@@ -101,6 +134,14 @@ impl fmt::Display for ContactStoreError {
             ContactStoreError::Full => {
                 write!(f, "the contact book already holds {MAX_CONTACTS} contacts")
             }
+            ContactStoreError::LinkBookFull { .. } => write!(
+                f,
+                "that invite link's claims already hold {MAX_LINK_CONTACTS} contacts"
+            ),
+            ContactStoreError::LinkContactScopesFull => write!(
+                f,
+                "that contact already holds a granted scope on {MAX_LINK_CONTACT_SCOPES} scopes"
+            ),
             ContactStoreError::Encode(e) => write!(f, "the contact book to store {e}"),
             ContactStoreError::Entropy(e) => write!(f, "contact book: {e}"),
             ContactStoreError::Seal(e) => write!(f, "contact book seal failed: {}", e.check()),
@@ -137,6 +178,12 @@ pub enum BookCodecError {
     /// Two codes named one identity: no defined authority for that recipient's
     /// subkey, refused in both directions (AGENTS.md rule 8).
     DuplicateIdentity,
+    /// One link-sourced entry named a scope twice, so the count of grants it
+    /// holds would outlive the cuts that removed them.
+    DuplicateScope,
+    /// A link-sourced entry holding no grant. It charges the link bound for a
+    /// contact no cut needs, so it is refused rather than carried.
+    LinkContactHoldsNothing,
     /// A stored code that is not its own canonical re-encoding. This build only
     /// ever writes canonical codes, so anything else is bytes it did not author
     /// — refused rather than silently normalised.
@@ -160,6 +207,12 @@ impl fmt::Display for BookCodecError {
                 write!(f, "holds a code that no longer imports: {}", e.check())
             }
             BookCodecError::DuplicateIdentity => f.write_str("names one identity twice"),
+            BookCodecError::DuplicateScope => {
+                f.write_str("names one scope twice for a link-sourced contact")
+            }
+            BookCodecError::LinkContactHoldsNothing => {
+                f.write_str("holds a link-sourced contact with no grant")
+            }
             BookCodecError::NonCanonicalCode => {
                 f.write_str("holds a code that is not its canonical encoding")
             }
@@ -197,6 +250,47 @@ pub trait ContactStore {
     /// the contact rotating their own subkey.
     async fn record(&self, contact_code: &[u8]) -> Result<Contact, ContactStoreError>;
 
+    /// Record a contact a claim conversion anchored, charged to that link's own
+    /// share of the book and holding the grant the conversion just minted at
+    /// `scope_id`.
+    ///
+    /// A contact the owner imported by hand keeps that standing and owes the
+    /// link bound nothing.
+    async fn record_from_link(
+        &self,
+        contact_code: &[u8],
+        link_tag: &[u8; 32],
+        scope_id: &[u8; 16],
+    ) -> Result<Contact, ContactStoreError>;
+
+    /// Take `identity_pk` off the link budget for good: the owner granted it
+    /// directly, which is a stronger vouch than a hand import.
+    ///
+    /// The entry then holds grants no claim conversion recorded, so no cut may
+    /// collect it — dropping it would leave a live grant the owner cannot
+    /// resolve a recipient for. Idempotent, and a no-op on an identity the book
+    /// does not hold or already holds by hand.
+    async fn vouch(&self, identity_pk: &[u8; IDENTITY_PUBLIC_LEN])
+    -> Result<(), ContactStoreError>;
+
+    /// Drop the grant a link-sourced contact holds at `scope_id`, and the entry
+    /// itself once it holds none.
+    ///
+    /// Idempotent, and a no-op on a hand-imported or vouched contact: no cut
+    /// takes one of those out.
+    async fn forget_link_grant(
+        &self,
+        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+        scope_id: &[u8; 16],
+    ) -> Result<(), ContactStoreError>;
+
+    /// Every recorded contact with the link that sourced it, `None` for one the
+    /// owner imported or granted directly. One decode for a caller that needs
+    /// both the book and [`link_budget_full`]'s input.
+    async fn contacts_with_sources(
+        &self,
+    ) -> Result<Vec<(Contact, Option<[u8; 32]>)>, ContactStoreError>;
+
     /// Drop the entry for `identity_pk`. Idempotent: an identity the book does
     /// not hold succeeds. Without it a book at [`MAX_CONTACTS`] would refuse
     /// every further import with no way back.
@@ -226,12 +320,62 @@ pub async fn resolve_recipient<S: ContactStore>(
         .ok_or(ContactStoreError::RecipientNotImported)
 }
 
-/// One recorded contact: the verified pair and the canonical self-authenticating
-/// code the book stores it as. Only [`import_recorded`] builds one, so the pair
-/// and the code can never disagree.
+/// Why a claim-sourced contact is in the book: the link that produced it, and
+/// the scopes its conversions took a grant on.
+///
+/// The scopes are what makes the entry collectable. A link-sourced contact is
+/// held only so a later revoke or downgrade can resolve the recipient the
+/// conversion granted, so an entry whose last grant a cut removed has no reason
+/// left to occupy the book ([`ContactStore::forget_link_grant`]).
+#[derive(Clone)]
+struct LinkOrigin {
+    link_tag: [u8; 32],
+    scopes: Vec<[u8; 16]>,
+}
+
+impl LinkOrigin {
+    fn hold(&mut self, scope_id: &[u8; 16]) -> Result<(), ContactStoreError> {
+        if self.scopes.contains(scope_id) {
+            return Ok(());
+        }
+        if self.scopes.len() >= MAX_LINK_CONTACT_SCOPES {
+            return Err(ContactStoreError::LinkContactScopesFull);
+        }
+        self.scopes.push(*scope_id);
+        Ok(())
+    }
+}
+
+/// One recorded contact: the verified pair, the canonical self-authenticating
+/// code the book stores it as, and where it came from — `None` for a hand
+/// import. Only [`import_recorded`] builds one, so the pair and the code can
+/// never disagree.
 struct Recorded {
     contact: Contact,
     code: Vec<u8>,
+    origin: Option<LinkOrigin>,
+}
+
+/// Whether `link_tag`'s own claim conversions already hold its whole
+/// [`MAX_LINK_CONTACTS`] share of the book.
+///
+/// `sourcing` is the link each recorded contact came from, `None` for a hand
+/// import ([`ContactStore::contacts_with_sources`]). The charge is per link, so
+/// one leaked link takes only its own share and denies no other link's claims.
+pub fn link_budget_full(sourcing: &[Option<[u8; 32]>], link_tag: &[u8; 32]) -> bool {
+    sourcing
+        .iter()
+        .filter(|held| held.as_ref() == Some(link_tag))
+        .count()
+        >= MAX_LINK_CONTACTS
+}
+
+/// The link each entry of `book` came from, `None` for one the owner imported
+/// or granted directly.
+fn sources(book: &[Recorded]) -> Vec<Option<[u8; 32]>> {
+    book.iter()
+        .map(|held| held.origin.as_ref().map(|origin| origin.link_tag))
+        .collect()
 }
 
 /// Verify a contact code and return it alongside its canonical re-encoding.
@@ -305,13 +449,120 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
         // into the owner's durable store.
         let (contact, code) = import_recorded(contact_code).map_err(ContactStoreError::Import)?;
         let mut book = self.recorded().await?;
+        // A hand import outranks a claim: the owner vouched for this identity,
+        // so the entry stops charging the link bound and stops being collectable
+        // by a cut.
         book.retain(|held| held.contact.identity_pk() != contact.identity_pk());
         if book.len() >= MAX_CONTACTS {
             return Err(ContactStoreError::Full);
         }
-        book.push(Recorded { contact, code });
+        book.push(Recorded {
+            contact,
+            code,
+            origin: None,
+        });
         self.put(&book).await?;
         Ok(contact)
+    }
+
+    async fn record_from_link(
+        &self,
+        contact_code: &[u8],
+        link_tag: &[u8; 32],
+        scope_id: &[u8; 16],
+    ) -> Result<Contact, ContactStoreError> {
+        let (contact, code) = import_recorded(contact_code).map_err(ContactStoreError::Import)?;
+        let mut book = self.recorded().await?;
+        let held = book
+            .iter()
+            .position(|held| held.contact.identity_pk() == contact.identity_pk())
+            .map(|at| book.remove(at));
+        let origin = match held {
+            Some(Recorded { origin: None, .. }) => None,
+            Some(Recorded {
+                origin: Some(mut origin),
+                ..
+            }) => {
+                origin.link_tag = *link_tag;
+                origin.hold(scope_id)?;
+                Some(origin)
+            }
+            None => {
+                if link_budget_full(&sources(&book), link_tag) {
+                    return Err(ContactStoreError::LinkBookFull {
+                        link_tag: *link_tag,
+                    });
+                }
+                Some(LinkOrigin {
+                    link_tag: *link_tag,
+                    scopes: vec![*scope_id],
+                })
+            }
+        };
+        if book.len() >= MAX_CONTACTS {
+            return Err(ContactStoreError::Full);
+        }
+        book.push(Recorded {
+            contact,
+            code,
+            origin,
+        });
+        self.put(&book).await?;
+        Ok(contact)
+    }
+
+    async fn vouch(
+        &self,
+        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+    ) -> Result<(), ContactStoreError> {
+        let mut book = self.recorded().await?;
+        let Some(held) = book
+            .iter_mut()
+            .find(|held| held.contact.identity_pk().to_sec1() == *identity_pk)
+        else {
+            return Ok(());
+        };
+        if held.origin.take().is_none() {
+            return Ok(());
+        }
+        self.put(&book).await
+    }
+
+    async fn forget_link_grant(
+        &self,
+        identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+        scope_id: &[u8; 16],
+    ) -> Result<(), ContactStoreError> {
+        let mut book = self.recorded().await?;
+        let Some(at) = book
+            .iter()
+            .position(|held| held.contact.identity_pk().to_sec1() == *identity_pk)
+        else {
+            return Ok(());
+        };
+        let Some(origin) = book[at].origin.as_mut() else {
+            return Ok(());
+        };
+        let before = origin.scopes.len();
+        origin.scopes.retain(|held| held != scope_id);
+        if origin.scopes.len() == before {
+            return Ok(());
+        }
+        if origin.scopes.is_empty() {
+            book.remove(at);
+        }
+        self.put(&book).await
+    }
+
+    async fn contacts_with_sources(
+        &self,
+    ) -> Result<Vec<(Contact, Option<[u8; 32]>)>, ContactStoreError> {
+        Ok(self
+            .recorded()
+            .await?
+            .into_iter()
+            .map(|held| (held.contact, held.origin.map(|origin| origin.link_tag)))
+            .collect())
     }
 
     async fn forget(
@@ -352,19 +603,46 @@ fn encode_book(book: &[Recorded]) -> Result<Vec<u8>, BookCodecError> {
     {
         return Err(BookCodecError::DuplicateIdentity);
     }
-    for held in &sorted {
+    let mut imported = Vec::new();
+    let mut from_links = Vec::new();
+    for held in sorted {
         within("contactCode", held.code.len(), MAX_CONTACT_CODE_BYTES)?;
+        match &held.origin {
+            None => imported.push(Value::Bytes(held.code.clone())),
+            Some(origin) => {
+                within(
+                    "linkContactScopes",
+                    origin.scopes.len(),
+                    MAX_LINK_CONTACT_SCOPES,
+                )?;
+                if origin.scopes.is_empty() {
+                    return Err(BookCodecError::LinkContactHoldsNothing);
+                }
+                let mut entry = Map::new();
+                entry.insert("code", Value::Bytes(held.code.clone()));
+                entry.insert("linkTag", Value::Bytes(origin.link_tag.to_vec()));
+                let mut scopes = origin.scopes.clone();
+                scopes.sort_unstable();
+                scopes.dedup();
+                if scopes.len() != origin.scopes.len() {
+                    return Err(BookCodecError::DuplicateScope);
+                }
+                entry.insert(
+                    "scopes",
+                    Value::Array(
+                        scopes
+                            .into_iter()
+                            .map(|scope| Value::Bytes(scope.to_vec()))
+                            .collect(),
+                    ),
+                );
+                from_links.push(Value::Map(entry));
+            }
+        }
     }
     let mut body = Map::new();
-    body.insert(
-        "contacts",
-        Value::Array(
-            sorted
-                .into_iter()
-                .map(|held| Value::Bytes(held.code.clone()))
-                .collect(),
-        ),
-    );
+    body.insert("contacts", Value::Array(imported));
+    body.insert("linkContacts", Value::Array(from_links));
     body.insert("v", Value::Unsigned(CONTACT_BOOK_V));
     Ok(encode_fixed_depth(&Value::Map(body)))
 }
@@ -378,34 +656,95 @@ fn encode_book(book: &[Recorded]) -> Result<Vec<u8>, BookCodecError> {
 fn decode_book(bytes: &[u8]) -> Result<Vec<Recorded>, BookCodecError> {
     let tree = decode(bytes)?;
     let map = tree.as_map()?;
-    reject_unknown(map, &["contacts", "v"])?;
+    reject_unknown(map, &["contacts", "linkContacts", "v"])?;
     let version = req(map, "v")?.as_unsigned()?;
     if version != CONTACT_BOOK_V {
         return Err(BookCodecError::UnsupportedVersion { version });
     }
-    let raw = req(map, "contacts")?.as_array()?;
-    within("contacts", raw.len(), MAX_CONTACTS)?;
-    let mut book: Vec<Recorded> = Vec::with_capacity(raw.len());
-    for item in raw {
-        let code = item.as_bytes()?;
-        within("contactCode", code.len(), MAX_CONTACT_CODE_BYTES)?;
-        let (contact, canonical) =
-            import_recorded(code).map_err(BookCodecError::UnverifiableCode)?;
-        if canonical != code {
-            return Err(BookCodecError::NonCanonicalCode);
+    let imported = req(map, "contacts")?.as_array()?;
+    let from_links = req(map, "linkContacts")?.as_array()?;
+    within(
+        "contacts",
+        imported.len().saturating_add(from_links.len()),
+        MAX_CONTACTS,
+    )?;
+    let mut book: Vec<Recorded> = Vec::with_capacity(imported.len() + from_links.len());
+    for item in imported {
+        let (contact, code) = decode_code(item.as_bytes()?)?;
+        push_unique(&mut book, contact, code, None)?;
+    }
+    for item in from_links {
+        let entry = item.as_map()?;
+        reject_unknown(entry, &["code", "linkTag", "scopes"])?;
+        let (contact, code) = decode_code(req(entry, "code")?.as_bytes()?)?;
+        let link_tag = fixed(req(entry, "linkTag")?.as_bytes()?)?;
+        let raw = req(entry, "scopes")?.as_array()?;
+        within("linkContactScopes", raw.len(), MAX_LINK_CONTACT_SCOPES)?;
+        let mut scopes: Vec<[u8; 16]> = Vec::with_capacity(raw.len());
+        for scope in raw {
+            let scope = fixed(scope.as_bytes()?)?;
+            if scopes.contains(&scope) {
+                return Err(BookCodecError::DuplicateScope);
+            }
+            scopes.push(scope);
         }
-        if book
-            .iter()
-            .any(|held| held.contact.identity_pk() == contact.identity_pk())
-        {
-            return Err(BookCodecError::DuplicateIdentity);
+        // An entry that holds nothing is one a cut should already have taken
+        // out: keeping it would charge the link bound for a contact no revoke
+        // needs. Refused in both directions (AGENTS.md rule 8).
+        if scopes.is_empty() {
+            return Err(BookCodecError::LinkContactHoldsNothing);
         }
-        book.push(Recorded {
+        push_unique(
+            &mut book,
             contact,
-            code: canonical,
-        });
+            code,
+            Some(LinkOrigin { link_tag, scopes }),
+        )?;
     }
     Ok(book)
+}
+
+/// Re-verify one stored code and prove it is the canonical spelling this build
+/// writes.
+fn decode_code(code: &[u8]) -> Result<(Contact, Vec<u8>), BookCodecError> {
+    within("contactCode", code.len(), MAX_CONTACT_CODE_BYTES)?;
+    let (contact, canonical) = import_recorded(code).map_err(BookCodecError::UnverifiableCode)?;
+    if canonical != code {
+        return Err(BookCodecError::NonCanonicalCode);
+    }
+    Ok((contact, canonical))
+}
+
+/// A stored fixed-width field, or [`BookCodecError::TooLong`] naming its width.
+fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], BookCodecError> {
+    <[u8; N]>::try_from(bytes).map_err(|_| {
+        BookCodecError::from(TooLong {
+            field: "linkContactField",
+            len: bytes.len(),
+            limit: N,
+        })
+    })
+}
+
+/// Append one entry, refusing a second code for one identity across both lists.
+fn push_unique(
+    book: &mut Vec<Recorded>,
+    contact: Contact,
+    code: Vec<u8>,
+    origin: Option<LinkOrigin>,
+) -> Result<(), BookCodecError> {
+    if book
+        .iter()
+        .any(|held| held.contact.identity_pk() == contact.identity_pk())
+    {
+        return Err(BookCodecError::DuplicateIdentity);
+    }
+    book.push(Recorded {
+        contact,
+        code,
+        origin,
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -479,6 +818,36 @@ mod tests {
             "contacts",
             Value::Array(codes.iter().cloned().map(Value::Bytes).collect()),
         );
+        m.insert("linkContacts", Value::Array(Vec::new()));
+        m.insert("v", Value::Unsigned(CONTACT_BOOK_V));
+        encode_fixed_depth(&Value::Map(m))
+    }
+
+    /// One link-sourced entry as the book stores it.
+    fn framed_link_entry(code: &[u8], link_tag: [u8; 32], scopes: &[[u8; 16]]) -> Value {
+        let mut m = Map::new();
+        m.insert("code", Value::Bytes(code.to_vec()));
+        m.insert("linkTag", Value::Bytes(link_tag.to_vec()));
+        m.insert(
+            "scopes",
+            Value::Array(
+                scopes
+                    .iter()
+                    .map(|scope| Value::Bytes(scope.to_vec()))
+                    .collect(),
+            ),
+        );
+        Value::Map(m)
+    }
+
+    /// A stored book carrying `link_entries` beside the hand-imported `codes`.
+    fn framed_with_links(codes: &[Vec<u8>], link_entries: Vec<Value>) -> Vec<u8> {
+        let mut m = Map::new();
+        m.insert(
+            "contacts",
+            Value::Array(codes.iter().cloned().map(Value::Bytes).collect()),
+        );
+        m.insert("linkContacts", Value::Array(link_entries));
         m.insert("v", Value::Unsigned(CONTACT_BOOK_V));
         encode_fixed_depth(&Value::Map(m))
     }
@@ -596,10 +965,12 @@ mod tests {
             Recorded {
                 contact,
                 code: encoded.clone(),
+                origin: None,
             },
             Recorded {
                 contact,
                 code: encoded,
+                origin: None,
             },
         ];
 
@@ -764,6 +1135,7 @@ mod tests {
             .map(|code| Recorded {
                 contact: import_contact(code).expect("valid code"),
                 code: code.clone(),
+                origin: None,
             })
             .collect();
         assert!(matches!(
@@ -837,7 +1209,11 @@ mod tests {
                 let (contact, code) =
                     import_recorded(&nth_code(u16::try_from(i).expect("in range")))
                         .expect("valid code");
-                Recorded { contact, code }
+                Recorded {
+                    contact,
+                    code,
+                    origin: None,
+                }
             })
             .collect();
         let first = book[0].contact.identity_pk().to_sec1();
@@ -959,5 +1335,239 @@ mod tests {
             first, second,
             "an ephemeral reused across two seals under one key and info is a confidentiality break"
         );
+    }
+
+    /// A contact code minted for the `i`-th claimant of a bearer link.
+    fn claimant_code(i: u16) -> Vec<u8> {
+        let mut scalar = [0x77; 32];
+        scalar[..2].copy_from_slice(&i.to_be_bytes());
+        let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+        ContactCode::create(&identity, kdf::enc_subkey(&scalar).public()).encode()
+    }
+
+    fn claimant_identity(i: u16) -> [u8; IDENTITY_PUBLIC_LEN] {
+        import_contact(&claimant_code(i))
+            .expect("valid code")
+            .identity_pk()
+            .to_sec1()
+    }
+
+    const LINK: [u8; 32] = [0xAB; 32];
+    const OTHER_LINK: [u8; 32] = [0xCD; 32];
+    const SCOPE_A: [u8; 16] = [0x0A; 16];
+    const SCOPE_B: [u8; 16] = [0x0B; 16];
+
+    /// A bearer link is multi-claim and its holder mints a fresh identity per
+    /// claim, so without a share of its own it fills the whole per-vault book.
+    /// The bound stops it short of the room hand imports need, and it names the
+    /// link so the owner knows which one to revoke.
+    #[test]
+    fn claims_past_the_link_bound_are_refused_and_hand_imports_still_land() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x71);
+        let entropy = seeded(113);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+
+        for i in 0..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the bound records");
+        }
+
+        let over = u16::try_from(MAX_LINK_CONTACTS).expect("in range");
+        assert!(
+            matches!(
+                block_on(store.record_from_link(&claimant_code(over), &LINK, &SCOPE_A)),
+                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == LINK
+            ),
+            "the refusal names the link the claim came in on"
+        );
+        block_on(store.record(&code(0x33))).expect("a hand import still has room");
+    }
+
+    /// The bound is charged per link, so one leaked link takes only its own
+    /// share. A second link's claims still convert, and a fresh link the owner
+    /// mints after a revoke carries a share of its own.
+    #[test]
+    fn one_full_link_denies_no_other_links_claims() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x72);
+        let entropy = seeded(114);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        for i in 0..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the bound records");
+        }
+
+        let sources = block_on(store.contacts_with_sources())
+            .expect("book")
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        assert!(link_budget_full(&sources, &LINK));
+        assert!(
+            !link_budget_full(&sources, &OTHER_LINK),
+            "another link's own share is untouched"
+        );
+
+        let over = u16::try_from(MAX_LINK_CONTACTS).expect("in range");
+        block_on(store.record_from_link(&claimant_code(over), &OTHER_LINK, &SCOPE_A))
+            .expect("a claim on another link converts");
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            MAX_LINK_CONTACTS + 1,
+            "and every earlier claimant stays resolvable for a cut"
+        );
+    }
+
+    /// A link-sourced contact is held only so a cut can resolve the recipient
+    /// its conversion granted. The entry goes when the last of those grants
+    /// does, and not before.
+    #[test]
+    fn a_link_sourced_contact_goes_when_its_last_grant_is_cut() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x73);
+        let entropy = seeded(115);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A)).expect("claim");
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_B))
+            .expect("a second scope's claim");
+
+        block_on(store.forget_link_grant(&claimant_identity(0), &SCOPE_A)).expect("cut one");
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            1,
+            "a contact that still holds a grant elsewhere stays cuttable"
+        );
+        block_on(store.forget_link_grant(&claimant_identity(0), &SCOPE_B)).expect("cut the last");
+        assert!(
+            block_on(store.contacts()).expect("load").is_empty(),
+            "the last cut returns the room the link took"
+        );
+    }
+
+    /// An owner-driven grant records no scope on the entry, so a cut must not
+    /// collect it: the claimant would keep a live grant no revoke could resolve
+    /// a recipient for. The vouch is what takes it off both the bound and the
+    /// collector.
+    #[test]
+    fn a_vouched_claimant_is_never_collected_by_a_cut() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x74);
+        let entropy = seeded(116);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A)).expect("claim");
+        block_on(store.vouch(&claimant_identity(0))).expect("the owner grants them directly");
+
+        let sources = block_on(store.contacts_with_sources())
+            .expect("book")
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        assert_eq!(sources, vec![None], "the entry no longer charges the link");
+        block_on(store.forget_link_grant(&claimant_identity(0), &SCOPE_A)).expect("cut");
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            1,
+            "and the cut leaves the recipient of every other grant resolvable"
+        );
+    }
+
+    /// A hand import outranks a claim the same way: the owner vouched for that
+    /// identity, so no cut takes it out.
+    #[test]
+    fn a_hand_import_takes_a_claimant_off_the_link_budget() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x75);
+        let entropy = seeded(117);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A)).expect("claim");
+        block_on(store.record(&claimant_code(0))).expect("the owner imports the same identity");
+
+        block_on(store.forget_link_grant(&claimant_identity(0), &SCOPE_A)).expect("cut");
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            1,
+            "a cut never drops a contact the owner imported"
+        );
+    }
+
+    /// Rule 8: a link-sourced entry holding no grant charges the link bound for
+    /// a contact no cut needs, so both codec directions refuse it.
+    #[test]
+    fn a_link_sourced_contact_holding_nothing_is_refused_in_both_directions() {
+        let (contact, code) = import_recorded(&claimant_code(0)).expect("import");
+        let book = [Recorded {
+            contact,
+            code: code.clone(),
+            origin: Some(LinkOrigin {
+                link_tag: LINK,
+                scopes: Vec::new(),
+            }),
+        }];
+        assert!(matches!(
+            encode_book(&book),
+            Err(BookCodecError::LinkContactHoldsNothing)
+        ));
+        assert!(matches!(
+            decode_book(&framed_with_links(
+                &[],
+                vec![framed_link_entry(&code, LINK, &[])]
+            )),
+            Err(BookCodecError::LinkContactHoldsNothing)
+        ));
+    }
+
+    /// Rule 8: one scope named twice would outlive the cut that removed it, so
+    /// both directions refuse it.
+    #[test]
+    fn a_repeated_scope_on_a_link_sourced_contact_is_refused_in_both_directions() {
+        let (contact, code) = import_recorded(&claimant_code(0)).expect("import");
+        let book = [Recorded {
+            contact,
+            code: code.clone(),
+            origin: Some(LinkOrigin {
+                link_tag: LINK,
+                scopes: vec![SCOPE_A, SCOPE_A],
+            }),
+        }];
+        assert!(matches!(
+            encode_book(&book),
+            Err(BookCodecError::DuplicateScope)
+        ));
+        assert!(matches!(
+            decode_book(&framed_with_links(
+                &[],
+                vec![framed_link_entry(&code, LINK, &[SCOPE_A, SCOPE_A])]
+            )),
+            Err(BookCodecError::DuplicateScope)
+        ));
+    }
+
+    /// One contact at the scope bound reports itself, never as a book this
+    /// build cannot write: the stored book is fine and one entry is full.
+    #[test]
+    fn a_claimant_past_the_scope_bound_reports_its_own_refusal() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x76);
+        let entropy = seeded(118);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        for i in 0..MAX_LINK_CONTACT_SCOPES {
+            let mut scope = [0u8; 16];
+            scope[..2].copy_from_slice(&u16::try_from(i).expect("in range").to_be_bytes());
+            block_on(store.record_from_link(&claimant_code(0), &LINK, &scope))
+                .expect("a claim under the scope bound records");
+        }
+        assert!(matches!(
+            block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_B)),
+            Err(ContactStoreError::LinkContactScopesFull)
+        ));
     }
 }

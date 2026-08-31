@@ -1279,6 +1279,60 @@ fn a_second_share_of_a_folder_whose_scope_the_index_lost_is_refused() {
     );
 }
 
+/// A direct-child-scope index carries no signature of its own: it rides the
+/// sealed write body, which any committed writer of that scope may author.
+/// Dropping an entry cannot be forged into a different name, but it would move
+/// the anchor of a later share up a level, and hand whoever dropped it the
+/// derivation of the scope that share mints. The walk refuses instead.
+#[test]
+fn a_share_below_a_scope_root_the_index_lost_is_refused() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the scope goes live unnamed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "enclosing-scope-index-lost-a-root"
+        }),
+    );
+}
+
+/// The gate reports a record below this device's own read-epoch floor as a
+/// plain rejection, which the derived-name probe would otherwise read as "no
+/// scope here". Only a scope root ever raises a floor at its own scope id, so
+/// the floor alone refuses the mint.
+#[test]
+fn a_second_share_is_refused_when_the_stranded_root_reads_below_the_floor() {
+    let mut fx = GrantScenario::new();
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&fx.folder.0, 9),
+    )
+    .expect("a floor a scope root adopted at this id left behind");
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+}
+
 /// A grant on a folder that already sits inside a granted scope anchors under
 /// **that** scope, not the vault root: its commitment, seeds and index are the
 /// ones the mint re-seals, and the fresh scope's ascent link is sealed to the
@@ -2314,6 +2368,96 @@ fn a_redelivered_claim_converts_once() {
 /// Revocation is the immediate-cut control, and `revoke` resolves its recipient
 /// in the contact book alone. A grant an invite link produced is therefore only
 /// real if the conversion recorded the claimant it granted.
+#[test]
+fn the_cut_of_a_converted_grant_returns_the_room_the_claim_took() {
+    /// Whether the owner's book holds `identity_pk`, read the way a host does.
+    fn book_holds(fx: &GrantScenario, identity_pk: &[u8]) -> bool {
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("the sharing read")
+            .contacts
+            .iter()
+            .any(|contact| contact.identity_public_key == identity_pk)
+    }
+
+    let mut fx = GrantScenario::new();
+    let imported = recipient_identity().verifying_key().to_sec1().to_vec();
+    let fragment = fx.mint_link();
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 33);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+    assert!(
+        book_holds(&fx, &claimant_pk),
+        "the conversion recorded the claimant so its grant can be cut"
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimant_pk.clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(
+        !book_holds(&fx, &claimant_pk),
+        "the cut of its last converted grant returns the room the claim took"
+    );
+    assert!(
+        book_holds(&fx, &imported),
+        "and a contact the owner imported by hand is never dropped by a cut"
+    );
+}
+
+/// A grant the owner issues records no scope on a claim-sourced entry, so the
+/// collector must not take that entry out on the next cut: the claimant would
+/// keep a live grant no revoke could name a recipient for. The owner grant is a
+/// vouch, and it outranks whatever the claim wrote.
+#[test]
+fn a_cut_after_an_owner_grant_leaves_the_claimant_revokable() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "second");
+    let fragment = fx.mint_link();
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 35);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: other,
+            recipient_identity_public_key: claimant_pk.clone(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+        "the owner grants the claimant a second scope"
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimant_pk.clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: other,
+            recipient_identity_public_key: claimant_pk,
+        })),
+        Ok(CommandOutcome::Done),
+        "the second grant is still cuttable, so the first cut kept the recipient"
+    );
+}
+
 #[test]
 fn a_converted_claim_records_the_claimant_so_its_grant_can_be_cut() {
     let mut fx = GrantScenario::new();

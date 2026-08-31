@@ -57,8 +57,8 @@ use crate::grants::{
     ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
     StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
     convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
-    locate_invite_link, mint_invite_link, partition_scope_links, post_invite_claim,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
+    post_invite_claim, recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
@@ -1549,6 +1549,12 @@ impl EngineError {
             ContactStoreError::Full => EngineError::MalformedInput {
                 check: "contact-book-full",
             },
+            // The scope's own sharing read names the link this refuses for
+            // ([`ScopeSharing::invite_link_refusal`]), which is where the owner
+            // revokes it.
+            ContactStoreError::LinkBookFull { .. } => EngineError::MalformedInput {
+                check: LINK_CONTACT_BUDGET_FULL,
+            },
             ContactStoreError::Encode(_) => EngineError::MalformedInput {
                 check: "contact-book-unstorable",
             },
@@ -1940,6 +1946,21 @@ enum UnindexedScope {
 /// The name an invite-link mint at `Permission::Write` reports. The mint owes
 /// the same refusal ([`InviteMintError::WriteCut`]), and both report this.
 const WRITE_LINK_CHECK: &str = "write-links-need-a-write-scope-cut";
+
+/// The name a claim conversion reports once the links this owner records hold
+/// the whole link-sourced share of the contact book
+/// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)).
+///
+/// The sharing read reports it as the scope's `invite_link_refusal` while the
+/// live link there holds part of that share. One scope carries at most one live
+/// link, so reporting it there is what names the link the owner revokes.
+const LINK_CONTACT_BUDGET_FULL: &str = "invite-link-contact-budget-full";
+
+/// The name [`Engine::enclosing_scope`] reports when an ancestor of the target
+/// is a live scope root its parent's index does not name. Anchoring above it
+/// would hand the writer that dropped the entry the derivation of every scope
+/// minted below, so the walk refuses instead.
+const ENCLOSING_INDEX_LOST_A_ROOT: &str = "enclosing-scope-index-lost-a-root";
 
 /// How far a committed-set cut goes at the tag it names.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4518,22 +4539,35 @@ where {
         ))
     }
 
-    /// The scope root that encloses `node`, with the gated record it resolves
-    /// to — the vault root when no scope this vault granted contains `node`.
+    /// The scope root that encloses `node`, the gated record it resolves to, and
+    /// the net that gated it — the vault root when no scope this vault granted
+    /// contains `node`.
     ///
     /// Each hop reads the next level's `ipnsName` out of the level above's
-    /// owner-signed direct-child-scope index and gates it under the ancestor
-    /// seed that level derives, so a nested scope root is never read at a name
-    /// this session merely re-derives. The walk follows the base snapshot's
-    /// ancestor chain downward, so it visits each level at most once and a vault
-    /// with no nested scope spends exactly one resolve.
-    async fn enclosing_scope(
-        &self,
+    /// direct-child-scope index. That index carries no signature of its own; it
+    /// rides the sealed write body, which any committed writer of that scope may
+    /// author. What holds the walk together is the target: the adoption gate
+    /// binds each name to a commitment the owner signed, and proves the ascent
+    /// link under the ancestor seed the level above derives. So a substituted
+    /// name cannot pass — but a **removed** entry would silently move the anchor
+    /// up a level, and hand the writer that removed it the seeds a later mint
+    /// below would derive. An ancestor the index does not name is therefore
+    /// probed the way [`refuse_an_unindexed_scope`](Self::refuse_an_unindexed_scope)
+    /// probes the leaf, and a live scope root there fails the walk closed.
+    ///
+    /// The returned net is the one that gated the final level, so the caller
+    /// republishes that scope from the record this pass parked rather than from
+    /// a second read taken later (`GatedRoots`).
+    ///
+    /// The walk follows the base snapshot's ancestor chain downward and visits
+    /// each level at most once.
+    async fn enclosing_scope<'a>(
+        &'a self,
         node: NodeId,
-        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
-        keys: OwnerRotationKeys<'_>,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'a>,
         pointer_consult: PointerConsultArm,
-    ) -> Result<(OwnerScope, CascadeTarget), EngineError> {
+    ) -> Result<(OwnerScope, CascadeTarget, OwnerNet<'a, T>), EngineError> {
         let OwnerRotationKeys {
             enc_secret,
             identity,
@@ -4549,14 +4583,20 @@ where {
             parent_node_seed: None,
             vouched: true,
         };
-        let mut current = self
-            .owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult)
+        let mut net = self.owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult);
+        let mut current = net
             .resolve_vault_root(&scope.scope)
             .await
             .map_err(EngineError::from_resolve_failure)?;
-        // Root-first, so each step descends into the index the step above signed.
-        let mut chain = self.snapshot.borrow().ancestors(node);
+        // Root-first, so each step descends into the index the step above rode.
+        // The vault root is the walk's own anchor rather than a step in it, and
+        // no index names it.
+        let (mut chain, root) = {
+            let base = self.snapshot.borrow();
+            (base.ancestors(node), base.root)
+        };
         chain.reverse();
+        chain.retain(|ancestor| *ancestor != root);
         for ancestor in chain {
             let Some(child) = current
                 .direct_child_scope_index
@@ -4564,6 +4604,14 @@ where {
                 .find(|child| child.scope_id == ancestor.0)
                 .cloned()
             else {
+                self.refuse_an_unindexed_scope(
+                    ancestor,
+                    &current,
+                    api,
+                    owner_keys(),
+                    ENCLOSING_INDEX_LOST_A_ROOT,
+                )
+                .await?;
                 continue;
             };
             let parent_node_seed = kdf::node_seed(&current.override_seed, &child.scope_id);
@@ -4572,24 +4620,24 @@ where {
                 parent_node_seed: Some(Zeroizing::new(*parent_node_seed.as_bytes())),
                 vouched: true,
             };
-            current = self
-                .owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult)
+            net = self.owner_rotation_net(api, owner_keys(), scope.ancestry(), pointer_consult);
+            current = net
                 .resolve_anchored(&scope.scope)
                 .await
                 .map_err(EngineError::from_resolve_failure)?;
         }
-        Ok((scope, current))
+        Ok((scope, current, net))
     }
 
     /// The scope root `node` names, and the ancestor node seed a gated read of an
     /// interior one needs.
     ///
-    /// The authority for what is a scope root is the owner-signed
-    /// direct-child-scope index of the scope that encloses it
-    /// ([`enclosing_scope`](Self::enclosing_scope)), so an interior root's
-    /// `ipnsName` is taken from that index rather than re-derived: a scope a
-    /// write rotation has moved is then read at the name its parent vouches for.
-    /// A node the base snapshot does not hold is refused before any resolve.
+    /// The authority for what is a scope root is the direct-child-scope index of
+    /// the scope that encloses it ([`enclosing_scope`](Self::enclosing_scope)),
+    /// so an interior root's `ipnsName` is taken from that index rather than
+    /// re-derived: a scope a write rotation has moved is then read at the name
+    /// its parent vouches for. A node the base snapshot does not hold is refused
+    /// before any resolve.
     ///
     /// `unindexed` decides what an index miss means — see [`UnindexedScope`].
     /// Either way the read is gated and its ascent link is proved under the
@@ -4636,7 +4684,7 @@ where {
         if !self.snapshot.borrow().contains(node) {
             return Err(EngineError::UnsupportedTarget { check });
         }
-        let (_, current) = self
+        let (_, current, _) = self
             .enclosing_scope(node, api, keys, PointerConsultArm::Refused)
             .await?;
         let standing = record_share_standing(node, current.v, &current.direct_child_scope_index);
@@ -4878,24 +4926,44 @@ where {
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        self.cut_and_rotate(
-            node,
-            kind.target_check(),
-            UnindexedScope::Refuse,
-            kind,
-            async |target: &OwnerScope, _current: &CascadeTarget| {
-                recipient_blinded_tag(
-                    session.enc_subkey(),
-                    &contact.enc_subkey(),
-                    &target.scope.ipns_name,
-                )
-                .ok_or(EngineError::MalformedInput {
-                    check: "unusable-recipient-key",
-                })
-            },
-        )
-        .await
-        .map(|_| ())
+        let cut = self
+            .cut_and_rotate(
+                node,
+                kind.target_check(),
+                UnindexedScope::Refuse,
+                kind,
+                async |target: &OwnerScope, _current: &CascadeTarget| {
+                    recipient_blinded_tag(
+                        session.enc_subkey(),
+                        &contact.enc_subkey(),
+                        &target.scope.ipns_name,
+                    )
+                    .ok_or(EngineError::MalformedInput {
+                        check: "unusable-recipient-key",
+                    })
+                },
+            )
+            .await;
+        // A claim conversion records its claimant only so a cut can resolve
+        // them; the grant is gone, so the entry returns the room it took. The
+        // book keeps a contact that still holds a converted grant elsewhere, and
+        // never drops one the owner imported or granted directly.
+        //
+        // Also on the already-cut verdict: a book write that failed behind a cut
+        // that landed leaves a retry facing a set the tag has already left, and
+        // without this the room the claim took would never come back.
+        let cut_reached_the_set = match &cut {
+            Ok(_) => true,
+            Err(EngineError::MalformedInput { check }) => *check == RevokeError::NotGranted.check(),
+            Err(_) => false,
+        };
+        if kind == CutKind::Revoke && cut_reached_the_set {
+            self.contact_store(session)
+                .forget_link_grant(&contact.identity_pk().to_sec1(), &node.0)
+                .await
+                .map_err(EngineError::from_contact_store)?;
+        }
+        cut.map(|_| ())
     }
 
     /// Cut the tag `select` names out of the owner-signed committed set at
@@ -5129,18 +5197,12 @@ where {
         };
         // The parent is the scope that already holds the folder, which is the
         // vault root only when no scope this vault granted encloses it. Its
-        // commitment, ledger, seeds and index are the ones the mint re-seals.
-        let (parent_scope, current) = self
-            // The converge pass consults the scope pointer.
+        // commitment, ledger, seeds and index are the ones the mint re-seals,
+        // and the converge pass that follows consults the scope pointer.
+        let (parent_scope, current, net) = self
             .enclosing_scope(node, api, owner_keys(), PointerConsultArm::Permitted)
             .await?;
         let parent = &parent_scope.scope;
-        let net = self.owner_rotation_net(
-            api,
-            owner_keys(),
-            parent_scope.ancestry(),
-            PointerConsultArm::Permitted,
-        );
 
         if let Some(check) = checks.refusal(record_share_standing(
             node,
@@ -5150,16 +5212,9 @@ where {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
+        self.refuse_an_unindexed_scope(node, &current, api, owner_keys(), checks.already_a_scope)
+            .await?;
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
-        self.refuse_an_unindexed_scope(
-            node,
-            &current,
-            parent_node_seed.as_bytes(),
-            api,
-            owner_keys(),
-            checks.already_a_scope,
-        )
-        .await?;
 
         let rendered = self.render().await?;
         // A link owes the bound too: the pointer its conversion posts carries
@@ -5230,7 +5285,7 @@ where {
         };
 
         let scope_root_name = grantee.ipns_name();
-        let outcome = match share {
+        let outcome = match &share {
             ScopeShare::Contact(contact) => create_grant(
                 &mut SharedEntropy(&self.entropy),
                 &net,
@@ -5260,7 +5315,7 @@ where {
                 &InviteMintPlan {
                     grantee: &grantee,
                     parent: &parent_plan,
-                    expires_at,
+                    expires_at: *expires_at,
                 },
             )
             .await
@@ -5268,6 +5323,16 @@ where {
             .map_err(EngineError::from_invite_mint),
         }?;
 
+        if let ScopeShare::Contact(contact) = share {
+            // The grant this mint published is one no claim conversion recorded,
+            // so a later cut must not collect the recipient's book entry and
+            // leave that grant with no resolvable recipient. An owner grant is a
+            // vouch, and it outranks whatever a claim wrote.
+            self.contact_store(session)
+                .vouch(&contact.identity_pk().to_sec1())
+                .await
+                .map_err(EngineError::from_contact_store)?;
+        }
         if permission == Permission::Write {
             self.cut_granted_write_scope(node, &scope_root_name, parent_node_seed.as_bytes())
                 .await?;
@@ -5275,41 +5340,56 @@ where {
         Ok(outcome)
     }
 
-    /// Refuse a share of `node` when a live scope root already answers at the
-    /// name a mint would publish it under.
+    /// Refuse when a live scope root already answers at the name a mint would
+    /// publish `node`'s under.
     ///
     /// [`record_share_standing`] decides from the parent's index, which
     /// `mint_grantee_scope` writes last: a mint that published the grantee scope
-    /// root and then failed leaves a live scope the index does not name. A second
-    /// share would republish at that same derived name under a fresh override
+    /// root and then failed leaves a live scope the index does not name. A mint
+    /// over it would republish at that same derived name under a fresh override
     /// seed and cut the first grantee off a scope they still hold — a revocation
-    /// the owner never asked for. So the name is probed before anything is
-    /// minted, under the ascent authority a real scope root there must answer to.
+    /// the owner never asked for.
     ///
-    /// `node`'s own record answers at that name until a mint promotes it, so a
-    /// gate rejection is the ordinary "no scope here" and the share proceeds. A
-    /// name this pass could not read leaves the question open, and the answer
-    /// that costs nothing is to retry.
-    #[allow(clippy::too_many_arguments)]
+    /// Two answers refuse, and both are needed.
+    ///
+    /// A read-epoch floor at `node`'s own scope id is the first: only a scope
+    /// root adopted at that id ever raises one, and it is what answers when the
+    /// record there sits below the floor this device already holds — a state the
+    /// gate reports as a plain rejection rather than as the live scope it is.
+    ///
+    /// The gated read is the second, under the ascent authority a real scope
+    /// root there must answer to.
+    ///
+    /// Past both, `node`'s own record is what answers at that name until a mint
+    /// promotes it, so a rejection is the ordinary "no scope here" and the share
+    /// proceeds. A name this pass could not read leaves the question open, and
+    /// the answer that costs nothing is to retry.
     async fn refuse_an_unindexed_scope(
         &self,
         node: NodeId,
         parent: &CascadeTarget,
-        parent_node_seed: &[u8; SECRET_LEN],
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'_>,
         check: &'static str,
     ) -> Result<(), EngineError> {
-        let derived = ChildScopeRef::new(
-            node.0,
-            derive_write_name(&parent.write_scope_seed, &node.0)
-                .as_str()
-                .as_bytes()
-                .to_vec(),
-        );
+        if floor::read_epoch_floor(&self.seams.floor_store, &node.0)
+            .await
+            .map_err(EngineError::from_seam)?
+            .is_some()
+        {
+            return Err(EngineError::UnsupportedTarget { check });
+        }
         let probe = OwnerScope {
-            scope: derived,
-            parent_node_seed: Some(Zeroizing::new(*parent_node_seed)),
+            scope: ChildScopeRef::new(
+                node.0,
+                derive_write_name(&parent.write_scope_seed, &node.0)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            parent_node_seed: Some(Zeroizing::new(
+                *kdf::node_seed(&parent.override_seed, &node.0).as_bytes(),
+            )),
             vouched: false,
         };
         match self
@@ -5412,16 +5492,10 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
-        let (parent_scope, current) = self
+        let (parent_scope, current, net) = self
             .enclosing_scope(node, api, owner_keys(), PointerConsultArm::Permitted)
             .await?;
         let parent = &parent_scope.scope;
-        let net = self.owner_rotation_net(
-            api,
-            owner_keys(),
-            parent_scope.ancestry(),
-            PointerConsultArm::Permitted,
-        );
         let index = insert_child(
             &current.direct_child_scope_index,
             ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
@@ -5728,6 +5802,7 @@ where {
                 commitment,
                 ledger,
                 claimant,
+                link_tag,
                 claimant_code,
                 outcome,
                 record,
@@ -5764,8 +5839,14 @@ where {
             // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
             // in the contact book alone, so a grant this owner cannot later cut
             // must never reach the record plane. A book with no room refuses the
-            // conversion and the item stays un-acked.
-            if let Err(e) = self.contact_store(session).record(&claimant_code).await {
+            // conversion and the item stays un-acked. The write is charged to
+            // the link that drove it, so bearer traffic cannot crowd out the
+            // contacts the owner imported by hand.
+            if let Err(e) = self
+                .contact_store(session)
+                .record_from_link(&claimant_code, &link_tag, &target.scope.scope_id)
+                .await
+            {
                 failure.get_or_insert(EngineError::from_contact_store(e));
                 continue;
             }
@@ -6884,13 +6965,17 @@ where {
                 return Err(EngineError::UnknownNode);
             }
         }
-        let contacts = self
+        // One decode: a load re-verifies one binding signature per stored code,
+        // so the sharing read must not open the book twice.
+        let book = self
             .contact_store(session)
-            .contacts()
+            .contacts_with_sources()
             .await
-            .map_err(EngineError::from_contact_store)?
+            .map_err(EngineError::from_contact_store)?;
+        let sources: Vec<Option<[u8; 32]>> = book.iter().map(|(_, source)| *source).collect();
+        let contacts = book
             .into_iter()
-            .map(|contact| SharingContact {
+            .map(|(contact, _)| SharingContact {
                 identity_public_key: contact.identity_pk().to_sec1().to_vec(),
             })
             .collect();
@@ -6898,7 +6983,7 @@ where {
             scope: scope_root,
             contacts,
             own_contact_code: session.contact_code(),
-            state: self.scope_sharing(session, scope_root).await,
+            state: self.scope_sharing(session, scope_root, &sources).await,
         })
     }
 
@@ -6907,7 +6992,7 @@ where {
     /// links there, and the refusal a further share of it would report.
     ///
     /// The authority for what is a scope root is the enclosing scope's
-    /// owner-signed direct-child-scope index, which
+    /// direct-child-scope index, which
     /// [`owner_scope_standing`](Self::owner_scope_standing) owns — so a node it
     /// does not name has an empty grant list, and only the parent record's own
     /// grounds stand in a mint's way.
@@ -6920,6 +7005,7 @@ where {
         &self,
         session: &SessionIdentity,
         scope_root: NodeId,
+        sources: &[Option<[u8; 32]>],
     ) -> Option<ScopeSharing> {
         let api = self.api.as_ref()?;
         let owner_identity = session.owner_identity();
@@ -6978,7 +7064,8 @@ where {
 
         // A link store this could not open is absence, not "no links": the grant
         // half of the read still stands.
-        let split = self.invite_store(session).load().await.ok().map(|records| {
+        let records = self.invite_store(session).load().await.ok();
+        let split = records.as_ref().map(|records| {
             partition_scope_links(
                 session.enc_subkey(),
                 &records.links,
@@ -6994,6 +7081,15 @@ where {
                 [link] => Some(link),
                 _ => None,
             });
+        // Reported at the scope whose link took the headroom, which is what
+        // names the link: one scope carries at most one live link, and revoking
+        // it is the remedy. It outranks the standing ground because that one is
+        // permanent and needs no action, while this one does — and while it
+        // stands, a link minted here would only mint claims that cannot convert.
+        let invite_link_refusal = match live {
+            Some(link) if link_budget_full(sources, &link.tag) => Some(LINK_CONTACT_BUDGET_FULL),
+            _ => invite_link_refusal,
+        };
         let now = self.seams.scheduler.now();
         let invite_links = split.as_ref().map(|split| SharingInviteLinks {
             live: live.is_some(),
