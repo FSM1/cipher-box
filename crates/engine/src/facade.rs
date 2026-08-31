@@ -4960,7 +4960,6 @@ where {
             owner_enc_pub: &current.owner_enc_pub,
             write_scope_seed: &current.write_scope_seed,
             write_cut: granted_write_scope_seed.as_deref(),
-            write_epoch: current.write_epoch,
             pointer_read_key: pointer_read_key.as_bytes(),
             subtree_child_index: &subtree,
         };
