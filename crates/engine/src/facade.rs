@@ -28,7 +28,7 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, ReadBody, Version,
-    seal_content_key, sign_grant_set,
+    open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -118,7 +118,7 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, reconcile_staging, release_version_blocks, stage_op,
+    LiveBlocks, PreservedBounds, StagedBlocks, reconcile_staging, release_version_blocks, stage_op,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
@@ -6788,15 +6788,45 @@ where {
 
     /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
-        let (version, version_count) = self.head_version(node).await?;
-        self.refuse_unpaired_version(node, &version).await?;
         // The range clamps to the version's size, so the whole file is the
         // unbounded window.
-        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, 0, u64::MAX)
+        if let Some(version) = self.staged_version(node).await? {
+            return self
+                .read_version_range(&version, 0, u64::MAX)
+                .await
+                .map_err(open_engine_error);
+        }
+        let (version, version_count) = self.head_version(node).await?;
+        let bytes = self
+            .read_version_range(&version, 0, u64::MAX)
             .await
             .map_err(open_engine_error)?;
         self.project_head(node, &version, version_count);
         Ok(bytes)
+    }
+
+    /// One window of `version`, local-first: a version this device staged is
+    /// served from the staging store, and every other block from the gateway.
+    ///
+    /// One source set for both, because the staging key **is** the block's
+    /// `contentCid` — a local hit is byte-identical to what any gateway would
+    /// serve for that address, and a mid-upload version whose confirmed leaves
+    /// the drain already released reads across both legs.
+    async fn read_version_range(
+        &self,
+        version: &Version,
+        offset: u64,
+        length: u64,
+    ) -> Result<Vec<u8>, OpenError> {
+        open_content_range(
+            &StagedBlocks(&self.seams.staging_store),
+            &self.gateway,
+            &self.seams.http,
+            version,
+            offset,
+            length,
+        )
+        .await
     }
 
     /// Open a ranged-read stream over a file node, pinning the head version and
@@ -6811,12 +6841,27 @@ where {
         // network and no open that reaches the insert can be refused there.
         let slot =
             StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
-        let (version, version_count) = self.head_version(node).await?;
-        self.refuse_unpaired_version(node, &version).await?;
-        let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
-            .await
-            .map_err(open_engine_error)?;
-        self.project_head(node, &version, version_count);
+        let staged = self.staged_version(node).await?;
+        let (version, projection) = match staged {
+            // A staged version is this device's own and not gate-passing state,
+            // so it pins a stream without repainting the base node.
+            Some(version) => (version, None),
+            None => {
+                let (version, count) = self.head_version(node).await?;
+                (version, Some(count))
+            }
+        };
+        let manifest = open_content_root(
+            &StagedBlocks(&self.seams.staging_store),
+            &self.gateway,
+            &self.seams.http,
+            &version,
+        )
+        .await
+        .map_err(open_engine_error)?;
+        if let Some(version_count) = projection {
+            self.project_head(node, &version, version_count);
+        }
         let mut streams = self.streams.borrow_mut();
         streams.next += 1;
         let handle = StreamHandle(streams.next);
@@ -6853,6 +6898,7 @@ where {
             .map(Rc::clone)
             .ok_or(EngineError::UnknownStreamHandle)?;
         read_pinned_range(
+            &StagedBlocks(&self.seams.staging_store),
             &self.gateway,
             &self.seams.http,
             &stream.version,
@@ -7132,39 +7178,62 @@ where {
         }
     }
 
-    /// Refuse to serve `version` when the queue has staged a different one: the
-    /// read-side half of the pairing rule
-    /// [`rendered_version_cid`](Self::rendered_version_cid) states.
+    /// The version the read plane pins for `node` when the queue has staged one.
     ///
-    /// Availability, not trust — the drain publishes the staged version and the
-    /// read lands. Judged on the staged cid alone, so a refusal costs no
-    /// resolve.
-    async fn refuse_unpaired_version(
+    /// This is the read half of the pairing rule
+    /// [`rendered_version_cid`](Self::rendered_version_cid) states: the reader
+    /// serves the very version the rendered length describes, so a partial write
+    /// composes its tail over the bytes it measured against. The version is
+    /// built from the op's own [`StagedContent`], and the content key is opened
+    /// under the owner enc subkey at the epoch the op carries — a blob authored
+    /// for another scope or another epoch fails closed here, exactly as it does
+    /// at the drain.
+    async fn staged_version(&self, node: NodeId) -> Result<Option<Version>, EngineError> {
+        let Some((staged, authored_at)) = self.staged_content(node).await? else {
+            return Ok(None);
+        };
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let scope = self.snapshot.borrow().root;
+        let key = open_content_key(
+            session.enc_subkey(),
+            &scope.0,
+            staged.epoch,
+            &staged.root_cid,
+            &staged.sealed_content_key,
+        )
+        .map_err(|error| EngineError::ContentUnavailable {
+            message: format!("the staged content key did not open: [{}]", error.check()),
+        })?;
+        Ok(Some(Version::new(
+            staged.root_cid,
+            *key,
+            staged.plaintext_size,
+            authored_at.0,
+        )))
+    }
+
+    /// What the newest queued op stages for `node`, with the time it was
+    /// authored — the `modifiedAt` the drain will publish the version under, so
+    /// the reader and the publisher agree.
+    async fn staged_content(
         &self,
         node: NodeId,
-        version: &Version,
-    ) -> Result<(), EngineError> {
-        match self
-            .staged_version_cid(node)
-            .await?
-            .is_some_and(|staged| staged != version.content_cid)
-        {
-            true => Err(EngineError::ContentUnavailable {
-                message: "a newer content version is staged and not yet published".to_owned(),
-            }),
-            false => Ok(()),
-        }
+    ) -> Result<Option<(StagedContent, UnixMillis)>, EngineError> {
+        Ok(self.pending_ops().await?.into_iter().rev().find_map(|op| {
+            (op.target == node)
+                .then(|| op.staged_content().cloned())
+                .flatten()
+                .map(|staged| (staged, op.authored_at))
+        }))
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
     /// `None` when the queue authors none.
     async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
-        Ok(self.pending_ops().await?.iter().rev().find_map(|op| {
-            (op.target == node)
-                .then(|| op.content_root_cid())
-                .flatten()
-                .map(<[u8]>::to_vec)
-        }))
+        Ok(self
+            .staged_content(node)
+            .await?
+            .map(|(staged, _)| staged.root_cid))
     }
 
     /// The `contentCid` of the version the rendered view's size and mtime

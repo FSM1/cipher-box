@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use cipherbox_core::content::verify_cid;
 
+use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::dag::RootManifest;
 use crate::content::decode_root;
@@ -137,6 +138,24 @@ impl PreservedBounds {
 
     fn expired(&self, entry: &PreservedDeadLetter) -> bool {
         elapsed_at_least(self.now, entry.preserved_at, self.ttl)
+    }
+}
+
+/// The staging store as a read-plane block source: a version the drain has not
+/// finished uploading reaches no gateway, so its blocks are served from here.
+///
+/// Every block a staging key holds is addressed by its own `contentCid`
+/// ([`stage_op`]'s companion write path), so the key is the anchor the read
+/// verifies against — a wrong or corrupted value fails closed at
+/// [`read_block_local_first`](crate::content::read_block_local_first) exactly as
+/// a fetched one does.
+pub(crate) struct StagedBlocks<'a, S>(pub(crate) &'a S);
+
+impl<S: StagingStore> LocalBlocks for StagedBlocks<'_, S> {
+    async fn block(&self, cid: &[u8]) -> Option<Vec<u8>> {
+        // A store that cannot answer holds nothing this read may use; the
+        // gateway leg still runs.
+        self.0.staged_bytes(cid).await.ok().flatten()
     }
 }
 

@@ -9,7 +9,8 @@
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::suite::aead::KEY_LEN;
 use cipherbox_engine::content::{
-    ContentKey, ContentProfile, SealedContent, assemble, open_content_range, seal_one_chunk,
+    ContentKey, ContentProfile, GatewayOnly, SealedContent, assemble, open_content_range,
+    seal_one_chunk,
 };
 use cipherbox_engine::testkit::{
     SeededEntropy, block_on, block_store, frame_version, frame_version_with, gateway, serve,
@@ -59,6 +60,7 @@ fn a_ranged_read_wipes_the_head_and_tail_it_trims_away() {
 
     let seen = watched(&[HEAD, MIDDLE, TAIL], || {
         block_on(open_content_range(
+            &GatewayOnly,
             &gateway(),
             &http,
             &version,
@@ -119,6 +121,7 @@ fn a_mid_read_trust_reject_wipes_what_the_assembly_buffer_already_holds() {
 
     let seen = watched(&[MARKER], || {
         block_on(open_content_range(
+            &GatewayOnly,
             &gateway(),
             &http,
             &version,
@@ -159,6 +162,7 @@ fn outgrowing_the_assembly_buffer_wipes_the_allocation_it_leaves_behind() {
 
     let seen = watched(&[MARKER], || {
         block_on(open_content_range(
+            &GatewayOnly,
             &gateway(),
             &http,
             &version,

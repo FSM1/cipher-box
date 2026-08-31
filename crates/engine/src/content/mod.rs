@@ -31,8 +31,8 @@ pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
 };
 pub use read::{
-    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, SessionBearer, is_plane_anchor,
-    leaf_range_for_byte_range, read_block,
+    ContentPlane, Gateway, GatewayConfig, GatewayOnly, GatewaySource, LocalBlocks, ReadError,
+    SessionBearer, is_plane_anchor, leaf_range_for_byte_range, read_block, read_block_local_first,
 };
 pub use retention::{
     ContentVersion, ExpandError, Expansion, PrunePlan, QuotaExceeded, RetentionPolicy,
@@ -211,13 +211,15 @@ fn grow_wiping(buf: &mut Zeroizing<Vec<u8>>, additional: usize) {
 /// Fetch and verify one version's DAG root, returning the manifest its leaves
 /// are read against. The manifest is complete on its own, so a caller may hold
 /// it and read many windows without re-verifying the root.
-pub(crate) async fn open_content_root<H: Http>(
+pub(crate) async fn open_content_root<L: LocalBlocks, H: Http>(
+    local: &L,
     gateway: &Gateway,
     http: &H,
     version: &Version,
 ) -> Result<RootManifest, OpenError> {
     let root_cid_str = encode_content_cid_str(&version.content_cid);
-    let root_block = read_block(
+    let root_block = read_block_local_first(
+        local,
         gateway,
         http,
         &root_cid_str,
@@ -245,20 +247,22 @@ pub(crate) async fn open_content_root<H: Http>(
 /// but for the final one. A disagreement is a fail-closed trust violation: a
 /// short middle leaf shifts every downstream byte, so tolerating one would serve
 /// silently misaligned plaintext.
-pub async fn open_content_range<H: Http>(
+pub async fn open_content_range<L: LocalBlocks, H: Http>(
+    local: &L,
     gateway: &Gateway,
     http: &H,
     version: &Version,
     offset: u64,
     length: u64,
 ) -> Result<Vec<u8>, OpenError> {
-    let manifest = open_content_root(gateway, http, version).await?;
-    read_pinned_range(gateway, http, version, &manifest, offset, length).await
+    let manifest = open_content_root(local, gateway, http, version).await?;
+    read_pinned_range(local, gateway, http, version, &manifest, offset, length).await
 }
 
 /// [`open_content_range`]'s leaf half, against a `manifest` [`open_content_root`]
 /// already verified against `version`.
-pub(crate) async fn read_pinned_range<H: Http>(
+pub(crate) async fn read_pinned_range<L: LocalBlocks, H: Http>(
+    local: &L,
     gateway: &Gateway,
     http: &H,
     version: &Version,
@@ -293,9 +297,16 @@ pub(crate) async fn read_pinned_range<H: Http>(
     for index in leaves {
         let leaf_cid = &manifest.leaf_cids[index];
         let leaf_cid_str = encode_content_cid_str(leaf_cid);
-        let sealed = read_block(gateway, http, &leaf_cid_str, leaf_cid, ContentPlane::Leaf)
-            .await
-            .map_err(open_read_error)?;
+        let sealed = read_block_local_first(
+            local,
+            gateway,
+            http,
+            &leaf_cid_str,
+            leaf_cid,
+            ContentPlane::Leaf,
+        )
+        .await
+        .map_err(open_read_error)?;
         // Terminal owner of this leaf's plaintext: a ranged read discards the
         // trimmed head and tail, so they must not outlive the loop (AGENTS.md 7).
         let chunk = Zeroizing::new(
@@ -477,6 +488,7 @@ mod tests {
         fn read_range(fixture: &Fixture, offset: u64, length: u64) -> (Vec<u8>, Vec<String>) {
             let http = serve(&fixture.blocks);
             let out = block_on(open_content_range(
+                &GatewayOnly,
                 &gateway(),
                 &http,
                 &fixture.version,
@@ -625,6 +637,7 @@ mod tests {
             let http = serve(&fixture.blocks);
 
             let err = block_on(open_content_range(
+                &GatewayOnly,
                 &gateway(),
                 &http,
                 &fixture.version,
@@ -654,6 +667,7 @@ mod tests {
             let http = serve(&fixture.blocks);
 
             let err = block_on(open_content_range(
+                &GatewayOnly,
                 &gateway(),
                 &http,
                 &fixture.version,
@@ -669,7 +683,15 @@ mod tests {
             let fixture = fixture(&(0..40u8).collect::<Vec<_>>());
             let version = Version::new(fixture.version.content_cid.clone(), CONTENT_KEY, 41, 0);
             let http = serve(&fixture.blocks);
-            let err = block_on(open_content_range(&gateway(), &http, &version, 0, 16)).unwrap_err();
+            let err = block_on(open_content_range(
+                &GatewayOnly,
+                &gateway(),
+                &http,
+                &version,
+                0,
+                16,
+            ))
+            .unwrap_err();
             assert!(matches!(err, OpenError::Trust(_)), "got {err:?}");
             assert_eq!(
                 fetched(&http).len(),

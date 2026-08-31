@@ -1354,10 +1354,11 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
 
 /// The bytes a read serves and the length the rendered view reports must come
 /// from one version, on both readers: the stream a mount composes over and the
-/// whole-file read the web download takes. Availability, not trust — the very
-/// next drain admits them.
+/// whole-file read the web download takes. A staged version pairs them off the
+/// staging store, so a file just written reads back before the drain publishes
+/// it.
 #[test]
-fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
+fn both_readers_serve_the_staged_version_the_rendered_size_names() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -1387,27 +1388,38 @@ fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
         Some(323),
         "the rendered size is the staged version's"
     );
-    assert!(
-        matches!(
-            block_on(engine.open_content_stream(node)),
-            Err(EngineError::ContentUnavailable { .. })
-        ),
-        "no stream serves the version the rendered size does not name"
-    );
-    assert!(
-        matches!(
-            block_on(engine.read_content(node)),
-            Err(EngineError::ContentUnavailable { .. })
-        ),
-        "nor does the whole-file read — the same mispairing, one surface out"
-    );
 
+    let staged = block_on(engine.open_content_stream(node)).expect("the staged version opens");
+    assert_eq!(
+        engine.stream_size(staged),
+        Some(323),
+        "the stream pins the length the rendered view reports"
+    );
+    assert_eq!(
+        engine.stream_version_cid(staged),
+        block_on(engine.rendered_version_cid(node)).unwrap(),
+        "the stream pins the very version the rendered size names"
+    );
+    assert_eq!(
+        block_on(engine.read_stream(staged, 0, 323)).expect("the window serves it"),
+        vec![0xBB; 323],
+        "the stream serves the staged bytes, never the published version's"
+    );
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the whole-file read serves it"),
+        vec![0xBB; 323],
+        "the same version on the other surface"
+    );
+    engine.close_stream(staged);
+
+    // The drain moves nothing the reader could see: the same bytes, now
+    // published, and the reader stops paying the staging store for them.
     tick(&world, &engine, &mut tasks);
     let opened = block_on(engine.open_content_stream(node)).expect("the drained version opens");
     assert_eq!(
         block_on(engine.read_stream(opened, 0, 323)).expect("the window serves it"),
         vec![0xBB; 323],
-        "the same open serves the staged version once it is published"
+        "the same open serves the version once it is published"
     );
     engine.close_stream(opened);
 }
