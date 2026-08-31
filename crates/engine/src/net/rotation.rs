@@ -5591,6 +5591,11 @@ mod tests {
 
     /// Run the enumeration's gated root read — the boundary-proved read a root
     /// republish runs off, which the wave always performs before it publishes.
+    ///
+    /// A root republish refuses an unparked root before `publish_moved`, so a
+    /// test that skips this call asserts that refusal and never the guard it
+    /// names. `a_root_republish_without_the_boundary_proved_read_is_refused_fail_closed`
+    /// is the one test that wants the refusal itself.
     fn enumerate_root<T: RecordTransport + Clone, F: FloorStore, E: Entropy>(
         net: &Wave<'_, T, F, E>,
     ) {
@@ -6284,6 +6289,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6304,6 +6310,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let mut moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         // The name and its record signer still agree; only the seed the section
         // hands out no longer derives them.
@@ -6504,6 +6511,7 @@ mod tests {
 
             let owner = owner_identity();
             let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+            enumerate_root(&net);
             let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
             assert_eq!(
                 block_on(net.republish(&moved)),
@@ -6527,6 +6535,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6560,6 +6569,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &plan);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6568,6 +6578,43 @@ mod tests {
         assert!(
             !published_at(&harness, &moved.new_name),
             "nothing is published, so the revokee never receives a re-minted blob",
+        );
+    }
+
+    #[test]
+    fn the_wave_refuses_a_downgrade_the_root_never_published_release_active() {
+        // A downgrade rotates no read plane, so nothing publishes the demoted
+        // set unless the cut publishes it itself (`rotate_on_cut`). Wired
+        // without that step, the wave reads the record's own pre-cut set and
+        // must refuse: minting from it would re-wrap the fresh
+        // `writeScopeSeed` to a party the owner just demoted to read.
+        let harness = Harness::plain();
+        let root = granted_root(Vec::new());
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let demoted = recipient_blinded_tag(
+            &write_grantee(),
+            &owner_enc().public(),
+            root.name.as_str().as_bytes(),
+        )
+        .expect("a contributory sharer key");
+        let mut plan = root.grant_section.commitment.clone();
+        for entry in plan.entries.iter_mut().filter(|e| e.tag == demoted) {
+            assert_eq!(entry.permission, Permission::Write);
+            entry.permission = Permission::Read;
+        }
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &plan);
+        enumerate_root(&net);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected)
+        );
+        assert!(
+            !published_at(&harness, &moved.new_name),
+            "nothing is published, so the demoted party never receives the fresh write seed",
         );
     }
 

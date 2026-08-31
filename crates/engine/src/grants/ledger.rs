@@ -183,7 +183,7 @@ pub const UNATTESTED_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0u8; IDENTITY_PUB
 /// The blinded tag binds `scope_root_ipns_name` and the writer pseudonym binds
 /// `scope_id`, both off the same shared secret; the two MUST name the same scope
 /// root, or the grantee derives a tag it can never self-locate. Callers derive
-/// the name rather than accepting one (`create::create_read_grant` step 2).
+/// the name rather than accepting one (`create::create_grant` step 2).
 ///
 /// A read entry's pseudonym never authorizes a structure but is derived honestly
 /// so a later write upgrade stays consistent. `None` on a non-contributory ECDH —

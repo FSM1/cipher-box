@@ -40,7 +40,7 @@ pub use contact_store::{
 };
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan,
-    OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter, converge_grant_subtree, create_read_grant,
+    OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter, converge_grant_subtree, create_grant,
     mint_grantee_scope,
 };
 pub use invite::{

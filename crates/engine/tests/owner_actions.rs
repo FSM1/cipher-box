@@ -12,8 +12,9 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields, ReadBody,
-    decode_envelope, decode_grant_section, grant_section_bytes, open_read_body, sign_grant_set,
+    AadContext, GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields,
+    ReadBody, STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
+    open_grant_blob, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -25,15 +26,19 @@ use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
     CLAIM_ID_LEN, EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, InviteRecords,
     InviteStore, MintedInvite, RecordedInvite, StagingInviteStore, import_contact, mint_grant_row,
-    mint_invite_grant, post_invite_claim,
+    mint_invite_grant, post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
-use cipherbox_engine::rotation::{MAX_ROTATION_ATTEMPTS, published_override_seed};
+use cipherbox_engine::rotation::{
+    MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
+};
 use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
 use cipherbox_engine::sync::SessionRole;
-use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::pointer::{
+    open_repoint, scope_pointer_name, seal_repoint, vault_pointer_name,
+};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
     serve_http,
@@ -332,10 +337,56 @@ fn published_grant_section(
     blocks: &Blocks,
     node: NodeId,
 ) -> Option<GrantSection> {
-    let head = published_head(world, blocks, &write_name(node))?;
+    published_grant_section_at(world, blocks, &write_name(node))
+}
+
+/// The grant section published at `name`, if the record there is a scope root.
+/// The by-name form a write-scope cut needs: the wave moves the root off the
+/// name [`write_name`] derives.
+fn published_grant_section_at(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    name: &IpnsName,
+) -> Option<GrantSection> {
+    let head = published_head(world, blocks, name)?;
     let envelope = decode_envelope(&head).expect("the head decodes");
     grant_section_bytes(&envelope)
         .map(|bytes| decode_grant_section(bytes).expect("the section decodes"))
+}
+
+/// The write-scope seed the recipient's own grant blob at `name` conveys — the
+/// only channel a grantee ever receives one on.
+fn grantee_write_scope_seed(
+    section: &GrantSection,
+    name: &IpnsName,
+    scope_id: &[u8; 16],
+    read_epoch: u64,
+) -> [u8; 32] {
+    let recipient_enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let owner_enc_pub = kdf::enc_subkey(&SECRET).public();
+    let tag = recipient_blinded_tag(&recipient_enc, &owner_enc_pub, name.as_str().as_bytes())
+        .expect("a contributory owner key");
+    let blob = section
+        .grant_blobs
+        .iter()
+        .find(|b| b.tag == tag)
+        .expect("the recipient self-locates its blob at the name the record asserts");
+    let payload = open_grant_blob(
+        &recipient_enc,
+        &blob.enc,
+        &AadContext {
+            v: ENVELOPE_V,
+            id: *scope_id,
+            scope: *scope_id,
+            epoch: read_epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        },
+        &blob.ciphertext,
+    )
+    .expect("the recipient opens its own blob");
+    *payload
+        .write_scope_seed()
+        .expect("a write grant's blob carries the write scope seed")
 }
 
 /// The sequence of the record published at `name`, verified under it.
@@ -499,11 +550,92 @@ impl GrantScenario {
     }
 
     fn grant_folder_to_recipient(&mut self) -> Result<CommandOutcome, EngineError> {
+        self.grant_folder_at(Permission::Read)
+    }
+
+    fn grant_folder_at(&mut self, permission: Permission) -> Result<CommandOutcome, EngineError> {
         block_on(self.engine.command(Command::Grant {
             node: self.folder,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
+            permission,
         }))
+    }
+
+    /// The re-point object the granted scope's own pointer record carries — the
+    /// owner-signed authority for where a write-scope cut moved the root to.
+    fn granted_scope_repoint(&self) -> RepointObject {
+        let owner_pointer_seed = kdf::owner_pointer_seed(&SECRET);
+        let pointer_name = scope_pointer_name(owner_pointer_seed.as_bytes(), &self.folder.0);
+        // A pointer record carries its sealed block inline, not an `/ipfs/`
+        // address, so it is read off the verified record rather than the plane.
+        let bytes = self
+            .world
+            .record_store
+            .record_at(
+                &self.world.record_store.endpoints()[0],
+                pointer_name.as_str(),
+            )
+            .expect("the write-scope cut published the scope pointer");
+        let block = IpnsRecord::unmarshal(&bytes)
+            .and_then(|record| record.verify(&pointer_name))
+            .expect("the pointer record verifies under its own name")
+            .value;
+        open_repoint(
+            kdf::pointer_read_key(owner_pointer_seed.as_bytes(), &self.folder.0).as_bytes(),
+            POINTER_PAYLOAD_VERSION,
+            &self.folder.0,
+            &owner_identity().verifying_key(),
+            &block,
+        )
+        .expect("the re-point object opens under the scope's own pointer read key")
+    }
+
+    /// The recipient's blinded tag at `name` — derived from the owner's own half
+    /// of the pairwise ECDH, as every self-location is.
+    fn recipient_tag(name: &IpnsName) -> [u8; 32] {
+        recipient_blinded_tag(
+            &kdf::enc_subkey(&RECIPIENT_SECRET),
+            &kdf::enc_subkey(&SECRET).public(),
+            name.as_str().as_bytes(),
+        )
+        .expect("a contributory owner key")
+    }
+
+    /// The permission the owner's own commitment at `name` carries for the
+    /// recipient, or `None` when it commits no row for them. A name no section
+    /// answers at panics, so `None` reports the tag and never a silent
+    /// non-publish.
+    fn committed_permission(&self, name: &IpnsName) -> Option<CorePermission> {
+        let tag = Self::recipient_tag(name);
+        published_grant_section_at(&self.world, &self.blocks, name)
+            .expect("a scope root answers at the name the pointer vouches for")
+            .commitment
+            .entries
+            .iter()
+            .find(|e| e.tag == tag)
+            .map(|e| e.permission)
+    }
+
+    /// Whether the recipient's blob at `name` conveys a write scope seed, or
+    /// `None` when they hold no blob there.
+    fn granted_blob_carries_write_seed(&self, name: &IpnsName) -> Option<bool> {
+        let tag = Self::recipient_tag(name);
+        let section = published_grant_section_at(&self.world, &self.blocks, name)?;
+        let blob = section.grant_blobs.iter().find(|b| b.tag == tag)?;
+        let payload = open_grant_blob(
+            &kdf::enc_subkey(&RECIPIENT_SECRET),
+            &blob.enc,
+            &AadContext {
+                v: ENVELOPE_V,
+                id: self.folder.0,
+                scope: self.folder.0,
+                epoch: 1,
+                struct_tag: STRUCT_TAG_GRANT_BLOB,
+            },
+            &blob.ciphertext,
+        )
+        .expect("the recipient opens its own blob");
+        Some(payload.write_scope_seed().is_some())
     }
 
     /// Mint a link at the folder and hand back only what a host holds: the URL
@@ -618,9 +750,9 @@ fn a_second_manual_rotation_cuts_again_rather_than_refusing_a_current_scope() {
 // Grant
 // ---------------------------------------------------------------------------
 
-/// Both refusals the grant arm owes are decided before any key material is
-/// wrapped: an unimported recipient has no verified subkey to seal to, and a
-/// write grant owes a write-scope cut this build does not author.
+/// The refusal the grant arm owes is decided before any key material is
+/// wrapped: an unimported recipient has no verified subkey to seal to. Both
+/// permissions refuse the same way, so a write grant costs no publish either.
 #[test]
 fn a_grant_the_engine_refuses_publishes_nothing() {
     let mut fx = GrantScenario::new();
@@ -634,26 +766,18 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
         .verifying_key()
         .to_sec1()
         .to_vec();
-    assert_eq!(
-        block_on(fx.engine.command(Command::Grant {
-            node: fx.folder,
-            recipient_identity_public_key: stranger,
-            permission: Permission::Read,
-        })),
-        Err(EngineError::MalformedInput {
-            check: "recipient-not-imported"
-        }),
-    );
-    assert_eq!(
-        block_on(fx.engine.command(Command::Grant {
-            node: fx.folder,
-            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Write,
-        })),
-        Err(EngineError::UnsupportedTarget {
-            check: "write-grants-need-a-write-scope-cut"
-        }),
-    );
+    for permission in [Permission::Read, Permission::Write] {
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: fx.folder,
+                recipient_identity_public_key: stranger.clone(),
+                permission,
+            })),
+            Err(EngineError::MalformedInput {
+                check: "recipient-not-imported"
+            }),
+        );
+    }
 
     assert_eq!(sequence_at(&fx.world, &root_name), root_before);
     assert_eq!(sequence_at(&fx.world, &folder_name), folder_before);
@@ -662,6 +786,233 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
         "a refused grant mints no scope at the target folder"
     );
     assert!(inbox(&fx.recipient_device).is_empty(), "and shares nothing");
+}
+
+/// The write-scope cut, against the production publisher: a write grant hands
+/// the grantee a `writeScopeSeed` the vault above cannot derive, and moves the
+/// granted subtree onto the names that seed derives
+/// (blueprint/engine.md "Grant creation").
+///
+/// The two halves are one property. A seed the grantee holds that still derived
+/// the parent's names would be write capability over the whole vault; a subtree
+/// left at the parent's names would leave the seed deriving nothing.
+#[test]
+fn a_write_grant_cuts_the_granted_subtree_into_its_own_write_scope() {
+    let mut fx = GrantScenario::new();
+    let inherited_name = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    // The scope pointer is the owner-signed authority for where the root sits.
+    let repoint = fx.granted_scope_repoint();
+    let moved_name = repoint.current_root.clone();
+    assert_eq!(repoint.prev_root.as_ref(), Some(&inherited_name));
+    assert_ne!(
+        moved_name, inherited_name,
+        "the wave moved the root off the name the parent's write scope derives"
+    );
+
+    // The grantee's own blob is the only channel that carries the seed, and it
+    // must be the one the moved names derive from. That equality also settles
+    // that the seed is not the vault's: the vault's derives `inherited_name`.
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &moved_name)
+        .expect("the moved root answers as a scope root");
+    let seed = grantee_write_scope_seed(&section, &moved_name, &fx.folder.0, 1);
+    assert_eq!(
+        derive_write_name(&seed, &fx.folder.0),
+        moved_name,
+        "the seed in the grantee's blob derives the root they resolve"
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "the share pointer reached the recipient"
+    );
+}
+
+/// The record the mint publishes before the wave lingers for ever — the wave
+/// retires interior names, never the root it moved off — and the recipient's tag
+/// at that name is the one it commits. So the seed it hands them has to be the
+/// mint's own cut, never the seed the scope above publishes under.
+///
+/// This is the one regression that would hand out vault-wide write capability,
+/// and the moved root cannot show it: its blob always carries the wave's fresh
+/// seed, whatever the mint sealed.
+#[test]
+fn the_record_a_write_grant_publishes_before_the_wave_withholds_the_vaults_seed() {
+    let mut fx = GrantScenario::new();
+    let interim_name = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let interim = published_grant_section_at(&fx.world, &fx.blocks, &interim_name)
+        .expect("the pre-wave root lingers at the name the vault's seed derives");
+    let seed = grantee_write_scope_seed(&interim, &interim_name, &fx.folder.0, 1);
+    assert_ne!(
+        derive_write_name(&seed, &ROOT.0),
+        write_name(ROOT),
+        "the interim blob must not convey the seed the vault's own names derive from"
+    );
+    assert_ne!(
+        derive_write_name(&seed, &fx.folder.0),
+        interim_name,
+        "nor the seed that derives the name the record itself sits at"
+    );
+}
+
+/// The revoke control must survive a downgrade. The wave moves the scope root,
+/// and the owner reaches an interior root through the vault root's own index —
+/// so a cut that moves a root and leaves that index behind strands every later
+/// owner action on the scope at a name it has moved off.
+#[test]
+fn a_downgraded_grant_can_still_be_revoked() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert_eq!(
+        block_on(fx.engine.command(Command::Downgrade {
+            node: fx.folder,
+            recipient_identity_public_key: recipient.clone(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient,
+        })),
+        Ok(CommandOutcome::Done),
+        "the owner still reaches the scope the downgrade's wave moved"
+    );
+    assert_eq!(
+        fx.committed_permission(&fx.granted_scope_repoint().current_root),
+        None,
+        "and the revoke cut their row from the moved root"
+    );
+}
+
+/// The downgrade arm, end to end against the production `CutRotator`.
+///
+/// The write wave re-mints the grant set only from a root already carrying the
+/// authorized commitment, and a downgrade rotates no read plane — so the cut
+/// publishes the demoted set itself before the wave. Assert the **published**
+/// permission, which is what the wave reads.
+#[test]
+fn a_downgrade_publishes_the_demoted_commitment_and_moves_the_scope() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    assert_eq!(
+        fx.committed_permission(&granted.current_root),
+        Some(CorePermission::Write)
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Downgrade {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done),
+        "the downgrade completes rather than refusing permanently at the wave"
+    );
+
+    let after = fx.granted_scope_repoint();
+    assert_eq!(
+        after.write_epoch,
+        granted.write_epoch + 1,
+        "the wave ran, so the demoted party's derived names are dead"
+    );
+    assert_eq!(after.prev_root, Some(granted.current_root.clone()));
+    assert_eq!(
+        fx.committed_permission(&after.current_root),
+        Some(CorePermission::Read),
+        "the moved root commits the recipient at the demoted permission"
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&after.current_root),
+        Some(false),
+        "and their blob no longer conveys a write scope seed"
+    );
+}
+
+/// A write revoke drives both planes: the read cascade cuts the row and the wave
+/// moves the scope off every name the revokee's seed derives. Only the re-key
+/// cuts access, so assert both halves.
+#[test]
+fn revoking_a_write_grant_cuts_the_row_and_moves_the_scope_off_the_revokees_names() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let granted = fx.granted_scope_repoint();
+    let revokee_seed = {
+        let section = published_grant_section_at(&fx.world, &fx.blocks, &granted.current_root)
+            .expect("the granted root");
+        grantee_write_scope_seed(&section, &granted.current_root, &fx.folder.0, 1)
+    };
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let after = fx.granted_scope_repoint();
+    assert_ne!(
+        derive_write_name(&revokee_seed, &fx.folder.0),
+        after.current_root,
+        "the revokee's seed no longer derives the name the scope pointer vouches for"
+    );
+    assert_eq!(
+        fx.committed_permission(&after.current_root),
+        None,
+        "and the moved root commits no row at their tag"
+    );
+}
+
+/// Key regression, stated at the write plane: after the cut, the vault's write
+/// scope seed no longer names anything in the granted scope. That is what lets
+/// a later revoke of this grantee re-key one scope instead of the vault, and
+/// what stops the parent scope's writers authoring inside the granted one.
+#[test]
+fn a_write_grants_cut_leaves_the_parent_scopes_seed_naming_nothing_granted() {
+    let mut fx = GrantScenario::new();
+    let inherited_name = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let repoint = fx.granted_scope_repoint();
+    assert_ne!(
+        repoint.current_root, inherited_name,
+        "the scope the parent's seed named is not the scope the grantee reads"
+    );
+    assert_eq!(
+        repoint.write_epoch, 2,
+        "the cut advanced the granted scope's own write clock"
+    );
+    assert_eq!(
+        repoint.min_read_epoch, 1,
+        "and left the read plane's clock at the epoch the mint anchored"
+    );
 }
 
 /// A first promotion against the production publisher: the minted scope root
@@ -1459,6 +1810,33 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
         recorded_links(&alice).len(),
         1,
         "a refused revoke forgets nothing"
+    );
+}
+
+/// A revoke and a downgrade are different actions to a user, so an ordinary
+/// folder refuses each under its own name.
+#[test]
+fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient.clone(),
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "revoke-target-is-not-a-scope-root"
+        }),
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Downgrade {
+            node: fx.folder,
+            recipient_identity_public_key: recipient,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "downgrade-target-is-not-a-scope-root"
+        }),
     );
 }
 

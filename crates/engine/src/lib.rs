@@ -91,9 +91,9 @@ pub use rotation::{
     RevokeError, RevokedCommittedSet, RotateError, RotateOnCutError, RotateScopePlan,
     RotationOutcome, RotationPlanes, RotationPublishError, RotationTrigger, ScopeExitReport,
     ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher, SweepError, SweepOutcome,
-    WriteHistory, WriteRevokeKind, consume_scope_exit_triggers, enumerate_eager_set,
-    prune_expired_grants, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
-    rotate_scope, run_sweep_job,
+    WriteHistory, WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_grant,
+    enumerate_eager_set, prune_expired_grants, reseal_scope_root, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep_job,
 };
 pub use seams::{
     OwedRetire, OwnerScopedFloorStore, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes,

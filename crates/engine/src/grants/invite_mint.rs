@@ -16,7 +16,6 @@
 
 use core::fmt;
 
-use cipherbox_core::seal::Permission;
 use cipherbox_core::suite::contact::ContactCode;
 use zeroize::Zeroizing;
 
@@ -78,6 +77,12 @@ pub enum InviteMintError {
     /// the scope-root publish; past it the record is live and
     /// [`CreateGrantError`] states what stayed behind.
     Create(CreateGrantError),
+    /// The plan carries a write cut, so it mints at
+    /// [`Permission::Write`](cipherbox_core::seal::Permission::Write). The
+    /// fragment and the recorded tag both bind the pre-cut scope root name, and
+    /// the cut moves that name — so the link would be unclaimable at the name it
+    /// carries. Refused before anything seals.
+    WriteCut,
 }
 
 impl fmt::Display for InviteMintError {
@@ -86,6 +91,9 @@ impl fmt::Display for InviteMintError {
             InviteMintError::Mint(e) => write!(f, "{e}"),
             InviteMintError::Store(e) => write!(f, "{e}"),
             InviteMintError::Create(e) => write!(f, "{e}"),
+            InviteMintError::WriteCut => {
+                f.write_str("an invite link mints read-only, so a write-cut plan is refused")
+            }
         }
     }
 }
@@ -96,11 +104,9 @@ impl std::error::Error for InviteMintError {}
 /// the link, mint and publish the fresh scope its row is the whole committed set
 /// of, and hand back the bearer capability.
 ///
-/// Owner-only by construction and read-only, exactly as
-/// [`create_read_grant`](super::create_read_grant) is: the scope this publishes
-/// is signed under the owner's writer pseudonym and its commitment under the
-/// owner identity, and it inherits the parent's write plane — so a write row's
-/// blob would hand the bearer the seed every name in that scope derives from.
+/// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
+/// is: the scope this publishes is signed under the owner's writer pseudonym and
+/// its commitment under the owner identity, so no other session can author it.
 pub async fn mint_invite_link<E, R, P, S>(
     entropy: &mut E,
     resolver: &R,
@@ -115,6 +121,10 @@ where
     P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
     S: InviteStore,
 {
+    // Release-active, ahead of every seal ([`InviteMintError::WriteCut`]).
+    if plan.grantee.write_cut.is_some() {
+        return Err(InviteMintError::WriteCut);
+    }
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
     let minted = mint_invite_grant(
         owner.identity_signer,
@@ -122,7 +132,7 @@ where
         &invitee,
         &plan.grantee.scope_id,
         plan.grantee.write_scope_seed,
-        Permission::Read,
+        plan.grantee.permission(),
         plan.expires_at,
     )
     .map_err(InviteMintError::Mint)?;
@@ -175,6 +185,8 @@ mod tests {
     use cipherbox_core::suite::secret::SECRET_LEN;
     use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
     use zeroize::Zeroizing;
+
+    use cipherbox_core::seal::Permission;
 
     use crate::grants::{RecordedInvite, StagingInviteStore, recipient_blinded_tag};
     use crate::rotation::{
@@ -395,6 +407,14 @@ mod tests {
             &self,
             expires_at: Option<UnixMillis>,
         ) -> Result<MintedInviteLink, InviteMintError> {
+            self.mint_with(expires_at, None)
+        }
+
+        fn mint_with(
+            &self,
+            expires_at: Option<UnixMillis>,
+            write_cut: Option<&[u8; SECRET_LEN]>,
+        ) -> Result<MintedInviteLink, InviteMintError> {
             let owner_enc_pub = self.enc.public();
             let grantee = GranteeScopePlan {
                 v: V,
@@ -402,6 +422,7 @@ mod tests {
                 parent_node_seed: &PARENT_NODE_SEED,
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &WRITE_SCOPE_SEED,
+                write_cut,
                 write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
@@ -573,6 +594,28 @@ mod tests {
             f.recovered().len(),
             1,
             "the record landed before the publish",
+        );
+    }
+
+    /// A write cut moves the scope root name the fragment and the record both
+    /// bind, so a write link is unclaimable at the name it carries. The refusal
+    /// is a runtime `Err`, never a debug_assert. Active in release.
+    #[test]
+    fn a_plan_that_cuts_a_write_scope_mints_no_link_release_active() {
+        let f = Fixture::new();
+
+        let refused = f
+            .mint_with(None, Some(&OVERRIDE_SEED))
+            .expect_err("a write plan mints no link");
+
+        assert!(matches!(refused, InviteMintError::WriteCut));
+        assert!(
+            f.recovered().is_empty(),
+            "the refusal precedes the record, so no durable slot is spent",
+        );
+        assert!(
+            f.net.published.borrow().is_empty(),
+            "and nothing publishes at a name the cut would move",
         );
     }
 }

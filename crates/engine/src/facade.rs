@@ -32,6 +32,7 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -44,7 +45,7 @@ use crate::content::{
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
-use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral};
+use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
 use crate::grants::{
@@ -55,7 +56,7 @@ use crate::grants::{
     OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
     ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
     StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
-    convert_invite_claim, create_read_grant, enforce_committed_ledger, import_contact,
+    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
     locate_invite_link, mint_invite_link, partition_scope_links, post_invite_claim,
     recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
@@ -77,9 +78,10 @@ use crate::net::{
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
-    AscentAuthority, CascadeTarget, CommittedSet, GrantCutPlan, MAX_ROTATION_ATTEMPTS, ResealError,
-    ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable, RevokeError, RotateError,
-    RotateScopePlan, ScopeRootIdentity, ScopeRootPublisher, WriteHistory, WriteRevokeKind, bounded,
+    AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
+    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
+    RevokeError, RevokedCommittedSet, RotateError, RotateScopePlan, ScopeRootIdentity,
+    ScopeRootPublisher, WriteHistory, WriteRevokeKind, bounded, cut_for_write_grant,
     derive_write_name, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
     rotate_scope, run_sweep,
 };
@@ -1304,6 +1306,9 @@ impl EngineError {
             InviteMintError::Mint(e) => EngineError::from_invite(e),
             InviteMintError::Store(e) => EngineError::from_invite_store(e),
             InviteMintError::Create(e) => EngineError::from_create_grant(e),
+            InviteMintError::WriteCut => EngineError::UnsupportedTarget {
+                check: WRITE_LINK_CHECK,
+            },
         }
     }
 
@@ -1893,6 +1898,31 @@ enum UnindexedScope {
     /// mint that stopped in between is live at that name and reachable nowhere
     /// else — and an owner that cannot reach it cannot revoke it.
     Derive,
+}
+
+/// The name an invite-link mint at `Permission::Write` reports. The mint owes
+/// the same refusal ([`InviteMintError::WriteCut`]), and both report this.
+const WRITE_LINK_CHECK: &str = "write-links-need-a-write-scope-cut";
+
+/// How far a committed-set cut goes at the tag it names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CutKind {
+    /// Remove the row: a read revoke, or a full write revoke.
+    Revoke,
+    /// Demote a write row to read, keeping the recipient committed
+    /// ([`WriteRevokeKind::DowngradeToRead`]).
+    Downgrade,
+}
+
+impl CutKind {
+    /// The name this cut reports for a target that names no scope root. One
+    /// rule, one name per command, as [`ShareChecks`] does for share actions.
+    fn target_check(self) -> &'static str {
+        match self {
+            CutKind::Revoke => "revoke-target-is-not-a-scope-root",
+            CutKind::Downgrade => "downgrade-target-is-not-a-scope-root",
+        }
+    }
 }
 
 impl OwnerScope {
@@ -4216,13 +4246,13 @@ where {
                 .revoke_grant(node, &recipient_identity_public_key)
                 .await
                 .map(|()| CommandOutcome::Done),
-            // A downgrade cuts the write plane only, and the wave re-mints the
-            // grant set from a record still carrying the pre-cut commitment. The
-            // pre-wave re-seal that would publish the demoted set is not
-            // implemented.
-            Command::Downgrade { .. } => Err(EngineError::UnsupportedTarget {
-                check: "downgrade-needs-a-pre-wave-reseal",
-            }),
+            Command::Downgrade {
+                node,
+                recipient_identity_public_key,
+            } => self
+                .downgrade_grant(node, &recipient_identity_public_key)
+                .await
+                .map(|()| CommandOutcome::Done),
             Command::AcceptShare {
                 sealed_share_pointer,
             } => self
@@ -4559,14 +4589,45 @@ where {
         node: NodeId,
         recipient_identity_public_key: &[u8],
     ) -> Result<(), EngineError> {
+        self.cut_recipient(node, recipient_identity_public_key, CutKind::Revoke)
+            .await
+    }
+
+    /// Demote a recipient's write grant on the vault root's scope to read
+    /// (blueprint/engine.md "Triggers": write revoke / downgrade).
+    ///
+    /// The read plane is untouched — the recipient keeps the grant they hold —
+    /// so the cut is driven through the write plane alone, behind the pre-wave
+    /// publish of the demoted set that [`rotate_on_cut`] owes it.
+    async fn downgrade_grant(
+        &self,
+        node: NodeId,
+        recipient_identity_public_key: &[u8],
+    ) -> Result<(), EngineError> {
+        self.cut_recipient(node, recipient_identity_public_key, CutKind::Downgrade)
+            .await
+    }
+
+    /// The shared spine of [`revoke_grant`](Self::revoke_grant) and
+    /// [`downgrade_grant`](Self::downgrade_grant).
+    ///
+    /// The owner's half of the same pairwise ECDH the recipient self-locates
+    /// under names the tag, so it is derived here and never taken from a caller.
+    async fn cut_recipient(
+        &self,
+        node: NodeId,
+        recipient_identity_public_key: &[u8],
+        kind: CutKind,
+    ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
         self.cut_and_rotate(
             node,
-            "revoke-target-is-not-a-scope-root",
+            kind.target_check(),
             UnindexedScope::Refuse,
+            kind,
             async |target: &OwnerScope, _current: &CascadeTarget| {
                 recipient_blinded_tag(
                     session.enc_subkey(),
@@ -4596,6 +4657,7 @@ where {
         node: NodeId,
         check: &'static str,
         unindexed: UnindexedScope,
+        kind: CutKind,
         select: S,
     ) -> Result<[u8; 32], EngineError>
     where
@@ -4603,7 +4665,6 @@ where {
     {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let sweep = self.sweep_factory()?;
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
         let owner_keys = || OwnerRotationKeys {
@@ -4611,7 +4672,6 @@ where {
             identity: &owner_identity,
             scope_keys: &scope_keys,
         };
-        let owner_pointer_seed = session.owner_pointer_seed();
         let target = self
             .owner_scope(node, api, owner_keys(), check, unindexed)
             .await?;
@@ -4635,16 +4695,40 @@ where {
             scope_root_name: &scope_root_name,
             owner_signer: session.identity(),
         };
-        // A write grant is cut by `revoke_write_grant`, never by a read revoke —
-        // the read cut refuses it by name, which is what selects the arm.
-        let cut = match revoke_read_grant(&plan, &tag) {
-            Err(RevokeError::WriteGranted) => {
-                revoke_write_grant(&plan, &tag, WriteRevokeKind::Full)
-            }
-            read_cut => read_cut,
+        let cut = match kind {
+            // A write grant is cut by `revoke_write_grant`, never by a read
+            // revoke — the read cut refuses it by name, which is what selects
+            // the arm.
+            CutKind::Revoke => match revoke_read_grant(&plan, &tag) {
+                Err(RevokeError::WriteGranted) => {
+                    revoke_write_grant(&plan, &tag, WriteRevokeKind::Full)
+                }
+                read_cut => read_cut,
+            },
+            CutKind::Downgrade => revoke_write_grant(&plan, &tag, WriteRevokeKind::DowngradeToRead),
         }
         .map_err(EngineError::from_revoke)?;
 
+        self.drive_cut(node, &target, &scope_root_name, &cut)
+            .await?;
+        Ok(tag)
+    }
+
+    /// Drive an authorized cut at `target` through the planes it demands
+    /// ([`rotate_on_cut`] over the production [`OwnerCutNet`]).
+    async fn drive_cut(
+        &self,
+        node: NodeId,
+        target: &OwnerScope,
+        scope_root_name: &IpnsName,
+        cut: &RevokedCommittedSet,
+    ) -> Result<CutRotationReport, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let sweep = self.sweep_factory()?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let owner_pointer_seed = session.owner_pointer_seed();
         let vault_pointer_signer = self
             .vault_pointer_index
             .get()
@@ -4658,22 +4742,49 @@ where {
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             entropy: &self.entropy,
-            keys: owner_keys(),
+            keys: OwnerRotationKeys {
+                enc_secret: session.enc_subkey(),
+                identity: &owner_identity,
+                scope_keys: &scope_keys,
+            },
             owner_signer: session.identity(),
             owner_pointer_seed: owner_pointer_seed.as_bytes(),
             vault_pointer_signer: vault_pointer_signer.as_ref(),
             held: &self.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
-            scope_root_name: &scope_root_name,
+            scope_root_name,
             scope_id: target.scope.scope_id,
             parent_node_seed: target.parent_node_seed.as_deref(),
             session_root_scope_id: self.snapshot.borrow().root.0,
             sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
         };
-        rotate_on_cut(&rotator, node, &cut)
+        let report = rotate_on_cut(&rotator, node, cut)
             .await
             .map_err(EngineError::from_rotation)?;
-        Ok(tag)
+        if let Some(write) = report.write.as_ref() {
+            // The wave publishes the re-point but never pre-advances the floor
+            // (`WriteEpochLease`): a failed publish must not brick the plane.
+            // Once it has landed, this session authored that owner-vouched
+            // `writeEpoch`, and the root it signed binds the same value as its
+            // owner-write blob's AAD — so the floor follows it here, exactly as
+            // a later consult of the pointer this wave just wrote would move it.
+            // Monotonic-max, so it can never roll one back. The wave holds no
+            // lease by the time it returns, so the raise is never deferred.
+            floor::advance_write_epoch_on_sight(
+                &self.seams.floor_store,
+                &target.scope.scope_id,
+                write.new_write_epoch,
+            )
+            .await
+            .map_err(EngineError::from_seam)?;
+            // Every wave moves the root, so every wave owes the index the same
+            // repoint — the vault root excepted, which no index names.
+            if node.0 != self.snapshot.borrow().root.0 {
+                self.repoint_child_scope_index(node, &write.new_root_name)
+                    .await?;
+            }
+        }
+        Ok(report)
     }
 
     /// Grant a node inside the vault root's scope to an imported contact
@@ -4684,19 +4795,12 @@ where {
         recipient_identity_public_key: &[u8],
         permission: Permission,
     ) -> Result<CommandOutcome, EngineError> {
-        // A write grant owes a write-scope cut — a fresh write scope seed and a
-        // name wave over the granted subtree — which the read-grant mint does
-        // not author.
-        if permission == Permission::Write {
-            return Err(EngineError::UnsupportedTarget {
-                check: "write-grants-need-a-write-scope-cut",
-            });
-        }
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let contact = self
             .recipient_contact(session, recipient_identity_public_key)
             .await?;
-        self.share_scope(node, ScopeShare::Contact(&contact)).await
+        self.share_scope(node, ScopeShare::Contact(&contact), permission)
+            .await
     }
 
     /// Mint an invite link over a node inside the vault root's scope: the same
@@ -4708,14 +4812,18 @@ where {
         permission: Permission,
         expires_at: Option<UnixMillis>,
     ) -> Result<CommandOutcome, EngineError> {
-        // The minted scope inherits the parent's write plane, so a write link
-        // would hand the bearer the seed every name in that scope derives from.
+        // A link's fragment and the owner's own record both bind the scope root
+        // name the mint published at, and the write-scope cut moves it — so a
+        // write link would be unclaimable at the name it carries and
+        // unlocatable at the tag it recorded. The cut has to run before the
+        // fragment is sealed, which the mint's record-before-publish order does
+        // not admit.
         if permission == Permission::Write {
             return Err(EngineError::UnsupportedTarget {
-                check: "write-links-need-a-write-scope-cut",
+                check: WRITE_LINK_CHECK,
             });
         }
-        self.share_scope(node, ScopeShare::InviteLink { expires_at })
+        self.share_scope(node, ScopeShare::InviteLink { expires_at }, permission)
             .await
     }
 
@@ -4725,6 +4833,11 @@ where {
     /// and deliver what `share` owes its recipient
     /// (blueprint/engine.md "Grant creation").
     ///
+    /// A `Permission::Write` share adds the write-scope cut between the mint and
+    /// the delivery: the mint seals a freshly drawn `writeScopeSeed`, and the
+    /// name wave then moves the subtree onto the names that seed's successor
+    /// derives ([`Self::cut_granted_write_scope`]).
+    ///
     /// Owner-only by construction: the parent's re-seal is signed under the
     /// owner's writer pseudonym and its commitment under the owner identity, so
     /// no other session can author it.
@@ -4732,6 +4845,7 @@ where {
         &self,
         node: NodeId,
         share: ScopeShare<'_>,
+        permission: Permission,
     ) -> Result<CommandOutcome, EngineError> {
         let checks = share.checks();
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
@@ -4780,14 +4894,24 @@ where {
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
         let pointer_read_key = session.pointer_read_key(&node.0);
         let pseudonym_signer = session.owner_writer_pseudonym_signer(&node.0);
+        // A read grant cuts no write scope: the granted node keeps the
+        // write-plane material it already publishes under. A write grant draws
+        // its own, because the mint seals this value into the grantee's blob and
+        // the inherited seed derives every name in the scope the node is
+        // leaving.
+        let granted_write_scope_seed = match permission {
+            Permission::Read => None,
+            Permission::Write => Some(
+                fresh_seed(&mut SharedEntropy(&self.entropy)).map_err(EngineError::from_entropy)?,
+            ),
+        };
         let grantee = GranteeScopePlan {
             v: current.v,
             scope_id: node.0,
             parent_node_seed: parent_node_seed.as_bytes(),
             owner_enc_pub: &current.owner_enc_pub,
-            // A read grant cuts no write scope: the granted node keeps the
-            // write-plane material it already publishes under.
             write_scope_seed: &current.write_scope_seed,
+            write_cut: granted_write_scope_seed.as_deref(),
             write_epoch: current.write_epoch,
             pointer_read_key: pointer_read_key.as_bytes(),
             subtree_child_index: &subtree,
@@ -4826,8 +4950,9 @@ where {
             carried_history_links: &current.carried_history_links,
         };
 
-        match share {
-            ScopeShare::Contact(contact) => create_read_grant(
+        let scope_root_name = grantee.ipns_name();
+        let outcome = match share {
+            ScopeShare::Contact(contact) => create_grant(
                 &mut SharedEntropy(&self.entropy),
                 &net,
                 &net,
@@ -4863,7 +4988,158 @@ where {
             .await
             .map(CommandOutcome::InviteLinkMinted)
             .map_err(EngineError::from_invite_mint),
+        }?;
+
+        if permission == Permission::Write {
+            self.cut_granted_write_scope(node, &scope_root_name, parent_node_seed.as_bytes())
+                .await?;
         }
+        Ok(outcome)
+    }
+
+    /// The write-scope cut a write grant owes, over the scope the mint just
+    /// published (blueprint/engine.md "Grant creation").
+    ///
+    /// Until this lands the granted subtree still sits at names the scope it
+    /// left derives, so the seed in the grantee's blob derives nothing they can
+    /// resolve and the owner alone authors there. The wave moves the subtree
+    /// onto names only the granted scope's `writeScopeSeed` derives, which is
+    /// what lets a later cut of this grantee re-key one scope instead of the
+    /// vault.
+    ///
+    /// The set driven is the one the mint published, read back off the record
+    /// and proven owner-signed by [`cut_for_write_grant`] — the same authority a
+    /// revoke's cut runs under, never a set this session merely believes it
+    /// wrote.
+    ///
+    /// This runs inside the non-atomic tail
+    /// [`CreateGrantError`](crate::grants::CreateGrantError) already documents:
+    /// the grantee root is published and the share pointer posted before it. A
+    /// failure therefore leaves a grantee holding a seed that derives nothing,
+    /// which is fail-closed — they read through child refs and write nowhere —
+    /// and self-heals on the next pointer consult once a later attempt cuts.
+    async fn cut_granted_write_scope(
+        &self,
+        node: NodeId,
+        scope_root_name: &IpnsName,
+        parent_node_seed: &[u8; SECRET_LEN],
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let target = OwnerScope {
+            scope: ChildScopeRef::new(node.0, scope_root_name.as_str().as_bytes().to_vec()),
+            parent_node_seed: Some(Zeroizing::new(*parent_node_seed)),
+            vouched: true,
+        };
+        let current = self
+            .owner_rotation_net(
+                api,
+                OwnerRotationKeys {
+                    enc_secret: session.enc_subkey(),
+                    identity: &owner_identity,
+                    scope_keys: &scope_keys,
+                },
+                target.ancestry(),
+                PointerConsultArm::Refused,
+            )
+            .resolve_anchored(&target.scope)
+            .await
+            // The mint published this root and the parent's index names it, so
+            // a gate rejection here is a trust violation, never a bad target.
+            .map_err(EngineError::from_resolve_failure)?;
+        let cut = cut_for_write_grant(&GrantCutPlan {
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            scope_root_name,
+            owner_signer: session.identity(),
+        })
+        .map_err(EngineError::from_revoke)?;
+        self.drive_cut(node, &target, scope_root_name, &cut)
+            .await
+            .map(|_| ())
+    }
+
+    /// Point the vault root's direct-child-scope index at the name a write-scope
+    /// cut moved `node`'s scope root to.
+    ///
+    /// The index is the owner's own authority for where an interior scope root
+    /// lives ([`Self::owner_scope_standing`]), and a later owner action reads it
+    /// before it consults any pointer. Left naming the pre-wave root, the next
+    /// revoke or downgrade of this grantee would resolve a name the scope has
+    /// moved off. A metadata-only re-seal at the parent's current epoch, so it
+    /// cuts no plane.
+    async fn repoint_child_scope_index(
+        &self,
+        node: NodeId,
+        moved: &IpnsName,
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let owner_identity = session.owner_identity();
+        let scope_keys = OwnerSessionKeys::new(session);
+        let parent = self.vault_root_scope()?;
+        let net = self.owner_rotation_net(
+            api,
+            OwnerRotationKeys {
+                enc_secret: session.enc_subkey(),
+                identity: &owner_identity,
+                scope_keys: &scope_keys,
+            },
+            RotationAncestry::default(),
+            PointerConsultArm::Permitted,
+        );
+        let current = net
+            .resolve_vault_root(&parent)
+            .await
+            .map_err(EngineError::from_resolve_failure)?;
+        let index = insert_child(
+            &current.direct_child_scope_index,
+            ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
+        );
+        let section = reseal_scope_root(
+            &mut SharedEntropy(&self.entropy),
+            &ScopeRootIdentity {
+                v: current.v,
+                scope_id: parent.scope_id,
+                ipns_name: &parent.ipns_name,
+                owner_enc_pub: &current.owner_enc_pub,
+                owner_enc_secret: Some(session.enc_subkey()),
+                ascent: None,
+                owes_ascent_link: current.carried_ascent_link,
+                pseudonym_signer: &current.pseudonym_signer,
+            },
+            &ResealSeeds {
+                override_seed: &current.override_seed,
+                read_epoch: current.current_read_epoch,
+                prev: None,
+                write_scope_seed: &current.write_scope_seed,
+                write_epoch: current.write_epoch,
+                write_history: WriteHistory::Carried(&current.write_history_link),
+                pointer_read_key: &current.pointer_read_key,
+            },
+            &CommittedSet {
+                owner_identity: &owner_identity,
+                commitment: &current.commitment,
+                commitment_sig: &current.commitment_sig,
+                grant_ledger: &current.grant_ledger,
+                direct_child_scope_index: &index,
+                revoked_recipients: &[],
+            },
+            &current.carried_history_links,
+        )
+        .map_err(|e| EngineError::from_rotate(RotateError::Reseal(e)))?;
+        net.publish_scope_root(&ResealedScopeRoot {
+            scope_id: parent.scope_id,
+            ipns_name: parent.ipns_name.clone(),
+            read_epoch: current.current_read_epoch,
+            write_epoch: current.write_epoch,
+            section,
+        })
+        .await
+        .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 
     /// Revoke the invite link the owner minted at `node`: cut its row from the
@@ -4889,6 +5165,7 @@ where {
                 node,
                 "revoke-link-target-is-not-a-scope-root",
                 UnindexedScope::Derive,
+                CutKind::Revoke,
                 async |target: &OwnerScope, current: &CascadeTarget| {
                     let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
                     locate_invite_link(
@@ -8732,26 +9009,30 @@ mod tests {
     fn a_rotation_arm_refuses_a_node_that_names_no_scope_root() {
         let (mut engine, _events) = started();
         let node = NodeId([1; 16]);
-        for (command, check) in [
-            (
-                Command::RotateNow { node },
-                "rotate-target-is-not-a-scope-root",
-            ),
-            (
-                Command::Downgrade {
-                    node,
-                    recipient_identity_public_key: vec![2u8; 33],
-                },
-                "downgrade-needs-a-pre-wave-reseal",
-            ),
-        ] {
-            let name = command.name();
-            assert_eq!(
-                block_on(engine.command(command)),
-                Err(EngineError::UnsupportedTarget { check }),
-                "`{name}` must refuse with its own typed verdict",
-            );
-        }
+        let name = Command::RotateNow { node }.name();
+        assert_eq!(
+            block_on(engine.command(Command::RotateNow { node })),
+            Err(EngineError::UnsupportedTarget {
+                check: "rotate-target-is-not-a-scope-root"
+            }),
+            "`{name}` must refuse with its own typed verdict",
+        );
+    }
+
+    /// A downgrade names a recipient before it names a scope, exactly as a
+    /// revoke does: both run the same cut spine.
+    #[test]
+    fn a_downgrade_refuses_an_unimported_recipient_before_it_resolves_anything() {
+        let (mut engine, _events) = started();
+        assert_eq!(
+            block_on(engine.command(Command::Downgrade {
+                node: NodeId([1; 16]),
+                recipient_identity_public_key: vec![2u8; 33],
+            })),
+            Err(EngineError::MalformedInput {
+                check: "recipient-not-imported"
+            }),
+        );
     }
 
     /// A revoke names a recipient before it names a scope: the contact book is
@@ -8771,11 +9052,10 @@ mod tests {
         );
     }
 
-    /// A read grant mints a fresh scope at the granted folder; a write grant
-    /// additionally owes a write-scope cut this build does not author, so it is
-    /// a typed refusal rather than a half-done grant.
+    /// A write grant names its recipient before it mints anything, so an
+    /// unimported one costs no publish — the same refusal a read grant gives.
     #[test]
-    fn a_write_grant_is_refused_before_anything_is_minted() {
+    fn a_write_grant_refuses_an_unimported_recipient_before_anything_is_minted() {
         let (mut engine, _events) = started();
         assert_eq!(
             block_on(engine.command(Command::Grant {
@@ -8783,8 +9063,8 @@ mod tests {
                 recipient_identity_public_key: vec![2u8; 33],
                 permission: Permission::Write,
             })),
-            Err(EngineError::UnsupportedTarget {
-                check: "write-grants-need-a-write-scope-cut"
+            Err(EngineError::MalformedInput {
+                check: "recipient-not-imported"
             }),
         );
     }

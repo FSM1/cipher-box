@@ -470,6 +470,46 @@ pub fn revoke_write_grant(
     )
 }
 
+/// The write-scope cut a **write grant** owes: drive the scope's already-minted
+/// committed set through the write plane alone (blueprint/engine.md "Grant
+/// creation" — "for write grants, the write-scope cut").
+///
+/// No row is cut. The granted scope root is minted at a name the scope it is
+/// leaving derives, so until the wave runs, the seed in the grantee's blob
+/// derives nothing and the owner still holds every name. The wave is what moves
+/// the subtree onto names the granted scope's own `writeScopeSeed` derives — the
+/// property that lets the owner later cut this grantee without re-keying the
+/// scope above.
+///
+/// Owner-only and scope-bound exactly as [`revoke_read_grant`] is: the set is
+/// re-used as the owner signed it, so it is verified rather than re-signed. A
+/// set committing no write row is refused on the same rule
+/// [`revoke_write_grant`] follows: the wave would move every name in the scope
+/// and hand nobody a seed they did not already hold.
+pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    if !plan
+        .commitment
+        .entries
+        .iter()
+        .any(|e| e.permission == Permission::Write)
+    {
+        return Err(RevokeError::NotWriteGranted);
+    }
+    enforce_committed_ledger(plan.commitment, plan.grant_ledger)
+        .map_err(RevokeError::LedgerDiverges)?;
+    Ok(RevokedCommittedSet {
+        commitment: plan.commitment.clone(),
+        commitment_sig: *plan.commitment_sig,
+        grant_ledger: plan.grant_ledger.to_vec(),
+        revoked_recipients: Vec::new(),
+        planes: RotationPlanes {
+            read: false,
+            write: true,
+        },
+    })
+}
+
 /// Prune every grant the owner's own record puts past its deadline at `now`,
 /// from both the commitment and the ledger, and owner-re-sign.
 ///
@@ -528,6 +568,17 @@ pub fn prune_expired_grants(
 /// and running the primitive over the live plane — `OwnerCutNet` over the real
 /// transport.
 pub trait CutRotator {
+    /// Publish `cut`'s committed set at `scope_root` without cutting either
+    /// plane's keys — a re-seal at the scope's current seed and read epoch.
+    ///
+    /// The implementation MUST be idempotent: a root already carrying the cut
+    /// set is left alone rather than republished.
+    async fn publish_cut_set(
+        &self,
+        scope_root: NodeId,
+        cut: &RevokedCommittedSet,
+    ) -> Result<(), CascadeError>;
+
     /// Run the fresh-seed read cascade at `scope_root` over `cut`
     /// ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)).
     async fn rotate_read_plane(
@@ -565,6 +616,9 @@ pub struct CutRotationReport {
 /// which half of a two-plane cut is outstanding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RotateOnCutError {
+    /// The cut set did not reach the scope root, so the write wave has nothing
+    /// to re-mint from. Nothing is cut on either plane.
+    PublishCut(CascadeError),
     /// The read-plane cascade did not complete, so the cut is not yet a
     /// revocation: the revokee's blob may still be at its tag.
     Read(CascadeError),
@@ -577,6 +631,7 @@ pub enum RotateOnCutError {
 impl core::fmt::Display for RotateOnCutError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            RotateOnCutError::PublishCut(e) => write!(f, "cut-set publish failed: {e}"),
             RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
             RotateOnCutError::Write(e) => write!(f, "write-plane wave failed: {e}"),
         }
@@ -589,7 +644,7 @@ impl RotateOnCutError {
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
-            RotateOnCutError::Read(e) => e.check(),
+            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.check(),
             RotateOnCutError::Write(e) => e.check(),
         }
     }
@@ -598,7 +653,7 @@ impl RotateOnCutError {
     /// stall — versus a trust violation no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            RotateOnCutError::Read(e) => e.is_retryable(),
+            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.is_retryable(),
             RotateOnCutError::Write(e) => e.is_retryable(),
         }
     }
@@ -611,12 +666,24 @@ impl RotateOnCutError {
 /// reading, which is the definitive revocation signal, and it is the record the
 /// write wave then re-mints its grant set from. The write wave moves the scope
 /// off every name the cut party can still author at, so it goes last. The first
-/// plane that does not complete aborts the cut ([`RotateOnCutError`]).
+/// step that does not complete aborts the cut ([`RotateOnCutError`]).
+///
+/// A cut that rotates the **write plane alone** — a downgrade, and the
+/// grant-time write-scope cut — has no read cascade to publish its set, and the
+/// wave re-mints only from a root already carrying it
+/// (`net/rotation.rs` `remint_grants`). Such a cut therefore publishes its own
+/// set first, at the scope's unchanged read seed and epoch.
 pub async fn rotate_on_cut<R: CutRotator>(
     rotator: &R,
     scope_root: NodeId,
     cut: &RevokedCommittedSet,
 ) -> Result<CutRotationReport, RotateOnCutError> {
+    if cut.planes.write && !cut.planes.read {
+        rotator
+            .publish_cut_set(scope_root, cut)
+            .await
+            .map_err(RotateOnCutError::PublishCut)?;
+    }
     let read = if cut.planes.read {
         Some(
             rotator
@@ -1193,30 +1260,61 @@ mod tests {
         assert_eq!(err.check(), "unauthorized-signer");
     }
 
-    /// Records which plane arms fired, in call order, failing the ones named.
+    /// Records which arms fired, in call order, failing the ones named. Each
+    /// arm also records the permission the cut carries at [`WRITE_TAG`], so a
+    /// test can prove the write wave ran over the demoted set rather than the
+    /// set the cut replaced.
     struct FakeCutRotator {
         seen: RefCell<Vec<&'static str>>,
+        committed_at_write_tag: RefCell<Vec<(&'static str, Permission)>>,
         refuse_read: bool,
         refuse_write: bool,
+        refuse_publish: bool,
     }
 
     impl FakeCutRotator {
         fn new() -> Self {
             Self {
                 seen: RefCell::new(Vec::new()),
+                committed_at_write_tag: RefCell::new(Vec::new()),
                 refuse_read: false,
                 refuse_write: false,
+                refuse_publish: false,
+            }
+        }
+
+        fn record(&self, arm: &'static str, cut: &RevokedCommittedSet) {
+            self.seen.borrow_mut().push(arm);
+            if let Some(entry) = cut.commitment.entries.iter().find(|e| e.tag == WRITE_TAG) {
+                self.committed_at_write_tag
+                    .borrow_mut()
+                    .push((arm, entry.permission));
             }
         }
     }
 
     impl CutRotator for FakeCutRotator {
+        async fn publish_cut_set(
+            &self,
+            scope_root: NodeId,
+            cut: &RevokedCommittedSet,
+        ) -> Result<(), CascadeError> {
+            self.record("publish-cut", cut);
+            if self.refuse_publish {
+                return Err(CascadeError::Resolve {
+                    scope_id: scope_root.0,
+                    reason: super::super::eager_set::ResolveFailure::Unavailable,
+                });
+            }
+            Ok(())
+        }
+
         async fn rotate_read_plane(
             &self,
             scope_root: NodeId,
-            _cut: &RevokedCommittedSet,
+            cut: &RevokedCommittedSet,
         ) -> Result<CascadeOutcome, CascadeError> {
-            self.seen.borrow_mut().push("read");
+            self.record("read", cut);
             if self.refuse_read {
                 return Err(CascadeError::Resolve {
                     scope_id: scope_root.0,
@@ -1235,9 +1333,9 @@ mod tests {
         async fn rotate_write_plane(
             &self,
             _scope_root: NodeId,
-            _cut: &RevokedCommittedSet,
+            cut: &RevokedCommittedSet,
         ) -> Result<WriteRotationOutcome, WriteRotateError> {
-            self.seen.borrow_mut().push("write");
+            self.record("write", cut);
             if self.refuse_write {
                 return Err(WriteRotateError::EpochExhausted);
             }
@@ -1277,9 +1375,99 @@ mod tests {
         let rotator = FakeCutRotator::new();
         let report = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("write plane");
 
-        assert_eq!(*rotator.seen.borrow(), ["write"]);
+        assert_eq!(*rotator.seen.borrow(), ["publish-cut", "write"]);
         assert!(report.read.is_none());
         assert!(report.write.is_some());
+    }
+
+    /// The write wave re-mints only from a root already carrying the authorized
+    /// set, so a write-only cut owes the publish before the wave — otherwise the
+    /// wave reads the pre-cut record and refuses permanently.
+    #[test]
+    fn a_downgrade_publishes_the_demoted_set_before_the_wave_runs() {
+        let fx = Fixture::new();
+        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+            .expect("downgrade");
+        let rotator = FakeCutRotator::new();
+        block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("write plane");
+
+        assert_eq!(
+            *rotator.committed_at_write_tag.borrow(),
+            [
+                ("publish-cut", Permission::Read),
+                ("write", Permission::Read)
+            ],
+            "the demoted row reaches the record before the wave re-mints from it"
+        );
+    }
+
+    #[test]
+    fn a_refused_cut_set_publish_never_reaches_the_write_plane() {
+        let fx = Fixture::new();
+        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+            .expect("downgrade");
+        let mut rotator = FakeCutRotator::new();
+        rotator.refuse_publish = true;
+        let err = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect_err("publish refused");
+
+        assert!(matches!(err, RotateOnCutError::PublishCut(_)));
+        assert_eq!(*rotator.seen.borrow(), ["publish-cut"]);
+        assert!(err.is_retryable());
+    }
+
+    /// A cut that rotates both planes has its set published by the read cascade,
+    /// so the pre-wave publish is not owed and never runs.
+    #[test]
+    fn a_two_plane_cut_owes_no_pre_wave_publish() {
+        let rotator = FakeCutRotator::new();
+        block_on(rotate_on_cut(&rotator, node(1), &full_write_revoke())).expect("both planes");
+
+        assert_eq!(*rotator.seen.borrow(), ["read", "write"]);
+    }
+
+    /// The grant-time write-scope cut drives the same write-only arm: the mint
+    /// published the set, so the publish arm still runs and finds it in place.
+    #[test]
+    fn a_write_grant_cut_carries_the_minted_set_through_the_write_plane() {
+        let fx = Fixture::new();
+        let cut = cut_for_write_grant(&fx.plan()).expect("the owner's own minted set");
+
+        assert!(!cut.planes().read(), "a grant re-keys no read plane");
+        assert!(cut.planes().write());
+        assert!(
+            cut.revoked_recipients.is_empty(),
+            "a grant cuts no recipient"
+        );
+        assert_eq!(cut.commitment, *fx.plan().commitment);
+
+        let rotator = FakeCutRotator::new();
+        block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("the write plane");
+        assert_eq!(*rotator.seen.borrow(), ["publish-cut", "write"]);
+    }
+
+    #[test]
+    fn a_write_grant_cut_refuses_a_set_the_owner_did_not_sign() {
+        let fx = Fixture::new();
+        let err = cut_for_write_grant(&fx.plan_signed_by(&stranger()))
+            .expect_err("a set this signer never authorized");
+        assert_eq!(err.check(), "unauthorized-signer");
+    }
+
+    #[test]
+    fn a_write_grant_cut_refuses_a_set_committing_no_write_row() {
+        // Read-only: the wave would move every name and cut nothing.
+        let fx = Fixture::new();
+        let read_only = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::Full)
+            .expect("the write row leaves the set");
+        let sig = read_only.commitment_sig;
+        let err = cut_for_write_grant(&GrantCutPlan {
+            commitment: &read_only.commitment,
+            commitment_sig: &sig,
+            grant_ledger: &read_only.grant_ledger,
+            ..fx.plan()
+        })
+        .expect_err("no write row to cut a scope for");
+        assert_eq!(err.check(), "not-write-granted");
     }
 
     #[test]

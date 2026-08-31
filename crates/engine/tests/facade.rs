@@ -71,8 +71,8 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
                 node,
                 recipient_identity_public_key: b"bob-pk".to_vec(),
             },
-            EngineError::UnsupportedTarget {
-                check: "downgrade-needs-a-pre-wave-reseal",
+            EngineError::MalformedInput {
+                check: "recipient-identity-key-length",
             },
         ),
         (
@@ -335,8 +335,9 @@ fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
     );
 }
 
-/// A write link would hand the bearer the write-scope seed the whole parent
-/// scope derives its names from, so it is refused ahead of every other check.
+/// A link's fragment and the owner's own record both bind the name the mint
+/// published at, and the write-scope cut moves it — so a write link is refused
+/// ahead of every other check rather than minted unclaimable.
 #[test]
 fn minting_a_write_invite_link_is_refused() {
     let world = FakeWorld::new();
