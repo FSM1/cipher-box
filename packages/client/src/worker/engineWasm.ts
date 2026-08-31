@@ -147,6 +147,7 @@ export interface WasmScopeSharing {
 export interface WasmSharingView {
   readonly scope: Uint8Array;
   readonly contacts: readonly WasmSharingContact[];
+  readonly ownContactCode: Uint8Array;
   readonly state?: WasmScopeSharing;
 }
 

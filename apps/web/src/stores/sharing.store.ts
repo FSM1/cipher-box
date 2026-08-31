@@ -1,6 +1,7 @@
 /**
  * The sharing state the engine reported, per scope: this vault's verified
- * contact book, and the grants a scope's own record commits.
+ * contact book, this member's own contact code, and the grants a scope's own
+ * record commits.
  *
  * A projection of `facade.sharing` with no independent writers — a command
  * re-reads rather than patching a row here, so the store holds nothing the
@@ -49,18 +50,25 @@ export interface ScopeSharing {
 
 export interface SharingState {
   readonly contacts: readonly VerifiedContact[];
+  /**
+   * This member's own contact code as hex, the encoding `sharing/contactCode`
+   * parses a pasted one from — so an exchange round-trips. `null` until a read
+   * has landed.
+   */
+  readonly ownContactCode: string | null;
   /** Each scope's own state, keyed by the scope root's hex node id. */
   readonly scopes: ReadonlyMap<string, ScopeSharing>;
 }
 
-let state: SharingState = frozen([], new Map());
+let state: SharingState = frozen([], null, new Map());
 const listeners = new Set<() => void>();
 
 function frozen(
   contacts: readonly VerifiedContact[],
+  ownContactCode: string | null,
   scopes: ReadonlyMap<string, ScopeSharing>
 ): SharingState {
-  return Object.freeze({ contacts: Object.freeze(contacts), scopes });
+  return Object.freeze({ contacts: Object.freeze(contacts), ownContactCode, scopes });
 }
 
 function publish(next: SharingState): void {
@@ -112,14 +120,17 @@ export const sharingStore = {
     publish(
       frozen(
         view.contacts.map((contact) => contactOf(contact.identityPublicKey)),
+        toHex(view.ownContactCode),
         scopes
       )
     );
   },
 
   clear(): void {
-    if (state.contacts.length === 0 && state.scopes.size === 0) return;
-    publish(frozen([], new Map()));
+    if (state.contacts.length === 0 && state.ownContactCode === null && state.scopes.size === 0) {
+      return;
+    }
+    publish(frozen([], null, new Map()));
   },
 };
 

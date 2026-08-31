@@ -108,6 +108,7 @@ describe('EngineProvider', () => {
           identityPublicKey: new Uint8Array(33).fill(1),
         },
       ],
+      ownContactCode: new Uint8Array([0xc0, 0xde]),
       state: {
         grants: [],
         grantRefusal: null,

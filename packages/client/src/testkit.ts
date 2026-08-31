@@ -112,6 +112,7 @@ export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDes
   return {
     scope,
     contacts: [],
+    ownContactCode: new Uint8Array(),
     state: {
       grants: [],
       grantRefusal: null,

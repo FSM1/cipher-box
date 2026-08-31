@@ -417,15 +417,22 @@ pub struct ScopeSharing {
 }
 
 /// A key-free read of the sharing state a host renders for one scope: this
-/// vault's whole verified contact book, and the grants the scope's own record
-/// commits — the same altitude as [`SnapshotView`], and the read that lets a UI
-/// stop mirroring its own command outcomes.
+/// vault's whole verified contact book, this member's own contact code, and the
+/// grants the scope's own record commits — the same altitude as
+/// [`SnapshotView`], and the read that lets a UI stop mirroring its own command
+/// outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharingView {
     /// The scope root this read is for.
     pub scope: NodeId,
     /// Every contact this vault has imported, ordered as the book stores them.
     pub contacts: Vec<SharingContact>,
+    /// This member's own contact code: the self-authenticating
+    /// `{identityPk, encSubkey, bindingSig}` bundle a peer imports to complete
+    /// the exchange the other direction already serves
+    /// ([`Command::ImportContact`]). Public material, signed under the
+    /// session's own identity key — it derives nothing and unwraps nothing.
+    pub own_contact_code: Vec<u8>,
     /// `None` where this read could not reach the scope root — absence a host
     /// must not paint as "shared with nobody".
     pub state: Option<ScopeSharing>,
@@ -6581,6 +6588,11 @@ where {
         Ok(SharingView {
             scope: scope_root,
             contacts,
+            own_contact_code: ContactCode::create(
+                session.identity(),
+                session.enc_subkey().public(),
+            )
+            .encode(),
             state: self.scope_sharing(session, scope_root).await,
         })
     }

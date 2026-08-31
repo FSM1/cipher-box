@@ -185,6 +185,8 @@ export interface SharingDescriptor {
   scope: Uint8Array;
   /** This vault's whole contact book, re-verified from each stored code. */
   contacts: SharingContactDescriptor[];
+  /** This member's own contact code, for a peer to import. Public material. */
+  ownContactCode: Uint8Array;
   /** `null` when the read could not reach the scope root — see `SharingView`. */
   state: ScopeSharingDescriptor | null;
 }

@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { sharingFor, sharingStore, type GrantRow } from './sharing.store';
 
 const DOCS = new Uint8Array(16).fill(7);
+/** This member's own contact code, as the engine hands it out. */
+const OWN_CODE = new Uint8Array([0xc0, 0xde]);
 const PHOTOS = new Uint8Array(16).fill(9);
 const DOCS_KEY = toHex(DOCS);
 const PHOTOS_KEY = toHex(PHOTOS);
@@ -49,6 +51,7 @@ function view(
     contacts: contacts.map((seed) => ({
       identityPublicKey: identity(seed),
     })),
+    ownContactCode: OWN_CODE,
     state:
       grants === null
         ? null

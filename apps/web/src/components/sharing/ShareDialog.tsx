@@ -104,6 +104,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
       {step === 'import' ? (
         <ContactImportForm
           busy={actions.busy === 'importContact'}
+          ownContactCode={state.ownContactCode}
           onCancel={() => goTo('grants')}
           onConfirm={importContact}
         />

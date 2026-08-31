@@ -647,6 +647,12 @@ mod tests {
         })
     }
 
+    /// The member's own contact code, as the engine mints it for the view.
+    fn own_code() -> Vec<u8> {
+        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
+        ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public()).encode()
+    }
+
     fn imported_contact() -> Outcome {
         let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
         let code = ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public());
@@ -839,6 +845,7 @@ mod tests {
             JsValue::from(SharingView::from_facade(facade::SharingView {
                 scope: EngineNodeId([0x5c; 16]),
                 contacts: Vec::new(),
+                own_contact_code: own_code(),
                 state,
             }))
         };
@@ -923,6 +930,15 @@ mod tests {
         assert!(
             field(&view(None), "state").is_undefined(),
             "a read that could not reach the scope root withholds every field"
+        );
+
+        // The exchange's other direction: a read that reached no scope root
+        // still hands out the code a peer imports, and it imports as a contact.
+        let code = bytes(field(&view(None), "ownContactCode"));
+        assert_eq!(code, own_code());
+        assert!(
+            import_contact(&code).is_ok(),
+            "the code the view crosses is the bundle an import verifies"
         );
     }
 
