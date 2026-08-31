@@ -15,6 +15,7 @@ pub use crate::ll::fuse_abi::FUSE_ROOT_ID;
 use crate::ll::fuse_abi::consts::*;
 pub use crate::ll::{TimeOrNow, fuse_abi::consts};
 use crate::mnt::mount_options::check_option_conflicts;
+use crate::redact::redacted;
 pub use crate::session::MAX_WRITE_SIZE;
 pub use ll::fuse_abi::fuse_forget_one;
 pub use mnt::mount_options::{MountOption, option_to_string};
@@ -43,6 +44,7 @@ mod mnt;
 mod notify;
 #[cfg(feature = "abi-7-40")]
 mod passthrough;
+mod redact;
 mod reply;
 mod request;
 mod session;
@@ -318,7 +320,10 @@ pub trait Filesystem {
 
     /// Look up a directory entry by name and get its attributes.
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        warn!("[Not Implemented] lookup(parent: {parent:#x?}, name {name:?})");
+        warn!(
+            "[Not Implemented] lookup(parent: {parent:#x?}, name {name})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
@@ -390,8 +395,9 @@ pub trait Filesystem {
         reply: ReplyEntry,
     ) {
         warn!(
-            "[Not Implemented] mknod(parent: {parent:#x?}, name: {name:?}, \
-            mode: {mode}, umask: {umask:#x?}, rdev: {rdev})"
+            "[Not Implemented] mknod(parent: {parent:#x?}, name: {name}, \
+            mode: {mode}, umask: {umask:#x?}, rdev: {rdev})",
+            name = redacted(name)
         );
         reply.error(ENOSYS);
     }
@@ -407,20 +413,27 @@ pub trait Filesystem {
         reply: ReplyEntry,
     ) {
         warn!(
-            "[Not Implemented] mkdir(parent: {parent:#x?}, name: {name:?}, mode: {mode}, umask: {umask:#x?})"
+            "[Not Implemented] mkdir(parent: {parent:#x?}, name: {name}, mode: {mode}, umask: {umask:#x?})",
+            name = redacted(name)
         );
         reply.error(ENOSYS);
     }
 
     /// Remove a file.
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        warn!("[Not Implemented] unlink(parent: {parent:#x?}, name: {name:?})",);
+        warn!(
+            "[Not Implemented] unlink(parent: {parent:#x?}, name: {name})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
     /// Remove a directory.
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        warn!("[Not Implemented] rmdir(parent: {parent:#x?}, name: {name:?})",);
+        warn!(
+            "[Not Implemented] rmdir(parent: {parent:#x?}, name: {name})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
@@ -434,7 +447,9 @@ pub trait Filesystem {
         reply: ReplyEntry,
     ) {
         warn!(
-            "[Not Implemented] symlink(parent: {parent:#x?}, link_name: {link_name:?}, target: {target:?})",
+            "[Not Implemented] symlink(parent: {parent:#x?}, link_name: {link_name}, target: {target})",
+            link_name = redacted(link_name),
+            target = redacted(target)
         );
         reply.error(EPERM);
     }
@@ -451,8 +466,10 @@ pub trait Filesystem {
         reply: ReplyEmpty,
     ) {
         warn!(
-            "[Not Implemented] rename(parent: {parent:#x?}, name: {name:?}, \
-            newparent: {newparent:#x?}, newname: {newname:?}, flags: {flags})",
+            "[Not Implemented] rename(parent: {parent:#x?}, name: {name}, \
+            newparent: {newparent:#x?}, newname: {newname}, flags: {flags})",
+            name = redacted(name),
+            newname = redacted(newname)
         );
         reply.error(ENOSYS);
     }
@@ -467,7 +484,8 @@ pub trait Filesystem {
         reply: ReplyEntry,
     ) {
         warn!(
-            "[Not Implemented] link(ino: {ino:#x?}, newparent: {newparent:#x?}, newname: {newname:?})"
+            "[Not Implemented] link(ino: {ino:#x?}, newparent: {newparent:#x?}, newname: {newname})",
+            newname = redacted(newname)
         );
         reply.error(EPERM);
     }
@@ -682,8 +700,9 @@ pub trait Filesystem {
         reply: ReplyEmpty,
     ) {
         warn!(
-            "[Not Implemented] setxattr(ino: {ino:#x?}, name: {name:?}, \
-            flags: {flags:#x?}, position: {position})"
+            "[Not Implemented] setxattr(ino: {ino:#x?}, name: {name}, \
+            flags: {flags:#x?}, position: {position})",
+            name = redacted(name)
         );
         reply.error(ENOSYS);
     }
@@ -700,7 +719,10 @@ pub trait Filesystem {
         size: u32,
         reply: ReplyXattr,
     ) {
-        warn!("[Not Implemented] getxattr(ino: {ino:#x?}, name: {name:?}, size: {size})");
+        warn!(
+            "[Not Implemented] getxattr(ino: {ino:#x?}, name: {name}, size: {size})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
@@ -715,7 +737,10 @@ pub trait Filesystem {
 
     /// Remove an extended attribute.
     fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
-        warn!("[Not Implemented] removexattr(ino: {ino:#x?}, name: {name:?})");
+        warn!(
+            "[Not Implemented] removexattr(ino: {ino:#x?}, name: {name})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
@@ -749,8 +774,9 @@ pub trait Filesystem {
         reply: ReplyCreate,
     ) {
         warn!(
-            "[Not Implemented] create(parent: {parent:#x?}, name: {name:?}, mode: {mode}, \
-            umask: {umask:#x?}, flags: {flags:#x?})"
+            "[Not Implemented] create(parent: {parent:#x?}, name: {name}, mode: {mode}, \
+            umask: {umask:#x?}, flags: {flags:#x?})",
+            name = redacted(name)
         );
         reply.error(ENOSYS);
     }
@@ -909,7 +935,10 @@ pub trait Filesystem {
     /// FUSE_VOL_RENAME to enable
     #[cfg(target_os = "macos")]
     fn setvolname(&mut self, _req: &Request<'_>, name: &OsStr, reply: ReplyEmpty) {
-        warn!("[Not Implemented] setvolname(name: {name:?})");
+        warn!(
+            "[Not Implemented] setvolname(name: {name})",
+            name = redacted(name)
+        );
         reply.error(ENOSYS);
     }
 
@@ -926,8 +955,10 @@ pub trait Filesystem {
         reply: ReplyEmpty,
     ) {
         warn!(
-            "[Not Implemented] exchange(parent: {parent:#x?}, name: {name:?}, \
-            newparent: {newparent:#x?}, newname: {newname:?}, options: {options})"
+            "[Not Implemented] exchange(parent: {parent:#x?}, name: {name}, \
+            newparent: {newparent:#x?}, newname: {newname}, options: {options})",
+            name = redacted(name),
+            newname = redacted(newname)
         );
         reply.error(ENOSYS);
     }
@@ -1001,4 +1032,169 @@ pub fn spawn_mount2<'a, FS: Filesystem + Send + 'static + 'a, P: AsRef<Path>>(
 ) -> io::Result<BackgroundSession> {
     check_option_conflicts(options)?;
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::io::IoSlice;
+    use std::os::unix::ffi::OsStringExt;
+    use std::sync::{Arc, Mutex, Once};
+
+    /// A name the default `Filesystem` bodies must never write to a log sink.
+    const SECRET: &str = "top-secret-vault-name.txt";
+    const SECRET_REDACTED: &str = "<redacted 25 bytes>";
+
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static LOGGER: CapturingLogger = CapturingLogger;
+
+    struct CapturingLogger;
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            CAPTURED.lock().unwrap().push(record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn install_logger() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let _ = log::set_logger(&LOGGER);
+            log::set_max_level(log::LevelFilter::Trace);
+        });
+    }
+
+    struct NullSender;
+
+    impl ReplySender for NullSender {
+        fn send(&self, _data: &[IoSlice<'_>]) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        #[cfg(feature = "abi-7-40")]
+        fn open_backing(&self, _fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<BackingId> {
+            unreachable!()
+        }
+    }
+
+    struct NullFs;
+
+    impl Filesystem for NullFs {}
+
+    /// `fuse_in_header` is cast out of the buffer, so the buffer needs alignment.
+    #[repr(align(8))]
+    struct AlignedHeader([u8; 40]);
+
+    const fn empty_header() -> AlignedHeader {
+        let mut bytes = [0u8; 40];
+        let len = 40u32.to_ne_bytes();
+        bytes[0] = len[0];
+        bytes[1] = len[1];
+        bytes[2] = len[2];
+        bytes[3] = len[3];
+        AlignedHeader(bytes)
+    }
+
+    fn request(header: &AlignedHeader) -> Request<'_> {
+        let device = std::fs::File::open("/dev/null").unwrap();
+        let sender = crate::channel::Channel::new(Arc::new(device)).sender();
+        Request::new(sender, &header.0).unwrap()
+    }
+
+    fn assert_op_redacted(lines: &[String], op: &str) {
+        let opening = format!("] {op}(");
+        let line = lines
+            .iter()
+            .find(|line| line.contains(&opening))
+            .unwrap_or_else(|| panic!("no log line for {op}"));
+        assert!(
+            line.contains(SECRET_REDACTED),
+            "{op} logged no redaction marker: {line}"
+        );
+    }
+
+    #[test]
+    fn default_filesystem_ops_never_log_a_name() {
+        install_logger();
+        let header = empty_header();
+        let req = request(&header);
+        let mut fs = NullFs;
+        let name = OsStr::new(SECRET);
+        let target = Path::new(SECRET);
+
+        CAPTURED.lock().unwrap().clear();
+
+        fs.lookup(&req, 1, name, Reply::new(1, NullSender));
+        fs.mknod(&req, 1, name, 0o644, 0, 0, Reply::new(2, NullSender));
+        fs.mkdir(&req, 1, name, 0o755, 0, Reply::new(3, NullSender));
+        fs.unlink(&req, 1, name, Reply::new(4, NullSender));
+        fs.rmdir(&req, 1, name, Reply::new(5, NullSender));
+        fs.symlink(&req, 1, name, target, Reply::new(6, NullSender));
+        fs.rename(&req, 1, name, 2, name, 0, Reply::new(7, NullSender));
+        fs.link(&req, 1, 2, name, Reply::new(8, NullSender));
+        fs.setxattr(&req, 1, name, b"value", 0, 0, Reply::new(9, NullSender));
+        fs.getxattr(&req, 1, name, 0, Reply::new(10, NullSender));
+        fs.removexattr(&req, 1, name, Reply::new(11, NullSender));
+        fs.create(&req, 1, name, 0o644, 0, 0, Reply::new(12, NullSender));
+        #[cfg(target_os = "macos")]
+        {
+            fs.setvolname(&req, name, Reply::new(13, NullSender));
+            fs.exchange(&req, 1, name, 2, name, 0, Reply::new(14, NullSender));
+        }
+
+        let lines = CAPTURED.lock().unwrap().clone();
+        for line in &lines {
+            assert!(!line.contains(SECRET), "a name reached a log line: {line}");
+        }
+
+        for op in [
+            "lookup",
+            "mknod",
+            "mkdir",
+            "unlink",
+            "rmdir",
+            "symlink",
+            "rename",
+            "link",
+            "setxattr",
+            "getxattr",
+            "removexattr",
+            "create",
+        ] {
+            assert_op_redacted(&lines, op);
+        }
+        #[cfg(target_os = "macos")]
+        for op in ["setvolname", "exchange"] {
+            assert_op_redacted(&lines, op);
+        }
+    }
+
+    #[test]
+    fn redacted_name_renders_only_a_length() {
+        let utf8 = OsString::from("secret.txt");
+        let non_utf8 = OsString::from_vec(vec![0xff, 0xfe, b'a', 0x80]);
+
+        for (name, expected) in [
+            (utf8, "<redacted 10 bytes>"),
+            (non_utf8, "<redacted 4 bytes>"),
+        ] {
+            let wrapped = redacted(&name);
+            assert_eq!(format!("{wrapped}"), expected);
+            assert_eq!(format!("{wrapped:?}"), expected);
+            // A precision a caller picks must not become a second render path.
+            assert_eq!(format!("{wrapped:.2}"), expected);
+        }
+
+        assert_eq!(
+            format!("{}", redacted(Path::new("/vault/secret.txt"))),
+            "<redacted 17 bytes>"
+        );
+    }
 }

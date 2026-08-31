@@ -172,7 +172,8 @@ is not the contract gate.
   validation and platform-junk filtering, inode stability across renames, the
   ranged read path and its bounded plaintext chunk cache, and the
   errno/status mapping per adapter. The vendored fuser MSG_PEEK patch gets
-  the regression test desktop.md commits to. Windows CI compiles and tests
+  the regression test desktop.md commits to, and the same job asserts that no
+  default `Filesystem` body writes a name to a log record. Windows CI compiles and tests
   the thin WinFsp adapter and remains authoritative for it — but the
   operation core no longer lives there.
 - **`apps/api` unit.** Nest specs where server logic actually lives (quota
