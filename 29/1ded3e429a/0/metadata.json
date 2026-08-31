@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "291ded3e429a",
+  "session_id": "04fa6c1e-01b7-445b-ab0c-d3327c220e72",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T10:19:20.337564Z",
+  "branch": "feat/web-shared-route-and-revocation-classification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/App.test.tsx",
+    "apps/web/src/hooks/useReceivedShares.ts",
+    "apps/web/src/routes/SettingsPage.tsx",
+    "apps/web/src/routes/SharedPage.test.tsx",
+    "apps/web/src/routes/SharedPage.tsx",
+    "apps/web/src/sharing/receivedShares.ts",
+    "apps/web/src/styles/layout.css",
+    "apps/web/src/styles/settings.css",
+    "apps/web/src/styles/shared.css",
+    "tests/web-e2e/page-objects/shared.page.ts",
+    "tests/web-e2e/tests/shared.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "db02b9fa87d0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 4589,
+    "cache_creation_tokens": 157212,
+    "cache_read_tokens": 4423521,
+    "output_tokens": 54182,
+    "api_call_count": 42
+  },
+  "summary": {
+    "intent": "Plan wave-17 of the CipherBox v2.0.0 pre-cutover issue burndown: survey the 71 remaining open issues, resolve dependency/file-ownership lanes via recon agents, do housekeeping (orphaned issue parenting), get user decisions on scope-changing questions, and launch the first batch of ship agents.",
+    "outcome": "Housekeeping completed (11 orphan issues parented, #656/#990 umbrella states resolved), three recon agents produced a full lane plan, four scope decisions were made by the user (keep identity chain, ship full bin, land #1176 registry refcount, delete vestigial /auth/siwe/login), the #1399 bin work was decomposed into 6 filed sub-issues (#1552-#1557), and batch 1 (6 ship agents: F1, G, P, C, K, P1) was launched in isolated worktrees off commit 1df781d51, with 3 more lanes (P2, P4, I1) held back pending disk space.",
+    "learnings": {
+      "repo": [
+        "facade.rs (11708 lines) is the throughput ceiling for the engine: 14 of 32 open engine slices touch it, forcing a strictly serial merge chain rather than parallel lanes",
+        "GitHub sub-issues have a 100-child cap per parent — hit on umbrella #991, requiring reroute of overflow orphans to #635/#992",
+        "/auth/siwe/login is a vestigial dead route (only caller is engine Command::SiweLogin, no UI/e2e/desktop reference); wallet sign-in actually flows through the separate /auth/identity/wallet route used by WalletLoginButton.tsx and the e2e login page object",
+        "Lane A and Lane C both write write_plane.rs despite being scheduled 'parallel' — requires a simulated pairwise merge to avoid collision",
+        "PR #1550's WinFsp adapter set case_insensitive_lookup: true, turning previously pre-emptive issue #1539 into a live Windows trust-path bug",
+        "ADR-0010 supersedes the original #1399 proposal's bin-folder design (§6 table) in favor of an owner-sealed index — recon caught this before the decomposition was filed",
+        "zsh does not word-split loop variables the way bash does; a fetch loop over 53 issues silently stopped after one iteration until rewritten as a bash script file"
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src/auth/coreKit.ts",
+          "line": 77,
+          "end_line": 91,
+          "finding": "Still throws on REQUIRED_SHARE, locking out factor-policy members from desktop — #1268 cannot close by doc change alone, it's real engineering work"
+        },
+        {
+          "path": "crates/fuse/src/adapters/windows.rs",
+          "line": 70,
+          "finding": "case_insensitive_lookup: true makes the node-id-order tiebreak (#1539) a live trust path on Windows, escalating its priority"
+        },
+        {
+          "path": "crates/engine/src/seams/gate/adoption.rs",
+          "line": 295,
+          "end_line": 305,
+          "finding": "Contains the highest-severity gap found in recon: a permanent unrecoverable third-party share lockout from a contact with no authority, must be fixed by #1345 part 2"
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 4270,
+          "finding": "Only remaining caller of /auth/siwe/login is Command::SiweLogin — confirms the route is safe to delete"
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 4993,
+          "finding": "Cited refusal removed by #1547, which is why #1430 was found stale during recon"
+        }
+      ],
+      "workflow": [
+        "Do orphan/housekeeping parenting before umbrella evaluation and wave planning — parent choice changes umbrella rollup counts that the plan reads",
+        "Recon agents should verify each candidate issue against the current main commit and report VALID/STALE/partly-landed status before lanes are trusted, since code drift between filing and planning is common",
+        "Ship agents run in isolated worktrees pinned to a single commit, each executing /simplify, /security-review, and crypto review where key material is touched, opening a draft PR and stopping at green CI — the orchestrator retains CodeRabbit resolution and merge control",
+        "A disk-space Monitor (alert under 15 GiB) is used to gate how many concurrent worktree-based ship agents can be launched at once"
+      ]
+    },
+    "friction": [
+      "zsh loop silently processed only 1 of 53 issues due to lack of word-splitting, requiring a rewrite as a bash script",
+      "GitHub's 100-sub-issue cap was hit unexpectedly on umbrella #991 mid-housekeeping, forcing a reroute of remaining orphans to alternate parents",
+      "Disk space constraints forced deferring 3 of 9 planned batch-1 lanes (P2, P4, I1) until other lanes free up or space allows"
+    ],
+    "open_items": [
+      "Launch deferred lanes P2 (#1268/#1428), P4 (#1380), and I1 (#1266) once disk space allows or a batch-1 lane finishes",
+      "#1430 to be closed as stale once P1 lands",
+      "#1507 verification and the #656 Grafana panel close to be folded into the #1390 cutover HITL step",
+      "Batch 4 (B5, B6, #1400, P9, P10) may roll into wave 18 given the facade chain's 8-serial-PR wall-clock limit",
+      "#857 to be closed via the finding folded into lane G rather than as a standalone fix",
+      "Full wave-17 plan targets ~24 PRs bringing open v2.0.0 issues from 71 down to roughly 15-20 by wave end"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T10:18:43.635489Z",
+    "agent_lines": 136,
+    "agent_removed": 163,
+    "human_added": 20,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 156,
+    "total_lines_changed": 320,
+    "agent_percentage": 93.4375,
+    "metric_version": 2
+  }
+}

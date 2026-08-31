@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "291ded3e429a",
+  "strategy": "manual-commit",
+  "branch": "feat/web-shared-route-and-revocation-classification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/App.test.tsx",
+    "apps/web/src/hooks/useReceivedShares.ts",
+    "apps/web/src/routes/SettingsPage.tsx",
+    "apps/web/src/routes/SharedPage.test.tsx",
+    "apps/web/src/routes/SharedPage.tsx",
+    "apps/web/src/sharing/receivedShares.ts",
+    "apps/web/src/styles/layout.css",
+    "apps/web/src/styles/settings.css",
+    "apps/web/src/styles/shared.css",
+    "tests/web-e2e/page-objects/shared.page.ts",
+    "tests/web-e2e/tests/shared.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/1ded3e429a/0/metadata.json",
+      "transcript": "/29/1ded3e429a/0/full.jsonl",
+      "compact_transcript": "/29/1ded3e429a/0/transcript.jsonl",
+      "content_hash": "/29/1ded3e429a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4589,
+    "cache_creation_tokens": 157212,
+    "cache_read_tokens": 4423521,
+    "output_tokens": 54182,
+    "api_call_count": 42
+  }
+}
