@@ -32,11 +32,11 @@
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.
 //!
-//! One non-floor value squats in the sequence namespace: the vault settings
-//! write plane's revision mint counter, under a `settings-revision-mint/`
-//! prefix ([`crate::settings`]). It is a local write clock, never an adoption
-//! bar, so it raises the store directly; the bar it feeds
-//! (`settings-revision/`) moves only through [`advance_sequence_on_unseal`].
+//! The body-revision mint counters squat in the sequence namespace
+//! ([`mint_revision`]) — one per record family whose sealed body carries a
+//! revision, each under its own `*-revision-mint/` prefix. Each is a local
+//! write clock, never an adoption bar, so it raises the store directly; the bar
+//! it feeds (`*-revision/`) moves only through [`advance_sequence_on_unseal`].
 
 use core::cell::RefCell;
 use core::marker::PhantomData;
@@ -290,6 +290,59 @@ pub async fn advance_sequence_on_unseal<F: FloorStore>(
 ) -> SeamResult<()> {
     floors.raise_sequence_floor(ipns_name, sequence).await?;
     Ok(())
+}
+
+/// Why a body-revision mint produced no value a reader would accept. Both
+/// variants fail the publish closed: nothing is sealed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevisionMintError {
+    /// The durable counter could not be read or raised. Host I/O, not a verdict.
+    Store(SeamError),
+    /// The counter did not advance, so the publish would seal a revision the
+    /// reader refuses.
+    Stalled,
+}
+
+/// Mint the next body revision for a record family whose sealed body carries
+/// one, advancing the writer's durable counter at `mint_key` **before** the PUT.
+///
+/// Attempt-scoped, which is the whole point: a revision derived from the
+/// confirm-gated sequence floor re-mints the same value on a retry and so cannot
+/// tell two same-sequence forks apart. The writer's counter and the reader's
+/// high-water at `adopted_key` stay separate durable values, so an attempt that
+/// never landed advances only the former and never makes this device refuse the
+/// live record it failed to replace.
+///
+/// AGENTS.md rule 8: the reader refuses a revision below its high-water, so a
+/// counter that did not actually advance fails here, release-active, rather than
+/// sealing bytes the reader would reject.
+pub async fn mint_revision<F: FloorStore>(
+    floors: &F,
+    mint_key: &[u8],
+    adopted_key: &[u8],
+) -> Result<u64, RevisionMintError> {
+    let read = |key| async move {
+        sequence_floor(floors, key)
+            .await
+            .map(|floor| floor.unwrap_or(0))
+            .map_err(RevisionMintError::Store)
+    };
+    let next = read(mint_key)
+        .await?
+        .max(read(adopted_key).await?)
+        .checked_add(1)
+        .ok_or(RevisionMintError::Stalled)?;
+    // A local write clock, not a record-plane advance, so it raises the store
+    // directly. Rule 8's guard is the compare: a store that reports a floor
+    // other than the one we asked for did not take our value.
+    let stored = floors
+        .raise_sequence_floor(mint_key, next)
+        .await
+        .map_err(RevisionMintError::Store)?;
+    if stored != next {
+        return Err(RevisionMintError::Stalled);
+    }
+    Ok(next)
 }
 
 /// Cold-seed a scope's floors from an owner-vouched re-point object. Raises the

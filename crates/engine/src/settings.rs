@@ -39,6 +39,7 @@ use crate::content::validate_byo_config;
 use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::gate::floor;
+use crate::gate::floor::RevisionMintError;
 use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
@@ -570,47 +571,27 @@ fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"settings-revision-mint/", name)
 }
 
-fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
+pub(crate) fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
     let mut key = prefix.to_vec();
     key.extend_from_slice(name.as_str().as_bytes());
     key
 }
 
-/// Mint the next body revision, advancing the durable counter **before** the
-/// PUT. Attempt-scoped, which is the whole point: a revision derived from the
-/// confirm-gated sequence floor re-mints the same value on a retry and so
-/// cannot tell two same-sequence forks apart.
-///
-/// AGENTS.md rule 8: the reader refuses a revision below its durable high-water,
-/// so a counter that did not actually advance fails the publish here,
-/// release-active, rather than sealing bytes the reader would reject.
+/// The next body revision for this account's settings record.
 async fn next_revision<F: FloorStore>(
     floors: &F,
     name: &IpnsName,
 ) -> Result<u64, SettingsPublishError> {
-    let mint_key = revision_mint_key(name);
-    let read = |key| async move {
-        floor::sequence_floor(floors, key)
-            .await
-            .map(|floor| floor.unwrap_or(0))
-            .map_err(SettingsPublishError::Floor)
-    };
-    let next = read(&mint_key)
-        .await?
-        .max(read(&revision_adopted_key(name)).await?)
-        .checked_add(1)
-        .ok_or(SettingsPublishError::Revision)?;
-    // A local mint counter, not a record-plane advance, so it raises the store
-    // directly. Rule 8's guard is the compare: a store that reports a floor
-    // other than the one we asked for did not take our value.
-    let stored = floors
-        .raise_sequence_floor(&mint_key, next)
-        .await
-        .map_err(SettingsPublishError::Floor)?;
-    if stored != next {
-        return Err(SettingsPublishError::Revision);
-    }
-    Ok(next)
+    floor::mint_revision(
+        floors,
+        &revision_mint_key(name),
+        &revision_adopted_key(name),
+    )
+    .await
+    .map_err(|error| match error {
+        RevisionMintError::Store(error) => SettingsPublishError::Floor(error),
+        RevisionMintError::Stalled => SettingsPublishError::Revision,
+    })
 }
 
 /// Seal `settings` and publish them at [`settings_name`] through the shared
@@ -898,7 +879,7 @@ where
 
 /// Run `work`, giving up once `budget` has elapsed on the injected scheduler.
 /// `None` is the timeout.
-async fn within<S: Scheduler, W: Future>(
+pub(crate) async fn within<S: Scheduler, W: Future>(
     scheduler: &S,
     budget: Duration,
     work: W,

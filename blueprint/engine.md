@@ -349,6 +349,48 @@ degraded outcome applies a different policy rather than showing stale data.
   credential the member has since rotated, which is why the reason is reported
   rather than swallowed.
 
+## Bin index record
+
+The bin index (`CONTEXT.md`) is the owner's vault-level record of every
+soft-deleted node. Its record plane is the settings record's, so everything
+above under "Vault settings load" holds unchanged: the same three-rung ladder
+(the published record, this device's last-known-good copy, then an empty bin),
+the same three durable marks, the same per-attempt body revision beside the
+per-name sequence floor, and the same carve-out that refuses a lapsed EOL
+because the reader is always the signer. Only what differs is stated here.
+
+- **The seal key never rotates, so the nonce is always entropy.**
+  `bin-index-seal-key` takes no epoch input and no per-record input, so one key
+  seals every publish this account ever makes, on every device. Each seal
+  therefore draws its 24-byte nonce from the injected entropy seam. A counter,
+  or a nonce derived from the body revision or the IPNS sequence, is unique on
+  one device and collides across two — and two devices publish this one record
+  concurrently under one CAS guard. Nonce reuse under one
+  XChaCha20-Poly1305 key discloses every `heldKey` the two bodies carry and
+  admits forgery. A seam that cannot supply a nonce fails the publish closed.
+  The fresh nonce also makes a no-op republish byte-indistinguishable from a
+  real edit, which is what a decoy publish needs to blunt the two disclosure
+  channels the body padding cannot close (`blueprint/core.md`, "Bin index").
+- **The index is rewritten whole, so a degraded load is never published over.**
+  A publish carries the entries the caller supplies and nothing else, so a
+  rewrite built on a copy behind another device's publish silently drops that
+  device's entries. That was v1's named data-loss bug, and the CAS guard alone
+  does not close it: the losing writer's bytes are well-formed and would win
+  the next round. Only a resolved record establishes the current index, and
+  only the unproven-first-run arm establishes that there is none yet. Every
+  other outcome — stale, suppressed, timed out, rolled back, unreadable —
+  refuses the rewrite and leaves the caller to retry on a later tick.
+- **A gate refusal is reported apart from staleness.** The load reports the
+  reason it degraded either way, but a replayed sequence, a same-sequence fork
+  below the adopted revision, and a body that will not open under a key only
+  this account holds are refusals of bytes the plane actually served. They are
+  trust verdicts, not availability, and a caller that retries on availability
+  must not retry on them.
+- **An empty bin is the bottom rung, not an error.** A vault that has never
+  soft-deleted anything has no entries to load, so the ladder bottoms out at an
+  empty index. The record still exists from vault genesis, because its very
+  existence would otherwise say the bin is non-empty.
+
 ## Sync core
 
 One model, two trigger sources (FSM1/cipher-box-next#33 D2): web drives it from navigation and the
