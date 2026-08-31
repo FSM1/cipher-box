@@ -43,6 +43,21 @@ describe('App routes', () => {
     expect(await screen.findByRole('heading', { name: 'CipherBox' })).toBeDefined();
   });
 
+  it('renders the shared route inside the app shell, reachable from the sidebar', async () => {
+    renderAt('/shared', true);
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(await screen.findByTestId('shared-page')).toBeDefined();
+    const link = screen.getByTestId('nav-item-shared');
+    expect(link.getAttribute('aria-current')).toBe('page');
+    expect(link.getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('sends a signed-out tab away from the shared route', async () => {
+    renderAt('/shared');
+    expect(await screen.findByRole('heading', { name: 'CipherBox' })).toBeDefined();
+    expect(screen.queryByTestId('shared-page')).toBeNull();
+  });
+
   it('renders the settings route inside the app shell', async () => {
     renderAt('/settings', true);
     expect(await screen.findByTestId('app-shell')).toBeDefined();

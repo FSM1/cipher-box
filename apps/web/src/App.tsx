@@ -5,6 +5,7 @@ import { FilesPage } from './routes/FilesPage';
 import { InvitePage } from './routes/InvitePage';
 import { LoginPage } from './routes/LoginPage';
 import { SettingsPage } from './routes/SettingsPage';
+import { SharedPage } from './routes/SharedPage';
 import { INVITE_ROUTE } from './sharing/inviteLink';
 
 export function App() {
@@ -18,6 +19,14 @@ export function App() {
           element={
             <RequireAuth>
               <FilesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/shared"
+          element={
+            <RequireAuth>
+              <SharedPage />
             </RequireAuth>
           }
         />

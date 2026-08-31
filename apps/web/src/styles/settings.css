@@ -1,18 +1,4 @@
-/* The /settings route: stacked sections over the app shell's main column. */
-
-.settings-page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-lg);
-  max-width: 736px;
-  padding: var(--spacing-md);
-}
-
-.settings-heading {
-  margin: 0;
-  color: var(--color-text-primary);
-  text-transform: lowercase;
-}
+/* The /settings route: stacked sections over the shared route column. */
 
 .settings-section {
   display: flex;

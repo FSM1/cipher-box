@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
   AuthMethodDescriptor,
   EngineClient,
+  ReceivedShareDescriptor,
   SiweIntent,
   VaultSettingsDescriptor,
   VaultStorageDescriptor,
@@ -87,6 +88,7 @@ export function fakeEngineClient(
     /** What the storage pane reads back; `null` stands for a probe that failed. */
     vaultStorage: () => Promise<VaultStorageDescriptor>;
     authMethods: () => Promise<AuthMethodDescriptor[]>;
+    receivedShares: () => Promise<ReceivedShareDescriptor[]>;
   }> = {}
 ) {
   const calls: EngineCalls = {
@@ -149,6 +151,7 @@ export function fakeEngineClient(
       },
       vaultStorage: () => overrides.vaultStorage?.() ?? Promise.resolve(FAKE_VAULT_STORAGE),
       authMethods: () => overrides.authMethods?.() ?? Promise.resolve([]),
+      receivedShares: () => overrides.receivedShares?.() ?? Promise.resolve([]),
       async logout() {
         calls.logouts += 1;
         // The engine is zeroized either way: `EngineFacade.logout` tears the
