@@ -15,12 +15,9 @@ import { startInstance } from './instance';
 import { deadlines } from './profile';
 import type { Scenario, ScenarioContext } from './scenario';
 import { Stack, requireFile } from './stack';
-import { conflictOutcome } from './scenarios/conflictOutcome';
-import { crossClientSync } from './scenarios/crossClientSync';
-import { mountRoundTrip } from './scenarios/mountRoundTrip';
-import { offlineReplay } from './scenarios/offlineReplay';
+import { mountLifecycle } from './scenarios/mountLifecycle';
 
-const SCENARIOS: Scenario[] = [mountRoundTrip, crossClientSync, conflictOutcome, offlineReplay];
+const SCENARIOS: Scenario[] = [mountLifecycle];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 

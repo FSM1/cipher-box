@@ -66,19 +66,6 @@ export class Instance {
     return sendRefresh(this.endpoint, this.budget.refreshMs);
   }
 
-  /** Polls the status until `accept` holds, and names what the wait proves. */
-  waitFor(
-    what: string,
-    accept: (status: VaultStatus) => boolean,
-    timeoutMs: number
-  ): Promise<VaultStatus> {
-    return poll(() => liveStatus(this.shell, this), accept, {
-      what: `${this.name}: ${what}`,
-      timeoutMs,
-      intervalMs: this.budget.intervalMs,
-    });
-  }
-
   /** Ends the instance, and never leaves a mount for the next scenario. */
   async stop(): Promise<void> {
     if (this.shell.exit) return;
@@ -181,11 +168,6 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
     await forceUnmount(join(home, DEFAULT_MOUNT_NAME));
     throw error;
   }
-}
-
-async function liveStatus(shell: Shell, instance: Instance): Promise<VaultStatus> {
-  await refuseIfDead(shell, instance.name);
-  return instance.status();
 }
 
 async function refuseIfDead(shell: Shell, name: string): Promise<void> {

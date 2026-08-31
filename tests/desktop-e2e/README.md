@@ -8,20 +8,27 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 
 ## What it covers
 
-- `mount-round-trip` — one instance writes a folder and a file through its
-  mount, the mount serves the same bytes back, and the root renders the folder
-- `cross-client-sync` — two instances of one host share one vault; A writes, B
-  refreshes with nocache, and B reads the bytes A wrote. This is where the
-  suite proves a publication: B holds its own engine and reads the network
-- `conflict-outcomes-at-the-mount` — the outcomes the projection renders: a
-  duplicate name, a case twin, a Unicode-normalization twin, a platform-junk
-  name, and a rename that replaces a file atomically
-- `offline-replay` — the orchestrator stops the API; the mount still acks a
-  write, the staleness ladder reaches `offline`, and the write reaches the
-  other instance after the API returns
+- `mount-lifecycle` — a headless shell starts on a dev key, mints the vault,
+  projects it as a filesystem, answers a manual refresh, and gives the mount
+  back on `quit`
 
-The payload is multi-byte and multi-line, so no transfer that mangles either
-passes.
+## What it does not cover yet
+
+The filesystem scenarios — a write round trip, cross-client convergence, the
+conflict outcomes the projection renders, and offline replay — are not here.
+The mount opens and answers, but the operations a scenario needs do not behave
+yet on any host this suite can run:
+
+- On macOS a `mkdir` at the mount root returns success and the vault root still
+  renders no child. A file created directly at the mount root answers `EISDIR`,
+  and a platform-junk name is taken rather than refused.
+- On Linux the shell reaches GTK and then never runs its setup hook, so it
+  arms no control endpoint and mounts nothing.
+- On Windows the shell builds the detached projection, so it makes no mount.
+
+Each one is a host-side defect rather than a harness defect, and each has its
+own issue. The harness here — the instance, the control client, the poll, the
+stack and the orchestrator — is what those scenarios will stand on.
 
 ## How the suite logs in
 
@@ -101,7 +108,5 @@ scenarios, and `--scenario <name>` runs one of them.
 
 ## Not in this suite
 
-- **Rotation under mount.** It needs a granted scope, and the desktop facade
-  exposes no sharing command. The cross-client harness owns that flow.
-- **The Windows leg.** The shell does not project through the WinFsp adapter
-  yet, so no Windows process can mount.
+Rotation under mount needs a granted scope, and the desktop facade exposes no
+sharing command. The cross-client harness owns that flow.

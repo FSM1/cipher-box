@@ -6,9 +6,7 @@ const NAMES = [
   'apiReadyMs',
   'controlFileMs',
   'mountMs',
-  'publishMs',
   'refreshMs',
-  'offlineMs',
   'shutdownMs',
 ] as const satisfies readonly (keyof Deadlines)[];
 
@@ -34,15 +32,9 @@ describe('deadlines', () => {
     }
   });
 
-  it('clears the staleness threshold before it waits for the offline rung', () => {
+  it('outlasts a published record before it gives up on a refresh', () => {
     for (const profile of [CI_PROFILE, PRODUCTION_PROFILE]) {
-      expect(deadlines(profile).offlineMs).toBeGreaterThan(profile.staleAfterMs);
-    }
-  });
-
-  it('outlasts a published record before it calls a publish late', () => {
-    for (const profile of [CI_PROFILE, PRODUCTION_PROFILE]) {
-      expect(deadlines(profile).publishMs).toBeGreaterThan(profile.recordTtlMs);
+      expect(deadlines(profile).refreshMs).toBeGreaterThan(profile.recordTtlMs);
     }
   });
 

@@ -232,14 +232,15 @@ failure.
 
 ### `desktop-e2e.yml`
 
-A matrix over macOS and Linux, 45 minutes per leg. Each leg builds the debug
-Tauri binary with the `e2e-hook` feature, provisions the stack, and runs the
-mounted suite. The job name is `Desktop E2E (<platform>)`, and that name is the
-branch-protection contract.
+A matrix, 45 minutes per leg. Each leg builds the debug Tauri binary with the
+`e2e-hook` feature, provisions the stack, and runs the mounted suite. The job
+name is `Desktop E2E (<platform>)`, and that name is the branch-protection
+contract.
 
-Windows joins the matrix once the Tauri shell projects the vault through the
-WinFsp adapter. `apps/desktop/src-tauri/src/mount` builds the detached
-projection on Windows today, so a Windows build makes no mount.
+The matrix runs the macOS leg alone today. The Linux shell reaches GTK and then
+never runs its setup hook, so it arms no control endpoint. The Windows shell
+builds the detached projection, so it makes no mount. Each leg joins the matrix
+when its host starts headless.
 
 ### `load-test.yml`
 

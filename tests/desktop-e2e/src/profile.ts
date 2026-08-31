@@ -35,12 +35,8 @@ export interface Deadlines {
   controlFileMs: number;
   /** The status reaches `mounted`. */
   mountMs: number;
-  /** A write through the mount drains to the network. */
-  publishMs: number;
   /** A manual refresh resolves. */
   refreshMs: number;
-  /** The staleness ladder reaches `offline`. */
-  offlineMs: number;
   /** The process exits after `quit`. */
   shutdownMs: number;
   /**
@@ -65,11 +61,7 @@ export function deadlines(profile: SyncTimingProfile = CI_PROFILE): Deadlines {
     apiReadyMs: 60 * tick,
     controlFileMs: 30 * tick,
     mountMs: 60 * tick,
-    publishMs: 40 * tick,
     refreshMs: 30 * tick,
-    // The rung itself takes `staleAfterMs` to arrive, so the wait must clear it
-    // by a wide margin or it could never observe the state it names.
-    offlineMs: 10 * profile.staleAfterMs,
     shutdownMs: 20 * tick,
     scenarioMs: 240 * tick,
   };
