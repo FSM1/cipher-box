@@ -458,12 +458,6 @@ where
     Ok(ConvergedSubtree { grantee, parent })
 }
 
-/// The write epoch a fresh grantee scope root mints at. Its write plane starts
-/// with the mint, and an empty `writeHistoryLink` is exactly that state
-/// ([`cipherbox_core::seal::write_body::WriteBody`]) — carrying the parent's
-/// epoch would advertise a walk-back the root holds no link for.
-const GRANTEE_WRITE_EPOCH: u64 = 1;
-
 /// Mint the grantee scope `row` is committed at, and hand the granted folder to
 /// it: mint (epoch 1) → publish (grantee first) → re-key the reparented
 /// descendants under the fresh grantee derivation → parent index update.
@@ -509,9 +503,12 @@ where
     let ledger = vec![row.ledger_entry.clone()];
 
     // 3) Mint at read and write epoch 1 with a FRESH RANDOM override seed
-    // (never KDF-derived). The new scope adopts the folder's descendant scope
-    // roots as its direct-child-scope index (they now live inside the granted
-    // scope).
+    // (never KDF-derived). Both planes start with the mint: an empty
+    // `writeHistoryLink` is exactly write epoch 1 (`cipherbox_core::seal::
+    // write_body`), so the parent's epoch here would advertise a walk-back this
+    // root holds no link for. The new scope adopts the folder's descendant
+    // scope roots as its direct-child-scope index (they now live inside the
+    // granted scope).
     let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
 
     let grantee_section = {
@@ -531,11 +528,7 @@ where
             read_epoch: 1,
             prev: None,
             write_scope_seed: grantee.sealed_write_scope_seed(),
-            // The mint carries no history link, and an empty `writeHistoryLink`
-            // *is* write epoch 1 (`cipherbox_core::seal::write_body`). The
-            // parent's epoch here would advertise a walk-back this root holds no
-            // link for. The granted scope's write plane is its own.
-            write_epoch: GRANTEE_WRITE_EPOCH,
+            write_epoch: 1,
             write_history: WriteHistory::Carried(&[]),
             pointer_read_key: grantee.pointer_read_key,
         };
@@ -558,7 +551,7 @@ where
         scope_id: grantee.scope_id,
         ipns_name: name_bytes.to_vec(),
         read_epoch: 1,
-        write_epoch: GRANTEE_WRITE_EPOCH,
+        write_epoch: 1,
         section: grantee_section,
     };
 
@@ -1390,10 +1383,6 @@ mod tests {
         );
     }
 
-    /// A granted scope's write plane starts at its own mint. The mint carries no
-    /// history link, and an empty `writeHistoryLink` is exactly write epoch 1
-    /// (`cipherbox_core::seal::write_body`) — so carrying the parent's epoch
-    /// would advertise a predecessor epoch with no link to walk back to.
     #[test]
     fn a_granted_scope_mints_at_write_epoch_one_however_far_the_parent_has_rotated() {
         let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[]);

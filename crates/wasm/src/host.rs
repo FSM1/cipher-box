@@ -654,9 +654,7 @@ mod tests {
     }
 
     fn imported_contact() -> Outcome {
-        let identity = EcdsaSigner::from_scalar(&CONTACT_SCALAR).expect("valid identity scalar");
-        let code = ContactCode::create(&identity, kdf::enc_subkey(&CONTACT_SCALAR).public());
-        Outcome::ContactImported(import_contact(&code.encode()).expect("the code imports"))
+        Outcome::ContactImported(import_contact(&own_code()).expect("the code imports"))
     }
 
     /// A byte figure that is not a whole number of bytes, or that the engine

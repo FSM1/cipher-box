@@ -60,7 +60,10 @@ export interface SharingState {
   readonly scopes: ReadonlyMap<string, ScopeSharing>;
 }
 
-let state: SharingState = frozen([], null, new Map());
+/** The state a session with no read behind it holds, and what sign-out restores. */
+const EMPTY: SharingState = frozen([], null, new Map());
+
+let state: SharingState = EMPTY;
 const listeners = new Set<() => void>();
 
 function frozen(
@@ -120,17 +123,14 @@ export const sharingStore = {
     publish(
       frozen(
         view.contacts.map((contact) => contactOf(contact.identityPublicKey)),
-        toHex(view.ownContactCode),
+        view.ownContactCode.length === 0 ? null : toHex(view.ownContactCode),
         scopes
       )
     );
   },
 
   clear(): void {
-    if (state.contacts.length === 0 && state.ownContactCode === null && state.scopes.size === 0) {
-      return;
-    }
-    publish(frozen([], null, new Map()));
+    if (state !== EMPTY) publish(EMPTY);
   },
 };
 

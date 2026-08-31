@@ -30,7 +30,6 @@ use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, ReadBody, Version,
     seal_content_key, sign_grant_set,
 };
-use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -2319,9 +2318,16 @@ fn surface_drain_report(
     }
 }
 
-/// The refusal [`Engine::vault_root_scope`] carries: the held write scope seed
-/// does not derive the root's current `ipnsName`.
+/// [`Engine::vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
+
+/// Whether `seed` derives the scope root's own `ipnsName` — the one proof both
+/// the deposit ([`deposit_write_seed`]) and the read
+/// ([`Engine::vault_root_scope`]) hold a write scope seed to, stated once so
+/// the two cannot drift apart.
+fn seed_names(seed: &[u8; 32], scope_id: &[u8; 16], root_name: Option<&IpnsName>) -> bool {
+    root_name.is_some_and(|name| derive_write_name(seed, scope_id) == *name)
+}
 
 /// Deposit a recovered scope write seed, but only if it derives the very name
 /// the scope root publishes under. A write-capable grantee can commit an
@@ -2336,7 +2342,7 @@ fn deposit_write_seed(
     root_name: Option<&IpnsName>,
     floor: Option<u64>,
 ) {
-    if root_name.is_some_and(|name| derive_write_name(&seed, &scope_id) == *name) {
+    if seed_names(&seed, &scope_id, root_name) {
         deposit_seed(cell, scope_id, seed, floor);
     }
 }
@@ -2703,8 +2709,9 @@ struct LiveStreams {
 /// sole v2 version (CONTEXT.md "Vault pointer").
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 
-/// The resolve-tick task, spawned once a root name exists to poll.
-type TickLoopSpawner = Box<dyn FnOnce(IpnsName)>;
+/// The resolve-tick task, spawned once a root name exists to poll. It reads
+/// that name from [`Engine::current_root_name`] on every pass.
+type TickLoopSpawner = Box<dyn FnOnce()>;
 
 /// Builds the lazy-wave sweep task a rotation enqueues once its cut is durable
 /// ([`rotate_scope`]'s third effect), over the scope root the rotation read and
@@ -3118,9 +3125,9 @@ impl<T: SeamTypes> Engine<T> {
             } else {
                 None
             };
-        let mut root_name = self.install_cold_start(outcome, root_scope_id);
+        self.install_cold_start(outcome, root_scope_id);
         if let Some(provisioned) = provisioned {
-            root_name = Some(self.install_mint(provisioned));
+            self.install_mint(provisioned);
         }
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
@@ -3145,9 +3152,7 @@ impl<T: SeamTypes> Engine<T> {
         self.spawn_liveness_loop(api.clone());
         *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
-        if let Some(root_name) = root_name {
-            self.open_tick_loop(root_name);
-        }
+        self.open_tick_loop();
         self.api = Some(api);
         self.started = true;
         Ok(())
@@ -3155,18 +3160,15 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Bring a cold-start outcome up as this session's data path: deposit both
     /// scope seeds, install the gate-passing base as the state law's left
-    /// operand, and answer the resolved root name (the vault pointer's
-    /// `currentRoot`) the tick loop polls — `None` on an empty chain.
+    /// operand, and hold the resolved root name (the vault pointer's
+    /// `currentRoot`) the tick loop polls. An empty chain holds none, and
+    /// answers `false`.
     ///
     /// Both seeds are stamped from the owner-vouched re-point the cold-seed
     /// installed the floors from, and which the adopt and the owner-write-blob
     /// AAD then bound to — the epochs they belong to, not a later floor read
     /// (see `deposit_seed`).
-    fn install_cold_start(
-        &self,
-        mut outcome: ColdStartOutcome,
-        root_scope_id: [u8; 16],
-    ) -> Option<IpnsName> {
+    fn install_cold_start(&self, mut outcome: ColdStartOutcome, root_scope_id: [u8; 16]) -> bool {
         let anchor = outcome.vault_pointer.as_ref();
         let vouched = anchor.map(|vp| &vp.repoint);
         self.vault_pointer_index.set(anchor.map(|vp| vp.index));
@@ -3197,14 +3199,14 @@ impl<T: SeamTypes> Engine<T> {
             );
         }
         *self.snapshot.borrow_mut() = outcome.base;
-        root_name
+        root_name.is_some()
     }
 
-    /// Deposit a fresh mint's seeds and answer the root name it published. A
+    /// Deposit a fresh mint's seeds and hold the root name it published. A
     /// just-provisioned vault has no adopt to surface them — this run minted
     /// them — so they are stamped at the epochs its own re-point vouches and
     /// the floors it seeded from them.
-    fn install_mint(&self, vault: ProvisionedVault) -> IpnsName {
+    fn install_mint(&self, vault: ProvisionedVault) {
         self.vault_pointer_index
             .set(Some(GENESIS_VAULT_POINTER_INDEX));
         deposit_seed(
@@ -3220,8 +3222,7 @@ impl<T: SeamTypes> Engine<T> {
             Some(&vault.root_name),
             Some(vault.repoint.write_epoch),
         );
-        *self.current_root_name.borrow_mut() = Some(vault.root_name.clone());
-        vault.root_name
+        *self.current_root_name.borrow_mut() = Some(vault.root_name);
     }
 
     /// Whether this session holds the root scope's write seed — the material a
@@ -3791,7 +3792,7 @@ where {
 
         let manual = self.manual_refresh.clone();
 
-        Some(Box::new(move |mut root_name: IpnsName| {
+        Some(Box::new(move || {
             manual.arm();
             let spawn_on = scheduler.clone();
             spawn_on.spawn(Box::pin(async move {
@@ -3800,11 +3801,11 @@ where {
                         return TickControl::Stop;
                     }
                     let mode = resolve_mode(cause);
-                    // The session cell is the root's current name; a wave this
-                    // session drove between passes has already moved it there.
-                    if let Some(current) = current_root_name.borrow().clone() {
-                        root_name = current;
-                    }
+                    // The session cell is the root's only current name: a wave
+                    // this session drove between passes has already moved it.
+                    let Some(mut root_name) = current_root_name.borrow().clone() else {
+                        return TickControl::Stop;
+                    };
                     // The pass owns a copy for exactly its own duration; the engine
                     // emptied the cell if it is already gone.
                     let enc_subkey = tick_enc_subkey.borrow().clone();
@@ -3847,8 +3848,8 @@ where {
                     )
                     .await
                     {
+                        *current_root_name.borrow_mut() = Some(current_root.clone());
                         root_name = current_root;
-                        *current_root_name.borrow_mut() = Some(root_name.clone());
                     }
                     // Before the steady-state hold consults them: a floor raised
                     // since the last pass revokes the seeds this pass would
@@ -4099,13 +4100,17 @@ where {
         }))
     }
 
-    /// Start polling `root_name`, consuming the spawner
+    /// Start polling the root this session holds, consuming the spawner
     /// [`start`](Self::start) built. One session runs one tick loop, so a
-    /// second call spawns nothing.
-    fn open_tick_loop(&self, root_name: IpnsName) {
+    /// second call spawns nothing, and a session with no root yet spawns
+    /// nothing until one lands.
+    fn open_tick_loop(&self) {
         let Some(session) = self.session.as_ref() else {
             return;
         };
+        if self.current_root_name.borrow().is_none() {
+            return;
+        }
         let Some(spawn) = self.tick_loop_spawner.borrow_mut().take() else {
             return;
         };
@@ -4113,7 +4118,7 @@ where {
         // pass needs the enc subkey and the (public) owner verifier, never the
         // login secret or the pointer seeds beside them.
         *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
-        spawn(root_name);
+        spawn();
     }
 
     /// Executes one command. The single write entry point: every mutation,
@@ -4350,14 +4355,13 @@ where {
                 message: "no write scope seed is held for the vault root".to_owned(),
             },
         )?;
-        let root_name = self
-            .current_root_name
-            .borrow()
-            .clone()
-            .filter(|name| derive_write_name(&write_scope_seed, &scope_id) == *name)
-            .ok_or(EngineError::MalformedInput {
+        let held = self.current_root_name.borrow();
+        if !seed_names(&write_scope_seed, &scope_id, held.as_ref()) {
+            return Err(EngineError::MalformedInput {
                 check: HELD_SEED_NOT_AT_CURRENT_ROOT,
-            })?;
+            });
+        }
+        let root_name = held.as_ref().expect("seed_names refuses an absent name");
         Ok(ChildScopeRef::new(
             scope_id,
             root_name.as_str().as_bytes().to_vec(),
@@ -4807,6 +4811,13 @@ where {
             .await
             .map_err(EngineError::from_rotation)?;
         if let Some(write) = report.write.as_ref() {
+            // First, and before anything fallible: the wave already published,
+            // so every later step in this method can fail without leaving the
+            // session anchored on the root the wave moved off. No index carries
+            // the vault root's name, so this cell is its only record.
+            if node.0 == self.snapshot.borrow().root.0 {
+                *self.current_root_name.borrow_mut() = Some(write.new_root_name.clone());
+            }
             // The wave publishes the re-point but never pre-advances the floor
             // (`WriteEpochLease`): a failed publish must not brick the plane.
             // Once it has landed, this session authored that owner-vouched
@@ -4823,13 +4834,10 @@ where {
             .await
             .map_err(EngineError::from_seam)?;
             // Every wave moves the root, so every wave owes the index the same
-            // repoint — the vault root excepted, whose name no index carries and
-            // which the session cell tracks instead.
+            // repoint — the vault root excepted, handled above.
             if node.0 != self.snapshot.borrow().root.0 {
                 self.repoint_child_scope_index(node, &write.new_root_name)
                     .await?;
-            } else {
-                *self.current_root_name.borrow_mut() = Some(write.new_root_name.clone());
             }
         }
         Ok(report)
@@ -5324,7 +5332,7 @@ where {
         let claim = InviteClaim::mint(
             &mut entropy,
             fragment.scope_root_name.clone(),
-            ContactCode::create(session.identity(), session.enc_subkey().public()).encode(),
+            session.contact_code(),
         )
         .map_err(EngineError::from_invite)?;
         let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
@@ -5767,7 +5775,7 @@ where {
     async fn provision_in_session(&self) -> Result<(), EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.snapshot.borrow().root;
-        let root_name = match self.provision_first_run_vault(&api, root.0).await {
+        match self.provision_first_run_vault(&api, root.0).await {
             Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault),
             // The account published from another device between this session's
             // failed mint and this retry — caught by the vacancy probe before
@@ -5780,11 +5788,11 @@ where {
                     .run_cold_start(root)
                     .await
                     .map_err(EngineError::from_cold_start)?;
-                self.install_cold_start(outcome, root.0).ok_or_else(|| {
-                    EngineError::RefreshFailed {
+                if !self.install_cold_start(outcome, root.0) {
+                    return Err(EngineError::RefreshFailed {
                         message: "the vault pointer served no root to adopt".to_owned(),
-                    }
-                })?
+                    });
+                }
             }
             Err(err) if err.is_retryable() => {
                 return Err(EngineError::RefreshFailed {
@@ -5796,8 +5804,8 @@ where {
                     message: err.to_string(),
                 });
             }
-        };
-        self.open_tick_loop(root_name);
+        }
+        self.open_tick_loop();
         self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         Ok(())
@@ -6587,11 +6595,7 @@ where {
         Ok(SharingView {
             scope: scope_root,
             contacts,
-            own_contact_code: ContactCode::create(
-                session.identity(),
-                session.enc_subkey().public(),
-            )
-            .encode(),
+            own_contact_code: session.contact_code(),
             state: self.scope_sharing(session, scope_root).await,
         })
     }

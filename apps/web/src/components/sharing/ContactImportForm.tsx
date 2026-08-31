@@ -4,10 +4,7 @@ import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 
 interface ContactImportFormProps {
   busy: boolean;
-  /**
-   * This member's own code as hex, to hand to the peer, or `null` until a
-   * sharing read has landed. Public material.
-   */
+  /** Hex, or `null` until a sharing read has landed (`stores/sharing.store`). */
   ownContactCode: string | null;
   onCancel: () => void;
   onConfirm: (contactCode: Uint8Array) => void;
@@ -39,9 +36,7 @@ export function ContactImportForm({
     <form className="dialog-content" onSubmit={submit} data-testid="import-contact-form">
       <p className="dialog-label">your contact code</p>
       {ownContactCode === null ? (
-        <p className="sharing-note" data-testid="own-contact-code-unavailable">
-          {'// no read has landed yet'}
-        </p>
+        <p className="sharing-note">{'// no read has landed yet'}</p>
       ) : (
         <div data-testid="own-contact-code">
           <CopyableValue value={ownContactCode} label="your contact code" />

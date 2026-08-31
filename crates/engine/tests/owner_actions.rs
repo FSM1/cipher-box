@@ -401,23 +401,33 @@ fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
         .sequence
 }
 
-/// The re-point object the vault root scope's own pointer record carries — the
-/// owner-signed authority for where a write wave moved the root to.
-fn root_scope_repoint(world: &FakeWorld) -> RepointObject {
+/// The `FloorStore` key a scope's write-epoch floor is raised under, unscoped:
+/// the fake strips the owner tag before it matches an injected fault.
+fn write_epoch_floor_key(scope: &[u8; 16]) -> Vec<u8> {
+    let mut key = scope.to_vec();
+    key.extend_from_slice(b"/write-epoch");
+    key
+}
+
+/// The re-point object `scope`'s own pointer record carries — the owner-signed
+/// authority for where a write-scope cut moved that scope's root to.
+fn scope_repoint(world: &FakeWorld, scope: &[u8; 16]) -> RepointObject {
     let owner_pointer_seed = kdf::owner_pointer_seed(&SECRET);
-    let pointer_name = scope_pointer_name(owner_pointer_seed.as_bytes(), &SCOPE);
+    let pointer_name = scope_pointer_name(owner_pointer_seed.as_bytes(), scope);
+    // A pointer record carries its sealed block inline, not an `/ipfs/`
+    // address, so it is read off the verified record rather than the plane.
     let bytes = world
         .record_store
         .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
-        .expect("the write wave published the scope pointer");
+        .expect("the write-scope cut published the scope pointer");
     let block = IpnsRecord::unmarshal(&bytes)
         .and_then(|record| record.verify(&pointer_name))
         .expect("the pointer record verifies under its own name")
         .value;
     open_repoint(
-        kdf::pointer_read_key(owner_pointer_seed.as_bytes(), &SCOPE).as_bytes(),
+        kdf::pointer_read_key(owner_pointer_seed.as_bytes(), scope).as_bytes(),
         POINTER_PAYLOAD_VERSION,
-        &SCOPE,
+        scope,
         &owner_identity().verifying_key(),
         &block,
     )
@@ -443,7 +453,7 @@ fn contact_code(scalar: &[u8; 32]) -> Vec<u8> {
 
 /// The recipient's committed grant row at the vault root — the row a revoke has
 /// to find in the owner-signed set before it can cut anything.
-fn recipient_row_at_root() -> GrantRow {
+fn recipient_row_at_root(permission: CorePermission) -> GrantRow {
     mint_grant_row(
         &owner_identity(),
         &kdf::enc_subkey(&SECRET),
@@ -451,22 +461,7 @@ fn recipient_row_at_root() -> GrantRow {
         &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
         &SCOPE,
         write_name(ROOT).as_str().as_bytes(),
-        CorePermission::Read,
-    )
-    .expect("a contributory recipient key")
-}
-
-/// The same recipient committed at the vault root with write permission, so a
-/// downgrade of it drives a write wave over the root's own scope.
-fn write_row_at_root() -> GrantRow {
-    mint_grant_row(
-        &owner_identity(),
-        &kdf::enc_subkey(&SECRET),
-        recipient_identity().verifying_key().to_sec1(),
-        &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
-        &SCOPE,
-        write_name(ROOT).as_str().as_bytes(),
-        CorePermission::Write,
+        permission,
     )
     .expect("a contributory recipient key")
 }
@@ -602,30 +597,7 @@ impl GrantScenario {
     /// The re-point object the granted scope's own pointer record carries — the
     /// owner-signed authority for where a write-scope cut moved the root to.
     fn granted_scope_repoint(&self) -> RepointObject {
-        let owner_pointer_seed = kdf::owner_pointer_seed(&SECRET);
-        let pointer_name = scope_pointer_name(owner_pointer_seed.as_bytes(), &self.folder.0);
-        // A pointer record carries its sealed block inline, not an `/ipfs/`
-        // address, so it is read off the verified record rather than the plane.
-        let bytes = self
-            .world
-            .record_store
-            .record_at(
-                &self.world.record_store.endpoints()[0],
-                pointer_name.as_str(),
-            )
-            .expect("the write-scope cut published the scope pointer");
-        let block = IpnsRecord::unmarshal(&bytes)
-            .and_then(|record| record.verify(&pointer_name))
-            .expect("the pointer record verifies under its own name")
-            .value;
-        open_repoint(
-            kdf::pointer_read_key(owner_pointer_seed.as_bytes(), &self.folder.0).as_bytes(),
-            POINTER_PAYLOAD_VERSION,
-            &self.folder.0,
-            &owner_identity().verifying_key(),
-            &block,
-        )
-        .expect("the re-point object opens under the scope's own pointer read key")
+        scope_repoint(&self.world, &self.folder.0)
     }
 
     /// The recipient's blinded tag at `name` — derived from the owner's own half
@@ -995,7 +967,11 @@ fn a_downgrade_publishes_the_demoted_commitment_and_moves_the_scope() {
 fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let seeded_root = seed_vault(&world, &blocks, vec![write_row_at_root()]);
+    let seeded_root = seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(CorePermission::Write)],
+    );
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
     import_recipient(&mut engine);
@@ -1007,7 +983,7 @@ fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
         })),
         Ok(CommandOutcome::Done)
     );
-    let moved = root_scope_repoint(&world).current_root;
+    let moved = scope_repoint(&world, &SCOPE).current_root;
     assert_ne!(
         moved, seeded_root,
         "the wave moved the vault root off the name the cached seed derives"
@@ -1033,6 +1009,49 @@ fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
         block_on(engine.command(Command::RotateNow { node: ROOT })),
         Ok(CommandOutcome::Done),
         "a tick that adopts at the moved root clears the refusal"
+    );
+}
+
+/// The wave publishes before the cut raises its durable floor, so a floor-store
+/// failure leaves the root moved with the floor still low. The session must
+/// still know the root moved, or both defences fall together and the next owner
+/// action anchors on the name the demoted party authors at.
+#[test]
+fn a_cut_whose_floor_raise_fails_still_refuses_the_next_owner_action() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let seeded_root = seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(CorePermission::Write)],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    alice
+        .floor_store
+        .fail_floor_raises_for(&write_epoch_floor_key(&SCOPE));
+
+    assert!(
+        block_on(engine.command(Command::Downgrade {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        }))
+        .is_err(),
+        "the cut reports the floor it could not raise"
+    );
+    assert_ne!(
+        scope_repoint(&world, &SCOPE).current_root,
+        seeded_root,
+        "and the wave moved the root before it failed"
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: ROOT })),
+        Err(EngineError::MalformedInput {
+            check: "held-write-seed-does-not-name-the-current-root",
+        }),
+        "so the next owner action still refuses the superseded root"
     );
 }
 
@@ -1231,7 +1250,10 @@ fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
     seed_vault(
         &world,
         &blocks,
-        vec![recipient_row_at_root(), bystander_row_with_corrupt_sig()],
+        vec![
+            recipient_row_at_root(CorePermission::Read),
+            bystander_row_with_corrupt_sig(),
+        ],
     );
     let alice = world.device(b"alice");
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
@@ -1401,7 +1423,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let link = expiring_invite_link_at_root(0x4e, Some(deadline));
-    let grantee = recipient_row_at_root();
+    let grantee = recipient_row_at_root(CorePermission::Read);
     seed_vault(&world, &blocks, vec![link.row.clone(), grantee.clone()]);
     let alice = world.device(b"alice");
     record_links(&alice, &[link.link]);
@@ -1499,7 +1521,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
 fn the_sharing_read_counts_the_records_a_prune_would_drop() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let grantee = recipient_row_at_root();
+    let grantee = recipient_row_at_root(CorePermission::Read);
     seed_vault(&world, &blocks, vec![grantee]);
     let alice = world.device(b"alice");
     record_links(&alice, &[invite_link_at_root(0x5f).link]);
@@ -1588,7 +1610,11 @@ impl ShareScenario {
     fn new() -> Self {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
-        let name = seed_vault(&world, &blocks, vec![recipient_row_at_root()]);
+        let name = seed_vault(
+            &world,
+            &blocks,
+            vec![recipient_row_at_root(CorePermission::Read)],
+        );
         let owner_device = world.device(b"alice");
         let recipient_device = world.device(&recipient_identity().verifying_key().to_sec1());
 
@@ -1693,7 +1719,7 @@ fn an_accept_from_a_sender_this_vault_never_imported_fails_closed() {
 fn revoking_a_read_grant_republishes_the_root_without_the_revokees_blob() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let row = recipient_row_at_root();
+    let row = recipient_row_at_root(CorePermission::Read);
     seed_vault(&world, &blocks, vec![row.clone()]);
     let alice = world.device(b"alice");
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
@@ -1737,7 +1763,7 @@ fn revoking_a_read_grant_republishes_the_root_without_the_revokees_blob() {
 fn a_cut_keeps_a_row_its_own_subkey_proves_despite_an_unverifiable_owner_signature() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let revokee = recipient_row_at_root();
+    let revokee = recipient_row_at_root(CorePermission::Read);
     let bystander = bystander_row_with_corrupt_sig();
     seed_vault(&world, &blocks, vec![revokee.clone(), bystander.clone()]);
     let alice = world.device(b"alice");
@@ -1774,7 +1800,11 @@ fn a_cut_keeps_a_row_its_own_subkey_proves_despite_an_unverifiable_owner_signatu
 fn a_stalled_cut_re_drives_the_read_cascade_under_one_bound() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    seed_vault(&world, &blocks, vec![recipient_row_at_root()]);
+    seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(CorePermission::Read)],
+    );
     let alice = world.device(b"alice");
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
     import_recipient(&mut engine);
@@ -1819,7 +1849,7 @@ fn a_stalled_cut_re_drives_the_read_cascade_under_one_bound() {
 fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let bystander = recipient_row_at_root();
+    let bystander = recipient_row_at_root(CorePermission::Read);
     let link = invite_link_at_root(0x4e);
     seed_vault(&world, &blocks, vec![link.row.clone(), bystander.clone()]);
     let alice = world.device(b"alice");
@@ -1935,7 +1965,7 @@ fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
 fn revoking_a_link_the_owner_never_recorded_publishes_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let grantee = recipient_row_at_root();
+    let grantee = recipient_row_at_root(CorePermission::Read);
     let root_name = seed_vault(&world, &blocks, vec![grantee.clone()]);
     let alice = world.device(b"alice");
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
