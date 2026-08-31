@@ -3,8 +3,8 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { VaultStatus } from './control';
 import type { Instance } from './instance';
 import { poll } from './poll';
@@ -51,6 +51,7 @@ export async function withInstances<T>(
 ): Promise<T> {
   const started: Instance[] = [];
   try {
+    // In order: two cold starts of one secret must not race to mint one vault.
     for (const name of names) started.push(await context.start(name));
     return await withDeadline(body(started), context.deadlines.scenarioMs);
   } finally {
@@ -120,4 +121,40 @@ export async function refuses(
     return error as NodeJS.ErrnoException;
   }
   assert.fail(`${what} must be refused, and it succeeded`);
+}
+
+/**
+ * Waits until `instance` lists `name` at its mount root and reads `text` back
+ * from it, and hands back the whole listing.
+ *
+ * Each read re-resolves: the manual refresh reads past every cache, and the
+ * listing that follows it is the one the mount answers from. A second instance
+ * reading through its own mount is the only proof of a publish — the instance
+ * that wrote renders its own pending op whether or not it left the device.
+ */
+export async function readsThrough(
+  context: ScenarioContext,
+  instance: Instance,
+  name: string,
+  text: string,
+  timeoutMs: number
+): Promise<string[]> {
+  const listed = await poll(
+    async () => {
+      await instance.refresh();
+      return readdir(instance.mountRoot);
+    },
+    (names) => names.includes(name),
+    {
+      what: `${instance.name}: the mount to list ${name}`,
+      timeoutMs,
+      intervalMs: context.deadlines.intervalMs,
+    }
+  );
+  assert.equal(
+    await readFile(join(instance.mountRoot, name), 'utf8'),
+    text,
+    `${instance.name} reads back the content published with ${name}`
+  );
+  return listed;
 }

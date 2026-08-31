@@ -21,10 +21,6 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - `offline-replay` — the orchestrator stops the API, the mount keeps taking
   writes, and the second instance reads them once the API returns
 
-The mount root is the case `write-round-trip` exists for. A backend that has
-not published its mount yet leaves that path serving the directory under it,
-and a write there returns success and reaches no engine.
-
 ## How the suite logs in
 
 There is no interactive login in CI. The `e2e-hook` build of

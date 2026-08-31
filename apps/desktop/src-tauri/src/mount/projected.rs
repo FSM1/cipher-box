@@ -5,11 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
-use cipherbox_fuse::{CacheBudget, OperationCore, Publication, SpillArea};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use cipherbox_fuse::{FuseInvalidator as Invalidator, FuseMount as Mount};
-#[cfg(windows)]
-use cipherbox_fuse::{WinFspInvalidator as Invalidator, WinFspMount as Mount};
+use cipherbox_fuse::{CacheBudget, Invalidator, Mount, OperationCore, Publication, SpillArea};
 use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};

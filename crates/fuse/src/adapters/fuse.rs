@@ -16,13 +16,14 @@
 //! makes unavoidable: a queued write holds its plaintext until the pump reaches
 //! it, so the mount caps the kernel's write width rather than the queue.
 
-use std::cell::Cell;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cipherbox_engine::seams::SeamTypes;
@@ -69,6 +70,14 @@ const MAX_WRITE_BYTES: u32 = 1 << 20;
 /// How long a mount is given to reach [`Publication::Live`] before a host
 /// reports it [`Publication::Refused`]. Wide enough for a loaded runner.
 const PUBLISHED_WITHIN: Duration = Duration::from_secs(30);
+
+/// How often the publication watch re-reads the mount point.
+const PUBLISH_POLL: Duration = Duration::from_millis(25);
+
+/// [`Publication`] as the watch stores it.
+const PENDING: u8 = 0;
+const LIVE: u8 = 1;
+const REFUSED: u8 = 2;
 
 /// Owner-only, and no execute bit: the projection carries no POSIX mode of its
 /// own, and a vault is not a place to hand out an executable.
@@ -346,49 +355,44 @@ pub struct FuseMount {
     invalidator: FuseInvalidator,
     ops: mpsc::UnboundedReceiver<FuseOp>,
     owner: Ownership,
-    point: MountPoint,
+    published: Arc<AtomicU8>,
 }
 
-/// A mount point, and the filesystem that served it before the mount.
+/// Watch `at` from a thread of its own until the mount serves it rather than
+/// the directory it covers, or until `within` runs out.
 ///
-/// FUSE-T's SMB backend mounts out of band, and it asks the session for the
-/// root while it does, so a host cannot wait the gap out — it pumps through it
-/// and reads [`publication`](Self::publication). Until the mount point moves
-/// off the filesystem it covers, a write there reaches the directory under the
-/// mount instead of the engine, which is silent loss.
-struct MountPoint {
-    at: PathBuf,
-    covered: u64,
-    live_by: Instant,
-    live: Cell<bool>,
+/// Off the pump, and it has to be: once the mount is published, reading the
+/// mount point is a kernel operation this session owes the answer to, so a pump
+/// that read it would wait on itself. FUSE-T's SMB backend also asks for the
+/// root while it publishes, which is the same knot from the other side.
+///
+/// Until the mount point moves off the filesystem it covers, a write there
+/// reaches the directory under the mount and no engine — silent loss, which is
+/// what [`Publication`] exists to keep a host from reporting as a mount.
+fn watch_publication(at: PathBuf, covered: u64, within: Duration) -> Arc<AtomicU8> {
+    let verdict = Arc::new(AtomicU8::new(PENDING));
+    let watch = verdict.clone();
+    thread::spawn(move || {
+        let deadline = Instant::now() + within;
+        loop {
+            if let Some(settled) = settle(&at, covered, deadline) {
+                watch.store(settled, Ordering::Release);
+                return;
+            }
+            thread::sleep(PUBLISH_POLL);
+        }
+    });
+    verdict
 }
 
-impl MountPoint {
-    /// The mount point as it stands before the mount is made.
-    fn covered(at: &Path, within: Duration) -> io::Result<Self> {
-        Ok(Self {
-            at: at.to_path_buf(),
-            covered: device_of(at)?,
-            live_by: Instant::now() + within,
-            live: Cell::new(false),
-        })
+/// One read of the mount point: its verdict, or nothing while the answer is
+/// still to come.
+fn settle(at: &Path, covered: u64, deadline: Instant) -> Option<u8> {
+    // A read that fails while the mount lands is not a verdict; the deadline is.
+    if device_of(at).is_ok_and(|serving| serving != covered) {
+        return Some(LIVE);
     }
-
-    fn publication(&self) -> Publication {
-        if self.live.get() {
-            return Publication::Live;
-        }
-        // A read that fails while the mount lands is not a verdict; the
-        // deadline is.
-        if device_of(&self.at).is_ok_and(|serving| serving != self.covered) {
-            self.live.set(true);
-            return Publication::Live;
-        }
-        if Instant::now() >= self.live_by {
-            return Publication::Refused;
-        }
-        Publication::Pending
-    }
+    (Instant::now() >= deadline).then_some(REFUSED)
 }
 
 impl FuseMount {
@@ -398,7 +402,7 @@ impl FuseMount {
         let options = mount_options(profile.options)?;
         stale::clear(mountpoint)?;
         prepare(mountpoint)?;
-        let point = MountPoint::covered(mountpoint, PUBLISHED_WITHIN)?;
+        let covered = device_of(mountpoint)?;
         let (sender, ops) = mpsc::unbounded();
         let session = Session::new(FuseSession { ops: sender }, mountpoint, &options)?;
         let invalidator = FuseInvalidator {
@@ -413,14 +417,17 @@ impl FuseMount {
                 uid: nix::unistd::Uid::effective().as_raw(),
                 gid: nix::unistd::Gid::effective().as_raw(),
             },
-            point,
+            published: watch_publication(mountpoint.to_path_buf(), covered, PUBLISHED_WITHIN),
         })
     }
 
-    /// Whether the backend has published this mount at its mount point yet. A
-    /// host reports the vault as projected only on [`Publication::Live`].
+    /// Whether the backend has published this mount at its mount point yet.
     pub fn publication(&self) -> Publication {
-        self.point.publication()
+        match self.published.load(Ordering::Acquire) {
+            LIVE => Publication::Live,
+            REFUSED => Publication::Refused,
+            _ => Publication::Pending,
+        }
     }
 
     /// The invalidator to mount the operation core behind.
@@ -1156,44 +1163,59 @@ mod tests {
     /// directory under the mount and no engine, so a host must not call that
     /// mount made.
     #[test]
-    fn a_mount_point_still_serving_the_directory_under_it_is_not_published() {
+    fn a_mount_point_still_serving_the_directory_under_it_is_not_settled() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let point = MountPoint::covered(home.path(), Duration::from_secs(30)).expect("a stat");
+        let covered = device_of(home.path()).expect("a stat");
 
-        assert_eq!(point.publication(), Publication::Pending);
+        assert_eq!(
+            settle(
+                home.path(),
+                covered,
+                Instant::now() + Duration::from_secs(30)
+            ),
+            None
+        );
     }
 
     /// The mount moves the mount point onto its own filesystem, which is what
-    /// a host waits for.
+    /// the watch waits for.
     #[test]
     fn a_mount_point_served_by_another_filesystem_is_published() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let mut point = MountPoint::covered(home.path(), Duration::from_secs(30)).expect("a stat");
-        point.covered = point.covered.wrapping_add(1);
+        let covered = device_of(home.path()).expect("a stat").wrapping_add(1);
 
-        assert_eq!(point.publication(), Publication::Live);
+        assert_eq!(
+            settle(
+                home.path(),
+                covered,
+                Instant::now() + Duration::from_secs(30)
+            ),
+            Some(LIVE)
+        );
     }
 
-    /// A backend that never publishes must reach a verdict rather than leave
-    /// the mount point in a state a host would go on waiting out.
+    /// A backend that never publishes must reach a verdict rather than leave a
+    /// host waiting out a mount that will not arrive.
     #[test]
-    fn a_mount_point_that_never_moves_is_refused_at_the_deadline() {
+    fn a_mount_point_that_has_not_moved_by_the_deadline_is_refused() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let point = MountPoint::covered(home.path(), Duration::ZERO).expect("a stat");
+        let covered = device_of(home.path()).expect("a stat");
 
-        assert_eq!(point.publication(), Publication::Refused);
+        assert_eq!(settle(home.path(), covered, Instant::now()), Some(REFUSED));
     }
 
-    /// A mount point that has been published stays published: the kernel
-    /// session ending is what takes a mount away, and it has its own signal.
+    /// The watch runs to a verdict without a mount to read, which is the path a
+    /// backend that never publishes takes.
     #[test]
-    fn a_published_mount_point_does_not_go_back() {
+    fn the_watch_reaches_a_verdict_off_the_pump() {
         let home = tempfile::tempdir().expect("a temp dir");
-        let mut point = MountPoint::covered(home.path(), Duration::ZERO).expect("a stat");
-        point.covered = point.covered.wrapping_add(1);
+        let covered = device_of(home.path()).expect("a stat");
 
-        assert_eq!(point.publication(), Publication::Live);
-        assert_eq!(point.publication(), Publication::Live);
+        let verdict = watch_publication(home.path().to_path_buf(), covered, Duration::ZERO);
+        while verdict.load(Ordering::Acquire) == PENDING {
+            thread::yield_now();
+        }
+        assert_eq!(verdict.load(Ordering::Acquire), REFUSED);
     }
 
     /// The mount point is made on demand and made private: a member who has

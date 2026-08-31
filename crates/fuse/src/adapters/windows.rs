@@ -1158,18 +1158,18 @@ impl WinFspMount {
         self.invalidator.clone()
     }
 
+    /// WinFsp mounts before [`mount`] returns, so this mount serves its mount
+    /// point from the moment a host holds it.
+    pub fn publication(&self) -> Publication {
+        Publication::Live
+    }
+
     /// Handles this mount closed while they still owed an `updateContent` op
     /// that would not journal.
     ///
     /// `close` returns no status on this protocol, so nothing else in the
     /// session ever learns of one — the FUSE backends answer the same failure
     /// out of `close(2)`.
-    /// WinFsp mounts before [`mount`] returns, so this mount is live from the
-    /// moment a host holds it.
-    pub fn publication(&self) -> Publication {
-        Publication::Live
-    }
-
     pub fn close_failures(&self) -> u64 {
         self.pump.close_failures
     }

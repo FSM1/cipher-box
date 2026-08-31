@@ -1261,7 +1261,6 @@ mod tests {
     /// The mount is a wake source of its own, so a mount that takes seconds is
     /// a mount point that is not there yet rather than a session that has
     /// stopped answering.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn a_status_read_lands_while_the_mount_is_still_being_made() {
         let dir = tempfile::tempdir().expect("a temp dir");

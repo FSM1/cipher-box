@@ -23,15 +23,6 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wind
 /// Label of the one (hidden-by-default) main window.
 const MAIN_WINDOW: &str = "main";
 
-/// The main window's geometry. Built in [`setup`](tauri::Builder::setup) rather
-/// than declared in `tauri.conf.json`, because a configured window is built
-/// before that hook runs and a headless start must reach the hook without one:
-/// the webview's web process waits on a session bus a headless runner has not
-/// got, and the shell then arms nothing.
-const WINDOW_TITLE: &str = "CipherBox";
-const WINDOW_SIZE: (f64, f64) = (960.0, 640.0);
-const WINDOW_MIN_SIZE: (f64, f64) = (480.0, 360.0);
-
 /// Exit code for an argument this build refuses. Distinct from a panic and
 /// from an ordinary quit, so a harness can tell them apart.
 #[cfg(feature = "e2e-hook")]
@@ -74,10 +65,13 @@ fn main() {
                 return Ok(());
             }
 
+            // Built here rather than declared in `tauri.conf.json`: the
+            // webview's web process waits on a session bus a headless runner
+            // has not got, and a configured window is built before this hook.
             WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::default())
-                .title(WINDOW_TITLE)
-                .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
-                .min_inner_size(WINDOW_MIN_SIZE.0, WINDOW_MIN_SIZE.1)
+                .title("CipherBox")
+                .inner_size(960.0, 640.0)
+                .min_inner_size(480.0, 360.0)
                 .build()?;
 
             tray::build(app.handle())?;

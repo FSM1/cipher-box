@@ -8,10 +8,15 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { poll } from '../poll';
-import { rendersItems, withInstances, type Scenario, type ScenarioContext } from '../scenario';
+import {
+  readsThrough,
+  rendersItems,
+  withInstances,
+  type Scenario,
+  type ScenarioContext,
+} from '../scenario';
 
 const QUEUED_FILE = 'written-offline.txt';
 const QUEUED_TEXT = 'written while the API was away';
@@ -33,27 +38,14 @@ export const offlineReplay: Scenario = {
 
       await context.stack.startApi();
 
-      // The second instance is the proof: the first renders its own pending op
-      // whether or not it ever left the device.
-      const listed = await poll(
-        async () => {
-          await b.refresh();
-          return readdir(b.mountRoot);
-        },
-        (names) => names.includes(QUEUED_FILE),
-        {
-          what: `${b.name}: the mount to list the op ${a.name} queued while offline`,
-          timeoutMs: context.deadlines.scenarioMs / 2,
-          intervalMs: context.deadlines.intervalMs,
-        }
+      const listed = await readsThrough(
+        context,
+        b,
+        QUEUED_FILE,
+        QUEUED_TEXT,
+        context.deadlines.scenarioMs / 2
       );
       assert.deepEqual(listed, [QUEUED_FILE], 'the replayed op is the whole vault root');
-
-      assert.equal(
-        await readFile(join(b.mountRoot, QUEUED_FILE), 'utf8'),
-        QUEUED_TEXT,
-        'the replayed op carried the content the mount took'
-      );
 
       const replayed = await a.status();
       assert.equal(replayed.deadLetters, 0, 'a replayed op dead-letters nothing');

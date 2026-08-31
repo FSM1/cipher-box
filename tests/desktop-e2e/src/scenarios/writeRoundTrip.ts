@@ -2,10 +2,8 @@
  * A write through the mount reaches the engine, and a name the projection
  * refuses reaches no engine and no listing.
  *
- * The mount root is the case this scenario exists for. A backend that has not
- * published its mount yet leaves that path serving the directory under it, and
- * a write there returns success and reaches nothing — silent loss, which no
- * later read can tell from an empty vault.
+ * The mount root is the case this scenario exists for: it is the path a backend
+ * leaves serving the directory under the mount until it publishes.
  */
 
 import { strict as assert } from 'node:assert';
