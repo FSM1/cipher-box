@@ -41,6 +41,61 @@ describe('sealing the Core Kit store', () => {
     await expect(crypto.subtle.exportKey('raw', wrapping as CryptoKey)).rejects.toThrow();
   });
 
+  /**
+   * Sealing under an exportable key would leave the Core Kit store openable by a
+   * later read of IndexedDB alone, which is what this custody exists to deny.
+   */
+  it('replaces a stored wrapping key whose bytes can be exported', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+      'encrypt',
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect(keys.held.extractable).toBe(false);
+  });
+
+  it('replaces a stored wrapping key of another algorithm', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-CBC', length: 256 }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect(keys.held.algorithm.name).toBe('AES-GCM');
+  });
+
+  /**
+   * A key without `encrypt` makes every seal throw, so a store left on it never
+   * takes another write. Replacing it costs the one re-login a dropped store costs.
+   */
+  it('replaces a stored wrapping key that cannot seal', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect(keys.held.usages).toContain('encrypt');
+  });
+
+  it('replaces a stored wrapping key of a shorter length', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect((keys.held.algorithm as AesKeyAlgorithm).length).toBe(256);
+  });
+
   it('seals each write under its own nonce', async () => {
     const store = sealed(new MemoryKeys());
 

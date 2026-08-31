@@ -28,6 +28,7 @@ import {
   type IdentityMethod,
 } from '@cipherbox/login';
 import { environment, loginEnv } from '../engine/config';
+import type { DeviceIdentity } from './deviceIdentity';
 import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 
 /** The Core Kit surface the web host drives beyond the shared login flow. */
@@ -42,7 +43,10 @@ export interface WebCoreKitSession extends CoreKitSession {
   hasRecoveryPhrase(): boolean;
   /** Turns the factor policy on; the phrase it returns is shown exactly once. */
   enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
-  /** Best-effort removal of this device's factor (`CoreKitSession`). */
+  /**
+   * Best-effort removal of this device's factor (`CoreKitSession`), and the
+   * erase of this device's identity key.
+   */
   forgetDevice(): Promise<void>;
 }
 
@@ -95,6 +99,7 @@ class Web3AuthSession implements WebCoreKitSession {
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
+    private readonly identity: DeviceIdentity,
     private readonly verifier: string
   ) {}
 
@@ -285,6 +290,14 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   async forgetDevice(): Promise<void> {
+    await this.dropDeviceFactor();
+    // The identity key is this device's durable local state, so a forget takes
+    // it too: a key left behind keeps signing as a device the member erased.
+    // Unlike the factor drop it needs no network, so its refusal is reported.
+    await this.identity.forget();
+  }
+
+  private async dropDeviceFactor(): Promise<void> {
     // Refused rather than risked: the erase beside this call destroys the only
     // copy of this factor, so dropping it from an account that carries no
     // recovery phrase would take the member's last route in with it. A factor
@@ -365,7 +378,8 @@ export function sealedCoreKitStore(): SealedStore {
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
-  store: SealedStore
+  store: SealedStore,
+  identity: DeviceIdentity
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
@@ -378,5 +392,5 @@ export function createCoreKitSession(
     manualSync: true,
     tssLib,
   });
-  return new Web3AuthSession(coreKit, store, verifier);
+  return new Web3AuthSession(coreKit, store, identity, verifier);
 }

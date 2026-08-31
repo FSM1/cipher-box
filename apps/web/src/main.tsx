@@ -21,6 +21,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { WagmiProvider } from 'wagmi';
 import { App } from './App';
 import { createCoreKitSession, sealedCoreKitStore } from './auth/coreKit';
+import { webDeviceIdentity } from './auth/deviceIdentity';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { IdentityProvider } from './auth/IdentityProvider';
 import { createIdentityExchange } from '@cipherbox/login';
@@ -50,7 +51,9 @@ createRoot(rootElement).render(
           createClient={(secrets) => installIntrospection(createEngineClient(secrets), secrets)}
         >
           <CoreKitProvider
-            createSession={() => createCoreKitSession(import.meta.env, sealedCoreKitStore())}
+            createSession={() =>
+              createCoreKitSession(import.meta.env, sealedCoreKitStore(), webDeviceIdentity())
+            }
           >
             <IdentityProvider
               exchange={identityExchange}

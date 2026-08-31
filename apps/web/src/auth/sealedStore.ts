@@ -15,26 +15,27 @@
  */
 
 import type { LockManagerLike } from '@cipherbox/client';
+import { indexedDbRecord, type KeyRecordLocation, type KeyRecordStore } from './keyStore';
 
-const DB_NAME = 'cipherbox-corekit';
-const DB_VERSION = 1;
-const KEY_STORE = 'wrapping-keys';
-const KEY_ID = 'corekit-store';
+/** The Core Kit wrapping key's own database, distinct from every other custody store. */
+const WRAPPING_KEY_RECORD: KeyRecordLocation = {
+  database: 'cipherbox-corekit',
+  version: 1,
+  store: 'wrapping-keys',
+  id: 'corekit-store',
+};
 
 /** Tabs cold-start together; the loser of an unserialised race would overwrite the key. */
 const WRAPPING_KEY_LOCK = 'cipherbox-corekit-wrapping-key';
 
 const IV_BYTES = 12;
+const KEY_BITS = 256;
 
 /** Bumped when the envelope shape changes. An older one is dropped, never migrated. */
 const ENVELOPE_VERSION = 1;
 
 /** Where the wrapping key lives. Its handle is storable; its bytes are not. */
-export interface WrappingKeyStore {
-  read(): Promise<CryptoKey | null>;
-  write(key: CryptoKey): Promise<void>;
-  clear(): Promise<void>;
-}
+export type WrappingKeyStore = KeyRecordStore<CryptoKey>;
 
 /**
  * `IAsyncStorage` for the Core Kit SDK, which awaits every store read and write.
@@ -127,9 +128,12 @@ export class SealedStore {
   private async loadOrMint(): Promise<CryptoKey> {
     let key: CryptoKey | undefined;
     await this.locks.request(WRAPPING_KEY_LOCK, { mode: 'exclusive' }, async () => {
-      key = (await this.keys.read()) ?? undefined;
-      if (key !== undefined) return;
-      const minted = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      const stored = await this.keys.read();
+      if (stored !== null && heldInCustody(stored)) {
+        key = stored;
+        return;
+      }
+      const minted = await crypto.subtle.generateKey({ name: 'AES-GCM', length: KEY_BITS }, false, [
         'encrypt',
         'decrypt',
       ]);
@@ -143,46 +147,27 @@ export class SealedStore {
 
 /** The wrapping key in IndexedDB: the handle survives a structured clone, the bytes do not. */
 export function indexedDbWrappingKeys(): WrappingKeyStore {
-  return {
-    read: async () => {
-      const held: unknown = await transact('readonly', (store) => store.get(KEY_ID));
-      return held instanceof CryptoKey ? held : null;
-    },
-    write: async (key) => {
-      await transact('readwrite', (store) => store.put(key, KEY_ID));
-    },
-    clear: async () => {
-      await transact('readwrite', (store) => store.delete(KEY_ID));
-    },
-  };
+  return indexedDbRecord(
+    WRAPPING_KEY_RECORD,
+    (value): value is CryptoKey => value instanceof CryptoKey
+  );
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => request.result.createObjectStore(KEY_STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('the wrapping-key database is shut'));
-    // An open that neither succeeds nor errors would strand the wrapping-key
-    // lock, and every tab on the origin queues behind it at login.
-    request.onblocked = () => reject(new Error('the wrapping-key database is held open'));
-  });
-}
-
-async function transact<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => IDBRequest<T>
-): Promise<T> {
-  const database = await openDatabase();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const request = run(database.transaction(KEY_STORE, mode).objectStore(KEY_STORE));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error('the wrapping-key store refused'));
-    });
-  } finally {
-    database.close();
-  }
+/**
+ * Whether a stored key is one this module would mint. Anything else is replaced
+ * rather than used: an exportable key leaves the store openable by a later read
+ * of IndexedDB alone, and a key that cannot encrypt wedges every write instead.
+ * Replacing it costs the one re-login a dropped store costs.
+ */
+function heldInCustody(key: CryptoKey): boolean {
+  const { name, length } = key.algorithm as AesKeyAlgorithm;
+  return (
+    name === 'AES-GCM' &&
+    length === KEY_BITS &&
+    !key.extractable &&
+    key.usages.includes('encrypt') &&
+    key.usages.includes('decrypt')
+  );
 }
 
 interface Envelope {
