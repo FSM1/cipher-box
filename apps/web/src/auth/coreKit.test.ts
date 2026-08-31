@@ -348,11 +348,13 @@ describe('forgetting this device with the account', () => {
    */
   it("erases this device's identity key even when the factor has to stand", async () => {
     sdk.shareDescriptions = {};
+    sdk.deviceFactor = DEVICE_FACTOR;
     // Seeded through an identity of its own, so a key is really there to erase.
     await deviceIdentityTestInstance(deviceKeys).publicKeyHex();
 
     await session().forgetDevice();
 
+    expect(sdk.deleted).toEqual([]);
     expect(deviceKeys.held).toBeNull();
   });
 

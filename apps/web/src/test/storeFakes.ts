@@ -32,10 +32,8 @@ export class MemoryRecords<T> implements KeyRecordStore<T> {
   }
 }
 
-/** The Core Kit store's wrapping key. */
 export class MemoryKeys extends MemoryRecords<CryptoKey> {}
 
-/** This device's identity key pair. */
 export class MemoryDeviceKeys extends MemoryRecords<CryptoKeyPair> {}
 
 /** One holder at a time, which is the only guarantee either key needs. */

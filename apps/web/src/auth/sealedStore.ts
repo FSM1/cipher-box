@@ -29,6 +29,7 @@ const WRAPPING_KEY_RECORD: KeyRecordLocation = {
 const WRAPPING_KEY_LOCK = 'cipherbox-corekit-wrapping-key';
 
 const IV_BYTES = 12;
+const KEY_BITS = 256;
 
 /** Bumped when the envelope shape changes. An older one is dropped, never migrated. */
 const ENVELOPE_VERSION = 1;
@@ -132,7 +133,7 @@ export class SealedStore {
         key = stored;
         return;
       }
-      const minted = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      const minted = await crypto.subtle.generateKey({ name: 'AES-GCM', length: KEY_BITS }, false, [
         'encrypt',
         'decrypt',
       ]);
@@ -153,13 +154,20 @@ export function indexedDbWrappingKeys(): WrappingKeyStore {
 }
 
 /**
- * Whether a stored key is one this module would mint. An exportable key, or one
- * of another algorithm, is replaced rather than used: sealing under a key whose
- * bytes script can read is the property this custody exists to deny. Replacing
- * it costs the one re-login a dropped store costs.
+ * Whether a stored key is one this module would mint. Anything else is replaced
+ * rather than used: an exportable key leaves the store openable by a later read
+ * of IndexedDB alone, and a key that cannot encrypt wedges every write instead.
+ * Replacing it costs the one re-login a dropped store costs.
  */
 function heldInCustody(key: CryptoKey): boolean {
-  return key.algorithm.name === 'AES-GCM' && !key.extractable;
+  const { name, length } = key.algorithm as AesKeyAlgorithm;
+  return (
+    name === 'AES-GCM' &&
+    length === KEY_BITS &&
+    !key.extractable &&
+    key.usages.includes('encrypt') &&
+    key.usages.includes('decrypt')
+  );
 }
 
 interface Envelope {

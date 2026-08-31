@@ -129,16 +129,21 @@ function isKeyPair(value: unknown): value is CryptoKeyPair {
  * Whether a stored pair is one this module would mint and can still use. An
  * exportable private half is the property this custody exists to deny, and a
  * pair whose halves do not match reports one key while signing under another,
- * so every signature it makes is refused. Either is replaced by a fresh key,
- * which makes this a new device — the same defined path a cleared store takes.
+ * so every signature it makes is refused.
+ *
+ * Only a proven custody failure answers `false`. A WebCrypto that cannot run
+ * the probe at all is reported, because a replacement there would discard an
+ * identity the account has already approved.
  */
 async function heldInCustody(pair: CryptoKeyPair): Promise<boolean> {
   if (pair.privateKey.extractable) return false;
   try {
     const signature = await crypto.subtle.sign(ALGORITHM, pair.privateKey, PROBE);
     return await crypto.subtle.verify(ALGORITHM, pair.publicKey, signature, PROBE);
-  } catch {
-    return false;
+  } catch (cause) {
+    // A key of another algorithm, or without the usage, is refused this way.
+    if (cause instanceof DOMException && cause.name === 'InvalidAccessError') return false;
+    throw new Error(UNUSABLE, { cause });
   }
 }
 

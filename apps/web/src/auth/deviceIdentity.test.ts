@@ -1,5 +1,5 @@
 import { createPublicKey, verify } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deviceIdentityTestInstance as identity,
   MemoryDeviceKeys,
@@ -11,6 +11,9 @@ const PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/;
 const SIGNATURE_HEX = /^[0-9a-f]{128}$/;
 
 const MESSAGE = new TextEncoder().encode('cipherbox/device-approval/request/v1');
+
+/** The guidance a browser that cannot hold this key must give the member. */
+const UNUSABLE = 'this browser cannot hold a device identity key — use your recovery phrase';
 
 /** SPKI DER header for an id-Ed25519 subjectPublicKey (RFC 8410 §4). */
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
@@ -43,6 +46,10 @@ let keys: MemoryDeviceKeys;
 
 beforeEach(() => {
   keys = new MemoryDeviceKeys();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('the device identity key', () => {
@@ -155,6 +162,29 @@ describe('a store that no longer holds this device identity', () => {
     const signature = await device.sign(MESSAGE);
 
     expect(verifiesAsTheApiWould(publicKey, signature, MESSAGE)).toBe(true);
+  });
+
+  /**
+   * A WebCrypto that cannot run the probe proves nothing about the stored pair.
+   * A replacement there would discard an identity the account already approved.
+   */
+  it('reports a probe the browser refused, rather than replacing the stored key', async () => {
+    const held = await mintPair(false);
+    keys.held = held;
+    vi.spyOn(crypto.subtle, 'sign').mockRejectedValue(new DOMException('busy', 'OperationError'));
+
+    await expect(identity(keys).publicKeyHex()).rejects.toThrow(UNUSABLE);
+
+    expect(keys.held).toBe(held);
+    expect(keys.writes).toBe(0);
+  });
+
+  it('tells a browser with no Ed25519 to use its recovery phrase', async () => {
+    vi.spyOn(crypto.subtle, 'generateKey').mockRejectedValue(
+      new DOMException('unsupported', 'NotSupportedError')
+    );
+
+    await expect(identity(keys).publicKeyHex()).rejects.toThrow(UNUSABLE);
   });
 
   it('retries a load the key store refused once, rather than replaying the refusal', async () => {

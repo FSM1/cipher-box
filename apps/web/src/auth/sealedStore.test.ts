@@ -69,6 +69,33 @@ describe('sealing the Core Kit store', () => {
     expect(keys.held.algorithm.name).toBe('AES-GCM');
   });
 
+  /**
+   * A key without `encrypt` makes every seal throw, so a store left on it never
+   * takes another write. Replacing it costs the one re-login a dropped store costs.
+   */
+  it('replaces a stored wrapping key that cannot seal', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect(keys.held.usages).toContain('encrypt');
+  });
+
+  it('replaces a stored wrapping key of a shorter length', async () => {
+    const keys = new MemoryKeys();
+    keys.held = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
+
+    await sealed(keys).setItem(KEY, STORE_VALUE);
+
+    expect((keys.held.algorithm as AesKeyAlgorithm).length).toBe(256);
+  });
+
   it('seals each write under its own nonce', async () => {
     const store = sealed(new MemoryKeys());
 

@@ -5,14 +5,12 @@
  * that is stored.
  */
 
-/** A single record, read back only when it is still the shape that was written. */
 export interface KeyRecordStore<T> {
   read(): Promise<T | null>;
   write(value: T): Promise<void>;
   clear(): Promise<void>;
 }
 
-/** Which database, store and key one record occupies. */
 export interface KeyRecordLocation {
   database: string;
   version: number;
