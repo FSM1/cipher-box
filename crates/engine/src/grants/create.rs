@@ -760,6 +760,9 @@ mod tests {
     const GRANTEE_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
     const PARENT_SCOPE: [u8; 16] = [0x0e; 16];
     const PARENT_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x0c; SECRET_LEN];
+    /// A parent past write epoch 1 carries a write-plane history link its cut
+    /// minted. The bytes are opaque to the re-seal, which only bounds them.
+    const CARRIED_PARENT_WRITE_LINK: &[u8] = b"opaque-write-history-link";
     const PARENT_NAME: &[u8] = b"parent-scope-root-name";
     const DESCENDANT_SCOPE: [u8; 16] = [0xdd; 16];
     const DESCENDANT_NAME: &[u8] = b"descendant-scope-root-name";
@@ -1211,7 +1214,7 @@ mod tests {
                 override_seed: &parent_override_seed,
                 read_epoch: 3,
                 prev: None::<PrevEpochSeed<'_>>,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Carried(CARRIED_PARENT_WRITE_LINK),
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
                 pointer_read_key: &PARENT_POINTER_READ_KEY,
@@ -1354,7 +1357,7 @@ mod tests {
                     override_seed: &parent_override_seed,
                     read_epoch: 3,
                     prev: None::<PrevEpochSeed<'_>>,
-                    write_history: WriteHistory::Carried(&[]),
+                    write_history: WriteHistory::Carried(CARRIED_PARENT_WRITE_LINK),
                     write_scope_seed: &parent_write_scope_seed,
                     write_epoch: 2,
                     pointer_read_key: &PARENT_POINTER_READ_KEY,

@@ -887,6 +887,9 @@ mod tests {
     use std::rc::Rc;
 
     const V: u64 = 2;
+    /// A scope past write epoch 1 carries a write-plane history link its cut
+    /// minted. The bytes are opaque to the re-seal, which only bounds them.
+    const CARRIED_WRITE_LINK: &[u8] = b"opaque-write-history-link";
 
     fn sid(byte: u8) -> [u8; 16] {
         [byte; 16]
@@ -1281,7 +1284,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &self.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: b"",
+                write_history_link: CARRIED_WRITE_LINK,
                 pointer_read_key: &self.pointer_read_key,
                 carried_history_links: &[],
             }

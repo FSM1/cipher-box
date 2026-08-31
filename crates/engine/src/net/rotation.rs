@@ -2267,6 +2267,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
         | ResealError::HistoryLinkNotContiguous
+        | ResealError::EmptyWriteHistoryAboveFirstEpoch
         | ResealError::OwnerKeyRequiredForWriteCut
         | ResealError::WriteBodyTooLarge
         | ResealError::Encode(_) => WritePublishError::Rejected,
@@ -7717,6 +7718,7 @@ mod tests {
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
+            ResealError::EmptyWriteHistoryAboveFirstEpoch,
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::TagNotBoundToRecipient,
             ResealError::WriteBodyTooLarge,
@@ -7748,6 +7750,7 @@ mod tests {
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending
                 | ResealError::HistoryLinkNotContiguous
+                | ResealError::EmptyWriteHistoryAboveFirstEpoch
                 | ResealError::OwnerKeyRequiredForWriteCut
                 | ResealError::WriteBodyTooLarge
                 | ResealError::Encode(_) => (

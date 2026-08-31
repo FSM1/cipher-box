@@ -190,6 +190,14 @@ impl ResealSeeds<'_> {
     /// chain to hole, and its epoch is monotonic only, the axis
     /// [`build_repoint_object`](super::rotate_write::build_repoint_object)
     /// enforces on `writeEpoch`.
+    ///
+    /// The write plane owes one more: an empty link means "no link", the state
+    /// at write epoch 1 ([`WriteBody::write_history_link`]). Every mint site
+    /// passes its own `WriteHistory`, and every one of them re-seals through
+    /// here, so this is where that pairing is held
+    /// ([`ResealError::EmptyWriteHistoryAboveFirstEpoch`]).
+    ///
+    /// [`WriteBody::write_history_link`]: cipherbox_core::seal::WriteBody::write_history_link
     fn check_history_descends(&self) -> Result<(), ResealError> {
         if let Some(prev) = self.prev.as_ref() {
             if prev.epoch >= self.read_epoch {
@@ -200,10 +208,17 @@ impl ResealSeeds<'_> {
                 return Err(ResealError::HistoryLinkNotContiguous);
             }
         }
-        if let WriteHistory::Cut(prev) = &self.write_history {
-            if prev.epoch >= self.write_epoch {
+        match &self.write_history {
+            WriteHistory::Cut(prev) if prev.epoch >= self.write_epoch => {
                 return Err(ResealError::HistoryLinkNotDescending);
             }
+            // Read the caller's input, never the emitted bytes: an over-long
+            // carried link degrades to empty below, and that degrade must stay
+            // a drop rather than become this refusal.
+            WriteHistory::Carried(link) if link.is_empty() && self.write_epoch != 1 => {
+                return Err(ResealError::EmptyWriteHistoryAboveFirstEpoch);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -303,6 +318,14 @@ pub enum ResealError {
     /// hole becomes unreachable to every reader. Read plane only: the write
     /// plane carries no chain. Release-active (AGENTS.md rule 8).
     HistoryLinkNotContiguous,
+    /// A carried write-plane history link is empty at a write epoch above 1.
+    /// An empty link means "no link" — the state at write epoch 1 — so the pair
+    /// advertises a predecessor epoch it holds no link to walk back to, and an
+    /// orphaned-name walk stops there reporting nothing rather than refusing.
+    /// The decode side follows a link it cannot open by truncating, because a
+    /// carried link is attacker-influenced; this is the produce half, and it is
+    /// release-active.
+    EmptyWriteHistoryAboveFirstEpoch,
     /// A [`WriteHistory::Cut`] was asked of a re-sealer holding no owner
     /// encryption subkey — only the owner can mint the link
     /// ([`seal_owner_history_link`]).
@@ -374,6 +397,9 @@ impl core::fmt::Display for ResealError {
             ResealError::UnusableAscentPublic => {
                 f.write_str("carried ascent public half is not a usable X25519 key")
             }
+            ResealError::EmptyWriteHistoryAboveFirstEpoch => {
+                f.write_str("empty write history link at a write epoch above 1")
+            }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
@@ -417,6 +443,9 @@ impl ResealError {
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
             ResealError::HistoryLinkNotDescending => "history-link-not-descending",
             ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
+            ResealError::EmptyWriteHistoryAboveFirstEpoch => {
+                "empty-write-history-above-first-epoch"
+            }
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::WriteBodyTooLarge => "write-body-too-large",
             ResealError::HistoryLinkTooLarge { .. } => "history-link-too-large",
@@ -2811,6 +2840,10 @@ mod tests {
         let bloated = vec![0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
         let s = ResealSeeds {
             write_history: WriteHistory::Carried(&bloated),
+            // Above write epoch 1, so the degrade is also pinned against
+            // [`ResealError::EmptyWriteHistoryAboveFirstEpoch`], which reads the
+            // caller's input rather than the bytes this drop emits.
+            write_epoch: 3,
             ..seeds(
                 &override_seed,
                 5,
@@ -2823,11 +2856,44 @@ mod tests {
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("the re-seal completes");
 
         assert!(
-            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 1)
+            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 3)
                 .write_history_link
                 .is_empty(),
             "the over-length blob is dropped, not carried"
         );
+    }
+
+    #[test]
+    fn an_empty_carried_write_history_link_above_write_epoch_1_is_refused_before_any_seal() {
+        // `UndrawnEntropy` is the release-active proof: the refusal returns
+        // before any seal draws a byte, in a build that strips `debug_assert!`.
+        let fx = Fixture::new();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
+        let owner_pub = fx.owner_enc.public();
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
+        let override_seed = [0x0e; 32];
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let at_epoch = |write_epoch| ResealSeeds {
+            write_epoch,
+            ..seeds(
+                &override_seed,
+                1,
+                None,
+                &FRESH_WRITE_SCOPE_SEED,
+                &fx.pointer_read_key,
+            )
+        };
+
+        assert_eq!(
+            reseal_scope_root(&mut UndrawnEntropy, &id, &at_epoch(2), &cs, &[])
+                .expect_err("an empty link above write epoch 1 seals nothing")
+                .check(),
+            "empty-write-history-above-first-epoch"
+        );
+
+        let mut e = SeededEntropy::new(83);
+        reseal_scope_root(&mut e, &id, &at_epoch(1), &cs, &[])
+            .expect("the same empty link at write epoch 1 re-seals");
     }
 
     #[test]
