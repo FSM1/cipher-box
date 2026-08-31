@@ -188,6 +188,11 @@ pub struct RevokedCommittedSet {
     /// mint a blob for anywhere in the cascade
     /// ([`CommittedSet::revoked_recipients`](super::reseal::CommittedSet::revoked_recipients)).
     pub revoked_recipients: Vec<[u8; SECRET_LEN]>,
+    /// Dropped entries whose committed recipient key core refused to adopt, so
+    /// the cut names nobody for them. The tag still leaves the set, but the
+    /// cascade withholds no blob, so a non-zero count is an incomplete harvest
+    /// the caller must surface rather than read as a clean revoke.
+    pub unnamed_drops: usize,
     /// Read-only — see [`planes`](Self::planes).
     planes: RotationPlanes,
 }
@@ -337,12 +342,20 @@ fn drop_tags(
     // (see [`GrantSetEntry`]), never from a ledger row. A key core will not
     // adopt names nobody rather than refuse: no blob was ever sealed to it, and
     // refusing would leave the cut that removes the bad entry the one operation
-    // the scope cannot run.
+    // the scope cannot run. The count travels with the cut, so the caller sees
+    // the harvest was incomplete ([`RevokedCommittedSet::unnamed_drops`]).
+    let mut unnamed_drops = 0usize;
     let dropped: Vec<X25519Public> = commitment
         .entries
         .iter()
         .filter(|e| tags.contains(&e.tag))
-        .filter_map(|e| X25519Public::from_bytes(e.recipient_enc_pk(plan.pointer_read_key)))
+        .filter_map(|e| {
+            let adopted = X25519Public::from_bytes(e.recipient_enc_pk(plan.pointer_read_key));
+            if adopted.is_none() {
+                unnamed_drops += 1;
+            }
+            adopted
+        })
         .collect();
     commitment.entries.retain(|e| !tags.contains(&e.tag));
     Ok(DroppedSet {
@@ -354,6 +367,7 @@ fn drop_tags(
             .cloned()
             .collect(),
         revoked_recipients: dropped.iter().map(X25519Public::to_bytes).collect(),
+        unnamed_drops,
     })
 }
 
@@ -362,6 +376,7 @@ struct DroppedSet {
     commitment: GrantSetCommitment,
     grant_ledger: Vec<GrantLedgerEntry>,
     revoked_recipients: Vec<[u8; SECRET_LEN]>,
+    unnamed_drops: usize,
 }
 
 /// Owner-re-sign the cut set, refusing release-active to sign a commitment its
@@ -379,6 +394,7 @@ fn resign(
         mut commitment,
         grant_ledger,
         revoked_recipients,
+        unnamed_drops,
     } = set;
     commitment.cut_epoch = commitment
         .cut_epoch
@@ -393,6 +409,7 @@ fn resign(
         commitment_sig,
         grant_ledger,
         revoked_recipients,
+        unnamed_drops,
         planes,
     })
 }
@@ -482,6 +499,7 @@ pub fn revoke_write_grant(
                 commitment,
                 grant_ledger,
                 revoked_recipients: Vec::new(),
+                unnamed_drops: 0,
             }
         }
     };
@@ -527,6 +545,7 @@ pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
         commitment: plan.commitment.clone(),
         commitment_sig: *plan.commitment_sig,
         grant_ledger: plan.grant_ledger.to_vec(),
+        unnamed_drops: 0,
         revoked_recipients: Vec::new(),
         planes: RotationPlanes {
             read: false,
@@ -760,9 +779,7 @@ mod tests {
     use crate::seams::Scheduler;
     use crate::testkit::block_on;
     use crate::testkit::fakes::VirtualScheduler;
-    use cipherbox_core::seal::{
-        GrantSetEntry, PreservedFields, sign_recipient_binding, verify_grant_set,
-    };
+    use cipherbox_core::seal::{PreservedFields, sign_recipient_binding, verify_grant_set};
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     use crate::grants::ledger::{mint_grant_row, recipient_blinded_tag};
@@ -1037,13 +1054,7 @@ mod tests {
     fn relabel_link_entry(fx: &mut Fixture, enc_pk: [u8; 32]) {
         for entry in &mut fx.commitment.entries {
             if entry.tag == link_tag() {
-                *entry = GrantSetEntry::new(
-                    &PRK,
-                    entry.tag,
-                    enc_pk,
-                    entry.permission,
-                    entry.pseudonym_pk,
-                );
+                entry.set_recipient_enc_pk(&PRK, enc_pk);
             }
         }
         fx.commitment_sig = sign_grant_set(&fx.owner, &fx.commitment)
@@ -1095,6 +1106,10 @@ mod tests {
 
             let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("the cut still lands");
             assert!(cut.revoked_recipients.is_empty());
+            assert_eq!(
+                cut.unnamed_drops, 1,
+                "the caller must see the harvest was incomplete"
+            );
             assert!(cut.commitment.entries.iter().all(|e| e.tag != link_tag()));
         }
     }

@@ -792,9 +792,14 @@ pub fn open_owner_history_link(
 pub struct GrantSetEntry {
     /// The recipient's blinded tag.
     pub tag: [u8; SECRET_LEN],
-    /// The recipient's X25519 encryption subkey public half, masked. Read it
-    /// through [`recipient_enc_pk`](Self::recipient_enc_pk).
-    pub masked_recipient_enc_pk: [u8; SECRET_LEN],
+    /// The recipient's X25519 encryption subkey public half, masked.
+    ///
+    /// Private, so the derivation is the only way in. A writable field would
+    /// let a caller store a raw key, which publishes the recipient, or pair one
+    /// tag with a second recipient, which reuses the pad and leaks the XOR of
+    /// the two. Read it with [`recipient_enc_pk`](Self::recipient_enc_pk) and
+    /// [`masked_recipient_enc_pk`](Self::masked_recipient_enc_pk).
+    masked_recipient_enc_pk: [u8; SECRET_LEN],
     /// The recipient's permission.
     pub permission: Permission,
     /// The writer pseudonym public key (Ed25519).
@@ -852,6 +857,30 @@ impl GrantSetEntry {
         xor_mask(pointer_read_key, &self.tag, &self.masked_recipient_enc_pk)
     }
 
+    /// The masked bytes as published. Only a caller that means to inspect the
+    /// wire form needs these; every consumer of the recipient wants
+    /// [`recipient_enc_pk`](Self::recipient_enc_pk).
+    pub fn masked_recipient_enc_pk(&self) -> &[u8; SECRET_LEN] {
+        &self.masked_recipient_enc_pk
+    }
+
+    /// Re-mask this entry over a different recipient, keeping every other field
+    /// and the preserved unknowns.
+    ///
+    /// A production re-label would reuse the pad: the tag is unchanged, so the
+    /// old and the new masked bytes XOR to the two recipients. Every mint
+    /// derives a fresh tag with its recipient instead ([`Self::new`]).
+    /// `#[doc(hidden)]`: `pub` only for the cross-crate test corpus, like
+    /// [`crate::kdf::EdgeProbe`], not supported API.
+    #[doc(hidden)]
+    pub fn set_recipient_enc_pk(
+        &mut self,
+        pointer_read_key: &[u8; SECRET_LEN],
+        recipient: [u8; SECRET_LEN],
+    ) {
+        self.masked_recipient_enc_pk = xor_mask(pointer_read_key, &self.tag, &recipient);
+    }
+
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
@@ -898,7 +927,7 @@ fn xor_mask(
 
 /// The owner-signed grant-set commitment: the scope root's `ipnsName`, the
 /// owner's own writer-pseudonym public key, the scope's cut epoch, and the
-/// committed `(tag, recipientEncPk, permission, pseudonymPk)` entries. A
+/// committed `(tag, maskedRecipientEncPk, permission, pseudonymPk)` entries. A
 /// recipient verifies their tag is committed before trusting a grant.
 ///
 /// It carries no **read** epoch, so a grantee-triggered rotation needs no fresh
@@ -1630,7 +1659,7 @@ mod tests {
         };
         let sig = sign_grant_set(&owner, &c).expect("signs");
         let mut relabelled = c.clone();
-        relabelled.entries[0].masked_recipient_enc_pk = [0x99; 32];
+        relabelled.entries[0].set_recipient_enc_pk(&PRK, [0x99; 32]);
         assert_ne!(
             encode_grant_set_commitment(&relabelled).unwrap(),
             encode_grant_set_commitment(&c).unwrap(),
@@ -1775,7 +1804,7 @@ mod tests {
         let recipient = [0x5a; 32];
 
         let here = GrantSetEntry::new(&PRK, [0x01; 32], recipient, Permission::Read, [0x02; 32]);
-        assert_ne!(here.masked_recipient_enc_pk, recipient);
+        assert_ne!(*here.masked_recipient_enc_pk(), recipient);
         assert_eq!(here.recipient_enc_pk(&PRK), recipient);
         assert_ne!(
             here.recipient_enc_pk(&[0x67; 32]),
@@ -1791,7 +1820,8 @@ mod tests {
             [0x02; 32],
         );
         assert_ne!(
-            here.masked_recipient_enc_pk, elsewhere.masked_recipient_enc_pk,
+            here.masked_recipient_enc_pk(),
+            elsewhere.masked_recipient_enc_pk(),
             "one recipient is unlinkable across two scope roots"
         );
 
@@ -1811,7 +1841,7 @@ mod tests {
         );
     }
 
-    /// A commitment of `n` distinct-tag, distinct-recipient read entries.
+    /// A commitment of `n` distinct-tag read entries.
     fn commitment_of(n: usize) -> GrantSetCommitment {
         GrantSetCommitment {
             ipns_name: b"n".to_vec(),

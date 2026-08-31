@@ -455,20 +455,8 @@ mod tests {
     #[test]
     fn matching_ledger_passes_owner_authority() {
         let c = commitment(vec![
-            GrantSetEntry::new(
-                &[0x66; 32],
-                [0x21; 32],
-                [0x61; 32],
-                Permission::Read,
-                [0x02; 32],
-            ),
-            GrantSetEntry::new(
-                &[0x66; 32],
-                [0x22; 32],
-                [0x62; 32],
-                Permission::Write,
-                [0x03; 32],
-            ),
+            GrantSetEntry::new(&PRK, [0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new(&PRK, [0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
         ]);
         let ledger = vec![
             ledger_entry([0x21; 32], Permission::Read),
@@ -481,7 +469,7 @@ mod tests {
     fn write_grantee_added_tag_is_an_authority_violation() {
         // A write-grantee injects a row for a tag the owner never committed.
         let c = commitment(vec![GrantSetEntry::new(
-            &[0x66; 32],
+            &PRK,
             [0x21; 32],
             [0x61; 32],
             Permission::Read,
@@ -498,7 +486,7 @@ mod tests {
     #[test]
     fn changed_permission_is_an_authority_violation() {
         let c = commitment(vec![GrantSetEntry::new(
-            &[0x66; 32],
+            &PRK,
             [0x21; 32],
             [0x61; 32],
             Permission::Read,
@@ -511,20 +499,8 @@ mod tests {
     #[test]
     fn dropped_tag_is_an_authority_violation() {
         let c = commitment(vec![
-            GrantSetEntry::new(
-                &[0x66; 32],
-                [0x21; 32],
-                [0x61; 32],
-                Permission::Read,
-                [0x02; 32],
-            ),
-            GrantSetEntry::new(
-                &[0x66; 32],
-                [0x22; 32],
-                [0x62; 32],
-                Permission::Write,
-                [0x03; 32],
-            ),
+            GrantSetEntry::new(&PRK, [0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new(&PRK, [0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
         ]);
         let ledger = vec![ledger_entry([0x21; 32], Permission::Read)]; // dropped 0x22
         assert!(enforce_committed_ledger(&c, &ledger).is_err());

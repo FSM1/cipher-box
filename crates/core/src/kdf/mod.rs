@@ -1,8 +1,8 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
 //! Nothing in CipherBox derives a key outside these twenty-four edges. Every
-//! edge
-//! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
+//! edge is domain-separated by a fixed `cipherbox/v2/<edge>` context string
+//! fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
 //! **fixed-length message input**, never variable context, which would admit
@@ -620,8 +620,8 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the outputs must be pairwise distinct), its property test, and the
-/// frozen vectors the KAT generator writes.
+/// (the outputs must be pairwise distinct), its property test, and the frozen
+/// vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
 /// path: it returns each edge's raw derived bytes in the clear. Never feed

@@ -5421,7 +5421,8 @@ fn grant_set_accept_vectors_decode_and_verify() {
                 v.name
             );
             assert_ne!(
-                entry.masked_recipient_enc_pk, recipient,
+                *entry.masked_recipient_enc_pk(),
+                recipient,
                 "grant-set accept {}: the recipient must not ride in the clear",
                 v.name
             );

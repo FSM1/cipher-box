@@ -461,7 +461,10 @@ mod tests {
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use crate::content::DAG_ROOT_CODEC;
-    use crate::testkit::{OWNER_ROOT_EPOCH, OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
+    use crate::testkit::{
+        OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootFixture, OwnerRootSpec,
+        owner_root_fixture,
+    };
 
     const READ_KEY: [u8; 32] = [9u8; 32];
     const NONCE: [u8; 24] = [5u8; 24];
@@ -676,7 +679,7 @@ mod tests {
         let second = Ed25519Signer::from_seed([0x55; 32]);
         let mut section = fixture.grant_section.clone();
         section.commitment.entries.push(GrantSetEntry::new(
-            &[0x66; 32],
+            &OWNER_ROOT_POINTER_READ_KEY,
             [0x66; 32],
             [0x67; 32],
             Permission::Write,

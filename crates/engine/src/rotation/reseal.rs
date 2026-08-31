@@ -54,7 +54,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use crate::content::limits::{MAX_RESEALABLE_SECTION_BYTES, MAX_RETAINED_HISTORY_LINK_BYTES};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
-use crate::grants::enforce_committed_ledger;
+use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
 
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window
@@ -258,6 +258,11 @@ pub enum ResealError {
     /// unopenable key, and the owner signed this one, so the whole re-seal fails
     /// closed rather than skip the entry ([`adopt_recipients`]).
     UnusableRecipientKey,
+    /// A committed entry's recipient does not derive the tag it is filed under.
+    /// Only raised where the re-sealer holds the owner encryption subkey, which
+    /// is the only authority that can tell — the mask came off under the wrong
+    /// scope key, or the owner signed a pair its own subkey does not reproduce.
+    TagNotBoundToRecipient,
     /// The freshly sealed ascent link does not reopen as this epoch's override
     /// seed — bytes the gate's stage 3 rejects whole-record
     /// ([`verify_ascent_link`]).
@@ -345,6 +350,9 @@ impl core::fmt::Display for ResealError {
             ResealError::UnusableRecipientKey => {
                 f.write_str("committed recipient encryption key is unusable")
             }
+            ResealError::TagNotBoundToRecipient => {
+                f.write_str("a committed recipient does not derive the tag it is filed under")
+            }
             ResealError::HistoryLinkTooLarge { size, limit } => {
                 write!(
                     f,
@@ -399,6 +407,7 @@ impl ResealError {
             ResealError::LedgerDivergesFromCommitment => "ledger-diverges-from-commitment",
             ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
+            ResealError::TagNotBoundToRecipient => "tag-not-bound-to-recipient",
             ResealError::AscentLinkMismatch => "ascent-link-mismatch",
             ResealError::AscentLinkDropped => "ascent-link-dropped",
             ResealError::AscentLinkNotOwed => "ascent-link-not-owed",
@@ -552,6 +561,7 @@ fn mint_owner_history_link<E: Entropy>(
 /// A committed key core refuses to adopt is the owner attesting a key nothing
 /// can seal to, so the whole re-seal fails closed rather than skip the entry.
 fn adopt_recipients(
+    identity: &ScopeRootIdentity<'_>,
     committed: &CommittedSet<'_>,
     pointer_read_key: &[u8; SECRET_LEN],
 ) -> Result<Vec<X25519Public>, ResealError> {
@@ -560,8 +570,19 @@ fn adopt_recipients(
         .entries
         .iter()
         .map(|e| {
-            X25519Public::from_bytes(e.recipient_enc_pk(pointer_read_key))
-                .ok_or(ResealError::UnusableRecipientKey)
+            let recipient = X25519Public::from_bytes(e.recipient_enc_pk(pointer_read_key))
+                .ok_or(ResealError::UnusableRecipientKey)?;
+            // The committed tag is `blind(ECDH(ownerEnc, recipient), name)`, so
+            // where the owner secret is in hand it proves the unmask used the
+            // right scope key. Without it the re-seal would wrap this scope's
+            // next seed to bytes nobody holds and lock the whole set out.
+            if let Some(owner_enc_secret) = identity.owner_enc_secret
+                && recipient_blinded_tag(owner_enc_secret, &recipient, identity.ipns_name)
+                    != Some(e.tag)
+            {
+                return Err(ResealError::TagNotBoundToRecipient);
+            }
+            Ok(recipient)
         })
         .collect()
 }
@@ -658,7 +679,7 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // Fail-closed BEFORE any seal, and the only adoption pass: the blob loop
     // below wraps to these keys rather than re-adopting the same bytes.
-    let recipients = adopt_recipients(committed, seeds.pointer_read_key)?;
+    let recipients = adopt_recipients(identity, committed, seeds.pointer_read_key)?;
 
     let scope_id = identity.scope_id;
     let read_epoch = seeds.read_epoch;
@@ -1874,7 +1895,13 @@ mod tests {
                 tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
                 let recipient = Fixture::nth_recipient(i).public().to_bytes();
                 (
-                    GrantSetEntry::new(&[0x66; 32], tag, recipient, Permission::Read, [0x02; 32]),
+                    GrantSetEntry::new(
+                        &fx.pointer_read_key,
+                        tag,
+                        recipient,
+                        Permission::Read,
+                        [0x02; 32],
+                    ),
                     fx.attested_row([0x02; 33], recipient, Permission::Read, tag, b"n"),
                 )
             })
@@ -2170,21 +2197,21 @@ mod tests {
 
         let entries = vec![
             GrantSetEntry::new(
-                &[0x66; 32],
+                &fx.pointer_read_key,
                 Fixture::read_tag(),
                 Fixture::read_recipient().public().to_bytes(),
                 Permission::Read,
                 [0x02; 32],
             ),
             GrantSetEntry::new(
-                &[0x66; 32],
+                &fx.pointer_read_key,
                 revoked_tag,
                 revoked.public().to_bytes(),
                 Permission::Read,
                 [0x04; 32],
             ),
             GrantSetEntry::new(
-                &[0x66; 32],
+                &fx.pointer_read_key,
                 Fixture::write_tag(),
                 Fixture::write_recipient().public().to_bytes(),
                 Permission::Write,
@@ -2575,14 +2602,7 @@ mod tests {
             .chain([high_bit]);
         for enc_pk in unadoptable {
             let (mut commitment, _, ledger) = fx.minted();
-            let entry = &commitment.entries[0];
-            commitment.entries[0] = GrantSetEntry::new(
-                &fx.pointer_read_key,
-                entry.tag,
-                enc_pk,
-                entry.permission,
-                entry.pseudonym_pk,
-            );
+            commitment.entries[0].set_recipient_enc_pk(&fx.pointer_read_key, enc_pk);
             let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
                 .expect("the owner signs the set it attests")
                 .to_compact();
@@ -2614,7 +2634,7 @@ mod tests {
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
             cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
-                &[0x66; 32],
+                &fx.pointer_read_key,
                 Fixture::read_tag(),
                 [0u8; 32], // low-order X25519 → from_bytes rejects
                 Permission::Read,

@@ -2532,7 +2532,7 @@ mod tests {
             let mut recipient_enc_pk = [0x42u8; 32];
             recipient_enc_pk[..8].copy_from_slice(&(i as u64).to_be_bytes());
             full_commitment.entries.push(GrantSetEntry::new(
-                &[0x66; 32],
+                &POINTER_READ_KEY,
                 tag,
                 recipient_enc_pk,
                 Permission::Read,

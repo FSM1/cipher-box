@@ -1296,9 +1296,8 @@ where
             .ok_or(ResolveFailure::Rejected)?;
         // The owner-signed commitment, never the blob's contents or a ledger row
         // a co-writer authors, says what this device may do here; publishing the
-        // root is a write. The recipient key is checked alongside the permission
-        // because a re-seal wraps this device's next seed to whatever the entry
-        // under its own tag names.
+        // root is a write. The recipient the entry commits is checked below,
+        // once the blob yields the pointer read key that unmasks it.
         let own_entry = section
             .commitment
             .entries
@@ -2259,6 +2258,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
+        | ResealError::TagNotBoundToRecipient
         | ResealError::AscentLinkMismatch
         | ResealError::AscentLinkDropped
         | ResealError::AscentLinkNotOwed
@@ -5602,13 +5602,30 @@ mod tests {
         // rather than publish a root it can never read back.
         let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
         let mut row = grantee_row(&name, Permission::Write);
-        row.commitment_entry = GrantSetEntry::new(
+        row.commitment_entry.set_recipient_enc_pk(
             &OWNER_ROOT_POINTER_READ_KEY,
-            row.commitment_entry.tag,
             X25519Secret::from_scalar([0x66; 32]).public().to_bytes(),
-            row.commitment_entry.permission,
-            row.commitment_entry.pseudonym_pk,
         );
+        let root = granted_scope_root_with(vec![row], Vec::new());
+        let world = GranteeWorld::staged(Harness::plain(), root);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    /// The mask key the device unmasks with is the one its own grant blob
+    /// carries, so an entry masked under any other key recovers noise. The
+    /// device must refuse rather than re-seal the scope to bytes nobody holds.
+    #[test]
+    fn a_grantee_cut_refuses_an_entry_masked_under_another_scope_key() {
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        let mut row = grantee_row(&name, Permission::Write);
+        let mut wrong_key = OWNER_ROOT_POINTER_READ_KEY;
+        wrong_key[0] ^= 1;
+        row.commitment_entry
+            .set_recipient_enc_pk(&wrong_key, grantee_enc().public().to_bytes());
         let root = granted_scope_root_with(vec![row], Vec::new());
         let world = GranteeWorld::staged(Harness::plain(), root);
 
@@ -6832,17 +6849,13 @@ mod tests {
         let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
             .into_iter()
             .chain([high_bit]);
+        let scope_pointer_read_key = WaveSeeds.pointer_read_key(&SCOPE);
         for enc_pk in unadoptable {
             let harness = Harness::plain();
             let mut rows = granted_rows();
-            let entry = &rows[0].commitment_entry;
-            rows[0].commitment_entry = GrantSetEntry::new(
-                &WaveSeeds.pointer_read_key(&SCOPE),
-                entry.tag,
-                enc_pk,
-                entry.permission,
-                entry.pseudonym_pk,
-            );
+            rows[0]
+                .commitment_entry
+                .set_recipient_enc_pk(&scope_pointer_read_key, enc_pk);
             let root = granted_root_with(rows, Vec::new());
             harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
@@ -7704,6 +7717,7 @@ mod tests {
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
+            ResealError::TagNotBoundToRecipient,
             ResealError::WriteBodyTooLarge,
             ResealError::SectionNotResealable { size: 2, limit: 1 },
             ResealError::HistoryLinkTooLarge { size: 2, limit: 1 },
@@ -7724,6 +7738,7 @@ mod tests {
                 | ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted
                 | ResealError::UnusableRecipientKey
+                | ResealError::TagNotBoundToRecipient
                 | ResealError::AscentLinkMismatch
                 | ResealError::AscentLinkDropped
                 | ResealError::AscentLinkNotOwed
