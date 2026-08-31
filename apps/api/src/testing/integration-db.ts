@@ -14,9 +14,11 @@ import { AddIdentitySubjects1784800000000 } from '../migrations/1784800000000-Ad
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
 import { AddMailboxReceivedAtIndex1784692000000 } from '../migrations/1784692000000-AddMailboxReceivedAtIndex';
 import { AddNameInventoryAndPinnedCids1784566605863 } from '../migrations/1784566605863-AddNameInventoryAndPinnedCids';
+import { AddPinReferences1788134400000 } from '../migrations/1788134400000-AddPinReferences';
 import { AddRecordCache1784600557946 } from '../migrations/1784600557946-AddRecordCache';
 import { InitAuthSchema1784513040045 } from '../migrations/1784513040045-InitAuthSchema';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
+import { PinReference } from '../registry/entities/pin-reference.entity';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { RecordCache } from '../republisher/entities/record-cache.entity';
 
@@ -40,6 +42,7 @@ const ENTITIES = [
   RefreshToken,
   AcceleratorToken,
   NameInventory,
+  PinReference,
   PinnedCid,
   MailboxMessage,
   RecordCache,
@@ -56,6 +59,7 @@ const MIGRATIONS = [
   AddIdentitySubjects1784800000000,
   AddDeviceApprovals1787155468460,
   AddAcceleratorTokens1787681144572,
+  AddPinReferences1788134400000,
 ];
 
 export interface IntegrationDatabase {

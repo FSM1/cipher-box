@@ -23,6 +23,7 @@ pub mod fakes;
 mod owner_root;
 mod world;
 
+pub use account::retire_targets;
 pub use content::{
     block_store, doomed_version, frame_version, frame_version_with, gateway, requested_cid, serve,
 };

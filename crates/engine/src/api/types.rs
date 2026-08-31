@@ -284,6 +284,22 @@ pub struct NameRegistration {
     pub content_cids: Vec<String>,
 }
 
+/// One entry of a batch retire (`[{ipnsName?, targets[]}]`, blueprint/api.md).
+///
+/// `ipns_name` names the record that stops referencing the targets, so the
+/// registry drops that record's reference and keeps the CID pinned while any
+/// other record of the account still names it. `None` drops every record's
+/// reference — the account-wide retire an orphaned head block needs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetireEntry {
+    /// The referencing record, when the caller can name it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipns_name: Option<String>,
+    /// The `[ipnsName | cid]` targets this entry retires.
+    pub targets: Vec<String>,
+}
+
 /// A per-account quota response. Hosted rows are authoritative; a BYO account's
 /// rows are advisory (`advisory: true`, quota always allows) — blueprint/api.md.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

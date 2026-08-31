@@ -677,6 +677,47 @@ async fn union_liveness_is_per_account_and_permissionless() {
         .expect("bob retires the last row");
 }
 
+/// The per-referencing-record refcount (blueprint/api.md): a retire scoped to
+/// one record drops only that record's reference, so a doomed root that aliases
+/// a leaf a different live record of the SAME account names cannot unpin it.
+/// The client reads that back as `retired: 0` while another record still names
+/// the CID, then as `retired: 1` once the last record drops it.
+#[tokio::test]
+async fn a_record_scoped_retire_keeps_a_cid_another_record_still_names() {
+    let base = require_stack!("a_record_scoped_retire_keeps_a_cid_another_record_still_names");
+    let client = fresh_account(&base).await;
+
+    let aliased = "bafyContractAliasedLeaf".to_owned();
+    for ipns_name in ["k51contractLive", "k51contractDoomed"] {
+        client
+            .register(&[NameRegistration {
+                ipns_name: ipns_name.into(),
+                head_cid: None,
+                content_cids: vec![aliased.clone()],
+            }])
+            .await
+            .expect("both records name the same leaf");
+    }
+
+    let scoped = client
+        .retire_for_record("k51contractDoomed", &[aliased.clone()])
+        .await
+        .expect("the doomed record drops its reference");
+    assert_eq!(
+        scoped.retired, 0,
+        "the pin row survives while the live record still names the leaf, got {scoped:?}"
+    );
+
+    let last = client
+        .retire_for_record("k51contractLive", &[aliased])
+        .await
+        .expect("the last record drops its reference");
+    assert_eq!(
+        last.retired, 1,
+        "the pin row goes with the last reference, got {last:?}"
+    );
+}
+
 /// The engine's own content address for a sealed leaf — the `raw` codec core
 /// fixes for content blocks.
 fn leaf_cid(bytes: &[u8]) -> String {

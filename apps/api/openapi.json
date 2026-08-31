@@ -802,8 +802,7 @@
                 "type": "array",
                 "maxItems": 1000,
                 "items": {
-                  "type": "string",
-                  "maxLength": 256
+                  "$ref": "#/components/schemas/RetireEntryDto"
                 }
               }
             }
@@ -845,7 +844,7 @@
             "bearer": []
           }
         ],
-        "summary": "Batch retire [ipnsName | cid] for the caller account; union liveness, refcounted physical unpin at global zero",
+        "summary": "Batch retire [{ipnsName?, targets[]}] for the caller account; a scoped entry drops only that record reference, union liveness, refcounted physical unpin at global zero",
         "tags": [
           "Registry"
         ]
@@ -2051,6 +2050,28 @@
           "contentCids"
         ]
       },
+      "RetireEntryDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "The record that drops the reference. Present: only this record stops naming the targets, so a target another live record still names stays pinned. Absent: every record of the account stops naming them, and a target may also name a record to retire."
+          },
+          "targets": {
+            "maxItems": 1000,
+            "description": "The `[ipnsName | cid]` targets this entry retires. The batch caps the TOTAL target count across its entries at 1000.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        "required": [
+          "targets"
+        ]
+      },
       "RegisterResponseDto": {
         "type": "object",
         "properties": {
@@ -2105,7 +2126,7 @@
         "properties": {
           "retired": {
             "type": "number",
-            "description": "Inventory + pin rows removed for the caller account"
+            "description": "Inventory + pin rows removed for the caller account. A pin row goes only when the account has no record left that names the CID, so a scoped retire of an aliased CID answers 0"
           },
           "unpinned": {
             "type": "number",

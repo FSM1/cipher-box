@@ -7,6 +7,7 @@ import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccountController } from './account.controller';
 import { NameInventory } from './entities/name-inventory.entity';
+import { PinReference } from './entities/pin-reference.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { KuboPinStore, PinStore } from './pin-store';
 import { RegistryController } from './registry.controller';
@@ -22,7 +23,7 @@ import { RegistryService } from './services/registry.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([NameInventory, PinnedCid, User]),
+    TypeOrmModule.forFeature([NameInventory, PinReference, PinnedCid, User]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

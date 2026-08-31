@@ -9,6 +9,7 @@ import { DataSource, EntityManager, FindOneOptions, QueryRunner, Repository } fr
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { advisoryLockKey } from '../common/advisory-lock';
+import { PinReference } from '../registry/entities/pin-reference.entity';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinCidMismatchError, PinStore } from '../registry/pin-store';
 import { RegistryService } from '../registry/services/registry.service';
@@ -862,6 +863,44 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       expect(rows[0]).toMatchObject({ cid, size: '0' });
       expect(await usedBytes(accountId)).toBe(0n);
       expect(failing.unpinned).toEqual([]);
+    });
+
+    it('keeps a registration a register claims while the pin runs, and unpins nothing', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(50, 5);
+      const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
+
+      const pinGate = makeGate();
+      const failing = new FakePinStore();
+      failing.pinGate = pinGate;
+      failing.failPin = true;
+
+      // The upload commits its row, then parks in the failing pin.
+      const upload = buildService(db.dataSource, failing)
+        .upload(accountId, cid, bytes)
+        .catch((e: unknown) => e);
+      await pinGate.reached;
+
+      // A register commits inside that window: it finds the row and claims the
+      // CID under its own record.
+      await buildRegistry(pinStore).register(accountId, [
+        { ipnsName: 'k51-claims-during-pin', contentCids: [cid] },
+      ]);
+
+      pinGate.release();
+      expect(await upload).toBeInstanceOf(ServiceUnavailableException);
+
+      // Compensation reverts the charge only: deleting the row would drop the
+      // registration the client just made, and unpin a CID a record names.
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '0' });
+      expect(await usedBytes(accountId)).toBe(0n);
+      expect(failing.unpinned).toEqual([]);
+      expect(
+        await db.dataSource.getRepository(PinReference).findBy({ accountId, cid })
+      ).toHaveLength(1);
     });
   });
 });

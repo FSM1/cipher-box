@@ -16,7 +16,7 @@ import {
   MAX_BATCH,
   RegisterEntryDto,
   RegisterResponseDto,
-  RETIRE_TARGET_MAX_LENGTH,
+  RetireEntryDto,
   RetireResponseDto,
 } from './dto/registry.dto';
 import { BatchRefusedDto, REGISTRY_BATCH_REFUSED } from './registry-error-codes';
@@ -32,7 +32,7 @@ import { RegistryService } from './services/registry.service';
  */
 @ApiTags('Registry')
 @ApiBearerAuth()
-@ApiExtraModels(RegisterEntryDto)
+@ApiExtraModels(RegisterEntryDto, RetireEntryDto)
 @UseGuards(JwtAuthGuard)
 @Controller('registry')
 export class RegistryController {
@@ -71,13 +71,13 @@ export class RegistryController {
   @Throttle(THROTTLE_SURFACES.registry)
   @ApiOperation({
     summary:
-      'Batch retire [ipnsName | cid] for the caller account; union liveness, refcounted physical unpin at global zero',
+      'Batch retire [{ipnsName?, targets[]}] for the caller account; a scoped entry drops only that record reference, union liveness, refcounted physical unpin at global zero',
   })
   @ApiBody({
     schema: {
       type: 'array',
       maxItems: MAX_BATCH,
-      items: { type: 'string', maxLength: RETIRE_TARGET_MAX_LENGTH },
+      items: { $ref: getSchemaPath(RetireEntryDto) },
     },
   })
   @ApiCreatedResponse({ type: RetireResponseDto })
@@ -90,9 +90,9 @@ export class RegistryController {
   @ApiResponse({ status: 429, description: 'Registry rate limit exceeded' })
   @ApiResponse({ status: 503, description: 'Token serialization contended; retry shortly' })
   retire(
-    @Body(...retireBodyPipes) targets: string[],
+    @Body(...retireBodyPipes) entries: RetireEntryDto[],
     @Req() request: AuthenticatedRequest
   ): Promise<RetireResponseDto> {
-    return this.registryService.retire(request.user.userId, targets);
+    return this.registryService.retire(request.user.userId, entries);
   }
 }

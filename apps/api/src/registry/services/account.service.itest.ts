@@ -19,6 +19,7 @@ import {
   waitForAdvisoryLockWait,
 } from '../../testing/integration-db';
 import { NameInventory } from '../entities/name-inventory.entity';
+import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { RegistryService } from './registry.service';
@@ -249,6 +250,23 @@ describe('AccountService cascade (real Postgres)', () => {
       expect(result).toEqual({ namesRetired: 1, pinsRetired: 1, mailboxPurged: 1, unpinned: 1 });
       expect(pinStore.unpinned).toEqual([cid]);
       expect(await db.dataSource.getRepository(User).findOne({ where: { id } })).toBeNull();
+    });
+
+    it('takes the account reference edges with it, so no record survives to hold a pin open', async () => {
+      const a = await seedAccount();
+      const cid = token();
+      const pinStore = new RecordingPinStore();
+      await registerService(db.dataSource, pinStore).register(a.id, [
+        { ipnsName: token(), contentCids: [cid] },
+      ]);
+
+      const result = await deleteService(db.dataSource, pinStore).deleteAccount(a.id);
+
+      expect(result.unpinned).toBe(1);
+      expect(pinStore.unpinned).toEqual([cid]);
+      expect(
+        await db.dataSource.getRepository(PinReference).find({ where: { accountId: a.id } })
+      ).toEqual([]);
     });
 
     it('does NOT unpin a CID co-registered by another account (union liveness)', async () => {

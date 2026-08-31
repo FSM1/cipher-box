@@ -14,6 +14,7 @@ import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integ
 import { AccountController } from './account.controller';
 import { MAX_CONTENT_CIDS } from './dto/registry.dto';
 import { NameInventory } from './entities/name-inventory.entity';
+import { PinReference } from './entities/pin-reference.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { PinStore } from './pin-store';
 import { REGISTRY_BATCH_REFUSED } from './registry-error-codes';
@@ -53,7 +54,7 @@ describe('registry HTTP surface (real Postgres)', () => {
     pinStore = new FakePinStore();
     ctx = await createHttpIntegrationApp({
       db,
-      entities: [User, NameInventory, PinnedCid],
+      entities: [User, NameInventory, PinReference, PinnedCid],
       controllers: [RegistryController, AccountController],
       providers: [
         RegistryService,
@@ -225,7 +226,7 @@ describe('registry HTTP surface (real Postgres)', () => {
       const first = await request(http())
         .post('/registry/retire')
         .set('Authorization', `Bearer ${alice.token}`)
-        .send([shared])
+        .send([{ targets: [shared] }])
         .expect(201);
       expect(first.body).toEqual({ retired: 1, unpinned: 0 });
       expect(pinStore.unpinned).not.toContain(shared);
@@ -236,7 +237,7 @@ describe('registry HTTP surface (real Postgres)', () => {
       const second = await request(http())
         .post('/registry/retire')
         .set('Authorization', `Bearer ${bob.token}`)
-        .send([shared])
+        .send([{ targets: [shared] }])
         .expect(201);
       expect(second.body).toEqual({ retired: 1, unpinned: 1 });
       expect(pinStore.unpinned).toContain(shared);
@@ -245,12 +246,57 @@ describe('registry HTTP surface (real Postgres)', () => {
       ).toHaveLength(0);
     });
 
+    it('a record-scoped retire leaves a CID another record of the same account names pinned', async () => {
+      const acct = await account();
+      const shared = 'bafyAliasedHttp';
+      for (const ipnsName of ['k51liveHttp', 'k51doomedHttp']) {
+        await request(http())
+          .post('/registry/register')
+          .set('Authorization', `Bearer ${acct.token}`)
+          .send([{ ipnsName, contentCids: [shared] }])
+          .expect(201);
+      }
+
+      const scoped = await request(http())
+        .post('/registry/retire')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51doomedHttp', targets: [shared] }])
+        .expect(201);
+      expect(scoped.body).toEqual({ retired: 0, unpinned: 0 });
+      expect(pinStore.unpinned).not.toContain(shared);
+      expect(
+        await db.dataSource.getRepository(PinnedCid).find({ where: { cid: shared } })
+      ).toHaveLength(1);
+
+      const last = await request(http())
+        .post('/registry/retire')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51liveHttp', targets: [shared] }])
+        .expect(201);
+      expect(last.body).toEqual({ retired: 1, unpinned: 1 });
+      expect(pinStore.unpinned).toContain(shared);
+    });
+
+    it('refuses a batch whose TOTAL target count exceeds the cap, however it is split', async () => {
+      const acct = await account();
+      const refused = await request(http())
+        .post('/registry/retire')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send(
+          Array.from({ length: 3 }, () => ({
+            targets: Array.from({ length: 400 }, (_, i) => `bafyBulk${i}`),
+          }))
+        )
+        .expect(400);
+      expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
+    });
+
     it('rejects an over-length target at the pipe (256-char cap)', async () => {
       const acct = await account();
       const refused = await request(http())
         .post('/registry/retire')
         .set('Authorization', `Bearer ${acct.token}`)
-        .send(['a'.repeat(257)])
+        .send([{ targets: ['a'.repeat(257)] }])
         .expect(400);
       expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
       expect(refused.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
