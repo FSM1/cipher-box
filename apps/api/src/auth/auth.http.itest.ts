@@ -24,11 +24,19 @@ import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
 import { GatewayController } from './gateway.controller';
+import { IdentityController } from './identity.controller';
+import { IdentitySubject } from './entities/identity-subject.entity';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { ChallengeService, type StepUpOperation } from './services/challenge.service';
 import { AcceleratorTokenService } from './services/accelerator-token.service';
+import { EmailOtpService } from './services/email-otp.service';
+import { GoogleOAuthService } from './services/google-oauth.service';
+import { IdentityExchangeService } from './services/identity-exchange.service';
 import { IdentityService } from './services/identity.service';
+import { IdentitySubjectService } from './services/identity-subject.service';
+import { IdentityTokenService } from './services/identity-token.service';
+import { MailProvider } from './services/mail.provider';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
@@ -75,8 +83,8 @@ describe('auth HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, AcceleratorToken],
-      controllers: [AuthController, GatewayController],
+      entities: [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject],
+      controllers: [AuthController, GatewayController, IdentityController],
       providers: [
         MetricsService,
         AuthMetricsInterceptor,
@@ -88,6 +96,27 @@ describe('auth HTTP flows (real Postgres)', () => {
         IdentityService,
         SiweService,
         JwtAuthGuard,
+        // The wallet sign-in that outlives the retired `POST /auth/siwe/login`
+        // draws on the same nonce mint, so the pool tests reach it here. Its
+        // sibling identity methods are wired to refuse: this suite drives none.
+        IdentityExchangeService,
+        IdentitySubjectService,
+        IdentityTokenService,
+        EmailOtpService,
+        {
+          provide: MailProvider,
+          useValue: {
+            sendVerificationCode: () => Promise.reject(new Error('no email in this suite')),
+          },
+        },
+        {
+          provide: GoogleOAuthService,
+          useFactory: (configService: ConfigService) =>
+            new GoogleOAuthService(configService, () =>
+              Promise.reject(new Error('no Google key in this suite'))
+            ),
+          inject: [ConfigService],
+        },
         { provide: Clock, useClass: SystemClock },
         { provide: Entropy, useClass: SystemEntropy },
         { provide: ConfigService, useValue: config.service },
