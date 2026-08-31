@@ -4745,6 +4745,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name: &scope_root_name,
             owner_signer: session.identity(),
+            owner_enc_secret: session.enc_subkey(),
         };
         let cut = match kind {
             // A write grant is cut by `revoke_write_grant`, never by a read
@@ -5112,6 +5113,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name,
             owner_signer: session.identity(),
+            owner_enc_secret: session.enc_subkey(),
         })
         .map_err(EngineError::from_revoke)?;
         self.drive_cut(node, &target, scope_root_name, &cut)

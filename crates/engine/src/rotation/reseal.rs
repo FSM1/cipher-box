@@ -1989,11 +1989,18 @@ mod tests {
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let revoked = X25519Secret::from_scalar([0xcc; 32]);
-        let revoked_tag = [0xc3; 32];
 
         // A real name: the cut binds the commitment to the scope it names.
         let scope_name = super::super::rotate_write::derive_write_name(&[0x5a; 32], &SCOPE);
         let scope_name_bytes = scope_name.as_str().as_bytes();
+        // The cut names the revokee by re-deriving this tag from the owner's own
+        // ECDH, so the fixture files the row under the tag that key really binds.
+        let revoked_tag = crate::grants::recipient_blinded_tag(
+            &fx.owner_enc,
+            &revoked.public(),
+            scope_name_bytes,
+        )
+        .expect("a contributory recipient key");
 
         let entries = vec![
             GrantSetEntry::new(Fixture::read_tag(), Permission::Read, [0x02; 32]),
@@ -2041,6 +2048,7 @@ mod tests {
                 grant_ledger: &ledger,
                 scope_root_name: &scope_name,
                 owner_signer: &fx.owner_ecdsa,
+                owner_enc_secret: &fx.owner_enc,
             },
             &revoked_tag,
         )
