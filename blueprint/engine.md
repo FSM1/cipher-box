@@ -163,8 +163,12 @@ bytes (FSM1/cipher-box-next#28 D2).
   resolved record still names exactly the version roots the owner-authored
   doomed manifest quoted at delete time. **No live namer is consulted**, and the
   snapshot is populated by the focus window rather than by a whole-vault walk,
-  so the first half is a refusal and never an entitlement — its strength is what
-  the session has rendered. The record half is vacuous for a folder, which
+  so absence from the snapshot **enables** a release rather than holding one
+  ([ADR 0011](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0011-quarantine-release-rests-on-the-doomed-manifest.md)
+  D2). Only an absence a poll of this session established counts, so a pass
+  whose base no poll painted decides nothing (D4); the accepted residual is that
+  a descendant a live parent outside the focus window still names can lose its
+  name and its pins. The record half is vacuous for a folder, which
   quotes no root. A proof that does not hold leaves the name registered and the
   content pinned; a descendant no pass can establish — a rotation leaves an
   unlinked node sealed at an epoch the gate refuses — drops unspent after a
